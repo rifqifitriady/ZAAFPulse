@@ -18,10 +18,36 @@ function hexA(hex, a) {
 }
 
 /* ---------- HTML blocks ---------- */
-// p (0..1) draws a fill bar along the tile's bottom edge.
-function metricTile({ label, value, sub = '', color, drill = '', p = null }) {
-  return `<div class="metric" style="--c:${color}"${drill ? ` role="button" tabindex="0" data-drill="${drill}" aria-label="${esc(label)}: open details"` : ''}>
-    <span>${label}</span><b class="num">${value}</b><small>${sub}</small>${p == null ? '' : `<i class="metric-bar" style="width:${(Math.max(0, Math.min(1, p)) * 100).toFixed(1)}%"></i>`}</div>`;
+// A KPI card: title, big value, a sub line (may start with a delta), and on the right a sparkline of
+// real values (spark) or, when there is no series, a small ring for a 0..1 share (p).
+let tileSeq = 0;
+function metricTile({ label, value, sub = '', color, drill = '', p = null, spark = null }) {
+  const art = spark && spark.length > 1 && spark.some((v) => v > 0) ? tileSpark(spark, color) : p != null ? tileRing(p, color) : '';
+  return `<div class="metric${art ? '' : ' plain'}" style="--c:${color}"${drill ? ` role="button" tabindex="0" data-drill="${drill}" aria-label="${esc(label)}: open details"` : ''}>
+    <span>${label}</span><b class="num">${value}</b><small>${sub}</small>${art}</div>`;
+}
+// Smooth (Catmull-Rom) line with a gradient stroke from the tile color to violet, and a soft area.
+function tileSpark(vals, color) {
+  const W = 104; const H = 46; const id = `ts${tileSeq++}`;
+  const max = Math.max(...vals); const min = Math.min(...vals); const span = max - min || 1;
+  const pts = vals.map((v, i) => [(i / (vals.length - 1)) * W, H - 4 - ((v - min) / span) * (H - 12)]);
+  let d = `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] || pts[i]; const p1 = pts[i]; const p2 = pts[i + 1]; const p3 = pts[i + 2] || p2;
+    d += `C${(p1[0] + (p2[0] - p0[0]) / 6).toFixed(1)},${(p1[1] + (p2[1] - p0[1]) / 6).toFixed(1)} ${(p2[0] - (p3[0] - p1[0]) / 6).toFixed(1)},${(p2[1] - (p3[1] - p1[1]) / 6).toFixed(1)} ${p2[0].toFixed(1)},${p2[1].toFixed(1)}`;
+  }
+  return `<svg class="tile-art" viewBox="0 0 ${W} ${H}" aria-hidden="true"><defs>
+    <linearGradient id="${id}s" x1="0" x2="1"><stop offset="0" stop-color="${color}"/><stop offset="1" stop-color="#b06cff"/></linearGradient>
+    <linearGradient id="${id}f" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity=".28"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>
+    <path d="${d}L${W},${H}L0,${H}Z" fill="url(#${id}f)"/><path d="${d}" fill="none" stroke="url(#${id}s)" stroke-width="2.2" stroke-linecap="round" style="filter:drop-shadow(0 0 4px ${color})"/>
+    <circle cx="${pts[pts.length - 1][0].toFixed(1)}" cy="${pts[pts.length - 1][1].toFixed(1)}" r="2.6" fill="#fff" style="filter:drop-shadow(0 0 4px ${color})"/></svg>`;
+}
+function tileRing(p, color) {
+  const v = Math.max(0, Math.min(1, p)); const r = 17; const C = 2 * Math.PI * r; const id = `tr${tileSeq++}`;
+  return `<svg class="tile-art ring" viewBox="0 0 44 44" aria-hidden="true"><defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${color}"/><stop offset="1" stop-color="#b06cff"/></linearGradient></defs>
+    <circle cx="22" cy="22" r="${r}" fill="none" stroke="rgba(140,160,255,.16)" stroke-width="4"/>
+    <circle cx="22" cy="22" r="${r}" fill="none" stroke="url(#${id})" stroke-width="4" stroke-linecap="round" stroke-dasharray="${(C * v).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 22 22)" style="filter:drop-shadow(0 0 3px ${color})"/>
+    <text x="22" y="25.5" text-anchor="middle">${Math.round(v * 100)}</text></svg>`;
 }
 let gaugeSeq = 0;
 function gauge(label, p, sub, c1, c2) {
@@ -209,4 +235,78 @@ function isoStage(canvas, { draw, yaw = -0.42, pitch = 0.56, fit = [12.6, 8.3], 
 
 function unmountStages() {
   for (const st of [...isoStages]) st.destroy();
+  runUnmountHooks();
 }
+
+/* ---------- subpages and SVG charts ---------- */
+// [slug, label, description] per page; '' is the page's own overview.
+const SUBPAGES = {
+  quality: [['', 'Overview'], ['utilization', 'Utilization'], ['cache', 'Cache'], ['compression', 'Compression'], ['providers', 'Provider stats']],
+  squad: [['', 'Office'], ['logs', 'Logs'], ['proxy', 'Proxy logs'], ['time', 'Time']],
+};
+function subTabs(route) {
+  return `<nav class="subtabs" aria-label="Subpages">${SUBPAGES[route].map(([slug, label]) =>
+    `<a href="#${route}${slug ? '/' + slug : ''}" class="${(state.sub || '') === slug ? 'on' : ''}" ${(state.sub || '') === slug ? 'aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
+}
+function subHero(eyebrow, title, sub, extra = '') {
+  return `<div class="hero"><div><div class="eyebrow">${eyebrow}</div><h1>${title}</h1><p>${sub}</p></div><div class="hero-actions">${extra}</div></div>`;
+}
+const panel = (title, meta, body, extra = '') => `<section class="holo panel"${extra}><div class="panel-head"><h3>${title}</h3>${meta ? `<span class="meta">${meta}</span>` : ''}</div>${body}</section>`;
+const holoEmpty = (text) => `<div class="empty">${text}</div>`;
+const pct = (x) => `${(x * 100).toFixed(x >= 0.995 || x < 0.1 ? 1 : 0)}%`;
+const msFmt = (ms) => (ms == null ? '—' : ms < 1000 ? `${Math.round(ms)} ms` : ms < 60000 ? `${(ms / 1000).toFixed(1)} s` : dur(ms / 1000));
+const quantile = (xs, q) => { const s = xs.filter((x) => x != null).sort((a, b) => a - b); return s.length ? s[Math.min(s.length - 1, Math.floor(q * s.length))] : null; };
+
+// Axis label: small counts keep their halves (2, 1.5, 1…) instead of rounding to repeats.
+const tick = (v, max, fmt) => (fmt === fmtN && max < 10 ? (Number.isInteger(v) ? String(v) : v.toFixed(1)) : fmt(v));
+
+// Stacked bars. series: [{ name, color, get(row) }]; rows from ghostFrom on are drawn as a forecast.
+// W is the drawing width: full-width panels pass a larger one so their text does not scale up.
+function holoBars(rows, { series, label = () => '', fmt = fmtN, height = 190, ghostFrom = Infinity, every, W = 640 }) {
+  const H = height; const m = { t: 10, r: 6, b: 22, l: 48 }; const iw = W - m.l - m.r; const ih = H - m.t - m.b;
+  const max = niceMax(Math.max(1e-9, ...rows.map((r) => series.reduce((a, s) => a + (s.get(r) || 0), 0))));
+  const step = iw / Math.max(1, rows.length); const bw = Math.max(1.5, Math.min(22, step * 0.7)); const k = every || Math.ceil(rows.length / 8);
+  const out = [];
+  for (let i = 0; i <= 4; i++) { const y = m.t + (ih * i) / 4; out.push(`<line x1="${m.l}" x2="${W - m.r}" y1="${y}" y2="${y}" class="gl"/><text x="${m.l - 6}" y="${y + 3}" text-anchor="end">${tick(max * (1 - i / 4), max, fmt)}</text>`); }
+  rows.forEach((r, i) => {
+    const x = m.l + i * step + (step - bw) / 2; let base = m.t + ih; const ghost = i >= ghostFrom;
+    const tip = `${label(r)}${ghost ? ' (forecast)' : ''} · ${series.map((s) => `${s.name} ${fmt(s.get(r) || 0)}`).join(' · ')}`;
+    out.push(`<g data-tip="${esc(tip)}"><rect x="${m.l + i * step}" y="${m.t}" width="${step}" height="${ih}" fill="transparent"/>`);
+    for (const s of series) {
+      const h = ((s.get(r) || 0) / max) * ih; if (h < 0.4) continue;
+      out.push(`<rect x="${x.toFixed(1)}" y="${(base - h).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="1.5" fill="${s.color}" ${ghost ? `fill-opacity=".28" stroke="${s.color}" stroke-dasharray="3 2"` : `style="filter:drop-shadow(0 0 3px ${s.color})"`}/>`);
+      base -= h;
+    }
+    out.push('</g>');
+    if (i % k === 0) out.push(`<text x="${(m.l + i * step + step / 2).toFixed(1)}" y="${H - 6}" text-anchor="middle">${esc(label(r))}</text>`);
+  });
+  return `<svg class="hchart" viewBox="0 0 ${W} ${H}" role="img">${out.join('')}</svg>`;
+}
+
+// Lines with a soft area under the first series. series: [{ name, color, get(row) }].
+function holoLine(rows, { series, label = () => '', fmt = fmtN, height = 190, max: fixedMax, W = 640 }) {
+  const H = height; const m = { t: 10, r: 8, b: 22, l: 48 }; const iw = W - m.l - m.r; const ih = H - m.t - m.b;
+  const max = fixedMax || niceMax(Math.max(1e-9, ...rows.flatMap((r) => series.map((s) => s.get(r) || 0))));
+  const x = (i) => m.l + (rows.length < 2 ? iw / 2 : (i / (rows.length - 1)) * iw); const y = (v) => m.t + ih - (Math.min(v, max) / max) * ih;
+  const out = []; const k = Math.ceil(rows.length / 8);
+  for (let i = 0; i <= 4; i++) { const yy = m.t + (ih * i) / 4; out.push(`<line x1="${m.l}" x2="${W - m.r}" y1="${yy}" y2="${yy}" class="gl"/><text x="${m.l - 6}" y="${yy + 3}" text-anchor="end">${tick(max * (1 - i / 4), max, fmt)}</text>`); }
+  series.forEach((s, si) => {
+    const pts = rows.map((r, i) => `${x(i).toFixed(1)},${y(s.get(r) || 0).toFixed(1)}`);
+    if (si === 0 && pts.length > 1) out.push(`<path d="M${pts.join('L')}L${x(rows.length - 1)},${m.t + ih}L${x(0)},${m.t + ih}Z" fill="${s.color}" fill-opacity=".12"/>`);
+    out.push(`<path d="M${pts.join('L')}" fill="none" stroke="${s.color}" stroke-width="2" style="filter:drop-shadow(0 0 4px ${s.color})"/>`);
+  });
+  rows.forEach((r, i) => {
+    out.push(`<rect x="${(x(i) - iw / rows.length / 2).toFixed(1)}" y="${m.t}" width="${(iw / rows.length).toFixed(1)}" height="${ih}" fill="transparent" data-tip="${esc(`${label(r)} · ${series.map((s) => `${s.name} ${fmt(s.get(r) || 0)}`).join(' · ')}`)}"/>`);
+    if (i % k === 0) out.push(`<text x="${x(i).toFixed(1)}" y="${H - 6}" text-anchor="middle">${esc(label(r))}</text>`);
+  });
+  return `<svg class="hchart" viewBox="0 0 ${W} ${H}" role="img">${out.join('')}</svg>`;
+}
+
+// Horizontal meter rows: [{ label, value, max, color, right }].
+const meters = (rows) => `<div class="hmeters">${rows.map((r) => `<div class="hmeter"><div class="hmeter-top"><span>${r.label}</span><b class="num">${r.right}</b></div>
+  <div class="meter"><i style="width:${Math.min(100, Math.max(0.5, (r.value / (r.max || 1)) * 100)).toFixed(1)}%;background:${r.color};box-shadow:0 0 8px ${r.color}"></i></div></div>`).join('')}</div>`;
+
+// Small cleanup hooks for pages that poll; run on every route change.
+const unmountHooks = [];
+const onUnmount = (fn) => unmountHooks.push(fn);
+function runUnmountHooks() { while (unmountHooks.length) { try { unmountHooks.pop()(); } catch { /* keep going */ } } }

@@ -29,6 +29,8 @@ function viewOverview() {
   const unpriced = d.unpriced.length
     ? ` ${d.unpriced.length} model${d.unpriced.length > 1 ? 's have' : ' has'} no price set (${d.unpriced.slice(0, 3).map(esc).join(', ')}${d.unpriced.length > 3 ? '…' : ''}), so their cost shows as $0.` : '';
   const squad = squadCards(6);
+  const dSum = (f) => d.daily.map((r) => SERIES.reduce((a, s) => a + r[s.id][f], 0)); // daily series for the card sparklines
+  let mtdRun = 0; const mtd = d.month.daily.map((r) => (mtdRun += r.cost));
   const totals = SERIES.map((s) => ({ ...s, cost: d.daily.reduce((a, r) => a + r[s.id].cost, 0) }));
   const claudeShare = k.cost ? totals[0].cost / k.cost : 0;
   const busiest = [...d.daily].sort((a, b) => SERIES.reduce((x, s) => x + b[s.id].cost, 0) - SERIES.reduce((x, s) => x + a[s.id].cost, 0))[0];
@@ -58,17 +60,17 @@ function viewOverview() {
 
   <div class="live-metrics">${[
     metricTile({ label: 'Active AI apps', value: String(live.apps.length).padStart(2, '0'), sub: `${squad.total} detected · ${live.installed.length} installed`, color: HOLO.cyan, drill: 'apps', p: squad.total ? live.apps.length / squad.total : 0 }),
-    metricTile({ label: 'Sessions', value: whole.format(k.sessions), sub: `${delta(k.sessions, k.prevSessions)} ${(k.sessions / Math.max(1, d.daily.length)).toFixed(1)} per day`, color: HOLO.cyan, drill: 'sessions' }),
+    metricTile({ spark: dSum('sessions'), label: 'Sessions', value: whole.format(k.sessions), sub: `${delta(k.sessions, k.prevSessions)} ${(k.sessions / Math.max(1, d.daily.length)).toFixed(1)} per day`, color: HOLO.cyan, drill: 'sessions' }),
     metricTile({ label: 'Prompts typed', value: whole.format(k.prompts), sub: `${(k.prompts / Math.max(1, k.sessions)).toFixed(1)} per session`, color: HOLO.blue, drill: 'sessions' }),
-    metricTile({ label: 'Model calls', value: fmtN(k.calls), sub: `${delta(k.calls, k.prevCalls)} ${fmtN(k.subagentCalls)} by subagents`, color: HOLO.blue, drill: 'sessions', p: k.calls ? k.subagentCalls / k.calls : 0 }),
-    metricTile({ label: 'Tokens processed', value: fmtN(k.tokens), sub: `${delta(k.tokens, k.prevTokens)} ${fmtN(k.tokens / Math.max(1, k.sessions))} per session`, color: HOLO.violet, drill: 'tokens' }),
+    metricTile({ spark: dSum('calls'), label: 'Model calls', value: fmtN(k.calls), sub: `${delta(k.calls, k.prevCalls)} ${fmtN(k.subagentCalls)} by subagents`, color: HOLO.blue, drill: 'sessions', p: k.calls ? k.subagentCalls / k.calls : 0 }),
+    metricTile({ spark: dSum('tokens'), label: 'Tokens processed', value: fmtN(k.tokens), sub: `${delta(k.tokens, k.prevTokens)} ${fmtN(k.tokens / Math.max(1, k.sessions))} per session`, color: HOLO.violet, drill: 'tokens' }),
     metricTile({ label: 'Output tokens', value: fmtN(k.output), sub: `${k.tokens ? ((k.output / k.tokens) * 100).toFixed(2) : 0}% of all tokens`, color: HOLO.violet, drill: 'tokens' }),
-    metricTile({ label: 'Est. spend', value: fmtUSD(k.cost), sub: `${delta(k.cost, k.prevCost)} ${fmtUSD(k.cost / Math.max(1, d.daily.length))} per day`, color: HOLO.orange, drill: 'spend' }),
-    metricTile({ label: 'Month to date', value: fmtUSD(k.monthCost), sub: budget ? `${Math.round(budgetPct * 100)}% of ${fmtUSD(budget)} budget` : 'no budget set', color: HOLO.orange, drill: 'spend', p: budget ? budgetPct : d.month.daysElapsed / d.month.daysInMonth }),
-    metricTile({ label: 'Month projection', value: fmtUSD(d.month.projected), sub: `day ${Math.ceil(d.month.daysElapsed)} of ${d.month.daysInMonth}`, color: HOLO.pink, drill: 'spend', p: budget ? d.month.projected / budget : null }),
+    metricTile({ spark: dSum('cost'), label: 'Est. spend', value: fmtUSD(k.cost), sub: `${delta(k.cost, k.prevCost)} ${fmtUSD(k.cost / Math.max(1, d.daily.length))} per day`, color: HOLO.orange, drill: 'spend' }),
+    metricTile({ spark: mtd, label: 'Month to date', value: fmtUSD(k.monthCost), sub: budget ? `${Math.round(budgetPct * 100)}% of ${fmtUSD(budget)} budget` : 'no budget set', color: HOLO.orange, drill: 'spend', p: budget ? budgetPct : d.month.daysElapsed / d.month.daysInMonth }),
+    metricTile({ spark: mtd, label: 'Month projection', value: fmtUSD(d.month.projected), sub: `day ${Math.ceil(d.month.daysElapsed)} of ${d.month.daysInMonth}`, color: HOLO.pink, drill: 'spend', p: budget ? d.month.projected / budget : null }),
     metricTile({ label: 'Cache hit rate', value: fmtPct(k.cacheHitRate), sub: `${fmtN(k.composition.cacheRead)} tokens read from cache`, color: HOLO.cyan, drill: 'tokens', p: k.cacheHitRate }),
-    metricTile({ label: 'Cost per session', value: fmtUSD(k.cost / Math.max(1, k.sessions)), sub: `${fmtUSD(k.cost / Math.max(1, k.calls))} per model call`, color: HOLO.pink, drill: 'spend' }),
-    metricTile({ label: 'Busiest day', value: busiest ? fmtUSD(busiestCost) : '—', sub: busiest ? dayLabel(busiest.date) : 'no activity', color: HOLO.orange, drill: 'spend' }),
+    metricTile({ spark: dSum('cost').map((c, i) => c / Math.max(1, dSum('sessions')[i])), label: 'Cost per session', value: fmtUSD(k.cost / Math.max(1, k.sessions)), sub: `${fmtUSD(k.cost / Math.max(1, k.calls))} per model call`, color: HOLO.pink, drill: 'spend' }),
+    metricTile({ spark: dSum('cost'), label: 'Busiest day', value: busiest ? fmtUSD(busiestCost) : '—', sub: busiest ? dayLabel(busiest.date) : 'no activity', color: HOLO.orange, drill: 'spend' }),
   ].join('')}</div>
 
   <div class="live-grid">

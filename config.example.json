@@ -1,0 +1,48 @@
+{
+  "userName": "",
+  "monthlyBudgetUSD": 0,
+  "integrations": {
+    "dynatrace-saas": {
+      "type": "dynatrace",
+      "baseUrl": "https://abc12345.live.dynatrace.com",
+      "token": { "keychain": "acc.dynatrace-saas" },
+      "platformUrl": "https://abc12345.apps.dynatrace.com",
+      "platformToken": { "keychain": "acc.dynatrace-saas-platform" }
+    },
+    "dynatrace-managed": {
+      "type": "dynatrace",
+      "baseUrl": "https://dynatrace.example.internal/e/1a2b3c4d-0000-0000-0000-000000000000",
+      "token": { "keychain": "acc.dynatrace-managed" }
+    },
+    "phoenix": { "type": "arize", "flavor": "phoenix", "baseUrl": "http://localhost:6006", "apiKey": { "keychain": "acc.phoenix" } },
+    "arize-ax": { "type": "arize", "flavor": "ax", "enabled": false, "apiKey": { "keychain": "acc.arize-ax" } },
+    "n8n": {
+      "type": "n8n",
+      "baseUrl": "http://localhost:5678",
+      "apiKey": { "keychain": "acc.n8n" },
+      "allowWrite": true,
+      "webhooks": { "daily-report": "http://localhost:5678/webhook/daily-report" }
+    },
+    "omniroute": { "type": "router", "flavor": "omniroute", "baseUrl": "http://localhost:20128", "managementToken": { "keychain": "acc.omniroute" } },
+    "9router": { "type": "router", "flavor": "9router", "enabled": false, "baseUrl": "http://localhost:20128" },
+    "aion": {
+      "type": "http",
+      "enabled": false,
+      "baseUrl": "https://aion.example.com",
+      "auth": { "header": "Authorization", "prefix": "Bearer ", "secret": { "keychain": "acc.aion" } },
+      "healthPath": "/api/health",
+      "endpoints": [
+        { "name": "list_agents", "method": "GET", "path": "/api/agents", "description": "List AION agents" },
+        { "name": "get_agent", "method": "GET", "path": "/api/agents/{agentId}", "description": "One AION agent" },
+        { "name": "invoke_agent", "method": "POST", "path": "/api/agents/{agentId}/invoke", "description": "Run an AION agent", "params": { "input": { "type": "string", "description": "Task for the agent" } } }
+      ]
+    },
+    "omniroute-mcp": {
+      "type": "mcp",
+      "enabled": false,
+      "url": "http://localhost:20128/api/mcp/stream",
+      "auth": { "prefix": "Bearer ", "secret": { "keychain": "acc.omniroute-admin" } },
+      "include": ["*health*", "*usage*", "*quota*"]
+    }
+  }
+}
