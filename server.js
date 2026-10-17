@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // AI Command Center: a local dashboard of AI usage on this laptop.
-// Listens on 127.0.0.1 only; nothing is sent off the machine.
+// Listens on 127.0.0.1 only; nothing leaves the machine except calls to integrations you configure.
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -11,6 +11,11 @@ const { summarize } = require('./lib/aggregate');
 const { DEFAULT_PRICING } = require('./lib/pricing');
 const processes = require('./lib/processes');
 const { getVault } = require('./lib/vault');
+const { createIntegrations } = require('./lib/integrations');
+const { createSecrets } = require('./lib/secrets');
+const { createAudit } = require('./lib/audit');
+const { createLocal } = require('./lib/local');
+const register = require('./scripts/register-mcp');
 
 const PORT = Number(process.env.PORT) || 4777;
 const HOST = '127.0.0.1';
@@ -40,6 +45,7 @@ function loadConfig() {
     monthlyBudgetUSD: Number.isFinite(c.monthlyBudgetUSD) ? c.monthlyBudgetUSD : 0,
     pricing: { ...DEFAULT_PRICING, ...(c.pricing || {}) },
     vaultPaths: Array.isArray(c.vaultPaths) ? c.vaultPaths.filter((p) => typeof p === 'string') : [],
+    integrations: c.integrations && typeof c.integrations === 'object' && !Array.isArray(c.integrations) ? c.integrations : {},
   };
 }
 let config = loadConfig();
@@ -48,6 +54,27 @@ const indexer = DEMO
   ? { version: 1, state: { indexing: false, total: 0, done: 0, lastScan: Date.now(), lastDurationMs: 0, errors: 0 }, results: () => demo.buildResults(), refresh: async () => {} }
   : new Indexer([require('./lib/claude'), require('./lib/codex')], path.join(DIR, '.cache', 'index.json'));
 const memo = new Map();
+
+// Integrations are rebuilt whenever config.json changes on disk (they are edited in the file).
+const audit = createAudit(path.join(DIR, '.cache', 'mcp-audit.jsonl'));
+let integ = { mtimeMs: -1, registry: null };
+function getIntegrations() {
+  let mtimeMs = 0;
+  try { mtimeMs = fs.statSync(CONFIG_FILE).mtimeMs; } catch { /* no config yet */ }
+  if (!integ.registry || integ.mtimeMs !== mtimeMs) {
+    if (integ.registry) config = loadConfig();
+    const local = createLocal({ cacheDir: path.join(DIR, '.cache'), config, indexer });
+    const registry = createIntegrations({ config, secrets: createSecrets(), audit, local });
+    local.integrationsStatus = () => registry.status();
+    integ = { mtimeMs, registry };
+  }
+  return integ.registry;
+}
+function clientRows() {
+  return Object.entries(register.clients()).map(([id, c]) => ({
+    id, name: c.name, file: c.file.replace(os.homedir(), '~'), registered: register.isRegistered(c.file), command: `npm run mcp:register -- ${id}`,
+  }));
+}
 
 function getSummary(range) {
   const key = `${range}|${indexer.version}|${new Date().getHours()}`;
@@ -92,7 +119,8 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, DEMO ? demo.vault() : getVault(config.vaultPaths));
     }
     if (url.pathname === '/api/config' && req.method === 'GET') {
-      return send(res, 200, config);
+      const { integrations, ...rest } = config;
+      return send(res, 200, rest);
     }
     if (url.pathname === '/api/config' && req.method === 'POST') {
       if (!(req.headers['content-type'] || '').startsWith('application/json')) return send(res, 415, { error: 'json only' });
@@ -114,7 +142,19 @@ const server = http.createServer(async (req, res) => {
       if (DEMO) config = next;
       else { fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2)); config = loadConfig(); }
       memo.clear();
-      return send(res, 200, config);
+      const { integrations, ...rest } = config;
+      return send(res, 200, rest);
+    }
+    if (url.pathname === '/api/integrations' && req.method === 'GET') {
+      if (DEMO) return send(res, 200, demo.integrations());
+      return send(res, 200, { integrations: await getIntegrations().status(), clients: clientRows(), calls: audit.tail(100), mcpCommand: `${process.execPath} ${path.join(DIR, 'mcp.js')}` });
+    }
+    if (url.pathname === '/api/integrations/test' && req.method === 'POST') {
+      if (!(req.headers['content-type'] || '').startsWith('application/json')) return send(res, 415, { error: 'json only' });
+      const { id } = JSON.parse(await readBody(req));
+      if (DEMO) { const s = demo.integrations().integrations.find((i) => i.id === id); return s ? send(res, 200, s) : send(res, 404, { error: 'unknown integration' }); }
+      const [s] = await getIntegrations().status({ fresh: true, only: String(id || '') });
+      return s ? send(res, 200, s) : send(res, 404, { error: 'unknown integration' });
     }
     if (url.pathname === '/api/rescan' && req.method === 'POST') {
       indexer.refresh().then(() => memo.clear());
