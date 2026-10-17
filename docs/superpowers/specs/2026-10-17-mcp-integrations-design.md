@@ -1,6 +1,17 @@
 # MCP integrations hub: design
 
-Date: 2026-10-17 · Status: approved design, awaiting spec review
+Date: 2026-10-17 · Status: approved
+
+## Decisions from review (2026-10-17)
+
+| Platform | Decision |
+|---|---|
+| Dynatrace | Both SaaS and Managed, as two instances (`dynatrace-saas`, `dynatrace-managed`). The existing `dynatrace-managed-mcp` in Claude Code stays alongside it. |
+| Arize | Phoenix is the instance in use (`flavor: "phoenix"`). AX support is still built, but is not in the live config. |
+| n8n | As designed: read tools, plus `run_workflow` limited to allowlisted webhooks and `set_workflow_active`, behind `allowWrite`. |
+| OmniRoute | Live and tested on this Mac. A `read`-scope access token named `ai-command-center` is stored in Keychain as `acc.omniroute`. That token works for `/api/health`, `/api/models`, `/api/combos`, `/api/providers`, `/api/usage/analytics` and `/api/telemetry/summary`. `/v1/models` needs an inference key (`sk-…`) and none exists, so the omniroute flavor lists models from `/api/models` and uses `/v1/models` only when `apiKey` is set. OmniRoute's own MCP (`/api/mcp/stream`) demands an `admin` token, so the `omniroute-mcp` proxy entry ships with `enabled: false`. |
+| 9router | Supported (flavor `9router`), covered by unit tests against a fake server, and not tested live yet. |
+| Kiro | `~/.kiro/settings/mcp.json` is created by the registration script. Not tested live yet. |
 
 ## Goal
 
@@ -146,10 +157,12 @@ Config: `baseUrl` (default `http://localhost:20128`), `apiKey` (Bearer). For Omn
 
 | Tool | API | Flavor |
 |---|---|---|
-| `health` | `GET /api/health` (OmniRoute); for 9router a `GET /v1/models` round trip | both |
-| `list_models` | `GET /v1/models` | both |
+| `health` | `GET /api/health` (OmniRoute, no auth needed); for 9router a `GET /v1/models` round trip | both |
+| `list_models` | OmniRoute: `GET /api/models` with `managementToken`, or `GET /v1/models` when `apiKey` is set. 9router: `GET /v1/models` | both |
+| `list_providers` | `GET /api/providers` (connections, without credentials) | omniroute |
 | `list_combos` | `GET /api/combos` | omniroute |
-| `usage` | `GET /api/usage/analytics?period=day\|week\|month` | omniroute |
+| `usage` | `GET /api/usage/analytics?period=day\|week\|month`, trimmed to `summary`, `byModel`, `byProvider`, `dailyTrend`, `errorBreakdown` | omniroute |
+| `telemetry` | `GET /api/telemetry/summary` | omniroute |
 
 Tools a flavor does not support are not listed. 9router's management API is not documented publicly, so it gets only the OpenAI-compatible tools. Chat completions are deliberately left out, because they spend tokens.
 
@@ -175,14 +188,14 @@ On first `tools/list` the proxy initialises a session with the upstream, lists i
 ```json
 "integrations": {
   "dynatrace": { "type": "dynatrace", "baseUrl": "https://abc123.live.dynatrace.com", "token": { "keychain": "acc.dynatrace" } },
-  "arize":     { "type": "arize", "flavor": "ax", "apiKey": { "keychain": "acc.arize" } },
+  "phoenix":   { "type": "arize", "flavor": "phoenix", "baseUrl": "http://localhost:6006", "apiKey": { "keychain": "acc.phoenix" } },
   "n8n":       { "type": "n8n", "baseUrl": "https://n8n.example.com", "apiKey": { "env": "N8N_API_KEY" },
                  "allowWrite": true, "webhooks": { "daily-report": "https://n8n.example.com/webhook/abc" } },
-  "omniroute": { "type": "router", "flavor": "omniroute", "baseUrl": "http://localhost:20128", "apiKey": { "keychain": "acc.omniroute" } },
+  "omniroute": { "type": "router", "flavor": "omniroute", "baseUrl": "http://localhost:20128", "managementToken": { "keychain": "acc.omniroute" } },
   "aion":      { "type": "http", "baseUrl": "https://aion.example.com",
                  "auth": { "header": "Authorization", "prefix": "Bearer ", "secret": { "env": "AION_TOKEN" } },
                  "endpoints": [ { "name": "list_agents", "method": "GET", "path": "/api/agents", "description": "List AION agents" } ] },
-  "omniroute-mcp": { "type": "mcp", "url": "http://localhost:20128/api/mcp/stream", "include": ["*health*", "*usage*"] }
+  "omniroute-mcp": { "type": "mcp", "enabled": false, "url": "http://localhost:20128/api/mcp/stream", "include": ["*health*", "*usage*"] }
 }
 ```
 
