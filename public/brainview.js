@@ -5,13 +5,17 @@ let brainGraph = null;
 const groupMeta = (id) => BRAIN_GROUPS.find((g) => g.id === id) || BRAIN_GROUPS[BRAIN_GROUPS.length - 1];
 
 function viewBrain() {
-  return `<div class="hero"><div><div class="eyebrow">SECOND BRAIN</div><h1>Your second brain</h1><p id="brain-sub">Reading your Obsidian vault…</p></div>
+  return `<div class="holo-deck"><div class="hero"><div><div class="eyebrow">SECOND BRAIN</div><h1>Your second brain</h1><p id="brain-sub">Reading your Obsidian vault…</p></div>
     <div class="hero-actions">
       <label class="search brain-search">${icon('search')}<input id="brain-search" type="search" placeholder="Find a note…" autocomplete="off" aria-label="Find a note"></label>
       <button class="btn ghost" id="brain-pulses" aria-pressed="true">${icon('wave', 14)}Pulses</button>
       <button class="btn" id="brain-replay-btn">${icon('play', 14)}Replay growth</button>
     </div></div>
+    <section class="holo stage work-stage"><canvas id="brain-scene" aria-label="3D chart of notes created per week, stacked by note type"></canvas>
+      <div class="stage-tl"><div class="holo-kicker">KNOWLEDGE GROWTH · NOTES PER WEEK</div><div class="stage-key">One tower per week, stacked by note type · back walls: notes over time and the biggest hubs · hover a tower</div></div>
+      <div class="stage-legend">${BRAIN_GROUPS.filter((g) => g.id !== 'other').map((g) => `<span><i style="background:${BRAIN_NEON[g.id]}"></i>${g.name}</span>`).join('')}</div></section>
     <div class="grid kpis" id="brain-kpis">${'<div class="skeleton" style="height:128px"></div>'.repeat(4)}</div>
+    <div class="live-metrics" id="brain-metrics"></div>
     <div class="card graph-card">
       <div class="graph-wrap">
         <canvas id="brain-canvas" aria-label="Graph of notes and the links between them"></canvas>
@@ -24,7 +28,7 @@ function viewBrain() {
     <div class="grid two">
       <div class="card"><div class="card-head"><h3>Most connected notes</h3><span class="meta">links in + out</span></div><div id="brain-hubs"></div></div>
       <div class="card"><div class="card-head"><h3>Recently updated</h3><span class="meta">by file change</span></div><div id="brain-recent"></div></div>
-    </div>`;
+    </div></div>`;
 }
 
 function noteRow(n, i, right) {
@@ -71,6 +75,7 @@ async function mountBrain() {
   $('#brain-legend').innerHTML = BRAIN_GROUPS.filter((g) => counts[g.id]).map((g) =>
     `<button data-bgroup="${g.id}" aria-pressed="true"><i style="background:${g.color}"></i>${g.name}<span class="num">${counts[g.id]}</span></button>`).join('');
   $('#brain-hubs').innerHTML = `<div class="note-list">${hubs.slice(0, 8).map((n, i) => noteRow(n, i, `${n.inLinks} in · ${n.outLinks} out`)).join('')}</div>`;
+  mountBrainExtras(v);
   $('#brain-recent').innerHTML = `<div class="note-list">${[...notes].sort((a, b) => b.modified - a.modified).slice(0, 8).map((n, i) => noteRow(n, i, ago(n.modified))).join('')}</div>`;
 
   unmountBrain();

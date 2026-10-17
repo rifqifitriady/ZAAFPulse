@@ -9,6 +9,8 @@ const FAIL_CATS = [
   { id: 'hallucination', name: 'Hallucination signal', color: 'var(--tt-cread)' },
   { id: 'execution', name: 'Command or test failed', color: 'var(--tt-cwrite)' },
 ];
+// Fixed neon colors for the 3D failures chart (the deck is dark in both themes).
+const FAIL_NEON = { other: '#3ee6b0', process: '#8b7bff', hallucination: '#ff5ca8', execution: '#ffb547' };
 const KIND_HELP = {
   'Path that does not exist': 'The model read or wrote a file path that is not on disk.',
   'Edit text not in the file': 'The model tried to replace text that the file does not contain.',
@@ -59,11 +61,12 @@ function viewQuality() {
   return hero('QUALITY & SAFETY', 'How well your AI is working', `Accuracy, hallucination, poisoning and safety signals from the ${rangeText()}.`) +
     `<div class="notice info">${icon('alert')}<div><b>These are signals detected in your local logs</b>, not a graded evaluation. Every card opens the exact items that were matched, so you can judge them yourself.</div></div>
     ${qualityKpis()}
-    <div class="card">
-      <div class="card-head"><h3>Model-caused failures per day</h3><span class="meta">hover a day for its accuracy</span>
-        <div class="right">${legend(FAIL_CATS)}</div></div>
-      <div class="chart" id="quality-chart"></div>
-    </div>
+    <section class="holo stage failures-stage">
+      <canvas id="quality-scene" aria-label="3D chart of model-caused failures per day, stacked by category, with daily accuracy and tool calls on the back walls"></canvas>
+      <div class="stage-tl"><div class="holo-kicker">MODEL-CAUSED FAILURES PER DAY</div>
+        <div class="stage-key">One tower per day, stacked by cause · back walls: accuracy and tool calls per day · hover a tower · drag to rotate</div></div>
+      <div class="stage-legend">${FAIL_CATS.map((c) => `<span><i style="background:${FAIL_NEON[c.id]}"></i>${c.name}</span>`).join('')}</div>
+    </section>
     <div class="grid two">
       <div class="card"><div class="card-head"><h3>Safety</h3><span class="meta">what the AI saw and did</span></div>
         <div class="tiles">
