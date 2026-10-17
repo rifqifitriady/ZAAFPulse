@@ -9,7 +9,8 @@
     "demo": "DEMO=1 PORT=4778 node server.js",
     "mcp": "node mcp.js",
     "mcp:register": "node scripts/register-mcp.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "media": "node scripts/capture-media.js"
   },
   "engines": {
     "node": ">=18"
