@@ -136,6 +136,10 @@ const server = http.createServer(async (req, res) => {
       const r = url.searchParams.get('range') || '30';
       return send(res, 200, getInsights(r === 'all' ? 'all' : Math.min(365, Math.max(1, parseInt(r, 10) || 30))));
     }
+    if (url.pathname === '/api/router' && DEMO) {
+      const section = url.searchParams.get('section');
+      return send(res, 200, { configured: true, id: 'omniroute (demo)', data: require('./lib/omniroute').demoRouter(section) });
+    }
     if (url.pathname === '/api/router') {
       if (!router.configured()) return send(res, 200, { configured: false });
       const range = ['1h', '24h', '7d', '30d'].includes(url.searchParams.get('range')) ? url.searchParams.get('range') : '24h';
@@ -151,7 +155,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, DEMO ? timeline.demoTimeline(hours) : await timeline.timeline(hours));
     }
     if (url.pathname === '/api/mcp-calls') {
-      return send(res, 200, { calls: DEMO ? [] : require('./lib/audit').createAudit(path.join(DIR, '.cache', 'mcp-audit.jsonl')).tail(300) });
+      return send(res, 200, { calls: DEMO ? demo.integrations().calls : require('./lib/audit').createAudit(path.join(DIR, '.cache', 'mcp-audit.jsonl')).tail(300) });
     }
     if (url.pathname === '/api/office') {
       return send(res, 200, DEMO ? office.demoSnapshot() : office.snapshot());
