@@ -96,6 +96,7 @@ const APPS = {
   antigravity: { name: 'ANTIGRAVITY', role: 'Gemini agentic IDE', icon: 'layers', chip: 'violet',
     desc: 'Google Antigravity IDE and Gemini tooling. Live presence and resource use only.' },
   cursor: { name: 'CURSOR', role: 'AI code editor', icon: 'code', chip: 'blue', desc: 'Cursor editor. Live presence and resource use only.' },
+  kiro: { name: 'KIRO', role: 'Spec-driven agentic IDE', icon: 'code', chip: 'amber', desc: 'Kiro IDE and CLI. Live presence and resource use only; it can use the AI Command Center MCP server.' },
   ollama: { name: 'OLLAMA', role: 'Local models', icon: 'cube', chip: 'green', desc: 'Runs open models on this laptop. Live presence and resource use only.' },
   lmstudio: { name: 'LM STUDIO', role: 'Local models', icon: 'cube', chip: 'amber', desc: 'Runs open models on this laptop. Live presence and resource use only.' },
 };
