@@ -1,0 +1,14 @@
+{
+  "name": "ai-command-center",
+  "version": "1.0.0",
+  "description": "Local dashboard of AI usage on this laptop: Claude Code, Codex, and running AI apps.",
+  "main": "server.js",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "demo": "DEMO=1 PORT=4778 node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
