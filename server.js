@@ -16,6 +16,7 @@ const { insights } = require('./lib/insights');
 const reqlogs = require('./lib/reqlogs');
 const timeline = require('./lib/timeline');
 const { createOmniRoute } = require('./lib/omniroute');
+const { createIntegrationConfig, describe: describeIntegrations } = require('./lib/integration-config');
 const { createIntegrations } = require('./lib/integrations');
 const { createSecrets } = require('./lib/secrets');
 const { createAudit } = require('./lib/audit');
@@ -67,7 +68,7 @@ function getIntegrations() {
   let mtimeMs = 0;
   try { mtimeMs = fs.statSync(CONFIG_FILE).mtimeMs; } catch { /* no config yet */ }
   if (!integ.registry || integ.mtimeMs !== mtimeMs) {
-    if (integ.registry) config = loadConfig();
+    config = loadConfig(); // also on the first build: config.json may have been edited since startup
     const local = createLocal({ cacheDir: path.join(DIR, '.cache'), config, indexer });
     const registry = createIntegrations({ config, secrets: createSecrets(), audit, local });
     local.integrationsStatus = () => registry.status();
@@ -75,6 +76,7 @@ function getIntegrations() {
   }
   return integ.registry;
 }
+const integrationConfig = createIntegrationConfig({ file: CONFIG_FILE, secrets: createSecrets() });
 function clientRows() {
   return Object.entries(register.clients()).map(([id, c]) => ({
     id, name: c.name, file: c.file.replace(os.homedir(), '~'), registered: register.isRegistered(c.file), command: `npm run mcp:register -- ${id}`,
@@ -189,6 +191,26 @@ const server = http.createServer(async (req, res) => {
       memo.clear();
       const { integrations, ...rest } = config;
       return send(res, 200, rest);
+    }
+    if (url.pathname === '/api/integrations/config' && req.method === 'GET') {
+      if (DEMO) return send(res, 200, describeIntegrations(Object.fromEntries(demo.integrations().integrations.filter((i) => i.type !== 'acc')
+        .map((i) => [i.id, { type: i.type, ...(i.flavor ? { flavor: i.flavor } : {}), enabled: i.enabled, allowWrite: i.allowWrite, baseUrl: 'http://localhost:8080' }]))));
+      return send(res, 200, integrationConfig.describe());
+    }
+    if (['/api/integrations/save', '/api/integrations/delete', '/api/integrations/test-draft'].includes(url.pathname) && req.method === 'POST') {
+      if (!(req.headers['content-type'] || '').startsWith('application/json')) return send(res, 415, { error: 'json only' });
+      const body = JSON.parse(await readBody(req));
+      if (url.pathname === '/api/integrations/test-draft') {
+        if (DEMO) return send(res, 200, { status: { id: body.id, type: body.type, state: 'ok', latencyMs: 87, tools: 5 }, tools: ['demo_tool_a', 'demo_tool_b'] });
+        return send(res, 200, await integrationConfig.test(body));
+      }
+      if (DEMO) return send(res, 200, { errors: ['Demo mode: changes are not saved.'] });
+      const r = url.pathname.endsWith('/save') ? integrationConfig.save(body) : integrationConfig.remove(body.id);
+      if (r.errors) return send(res, 200, r);
+      config = loadConfig(); // keep Settings saves from writing back a stale integrations list
+      if (url.pathname.endsWith('/delete')) return send(res, 200, r);
+      const [status] = await getIntegrations().status({ fresh: true, only: r.id });
+      return send(res, 200, { id: r.id, status });
     }
     if (url.pathname === '/api/integrations' && req.method === 'GET') {
       if (DEMO) return send(res, 200, demo.integrations());

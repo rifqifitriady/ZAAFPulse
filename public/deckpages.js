@@ -94,7 +94,7 @@ function viewIntegrationsPage() {
   const busiest = Object.entries(callsBy).sort((a, b) => b[1] - a[1])[0];
   const okCalls = calls.filter((c) => c.ok).length;
   return `<div class="holo-deck">
-    ${subHero('INTEGRATIONS', 'MCP connections', `${by('ok')} of ${list.length} connected. AI clients reach these through <code>ai-command-center</code>; edit them in config.json.`, `<span class="pill">${icon('refresh', 14)}Checked ${ago(integ.at)}</span>`)}
+    ${subHero('INTEGRATIONS', 'MCP connections', `${by('ok')} of ${list.length} connected. AI clients reach these through <code>ai-command-center</code>. Add, configure and test them here; changes are saved to config.json.`, `<span class="pill">${icon('refresh', 14)}Checked ${ago(integ.at)}</span><button class="btn" type="button" data-ig-add>+ Add integration</button>`)}
     ${workStage('ig-scene', 'INTEGRATION HUB', 'Centre = the ai-command-center MCP server · ring = integrations (height = tools, color = health) · left = AI clients · pulses = recent tool calls · hover a node',
       '3D map of the MCP hub, its integrations and the clients registered to it',
       Object.entries({ ok: 'Connected', error: 'Error', unchecked: 'Not checked', disabled: 'Disabled' }).map(([k, l]) => `<span><i style="background:${INTEG_NEON[k]}"></i>${l}</span>`).join(''))}
@@ -177,4 +177,137 @@ function mountIntegrations() {
       hoverTip(g, pts, hov);
     },
   });
+  // Clicking an integration node opens its editor (clients are configured in their own apps).
+  canvas.addEventListener('click', () => { const key = (hov.tip || '').split('|')[0]; if (key && !key.startsWith('client:') && key !== 'acc') openIntegEditor(key); });
 }
+
+/* ---------- Integration editor: add, configure, test, delete ---------- */
+const ie = { schema: null, form: null, busy: '', result: null, errors: [] };
+const SECRET_MODES = [['keep', 'Keep current'], ['store', 'Paste → save to Keychain'], ['keychain', 'Keychain item'], ['env', 'Environment variable'], ['none', 'None']];
+
+async function openIntegEditor(id) {
+  try { ie.schema = await api('/api/integrations/config'); } catch (err) { alert(`Could not load integration settings: ${err.message}`); return; }
+  const e = id ? ie.schema.entries.find((x) => x.id === id) : null;
+  if (id && (!e || !e.editable)) { alert(`"${id}" cannot be edited here; change it in config.json.`); return; }
+  ie.form = e ? { id: e.id, originalId: e.id, type: e.type, enabled: e.enabled, allowWrite: e.allowWrite, values: { ...e.values } } : { id: '', originalId: null, type: null, enabled: true, allowWrite: false, values: {} };
+  ie.result = null; ie.errors = []; ie.busy = '';
+  paintIntegEditor(true);
+}
+function closeIntegEditor() { const el = $('#ie'); if (el) el.remove(); ie.form = null; document.body.classList.remove('drawer-locked'); }
+
+// Reads the form back from the DOM so typing never needs a re-render.
+function collectIntegForm() {
+  const root = $('#ie'); if (!root || !ie.form || !ie.form.type) return ie.form;
+  const f = ie.form; const t = ie.schema.types[f.type];
+  f.id = root.querySelector('[name="ie-id"]').value.trim();
+  f.enabled = root.querySelector('[name="ie-enabled"]').checked;
+  f.allowWrite = root.querySelector('[name="ie-write"]').checked;
+  for (const fld of t.fields) {
+    if (fld.kind === 'secret') {
+      const mode = root.querySelector(`[name="ie-${fld.key}-mode"]`).value;
+      const input = root.querySelector(`[name="ie-${fld.key}"]`);
+      const v = input ? input.value : '';
+      f.values[fld.key] = mode === 'keychain' ? { mode, service: v.trim() } : mode === 'env' ? { mode, name: v.trim() } : mode === 'store' ? { mode, value: v } : { mode };
+      f.values[`__${fld.key}Current`] = f.values[`__${fld.key}Current`] ?? (ie.schema.entries.find((x) => x.id === f.originalId)?.values[fld.key] || null);
+    } else {
+      const el = root.querySelector(`[name="ie-${fld.key}"]`);
+      f.values[fld.key] = el ? el.value : '';
+    }
+  }
+  return f;
+}
+const payload = () => { const f = collectIntegForm(); const values = {}; for (const [k, v] of Object.entries(f.values)) if (!k.startsWith('__')) values[k] = v; return { id: f.id, originalId: f.originalId, type: f.type, enabled: f.enabled, allowWrite: f.allowWrite, values }; };
+
+function secretField(fld, f) {
+  const current = f.values[`__${fld.key}Current`] !== undefined ? f.values[`__${fld.key}Current`] : (ie.schema.entries.find((x) => x.id === f.originalId)?.values[fld.key] || null);
+  f.values[`__${fld.key}Current`] = current;
+  const v = f.values[fld.key];
+  const mode = v && v.mode ? v.mode : current ? 'keep' : fld.required ? 'store' : 'none';
+  const modes = SECRET_MODES.filter(([m]) => m !== 'keep' || current);
+  const val = v && (v.service || v.name || v.value) ? (v.service || v.name || v.value) : '';
+  const input = mode === 'store' ? `<input class="input" type="password" name="ie-${fld.key}" autocomplete="off" placeholder="Paste the secret; it goes to the macOS Keychain, not config.json" value="${esc(val)}">`
+    : mode === 'keychain' ? `<input class="input" name="ie-${fld.key}" placeholder="acc.${esc(f.id || 'my-integration')}" value="${esc(val || (current && current.keychain) || '')}">`
+      : mode === 'env' ? `<input class="input" name="ie-${fld.key}" placeholder="MY_API_TOKEN" value="${esc(val || (current && current.env) || '')}">` : '';
+  return `<div class="ie-field"><label>${esc(fld.label)}${fld.required ? ' <i>required</i>' : ''}</label>
+    ${current ? `<div class="ie-current">Current: <code>${current.keychain ? `Keychain · ${esc(current.keychain)}` : `env · ${esc(current.env)}`}</code></div>` : ''}
+    <div class="ie-secret"><select class="input" name="ie-${fld.key}-mode" data-ie-remode>${modes.map(([m, l]) => `<option value="${m}" ${m === mode ? 'selected' : ''}>${l}</option>`).join('')}</select>${input}</div>
+    ${fld.help ? `<small>${esc(fld.help)}</small>` : ''}</div>`;
+}
+
+function paintIntegEditor(first) {
+  if (!ie.form) return;
+  let el = $('#ie');
+  if (!el) { el = document.createElement('div'); el.id = 'ie'; document.body.appendChild(el); document.body.classList.add('drawer-locked'); }
+  const f = ie.form; const types = ie.schema.types; const t = f.type ? types[f.type] : null;
+  const typeMeta = (k) => INTEG_TYPES[k] || [types[k].label, 'plug', 'blue'];
+  const body = !t
+    ? `<p class="ie-lead">Choose what to connect. You can test the connection before anything is saved.</p>
+       <div class="ie-types">${Object.entries(types).map(([k, v]) => `<button type="button" class="ie-type" data-ie-type="${k}"><span class="chip ${typeMeta(k)[2]}">${icon(typeMeta(k)[1], 16)}</span><b>${esc(v.label)}</b><small>${esc(v.hint)}</small></button>`).join('')}</div>`
+    : `<div class="ie-typebar"><span class="chip ${typeMeta(f.type)[2]}">${icon(typeMeta(f.type)[1], 16)}</span><div><b>${esc(t.label)}</b><small>${esc(t.hint)}</small></div>${f.originalId ? '' : '<button type="button" class="link" data-ie-retype>Change type</button>'}</div>
+       <div class="ie-field"><label>ID <i>required</i></label><input class="input" name="ie-id" value="${esc(f.id)}" placeholder="${esc(f.type)}-prod" autocomplete="off"><small>Lowercase letters, digits and dashes. Tools are named <code>${esc(f.id || '<id>')}_…</code>.</small></div>
+       <div class="ie-toggles"><label class="ie-switch"><input type="checkbox" name="ie-enabled" ${f.enabled ? 'checked' : ''}><span></span>Enabled</label>
+         <label class="ie-switch"><input type="checkbox" name="ie-write" ${f.allowWrite ? 'checked' : ''}><span></span>Allow write tools</label></div>
+       ${t.fields.map((fld) => {
+         if (fld.kind === 'secret') return secretField(fld, f);
+         const v = f.values[fld.key] ?? '';
+         const label = `<label>${esc(fld.label)}${fld.required ? ' <i>required</i>' : ''}</label>`;
+         const help = fld.help ? `<small>${esc(fld.help)}</small>` : '';
+         if (fld.kind === 'select') return `<div class="ie-field">${label}<select class="input" name="ie-${fld.key}">${fld.options.map((o) => `<option ${o === (v || fld.default) ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>${help}</div>`;
+         if (fld.kind === 'json') return `<div class="ie-field">${label}<textarea class="input ie-json" name="ie-${fld.key}" rows="${fld.shape === 'array' ? 6 : 3}" spellcheck="false" placeholder="${esc(fld.placeholder || '')}">${esc(v)}</textarea>${help}</div>`;
+         return `<div class="ie-field">${label}<input class="input" name="ie-${fld.key}" value="${esc(v)}" placeholder="${esc(fld.placeholder || '')}" autocomplete="off">${help}</div>`;
+       }).join('')}`;
+  const r = ie.result;
+  const result = ie.errors.length ? `<div class="ie-result bad"><b>Fix these first</b><ul>${ie.errors.map((e) => `<li>${esc(e)}</li>`).join('')}</ul></div>`
+    : r ? `<div class="ie-result ${r.status.state === 'ok' ? 'good' : r.status.state === 'error' ? 'bad' : ''}"><b>${r.status.state === 'ok' ? 'Connected' : r.status.state === 'error' ? 'Connection failed' : r.status.state === 'disabled' ? 'Disabled' : 'Built, not checked'}${r.status.latencyMs != null ? ` · ${whole.format(r.status.latencyMs)} ms` : ''}</b>
+        ${r.status.error ? `<code class="ie-err">${esc(r.status.error)}</code>` : ''}${r.tools && r.tools.length ? `<div class="ie-tools">${r.tools.slice(0, 18).map((x) => `<code>${esc(x)}</code>`).join('')}${r.tools.length > 18 ? `<span>+${r.tools.length - 18} more</span>` : ''}</div>` : ''}${r.saved ? '<small>Saved to config.json. AI clients see the change on their next tool list.</small>' : ''}</div>` : '';
+  el.innerHTML = `<div class="ie-backdrop" data-ie-close></div>
+    <aside class="ie-panel holo-deck" role="dialog" aria-modal="true" aria-labelledby="ie-title">
+      <div class="ie-head"><div><div class="eyebrow">INTEGRATIONS</div><h2 id="ie-title">${f.originalId ? `Configure ${esc(f.originalId)}` : 'Add integration'}</h2></div><button class="icon-btn" data-ie-close aria-label="Close">×</button></div>
+      <div class="ie-body">${body}${result}</div>
+      ${t ? `<div class="ie-foot">${f.originalId ? `<button type="button" class="btn ghost danger" data-ie-delete ${ie.busy ? 'disabled' : ''}>Delete</button>` : ''}<span class="ie-spacer"></span>
+        <button type="button" class="btn ghost" data-ie-test ${ie.busy ? 'disabled' : ''}>${ie.busy === 'test' ? 'Testing…' : 'Test connection'}</button>
+        <button type="button" class="btn" data-ie-save ${ie.busy ? 'disabled' : ''}>${ie.busy === 'save' ? 'Saving…' : f.originalId ? 'Save changes' : 'Add integration'}</button></div>` : ''}
+    </aside>`;
+  if (first) { const inp = el.querySelector('input, button.ie-type'); if (inp) inp.focus(); }
+}
+
+async function integEditorAction(kind) {
+  const p = payload(); ie.busy = kind; ie.errors = []; ie.result = null; paintIntegEditor();
+  try {
+    if (kind === 'test') {
+      const r = await api('/api/integrations/test-draft', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) });
+      if (r.errors) ie.errors = r.errors; else ie.result = r;
+    } else if (kind === 'save') {
+      const r = await api('/api/integrations/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) });
+      if (r.errors) ie.errors = r.errors;
+      else {
+        ie.result = { status: r.status || { state: 'unchecked' }, tools: [], saved: true };
+        ie.form.originalId = r.id; ie.form.id = r.id;
+        // Pasted secrets are now Keychain references: reload the form so it shows them as current.
+        ie.schema = await api('/api/integrations/config');
+        const e = ie.schema.entries.find((x) => x.id === r.id);
+        if (e) ie.form.values = { ...e.values };
+        integ.data = null; loadIntegrations();
+      }
+    } else if (kind === 'delete') {
+      if (!confirm(`Remove "${p.originalId}" from config.json? Keychain items are left in place.`)) { ie.busy = ''; paintIntegEditor(); return; }
+      const r = await api('/api/integrations/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: p.originalId }) });
+      if (r.errors) ie.errors = r.errors; else { ie.busy = ''; closeIntegEditor(); integ.data = null; loadIntegrations(); return; }
+    }
+  } catch (err) { ie.errors = [err.message]; }
+  ie.busy = ''; paintIntegEditor();
+}
+
+document.addEventListener('click', (e) => {
+  if (e.target.closest('[data-ig-add]')) { openIntegEditor(null); return; }
+  const ed = e.target.closest('[data-integ-edit]'); if (ed) { openIntegEditor(ed.dataset.integEdit); return; }
+  if (!$('#ie')) return;
+  if (e.target.closest('[data-ie-close]')) { closeIntegEditor(); return; }
+  const ty = e.target.closest('[data-ie-type]'); if (ty) { ie.form.type = ty.dataset.ieType; ie.form.values = {}; ie.form.id = ie.form.id || ty.dataset.ieType; paintIntegEditor(true); return; }
+  if (e.target.closest('[data-ie-retype]')) { ie.form.type = null; ie.result = null; ie.errors = []; paintIntegEditor(true); return; }
+  if (e.target.closest('[data-ie-test]')) { integEditorAction('test'); return; }
+  if (e.target.closest('[data-ie-save]')) { integEditorAction('save'); return; }
+  if (e.target.closest('[data-ie-delete]')) integEditorAction('delete');
+});
+document.addEventListener('change', (e) => { if (e.target.matches && e.target.matches('[data-ie-remode]')) { collectIntegForm(); const key = e.target.name.replace(/^ie-|-mode$/g, ''); ie.form.values[key] = { mode: e.target.value }; paintIntegEditor(); } });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('#ie')) { e.stopPropagation(); closeIntegEditor(); } }, true);
