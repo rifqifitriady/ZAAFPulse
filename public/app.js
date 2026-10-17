@@ -58,6 +58,7 @@ const ICON_PATHS = {
   dollar: '<path d="M12 3v18M16.5 7.5c0-1.7-2-3-4.5-3s-4.5 1.3-4.5 3S9.5 10.5 12 11s4.5 1.3 4.5 3.2-2 3.3-4.5 3.3-4.5-1.3-4.5-3"/>',
   alert: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5M12 16h.01"/>',
   terminal: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M7 9.5l3 2.5-3 2.5M12.5 15H17"/>',
+  plug: '<path d="M9 3v5M15 3v5M6.5 8h11v3a5.5 5.5 0 0 1-11 0zM12 16.5V21"/>',
   code: '<path d="M8.5 7L3.5 12l5 5M15.5 7l5 5-5 5M13.5 4.5l-3 15"/>',
   chat: '<path d="M4 5.5h16v10H9l-5 4z"/>',
   layers: '<path d="M12 3l9 5-9 5-9-5zM3 13l9 5 9-5"/>',
@@ -96,6 +97,7 @@ const APPS = {
   antigravity: { name: 'ANTIGRAVITY', role: 'Gemini agentic IDE', icon: 'layers', chip: 'violet',
     desc: 'Google Antigravity IDE and Gemini tooling. Live presence and resource use only.' },
   cursor: { name: 'CURSOR', role: 'AI code editor', icon: 'code', chip: 'blue', desc: 'Cursor editor. Live presence and resource use only.' },
+  kiro: { name: 'KIRO', role: 'Spec-driven agentic IDE', icon: 'code', chip: 'amber', desc: 'Kiro IDE and CLI. Live presence and resource use only; it can use the AI Command Center MCP server.' },
   ollama: { name: 'OLLAMA', role: 'Local models', icon: 'cube', chip: 'green', desc: 'Runs open models on this laptop. Live presence and resource use only.' },
   lmstudio: { name: 'LM STUDIO', role: 'Local models', icon: 'cube', chip: 'amber', desc: 'Runs open models on this laptop. Live presence and resource use only.' },
 };
@@ -111,7 +113,7 @@ const state = {
   route: 'overview',
   history: {}, // app id -> recent CPU samples
 };
-const TITLES = { overview: 'OVERVIEW', squad: 'AI SQUAD', sessions: 'SESSIONS', projects: 'PROJECTS', agents: 'AGENTS & SKILLS', quality: 'QUALITY & SAFETY', brain: 'SECOND BRAIN', live: 'LIVE MONITOR', settings: 'SETTINGS' };
+const TITLES = { overview: 'OVERVIEW', squad: 'AI SQUAD', sessions: 'SESSIONS', projects: 'PROJECTS', agents: 'AGENTS & SKILLS', quality: 'QUALITY & SAFETY', brain: 'SECOND BRAIN', live: 'LIVE MONITOR', integrations: 'INTEGRATIONS', settings: 'SETTINGS' };
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -127,6 +129,7 @@ async function loadLive() {
     state.live = await api('/api/live');
     const seen = new Set();
     for (const a of state.live.apps) { (state.history[a.id] ||= []).push(a.cpu); seen.add(a.id); }
+    recordLive(state.live);
     for (const [id, h] of Object.entries(state.history)) {
       if (!seen.has(id)) h.push(0);
       if (h.length > 60) h.splice(0, h.length - 60); // 5 minutes at 5-second polling
@@ -396,62 +399,6 @@ function squadCards(limit) {
   return { html: cards.join(''), total: ids.length, running: live.apps.length };
 }
 
-function viewOverview() {
-  const d = state.data; const k = d.kpis; const live = state.live || { apps: [] };
-  const name = d.config.userName;
-  const today = new Date().toLocaleDateString('en', { weekday: 'long', month: 'long', day: 'numeric' });
-  const budget = d.config.monthlyBudgetUSD;
-  const budgetPct = budget ? k.monthCost / budget : 0;
-  const unpriced = d.unpriced.length
-    ? ` ${d.unpriced.length} model${d.unpriced.length > 1 ? 's have' : ' has'} no price set (${d.unpriced.slice(0, 3).map(esc).join(', ')}${d.unpriced.length > 3 ? '…' : ''}), so their cost shows as $0.` : '';
-  const squad = squadCards(6);
-  const runningNames = live.apps.map((a) => a.name).slice(0, 3).join(', ');
-
-  return hero('AI USAGE OVERVIEW', `${greeting()}, ${esc(name)}.`, `Here's how AI has been working on this laptop over the ${rangeText()}.`,
-    `<span class="pill">${icon('calendar', 14)}${today}</span>`) +
-  `<div class="notice">${icon('alert')}<div><b>Cost is an API-equivalent estimate</b> at list price per token. On a Claude Max or ChatGPT plan you are not billed per token.${unpriced}</div><a href="#settings">Edit prices ${icon('external', 12)}</a></div>
-  <div class="grid kpis">
-    ${kpiCard({ title: 'Active AI apps', chip: 'green', ic: 'cpu', drill: 'apps', value: live.apps.length, fmt: 'pad2',
-      after: `<small class="muted">${squad.total} detected</small>`, sub: runningNames ? `Running now: ${esc(runningNames)}` : 'No AI app is running right now' })}
-    ${kpiCard({ title: 'Sessions', chip: 'violet', ic: 'zap', drill: 'sessions', value: k.sessions, fmt: 'int',
-      after: delta(k.sessions, k.prevSessions), sub: `${whole.format(k.prompts)} prompts typed · ${fmtN(k.calls)} model calls` })}
-    ${kpiCard({ title: 'Tokens processed', chip: 'blue', ic: 'layers', drill: 'tokens', value: k.tokens, fmt: 'n',
-      after: delta(k.tokens, k.prevTokens), sub: `${fmtN(k.output)} output · ${fmtPct(k.cacheHitRate)} served from cache` })}
-    ${kpiCard({ title: 'Est. spend', chip: 'amber', ic: 'dollar', drill: 'spend', value: k.cost, fmt: 'usd',
-      after: delta(k.cost, k.prevCost),
-      sub: `${fmtUSD(k.monthCost)} this month · ${budget ? `${Math.round(budgetPct * 100)}% of ${fmtUSD(budget)} budget` : 'no budget set'}`,
-      extra: budget ? `<div class="meter" title="Month to date vs budget"><i class="${budgetPct > 1 ? 'over' : ''}" style="width:${Math.min(100, budgetPct * 100)}%"></i></div>` : '' })}
-  </div>
-
-  <div class="card">
-    <div class="card-head"><h3>Daily activity</h3><span class="meta">${rangeText()} · by tool</span>
-      <div class="right">${legend()}
-        <div class="segmented" role="group" aria-label="Metric">${[['cost', 'Cost'], ['tokens', 'Tokens'], ['calls', 'Calls']].map(([v, l]) =>
-          `<button data-metric="${v}" aria-pressed="${state.metric === v}">${l}</button>`).join('')}</div></div></div>
-    <div class="chart" id="daily-chart"></div>
-  </div>
-
-  <div class="section-head"><h2>AI quality & safety</h2><span class="meta">— signals from your local logs · click a card for details</span><a class="link" href="#quality">Quality & safety ↗</a></div>
-  ${qualityKpis()}
-
-  <div class="section-head"><h2>AI Squad</h2><span class="meta">— ${squad.total} detected · ${squad.running} running now</span><a class="link" href="#squad">View all ↗</a></div>
-  <div class="grid squad">${squad.html}</div>
-
-  <div class="grid two">
-    <div class="card"><div class="card-head"><h3>Model mix</h3><span class="meta">tokens by model</span><div class="right">${legend()}</div></div>
-      ${barList(d.models.slice(0, 8), { value: (m) => m.tokens, label: (m) => `${esc(m.model)}<small>${fmtN(m.calls)} calls${m.priced ? ' · ' + fmtUSD(m.cost) : ''}</small>`, color: (m) => seriesColor(m.tool) })}</div>
-    <div class="card"><div class="card-head"><h3>When you use AI</h3><span class="meta">model calls by weekday and hour</span></div>${heatmap(d.heatmap)}</div>
-  </div>
-
-  <div class="grid two">
-    <div class="card"><div class="card-head"><h3>Top projects</h3><span class="meta">by tokens</span><div class="right"><a class="link" href="#projects" style="font-size:12.5px;color:var(--accent);text-decoration:none;font-weight:600">All projects ↗</a></div></div>
-      ${projectsTable(d.projects.slice(0, 6), true)}</div>
-    <div class="card"><div class="card-head"><h3>Plan limits</h3><span class="meta">latest reading</span></div>${limitsBlock()}
-      <div class="card-head" style="margin-top:18px"><h3>Most-used subagents</h3></div>
-      ${barList(d.subagents.slice(0, 5), { value: (a) => a.count, label: (a) => esc(a.name), color: () => 'var(--accent)', empty: 'No subagents launched in this range.' })}</div>
-  </div>`;
-}
-
 function limitsBlock() {
   const l = state.data.codexLimits;
   if (!l) return '<div class="empty">No plan-limit readings found. Claude Code does not write its limits to disk.</div>';
@@ -477,73 +424,13 @@ function projectsTable(rows, compactMode) {
   </tbody></table></div>`;
 }
 
-function viewSquad() {
-  const s = squadCards(99);
-  return hero('AI SQUAD', 'Every AI tool on this laptop', `${s.total} detected · ${s.running} running now. Tools with local logs show usage for the ${rangeText()}.`) +
-    `<div class="grid squad">${s.html}</div>`;
-}
-
 function matches(...fields) {
   const q = state.search.trim().toLowerCase();
   return !q || fields.some((f) => String(f || '').toLowerCase().includes(q));
 }
 
-function viewSessions() {
-  const d = state.data;
-  const rows = d.sessions.filter((s) => (state.toolFilter === 'all' || s.tool === state.toolFilter)
-    && matches(s.project, s.projectPath, s.model, s.id, s.branch, s.entrypoint));
-  const filter = `<div class="segmented" role="group" aria-label="Tool">${[['all', 'All tools'], ...SERIES.map((x) => [x.id, x.name])].map(([v, l]) =>
-    `<button data-tool="${v}" aria-pressed="${state.toolFilter === v}">${l}</button>`).join('')}</div>`;
-  const note = d.totalSessions > d.sessions.length ? ` Showing the latest ${d.sessions.length} of ${d.totalSessions}.` : '';
-  return hero('SESSIONS', 'Session log', `Every AI session with recorded usage in the ${rangeText()}.${note}`) +
-    `<div class="filters">${filter}${state.search ? `<span class="muted">Filtered by “${esc(state.search)}”</span>` : ''}</div>
-    <div class="card">${rows.length ? `<div class="table-wrap"><table><thead><tr><th>Session</th><th>Tool</th><th>Model</th><th>Started</th><th class="r">Duration</th><th class="r">Prompts</th><th class="r">Calls</th><th class="r">Tokens</th><th class="r">Est. cost</th></tr></thead><tbody>
-    ${rows.map((s) => `<tr><td><div class="clip" title="${esc(s.projectPath)}">${esc(s.project)}</div><div class="sub clip">${esc(s.branch && s.branch !== 'HEAD' ? s.branch + ' · ' : '')}${esc((s.entrypoint || '').replace(/^claude-/, ''))} · ${esc(s.id.slice(0, 8))}</div></td>
-      <td><span class="tool-dot" style="background:${seriesColor(s.tool)}"></span>${esc(SERIES.find((x) => x.id === s.tool)?.name)}</td>
-      <td>${esc(s.model || '')}${s.models.length > 1 ? `<span class="sub"> +${s.models.length - 1}</span>` : ''}</td>
-      <td class="sub">${fmtDate(s.start)}</td><td class="r num">${dur((s.end - s.start) / 1000)}</td>
-      <td class="r num">${s.prompts}</td><td class="r num">${fmtN(s.calls)}${s.subCalls ? `<div class="sub">${fmtN(s.subCalls)} by subagents</div>` : ''}</td>
-      <td class="r num">${fmtN(s.tokens)}</td><td class="r num">${s.cost ? fmtUSD(s.cost) : '—'}</td></tr>`).join('')}
-    </tbody></table></div>` : '<div class="empty">No sessions match.</div>'}</div>`;
-}
 
-function viewProjects() {
-  const rows = state.data.projects.filter((p) => matches(p.name, p.path));
-  return hero('PROJECTS', 'Where AI time goes', `Usage grouped by working folder for the ${rangeText()}.`) +
-    `<div class="card">${projectsTable(rows, false)}</div>`;
-}
 
-function viewAgents() {
-  const d = state.data;
-  const card = (title, meta, rows, empty) => `<div class="card"><div class="card-head"><h3>${title}</h3><span class="meta">${meta}</span></div>
-    ${barList(rows, { value: (r) => r.count, label: (r) => esc(r.name), color: () => 'var(--accent)', empty })}</div>`;
-  return hero('AGENTS & SKILLS', 'What your AI reaches for', `Subagents, skills and tool calls from sessions active in the ${rangeText()}.`) +
-    `<div class="grid two" style="margin-top:0">${card('Subagents launched', `${fmtN(d.kpis.subagentCalls)} model calls made by subagents`, d.subagents, 'No subagents launched.')}
-      ${card('Skills invoked', 'Claude Code skills', d.skills, 'No skills invoked.')}</div>
-    <div class="grid two">${card('Tool calls', 'across Claude Code and Codex', d.toolUse, 'No tool calls.')}
-      <div class="card"><div class="card-head"><h3>Model calls by tool</h3></div>
-      ${barList(d.tools, { value: (t) => t.calls, label: (t) => esc(t.name), color: (t) => seriesColor(t.id) })}</div></div>`;
-}
-
-function viewLive() {
-  const live = state.live;
-  if (!live) return '<div class="skeleton"></div>';
-  const ix = live.index || {};
-  return `<div class="hero"><div><div class="eyebrow">LIVE MONITOR</div><h1>Running right now</h1><p>AI apps detected in the process list, refreshed every 5 seconds.</p></div>
-    <div class="hero-actions"><span class="pill">${icon('refresh', 14)}Updated ${new Date(live.ts).toLocaleTimeString()}</span></div></div>
-    <div class="card">${live.apps.length ? `<div class="table-wrap"><table><thead><tr><th>App</th><th>Status</th><th class="r">Processes</th><th class="r">CPU</th><th class="r">Memory</th><th class="r">Uptime</th></tr></thead><tbody>
-    ${live.apps.map((a) => `<tr><td><b>${esc(a.name)}</b></td><td><span class="status running" style="width:auto"><i></i>Running</span></td>
-      <td class="r num">${a.processes}</td><td class="r num">${a.cpu.toFixed(1)}%</td><td class="r num">${whole.format(a.memMB)} MB</td><td class="r num">${dur(a.uptimeSec)}</td></tr>`).join('')}
-    </tbody></table></div>` : '<div class="empty">No AI apps are running.</div>'}</div>
-    <div class="grid two">
-      <div class="card"><div class="card-head"><h3>Plan limits</h3></div>${state.data ? limitsBlock() : ''}</div>
-      <div class="card"><div class="card-head"><h3>Log collector</h3></div>
-        <div class="limit"><div class="limit-top"><b>Status</b><span>${ix.indexing ? `Indexing ${ix.done}/${ix.total} files` : 'Up to date'}</span></div></div>
-        <div class="limit"><div class="limit-top"><b>Last scan</b><span>${ix.lastScan ? `${ago(ix.lastScan)} · took ${(ix.lastDurationMs / 1000).toFixed(1)}s` : 'pending'}</span></div></div>
-        <div class="limit"><div class="limit-top"><b>Sources</b><span>~/.claude/projects · ~/.codex/sessions</span></div></div>
-        <div class="kpi-sub">Logs are rescanned every minute; only changed files are re-read. Message text is never stored.</div></div>
-    </div>`;
-}
 
 async function viewSettings(el) {
   const cfg = await api('/api/config');
@@ -747,7 +634,7 @@ function closeDrill(restoreFocus = true) {
 }
 
 /* ---------- routing & render ---------- */
-const VIEWS = { overview: viewOverview, squad: viewSquad, sessions: viewSessions, projects: viewProjects, agents: viewAgents, quality: viewQuality, brain: viewBrain, live: viewLive };
+const VIEWS = { overview: viewOverview, squad: viewSquadPage, sessions: viewSessions, projects: viewProjects, agents: viewAgents, quality: viewQualityPage, brain: viewBrain, live: viewLive, integrations: viewIntegrationsPage };
 Object.assign(DRILLS, QUALITY_DRILLS, BRAIN_DRILLS);
 function drawPageCharts() {
   const c = $('#daily-chart'); if (c) drawDaily(c);
@@ -757,21 +644,33 @@ function drawPageCharts() {
 // animate: entrance motion for route/range changes; background refreshes repaint quietly.
 function render(animate = true) {
   const el = $('#view');
-  state.route = (location.hash.slice(1) || 'overview').split('?')[0];
+  [state.route, state.sub = ''] = (location.hash.slice(1) || 'overview').split('?')[0].split('/');
   if (!VIEWS[state.route] && state.route !== 'settings') state.route = 'overview';
-  $('#crumb').textContent = TITLES[state.route];
-  for (const a of $$('nav a')) a.classList.toggle('active', a.dataset.route === state.route);
+  const subMeta = (SUBPAGES[state.route] || []).find(([slug]) => slug && slug === state.sub);
+  if (!subMeta) state.sub = '';
+  $('#crumb').textContent = TITLES[state.route] + (subMeta ? ` / ${subMeta[1].toUpperCase()}` : '');
+  const full = state.sub ? `${state.route}/${state.sub}` : state.route;
+  for (const a of $$('nav a')) a.classList.toggle('active', a.classList.contains('nav-sub') ? a.dataset.route === full : a.dataset.route === state.route);
   $('#sidebar').classList.remove('open');
   hideTip();
   el.classList.toggle('animate', animate && !reduceMotion.matches);
   unmountBrain();
+  unmountStages();
   if (state.route === 'settings') return viewSettings(el);
-  if (!state.data && !['live', 'brain'].includes(state.route)) {
+  if (!state.data && !['live', 'brain', 'integrations'].includes(state.route)) {
     el.innerHTML = '<div class="grid kpis">' + '<div class="skeleton"></div>'.repeat(4) + '</div><div class="skeleton" style="height:260px"></div>';
     return;
   }
   el.innerHTML = VIEWS[state.route]();
   drawPageCharts();
+  if (state.route === 'live') mountLive();
+  if (state.route === 'overview') mountOverview();
+  if (state.route === 'squad') mountSquadPage();
+  if (state.route === 'quality') mountQualityPage();
+  if (state.route === 'sessions') mountSessions();
+  if (state.route === 'projects') mountProjects();
+  if (state.route === 'agents') mountAgents();
+  if (state.route === 'integrations') mountIntegrations();
   if (state.route === 'brain') mountBrain().catch((err) => { $('#brain-sub').textContent = `Could not read the vault: ${err.message}`; });
   if (animate) { countUp(el); settle(el); }
 }
@@ -808,7 +707,7 @@ $('#drawer-close').onclick = () => closeDrill();
 $('#drawer-backdrop').onclick = () => closeDrill();
 document.addEventListener('mousemove', (e) => {
   const t = e.target.closest && e.target.closest('[data-tip]');
-  if (t) showTip(e, esc(t.dataset.tip)); else if (!e.target.closest('.chart')) hideTip();
+  if (t) showTip(e, esc(t.dataset.tip)); else if (!e.target.closest('.chart, .stage')) hideTip();
 });
 $('#search').addEventListener('input', (e) => {
   state.search = e.target.value;
@@ -845,12 +744,13 @@ function applyTheme() {
   // Live data refreshes often; summaries follow the server's one-minute rescan.
   setInterval(async () => {
     await loadLive();
-    if (state.route === 'live') render(false);
+    if (state.route === 'live' && !updateLive()) render(false);
     if (drawer.kind === 'apps') paintDrawer(false);
   }, 5000);
   setInterval(async () => {
     await loadSummary();
-    if (!['settings', 'brain'].includes(state.route) && !$('#view').contains(document.activeElement)) render(false);
+    if (state.route === 'live' && updateLive()) { /* patched in place */ }
+    else if (!['settings', 'brain', 'squad'].includes(state.route) && !$('#view').contains(document.activeElement)) render(false); // squad pages poll on their own
     if (drawer.kind && drawer.kind !== 'apps') paintDrawer(false);
   }, 60000);
 })();
