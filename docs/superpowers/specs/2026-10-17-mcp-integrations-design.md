@@ -127,7 +127,7 @@ Scopes needed: `problems.read`, `entities.read`, `metrics.read`, `logs.read`, `s
 |---|---|
 | `list_projects` | `GET /v2/projects` |
 | `search_spans` | `POST /v2/spans` (operation `list_spans`: project, time window, filter, limit up to 500) |
-| `list_traces` | `GET /v2/traces` |
+| `list_traces` | `POST /v2/traces` (operation `list_traces`, same body as spans) |
 | `list_datasets` | `GET /v2/datasets` |
 | `list_experiments` | `GET /v2/experiments` |
 | `list_monitors` | `GET /v2/monitors` |
@@ -231,7 +231,7 @@ Before any file write it copies the original to `<file>.bak-<YYYYMMDDHHmmss>`. I
 ## Error handling
 
 - Every outbound request has a 15 s timeout (DQL polling 60 s total) and returns a short error: HTTP status plus the first 300 characters of the body, masked.
-- Results larger than 50 KB are cut, with `"truncated": true` and a hint to narrow the query.
+- Results larger than 50 KB are cut, ending with a `…[truncated: N KB result cut to 50 KB; narrow the query]` note.
 - Unknown tool, invalid arguments (checked against the tool's `inputSchema` for required fields and basic types) and disabled writes return JSON-RPC errors or `isError` results with a clear message. They never throw out of the stdio loop.
 - `mcp.js` writes diagnostics to stderr only. stdout carries protocol messages only.
 
