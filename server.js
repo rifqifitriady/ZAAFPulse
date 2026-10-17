@@ -11,6 +11,7 @@ const { summarize } = require('./lib/aggregate');
 const { DEFAULT_PRICING } = require('./lib/pricing');
 const processes = require('./lib/processes');
 const { getVault } = require('./lib/vault');
+const office = require('./lib/office');
 
 const PORT = Number(process.env.PORT) || 4777;
 const HOST = '127.0.0.1';
@@ -87,6 +88,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/live') {
       return send(res, 200, { ...(DEMO ? demo.live() : await processes.snapshot()), index: indexer.state });
+    }
+    if (url.pathname === '/api/office') {
+      return send(res, 200, DEMO ? office.demoSnapshot() : office.snapshot());
     }
     if (url.pathname === '/api/vault') {
       return send(res, 200, DEMO ? demo.vault() : getVault(config.vaultPaths));
