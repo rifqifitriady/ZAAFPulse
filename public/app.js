@@ -58,6 +58,7 @@ const ICON_PATHS = {
   dollar: '<path d="M12 3v18M16.5 7.5c0-1.7-2-3-4.5-3s-4.5 1.3-4.5 3S9.5 10.5 12 11s4.5 1.3 4.5 3.2-2 3.3-4.5 3.3-4.5-1.3-4.5-3"/>',
   alert: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5M12 16h.01"/>',
   terminal: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M7 9.5l3 2.5-3 2.5M12.5 15H17"/>',
+  plug: '<path d="M9 3v5M15 3v5M6.5 8h11v3a5.5 5.5 0 0 1-11 0zM12 16.5V21"/>',
   code: '<path d="M8.5 7L3.5 12l5 5M15.5 7l5 5-5 5M13.5 4.5l-3 15"/>',
   chat: '<path d="M4 5.5h16v10H9l-5 4z"/>',
   layers: '<path d="M12 3l9 5-9 5-9-5zM3 13l9 5 9-5"/>',
@@ -112,7 +113,7 @@ const state = {
   route: 'overview',
   history: {}, // app id -> recent CPU samples
 };
-const TITLES = { overview: 'OVERVIEW', squad: 'AI SQUAD', sessions: 'SESSIONS', projects: 'PROJECTS', agents: 'AGENTS & SKILLS', quality: 'QUALITY & SAFETY', brain: 'SECOND BRAIN', live: 'LIVE MONITOR', settings: 'SETTINGS' };
+const TITLES = { overview: 'OVERVIEW', squad: 'AI SQUAD', sessions: 'SESSIONS', projects: 'PROJECTS', agents: 'AGENTS & SKILLS', quality: 'QUALITY & SAFETY', brain: 'SECOND BRAIN', live: 'LIVE MONITOR', integrations: 'INTEGRATIONS', settings: 'SETTINGS' };
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -748,7 +749,7 @@ function closeDrill(restoreFocus = true) {
 }
 
 /* ---------- routing & render ---------- */
-const VIEWS = { overview: viewOverview, squad: viewSquad, sessions: viewSessions, projects: viewProjects, agents: viewAgents, quality: viewQuality, brain: viewBrain, live: viewLive };
+const VIEWS = { overview: viewOverview, squad: viewSquad, sessions: viewSessions, projects: viewProjects, agents: viewAgents, quality: viewQuality, brain: viewBrain, live: viewLive, integrations: viewIntegrations };
 Object.assign(DRILLS, QUALITY_DRILLS, BRAIN_DRILLS);
 function drawPageCharts() {
   const c = $('#daily-chart'); if (c) drawDaily(c);
@@ -767,7 +768,7 @@ function render(animate = true) {
   el.classList.toggle('animate', animate && !reduceMotion.matches);
   unmountBrain();
   if (state.route === 'settings') return viewSettings(el);
-  if (!state.data && !['live', 'brain'].includes(state.route)) {
+  if (!state.data && !['live', 'brain', 'integrations'].includes(state.route)) {
     el.innerHTML = '<div class="grid kpis">' + '<div class="skeleton"></div>'.repeat(4) + '</div><div class="skeleton" style="height:260px"></div>';
     return;
   }
