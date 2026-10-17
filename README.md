@@ -11,9 +11,10 @@
 <img alt="macOS" src="https://img.shields.io/badge/macOS-native-0f1b2a?style=flat-square&logo=apple&logoColor=white">
 <img alt="Node 18+" src="https://img.shields.io/badge/Node-18%2B-1f7f95?style=flat-square&logo=nodedotjs&logoColor=white">
 <img alt="Zero dependencies" src="https://img.shields.io/badge/dependencies-0-1baf7a?style=flat-square">
-<img alt="100% local" src="https://img.shields.io/badge/data-100%25%20local-6250d6?style=flat-square">
+<img alt="Local first" src="https://img.shields.io/badge/data-local%20first-6250d6?style=flat-square">
 <img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-supported-2a78d6?style=flat-square">
 <img alt="Codex" src="https://img.shields.io/badge/Codex-supported-eb6834?style=flat-square">
+<img alt="MCP server" src="https://img.shields.io/badge/MCP-server-0f1b2a?style=flat-square">
 <img alt="Obsidian" src="https://img.shields.io/badge/Obsidian-graph-e87ba4?style=flat-square&logo=obsidian&logoColor=white">
 
 **One local dashboard for everything AI does on your laptop:**<br>
@@ -40,6 +41,7 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 | **✓** | *Can I trust what it did?* | Tool-call accuracy, hallucination signals (paths, edits, arguments and URLs that did not exist) and how often you had to correct it. |
 | **⚠** | *Did anything unsafe happen?* | Prompt-injection attempts in web and MCP content, secrets that surfaced in tool output, and risky commands such as `rm -rf` or force pushes. |
 | **◉** | *Is my second brain growing?* | A live, animated graph of your Obsidian vault: hubs, orphans, unresolved links, and a replay of how it grew. |
+| **⇄** | *Can my agents reach the rest of my stack?* | An MCP server for Claude Code, Kiro and Antigravity with connectors to Dynatrace, Arize Phoenix and AX, n8n, OmniRoute, 9router and any HTTP or MCP service, plus a page that shows every connection's health. |
 
 ## Features
 
@@ -90,7 +92,7 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 |---|---|
 | Runtime dependencies | **0** (Node standard library only) |
 | First index of 2 GB of logs | **~15 s**, then **~25 ms** per rescan |
-| Network exposure | **127.0.0.1 only**, host-header checked |
+| Network exposure | **127.0.0.1 only**, host-header checked; outbound only to integrations you configure |
 | Themes | Light and dark, follows your system |
 
 ## Screenshots
@@ -154,6 +156,7 @@ Requires macOS and Node 18 or newer. Nothing to install. Clone this repository (
 cd ai-command-center
 npm start          # reads your logs  → http://localhost:4777
 npm run demo       # synthetic data   → http://localhost:4778
+npm test           # run the test suite (node:test, no dependencies)
 ```
 
 The first start indexes your logs (about 15 seconds for 2 GB). After that the server rescans every minute and only re-reads files that changed.
@@ -166,6 +169,26 @@ The first start indexes your logs (about 15 seconds for 2 GB). After that the se
 ```
 
 This installs two LaunchAgents: `com.zaaf.aipulse.server` (starts at login, restarts on crash) and `com.zaaf.aipulse.opener` (brings the dashboard tab to the front in Chrome at login and whenever the Mac wakes). macOS asks once for permission to control Chrome. Logs go to `~/Library/Logs/AIPulse/`.
+
+## MCP server and integrations
+
+`node mcp.js` is an MCP server (stdio) that AI clients start on demand. It offers the dashboard's own data and a connector for each platform you configure under `integrations` in `config.json`. Register it once:
+
+```bash
+npm run mcp:register -- all        # Claude Code, Kiro and Antigravity (backs up their config first)
+```
+
+| Type | Platforms | Tools |
+|---|---|---|
+| `acc` (always on) | this dashboard | `usage_summary`, `quality`, `live_apps`, `integrations_status` |
+| `dynatrace` | Dynatrace SaaS and Managed | problems, entities, metrics, logs, security problems, DQL (SaaS) |
+| `arize` | Arize Phoenix and Arize AX | projects, spans, traces, datasets, experiments, monitors (AX) |
+| `n8n` | n8n | workflows, executions; run allowlisted webhooks and (de)activate workflows when writes are on |
+| `router` | OmniRoute, 9router | health, models, providers, combos, usage, telemetry |
+| `http` | AION and any REST API | one tool per endpoint you declare |
+| `mcp` | any Streamable HTTP MCP server | the upstream tools, filtered, under a `<id>__` prefix |
+
+Tools are prefixed with the integration id (`dynatrace-saas_list_problems`). Everything is read-only unless an integration sets `"allowWrite": true`. Secrets stay in the macOS Keychain or environment variables, never in `config.json`. The **Integrations** page shows each connection's health, which clients have the server registered, and recent tool calls. Setup per platform: [docs/integrations.md](docs/integrations.md).
 
 ## How it works
 
@@ -202,7 +225,7 @@ These are **signals detected in the logs, not a graded evaluation**. Every card 
 ## Privacy
 
 - The server listens on `127.0.0.1` only and rejects requests whose `Host` is not `localhost`.
-- Nothing is sent anywhere. No telemetry, no accounts, no API keys.
+- Nothing is sent anywhere unless you configure an integration, and then only to the URL you configured: when an AI client calls a tool, or when the Integrations page checks health (at most once a minute per integration, or when you press Test). No telemetry, no accounts. Integration secrets stay in the macOS Keychain or environment variables, never in `config.json`.
 - Message text is never stored. The cache keeps token counts, metadata and, for flagged quality or safety items only, a masked snippet of up to 160 characters. Secret values are never kept.
 - `config.json` and `.cache/` are git-ignored.
 
@@ -211,6 +234,13 @@ These are **signals detected in the logs, not a graded evaluation**. Every card 
 
 ```
 server.js              HTTP server, API routes, config, demo switch
+mcp.js                 MCP server over stdio for AI clients
+lib/mcp/               MCP protocol (stdio server, Streamable HTTP client)
+lib/integrations.js    builds connectors, prefixes tools, enforces allowWrite, audits calls
+lib/connectors/        acc, dynatrace, arize, n8n, router, http and mcp-proxy connectors
+lib/secrets.js         Keychain and env secret references, masking
+lib/audit.js           tool-call log (.cache/mcp-audit.jsonl)
+lib/local.js           dashboard data for the acc connector
 lib/claude.js          Claude Code log parser (usage + signals)
 lib/codex.js           Codex log parser (usage + signals)
 lib/signals.js         hallucination, injection, secret, risky-command and correction detectors
@@ -222,7 +252,10 @@ lib/processes.js       running-app detection
 lib/vault.js           Obsidian vault scanner
 lib/demo.js            seeded synthetic dataset for demo mode
 public/                dashboard UI: plain HTML, CSS and JavaScript, no build step
-scripts/               LaunchAgent install/uninstall, launcher, Chrome opener
+scripts/               LaunchAgent install/uninstall, launcher, Chrome opener, MCP client registration
+test/                  node:test suites with fake HTTP and MCP servers
+config.example.json    every integration type with placeholder references
+docs/integrations.md   per-platform setup
 docs/assets/           README banner, diagrams, screenshots and GIFs
 ```
 </details>
@@ -237,6 +270,8 @@ docs/assets/           README banner, diagrams, screenshots and GIFs
 | `GET /api/vault` | notes, links and unresolved links of the Obsidian vault |
 | `GET /api/config` · `POST /api/config` | name, monthly budget, prices, vault path |
 | `POST /api/rescan` | re-index changed log files now |
+| `GET /api/integrations` | integration health, client registration and recent MCP tool calls |
+| `POST /api/integrations/test` | fresh health check of one integration (`{ "id": "..." }`) |
 </details>
 
 <details>
