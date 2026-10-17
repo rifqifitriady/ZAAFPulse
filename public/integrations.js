@@ -29,7 +29,8 @@ function integCard(i) {
       ${i.latencyMs != null ? `<span><b class="num">${whole.format(i.latencyMs)}</b> ms</span>` : ''}
       ${i.writeTools ? `<span class="pill integ-write">write on · ${i.writeTools}</span>` : ''}</div>
     ${i.error ? `<p class="integ-error">${esc(i.error)}</p>` : i.detail ? `<p class="kpi-sub">${esc(i.detail)}</p>` : ''}
-    <button class="btn ghost" type="button" data-integ-test="${esc(i.id)}" ${i.state === 'disabled' || integ.testing === i.id ? 'disabled' : ''}>${integ.testing === i.id ? 'Testing…' : 'Test'}</button>
+    <div class="integ-actions"><button class="btn ghost" type="button" data-integ-test="${esc(i.id)}" ${i.state === 'disabled' || integ.testing === i.id ? 'disabled' : ''}>${integ.testing === i.id ? 'Testing…' : 'Test'}</button>
+      ${i.id !== 'acc' ? `<button class="btn ghost" type="button" data-integ-edit="${esc(i.id)}">Configure</button>` : ''}</div>
   </div>`;
 }
 
