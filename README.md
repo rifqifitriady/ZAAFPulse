@@ -18,7 +18,7 @@
 <img alt="Obsidian" src="https://img.shields.io/badge/Obsidian-graph-e87ba4?style=flat-square&logo=obsidian&logoColor=white">
 
 **One local dashboard for everything AI does on your laptop:**<br>
-what it costs, how often it is wrong, what it touched, and how your knowledge grows.
+what it costs, how often it is wrong, what your agents are doing right now, and how your knowledge grows.
 
 [Features](#features) · [Screenshots](#screenshots) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Metrics](#what-the-quality-metrics-mean) · [Privacy](#privacy)
 
@@ -27,19 +27,20 @@ what it costs, how often it is wrong, what it touched, and how your knowledge gr
 <br>
 
 <p align="center">
-  <img alt="Dashboard opening: counters count up, charts grow, and the spend drill-down slides in" src="docs/assets/demo-overview.gif" width="92%">
+  <img alt="Overview opening: the 3D usage city grows day by day while the KPI cards and charts load" src="docs/assets/demo-overview.gif" width="92%">
 </p>
-<p align="center"><sub>Demo data. Every card is clickable and opens a drill-down.</sub></p>
+<p align="center"><sub>Demo data. Every page is a holographic deck with its own 3D scene; drag to rotate, hover for details, click a card for a drill-down.</sub></p>
 
 ## Why ZAAFPulse
 
-AI coding agents now run for hours, read thousands of files and call hundreds of tools. Their logs already sit on your disk, but nobody reads 2 GB of JSONL. ZAAFPulse reads it for you and answers four questions at a glance:
+AI coding agents now run for hours, read thousands of files and call hundreds of tools. Their logs already sit on your disk, but nobody reads 2 GB of JSONL. ZAAFPulse reads it for you and answers these questions at a glance:
 
 | | Question | What you get |
 |---|---|---|
 | **$** | *What is AI costing me?* | API-equivalent spend per day, model, project and session, a month-end projection, and where the money goes: input, output, cache reads or cache writes. |
 | **✓** | *Can I trust what it did?* | Tool-call accuracy, hallucination signals (paths, edits, arguments and URLs that did not exist) and how often you had to correct it. |
 | **⚠** | *Did anything unsafe happen?* | Prompt-injection attempts in web and MCP content, secrets that surfaced in tool output, and risky commands such as `rm -rf` or force pushes. |
+| **◈** | *What are my agents doing right now?* | A live 3D office: every session and subagent walks to the room for the tool it is using, waits at the help desk when it needs you, and shows up in a request log, a stream inspector and a timeline. |
 | **◉** | *Is my second brain growing?* | A live, animated graph of your Obsidian vault: hubs, orphans, unresolved links, and a replay of how it grew. |
 | **⇄** | *Can my agents reach the rest of my stack?* | An MCP server for Claude Code, Kiro and Antigravity with connectors to Dynatrace, Arize Phoenix and AX, n8n, OmniRoute, 9router and any HTTP or MCP service, plus a page that shows every connection's health. |
 
@@ -50,33 +51,53 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 <td width="33%" valign="top">
 
 **Usage & cost**<br>
-<sub>Tokens, sessions, prompts, models and projects across Claude Code and Codex. Cost at list price with cache-aware rates, a monthly budget meter and a projection.</sub>
+<sub>Tokens, sessions, prompts, models and projects across Claude Code and Codex. Cost at list price with cache-aware rates, a monthly budget meter, a projection, and a 3D "usage city" of every day.</sub>
 
 </td>
 <td width="33%" valign="top">
 
 **Quality & safety**<br>
-<sub>Accuracy, hallucination signals, poisoning detection, corrections, secrets, risky commands, API errors, loops and context compactions. Every number opens the exact items behind it.</sub>
+<sub>Accuracy, hallucination signals, poisoning, corrections, secrets, risky commands, API errors, loops and compactions, plus subpages for <b>Utilization</b>, <b>Cache</b>, <b>Compression</b> and <b>Provider stats</b>.</sub>
 
 </td>
 <td width="33%" valign="top">
 
-**Second brain graph**<br>
-<sub>Force-directed graph of your vault with pulses along every link, hover focus, search, legend filters, backlinks per note, Open in Obsidian, and a growth replay.</sub>
+**AI Squad, live**<br>
+<sub>A 3D office driven by real transcript state: who is editing, reading, running commands, browsing or delegating, who is waiting for you and who needs approval. Subagents appear next to their parent.</sub>
 
 </td>
 </tr>
 <tr>
 <td valign="top">
 
+**Logs, proxy & timeline**<br>
+<sub>Real-time request log with TTFT and duration, error traces and a stream inspector; OmniRoute upstream and MCP hub traffic; a timeline of every agent and subagent with parallelism.</sub>
+
+</td>
+<td valign="top">
+
 **Live monitor**<br>
-<sub>Which AI apps are running right now (Claude Code, Claude Desktop, Codex, ChatGPT, Antigravity, Cursor, Ollama, LM Studio), with CPU sparklines, memory and uptime.</sub>
+<sub>Which AI apps are running right now (Claude Code, Claude Desktop, Codex, ChatGPT, Antigravity, Cursor, Ollama, LM Studio) as a 3D fleet, with CPU, memory, machine share and load.</sub>
+
+</td>
+<td valign="top">
+
+**Second brain graph**<br>
+<sub>Force-directed graph of your vault with pulses along every link, search, legend filters, backlinks, Open in Obsidian, a growth replay and a 3D chart of notes per week.</sub>
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**MCP hub & integrations**<br>
+<sub>An MCP server for Claude Code, Kiro and Antigravity with connectors to Dynatrace, Arize, n8n, OmniRoute, 9router and any HTTP or MCP service, shown as a 3D hub with health and traffic.</sub>
 
 </td>
 <td valign="top">
 
 **Drill-downs everywhere**<br>
-<sub>Each KPI slides open a panel with charts, breakdowns and tables. Count-up numbers, growing bars, keyboard support, and reduced-motion respected.</sub>
+<sub>KPI cards are compact glass tiles with sparklines drawn from real series; each one opens a panel with charts, breakdowns and tables. Keyboard support, reduced motion respected.</sub>
 
 </td>
 <td valign="top">
@@ -93,36 +114,76 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 | Runtime dependencies | **0** (Node standard library only) |
 | First index of 2 GB of logs | **~15 s**, then **~25 ms** per rescan |
 | Network exposure | **127.0.0.1 only**, host-header checked; outbound only to integrations you configure |
-| Themes | Light and dark, follows your system |
+| 3D scenes | plain `<canvas>` 2D with an isometric projection: no WebGL, no libraries |
+| Themes | Light and dark chrome, follows your system; the decks stay dark |
 
 ## Screenshots
 
 <details open>
-<summary><b>Overview</b>: usage, cost, quality and your AI squad on one page</summary>
+<summary><b>AI Squad</b>: your agents at work in a 3D office</summary>
 <br>
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screen-overview-dark.png">
-  <img alt="Overview page" src="docs/assets/screen-overview-light.png">
-</picture>
+<p align="center"><img alt="Agents walk between the coding desks, library, server room, web globe and help desk as their tools change; subagents are linked to their parent" src="docs/assets/demo-office.gif" width="88%"></p>
+<table>
+<tr>
+<td width="50%"><img alt="Logs: request log with TTFT and duration, error traces and the stream inspector" src="docs/assets/screen-logs.jpg"></td>
+<td width="50%"><img alt="Time: a timeline of every agent and subagent with parallel work" src="docs/assets/screen-time.jpg"></td>
+</tr>
+</table>
+<table>
+<tr>
+<td width="50%"><img alt="Proxy logs: OmniRoute upstream attempts and MCP hub calls" src="docs/assets/screen-proxy.jpg"></td>
+<td width="50%"><img alt="The AI office with roster, live activity and state counts" src="docs/assets/screen-office.jpg"></td>
+</tr>
+</table>
 </details>
 
 <details open>
-<summary><b>Quality & safety</b>: accuracy, hallucinations, poisoning and corrections</summary>
+<summary><b>Overview & live monitor</b>: usage, cost and what is running right now</summary>
 <br>
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screen-quality-dark.png">
-  <img alt="Quality and safety page" src="docs/assets/screen-quality-light.png">
-</picture>
+<img alt="Overview: 3D usage city, KPI cards, daily activity and efficiency gauges" src="docs/assets/screen-overview.jpg">
+<table>
+<tr>
+<td width="50%"><img alt="Live monitor: AI fleet in 3D, telemetry, machine share and process table" src="docs/assets/screen-live.jpg"></td>
+<td width="50%"><img alt="Sessions: a constellation of every session by day and start hour" src="docs/assets/screen-sessions.jpg"></td>
+</tr>
+</table>
+</details>
+
+<details open>
+<summary><b>Quality & safety</b>: accuracy, utilization, cache, compression and providers</summary>
+<br>
+<img alt="Quality and safety: KPI cards and model-caused failures per day as a 3D stacked city" src="docs/assets/screen-quality.jpg">
+<table>
+<tr>
+<td width="50%"><img alt="Utilization: load landscape by weekday and hour, peaks, 5-hour windows and forecast" src="docs/assets/screen-utilization.jpg"></td>
+<td width="50%"><img alt="Cache: hit rate, savings, write premium and router memo reuse" src="docs/assets/screen-cache.jpg"></td>
+</tr>
+</table>
+<table>
+<tr>
+<td width="50%"><img alt="Compression: compactions, context pressure and tokens avoided" src="docs/assets/screen-compression.jpg"></td>
+<td width="50%"><img alt="Provider stats: per provider and model, latency and reliability" src="docs/assets/screen-providers.jpg"></td>
+</tr>
+</table>
 </details>
 
 <details open>
 <summary><b>Second brain</b>: your Obsidian vault as a living graph</summary>
 <br>
-<p align="center"><img alt="Note graph with pulses travelling along links, hover focus on a hub, then a growth replay" src="docs/assets/demo-brain.gif" width="82%"></p>
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screen-brain-dark.png">
-  <img alt="Second brain page" src="docs/assets/screen-brain-light.png">
-</picture>
+<p align="center"><img alt="Notes per week grow in 3D while the note graph replays how the vault grew" src="docs/assets/demo-brain.gif" width="82%"></p>
+<img alt="Second brain: knowledge growth in 3D, vault metrics and the note graph" src="docs/assets/screen-brain.jpg">
+</details>
+
+<details>
+<summary><b>Projects, agents & skills, integrations</b></summary>
+<br>
+<table>
+<tr>
+<td width="50%"><img alt="Projects: a 3D skyline of projects by tokens, sessions and cost" src="docs/assets/screen-projects.jpg"></td>
+<td width="50%"><img alt="Agents and skills: subagents, skills and tools as a 3D toolbelt city" src="docs/assets/screen-agents.jpg"></td>
+</tr>
+</table>
+<img alt="Integrations: the MCP hub in 3D with every connection, its health and recent calls" src="docs/assets/screen-integrations.jpg">
 </details>
 
 <details>
@@ -130,23 +191,13 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 <br>
 <table>
 <tr>
-<td width="50%">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screen-drawer-spend-dark.png">
-  <img alt="Estimated spend drill-down" src="docs/assets/screen-drawer-spend-light.png">
-</picture>
-</td>
-<td width="50%">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/screen-drawer-poisoning-dark.png">
-  <img alt="Poisoning drill-down" src="docs/assets/screen-drawer-poisoning-light.png">
-</picture>
-</td>
+<td width="50%"><img alt="Estimated spend drill-down" src="docs/assets/screen-drawer-spend.jpg"></td>
+<td width="50%"><img alt="Poisoning drill-down" src="docs/assets/screen-drawer-poisoning.jpg"></td>
 </tr>
 </table>
 </details>
 
-<sub>All screenshots use the built-in demo dataset (`npm run demo`). No real projects, costs or notes are shown.</sub>
+<sub>All screenshots and GIFs use the built-in demo dataset (`npm run demo`). No real projects, costs, notes or accounts are shown. Regenerate them with `npm run media` (needs Google Chrome and ffmpeg).</sub>
 
 ## Quick start
 
@@ -157,6 +208,7 @@ cd ai-command-center
 npm start          # reads your logs  → http://localhost:4777
 npm run demo       # synthetic data   → http://localhost:4778
 npm test           # run the test suite (node:test, no dependencies)
+npm run media      # regenerate README screenshots and GIFs from demo data
 ```
 
 The first start indexes your logs (about 15 seconds for 2 GB). After that the server rescans every minute and only re-reads files that changed.
@@ -204,6 +256,8 @@ Tools are prefixed with the integration id (`dynatrace-saas_list_problems`). Eve
 | Codex | `~/.codex/sessions/**/*.jsonl` | tokens per turn, model, project, prompts, tool calls, failures, plan rate limits |
 | Running apps | `ps` | which AI apps are open, process count, CPU, memory, uptime |
 | Obsidian | the vault Obsidian has open, or a path in Settings | notes, `[[wikilinks]]`, embeds and `.md` links, tags, frontmatter type; symlinked folders are followed |
+| Live transcripts | the tail of Claude Code and Codex transcripts written in the last 30 minutes to 24 hours | for the office, logs and timeline: tool names, block sizes, file and command names, hostnames, timing and state |
+| OmniRoute (optional) | its management API, GET only | quota utilization, cache and compression analytics, provider stats, call logs and upstream proxy logs |
 
 Claude Desktop, ChatGPT and Antigravity keep conversations in the cloud, so they are shown by live presence and resource use only.
 
@@ -226,6 +280,7 @@ These are **signals detected in the logs, not a graded evaluation**. Every card 
 
 - The server listens on `127.0.0.1` only and rejects requests whose `Host` is not `localhost`.
 - Nothing is sent anywhere unless you configure an integration, and then only to the URL you configured: when an AI client calls a tool, or when the Integrations page checks health (at most once a minute per integration, or when you press Test). No telemetry, no accounts. Integration secrets stay in the macOS Keychain or environment variables, never in `config.json`.
+- The office, logs and timeline read transcript tails on demand and keep only tool names, sizes, file and command names, hostnames, timing and state; message text is never shown.
 - Message text is never stored. The cache keeps token counts, metadata and, for flagged quality or safety items only, a masked snippet of up to 160 characters. Secret values are never kept.
 - `config.json` and `.cache/` are git-ignored.
 
@@ -251,8 +306,14 @@ lib/pricing.js         default prices and cost function
 lib/processes.js       running-app detection
 lib/vault.js           Obsidian vault scanner
 lib/demo.js            seeded synthetic dataset for demo mode
+lib/office.js          live agent state from transcript tails (AI office)
+lib/reqlogs.js         recent requests, error traces and stream events (Logs)
+lib/timeline.js        per-agent timeline segments with a per-file cache (Time)
+lib/insights.js        utilization, cache, compression and provider analytics
+lib/omniroute.js       read-only OmniRoute management API client, emails masked
 public/                dashboard UI: plain HTML, CSS and JavaScript, no build step
-scripts/               LaunchAgent install/uninstall, launcher, Chrome opener, MCP client registration
+public/iso.js          isometric 3D engine, KPI cards and SVG chart helpers shared by all pages
+scripts/               LaunchAgent install/uninstall, launcher, Chrome opener, MCP client registration, media capture
 test/                  node:test suites with fake HTTP and MCP servers
 config.example.json    every integration type with placeholder references
 docs/integrations.md   per-platform setup
@@ -266,7 +327,13 @@ docs/assets/           README banner, diagrams, screenshots and GIFs
 | Route | Returns |
 |---|---|
 | `GET /api/summary?range=7\|30\|90\|all` | usage, cost, sessions, projects, models and quality for the range |
-| `GET /api/live` | running AI apps and indexer status |
+| `GET /api/live` | running AI apps, system load and used memory, indexer status |
+| `GET /api/office` | live state of every agent and subagent for the 3D office |
+| `GET /api/insights?range=…` | utilization, cache, compression and provider analytics for the range |
+| `GET /api/logs` | requests and error traces from the last 3 hours, with stream events |
+| `GET /api/timeline?hours=1\|6\|24` | per-agent timeline segments and markers |
+| `GET /api/router?section=…` | OmniRoute data: `utilization`, `cache`, `compression`, `providers`, `calls`, `proxy` |
+| `GET /api/mcp-calls` | recent MCP hub tool calls from the audit log |
 | `GET /api/vault` | notes, links and unresolved links of the Obsidian vault |
 | `GET /api/config` · `POST /api/config` | name, monthly budget, prices, vault path |
 | `POST /api/rescan` | re-index changed log files now |
