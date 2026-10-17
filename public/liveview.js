@@ -126,15 +126,15 @@ function paintLive() {
 function liveMetrics(st) {
   const live = state.live; const d = state.data;
   const hist = liveHist.cpu;
-  const tile = (label, value, sub, color, drill, p) => metricTile({ label, value, sub, color, drill, p });
+  const tile = (label, value, sub, color, drill, p, spark) => metricTile({ label, value, sub, color, drill, p, spark });
   const spark = (vals, c) => `<div class="metric-spark">${sparkline(vals, c)}</div>`;
   const items = [
     tile('Active AI apps', String(live.apps.length).padStart(2, '0'), `${live.installed.length} installed`, HOLO.cyan, 'apps', live.installed.length ? live.apps.length / live.installed.length : 0),
-    tile('AI CPU now', `${st.cpu.toFixed(1)}%`, spark(hist, HOLO.cyan), HOLO.cyan, 'apps', st.cpuOfMachine),
-    tile('AI memory', gb(st.mem), spark(liveHist.mem, HOLO.violet), HOLO.violet, 'apps', st.aiRam),
+    tile('AI CPU now', `${st.cpu.toFixed(1)}%`, st.cores ? `${pct(st.cpuOfMachine)} of ${st.cores} cores` : 'last 5 minutes', HOLO.cyan, 'apps', st.cpuOfMachine, hist),
+    tile('AI memory', gb(st.mem), st.sys ? `${pct(st.aiRam)} of RAM` : 'last 5 minutes', HOLO.violet, 'apps', st.aiRam, liveHist.mem),
     tile('Processes', whole.format(st.procs), 'including helpers', HOLO.blue, 'apps'),
-    tile('Peak CPU · 5m', `${liveHist.peak.cpu.toFixed(1)}%`, liveHist.peak.ts ? `reached ${ago(liveHist.peak.ts)}` : '—', HOLO.pink, '', st.cores ? liveHist.peak.cpu / (st.cores * 100) : null),
-    tile('Avg CPU · 5m', `${avg(hist).toFixed(1)}%`, `σ ${Math.sqrt(avg(hist.map((v) => (v - avg(hist)) ** 2))).toFixed(1)} pts`, HOLO.pink),
+    tile('Peak CPU · 5m', `${liveHist.peak.cpu.toFixed(1)}%`, liveHist.peak.ts ? `reached ${ago(liveHist.peak.ts)}` : '—', HOLO.pink, '', st.cores ? liveHist.peak.cpu / (st.cores * 100) : null, hist),
+    tile('Avg CPU · 5m', `${avg(hist).toFixed(1)}%`, `σ ${Math.sqrt(avg(hist.map((v) => (v - avg(hist)) ** 2))).toFixed(1)} pts`, HOLO.pink, '', null, hist),
     tile('Longest uptime', st.oldest ? dur(st.oldest.uptimeSec) : '—', st.oldest ? esc(st.oldest.name) : 'nothing running', HOLO.violet),
     tile('System RAM', st.sys ? fmtPct(st.ramUsed) : '—', st.sys ? `${gb(st.sys.memTotalMB - st.sys.memFreeMB)} of ${gb(st.sys.memTotalMB)}` : 'unavailable', HOLO.orange, '', st.sys ? st.ramUsed : null),
     tile('Load average', st.sys ? st.sys.load[0].toFixed(2) : '—', st.sys ? `5m ${st.sys.load[1]} · 15m ${st.sys.load[2]} · ${st.cores} cores` : 'unavailable', HOLO.orange, '', st.sys ? st.load : null),

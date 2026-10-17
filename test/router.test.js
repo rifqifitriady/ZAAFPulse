@@ -33,6 +33,15 @@ test('omniroute with a management token uses the management API', async () => {
   } finally { await srv.close(); }
 });
 
+test('provider names that are email addresses are masked', async () => {
+  const srv = await fakeServer({ 'GET /api/providers': { body: { connections: [{ id: 'c2', provider: 'claude', name: 'someone.long@example.com', displayName: 'someone.long@example.com', email: 'someone.long@example.com' }], total: 1 } } });
+  try {
+    const c = router.create('om', { flavor: 'omniroute', baseUrl: srv.url, managementToken: { env: 'OM' } }, { secrets: secretsFor({ OM: 'oma_live_token1' }) });
+    const p = (await tools(c).list_providers.run({})).connections[0];
+    assert.deepEqual(p, { id: 'c2', provider: 'claude', name: 'so***@example.com', displayName: 'so***@example.com' });
+  } finally { await srv.close(); }
+});
+
 test('omniroute with only an inference key lists models from /v1/models', async () => {
   const srv = await fakeServer({ 'GET /v1/models': { body: { data: [{ id: 'auto', owned_by: 'omniroute' }] } }, 'GET /api/health': { body: { status: 'ok' } } });
   try {

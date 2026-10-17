@@ -58,6 +58,7 @@ const ICON_PATHS = {
   dollar: '<path d="M12 3v18M16.5 7.5c0-1.7-2-3-4.5-3s-4.5 1.3-4.5 3S9.5 10.5 12 11s4.5 1.3 4.5 3.2-2 3.3-4.5 3.3-4.5-1.3-4.5-3"/>',
   alert: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5M12 16h.01"/>',
   terminal: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M7 9.5l3 2.5-3 2.5M12.5 15H17"/>',
+  plug: '<path d="M9 3v5M15 3v5M6.5 8h11v3a5.5 5.5 0 0 1-11 0zM12 16.5V21"/>',
   code: '<path d="M8.5 7L3.5 12l5 5M15.5 7l5 5-5 5M13.5 4.5l-3 15"/>',
   chat: '<path d="M4 5.5h16v10H9l-5 4z"/>',
   layers: '<path d="M12 3l9 5-9 5-9-5zM3 13l9 5 9-5"/>',
@@ -112,7 +113,7 @@ const state = {
   route: 'overview',
   history: {}, // app id -> recent CPU samples
 };
-const TITLES = { overview: 'OVERVIEW', squad: 'AI SQUAD', sessions: 'SESSIONS', projects: 'PROJECTS', agents: 'AGENTS & SKILLS', quality: 'QUALITY & SAFETY', brain: 'SECOND BRAIN', live: 'LIVE MONITOR', settings: 'SETTINGS' };
+const TITLES = { overview: 'OVERVIEW', squad: 'AI SQUAD', sessions: 'SESSIONS', projects: 'PROJECTS', agents: 'AGENTS & SKILLS', quality: 'QUALITY & SAFETY', brain: 'SECOND BRAIN', live: 'LIVE MONITOR', integrations: 'INTEGRATIONS', settings: 'SETTINGS' };
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -428,42 +429,8 @@ function matches(...fields) {
   return !q || fields.some((f) => String(f || '').toLowerCase().includes(q));
 }
 
-function viewSessions() {
-  const d = state.data;
-  const rows = d.sessions.filter((s) => (state.toolFilter === 'all' || s.tool === state.toolFilter)
-    && matches(s.project, s.projectPath, s.model, s.id, s.branch, s.entrypoint));
-  const filter = `<div class="segmented" role="group" aria-label="Tool">${[['all', 'All tools'], ...SERIES.map((x) => [x.id, x.name])].map(([v, l]) =>
-    `<button data-tool="${v}" aria-pressed="${state.toolFilter === v}">${l}</button>`).join('')}</div>`;
-  const note = d.totalSessions > d.sessions.length ? ` Showing the latest ${d.sessions.length} of ${d.totalSessions}.` : '';
-  return hero('SESSIONS', 'Session log', `Every AI session with recorded usage in the ${rangeText()}.${note}`) +
-    `<div class="filters">${filter}${state.search ? `<span class="muted">Filtered by “${esc(state.search)}”</span>` : ''}</div>
-    <div class="card">${rows.length ? `<div class="table-wrap"><table><thead><tr><th>Session</th><th>Tool</th><th>Model</th><th>Started</th><th class="r">Duration</th><th class="r">Prompts</th><th class="r">Calls</th><th class="r">Tokens</th><th class="r">Est. cost</th></tr></thead><tbody>
-    ${rows.map((s) => `<tr><td><div class="clip" title="${esc(s.projectPath)}">${esc(s.project)}</div><div class="sub clip">${esc(s.branch && s.branch !== 'HEAD' ? s.branch + ' · ' : '')}${esc((s.entrypoint || '').replace(/^claude-/, ''))} · ${esc(s.id.slice(0, 8))}</div></td>
-      <td><span class="tool-dot" style="background:${seriesColor(s.tool)}"></span>${esc(SERIES.find((x) => x.id === s.tool)?.name)}</td>
-      <td>${esc(s.model || '')}${s.models.length > 1 ? `<span class="sub"> +${s.models.length - 1}</span>` : ''}</td>
-      <td class="sub">${fmtDate(s.start)}</td><td class="r num">${dur((s.end - s.start) / 1000)}</td>
-      <td class="r num">${s.prompts}</td><td class="r num">${fmtN(s.calls)}${s.subCalls ? `<div class="sub">${fmtN(s.subCalls)} by subagents</div>` : ''}</td>
-      <td class="r num">${fmtN(s.tokens)}</td><td class="r num">${s.cost ? fmtUSD(s.cost) : '—'}</td></tr>`).join('')}
-    </tbody></table></div>` : '<div class="empty">No sessions match.</div>'}</div>`;
-}
 
-function viewProjects() {
-  const rows = state.data.projects.filter((p) => matches(p.name, p.path));
-  return hero('PROJECTS', 'Where AI time goes', `Usage grouped by working folder for the ${rangeText()}.`) +
-    `<div class="card">${projectsTable(rows, false)}</div>`;
-}
 
-function viewAgents() {
-  const d = state.data;
-  const card = (title, meta, rows, empty) => `<div class="card"><div class="card-head"><h3>${title}</h3><span class="meta">${meta}</span></div>
-    ${barList(rows, { value: (r) => r.count, label: (r) => esc(r.name), color: () => 'var(--accent)', empty })}</div>`;
-  return hero('AGENTS & SKILLS', 'What your AI reaches for', `Subagents, skills and tool calls from sessions active in the ${rangeText()}.`) +
-    `<div class="grid two" style="margin-top:0">${card('Subagents launched', `${fmtN(d.kpis.subagentCalls)} model calls made by subagents`, d.subagents, 'No subagents launched.')}
-      ${card('Skills invoked', 'Claude Code skills', d.skills, 'No skills invoked.')}</div>
-    <div class="grid two">${card('Tool calls', 'across Claude Code and Codex', d.toolUse, 'No tool calls.')}
-      <div class="card"><div class="card-head"><h3>Model calls by tool</h3></div>
-      ${barList(d.tools, { value: (t) => t.calls, label: (t) => esc(t.name), color: (t) => seriesColor(t.id) })}</div></div>`;
-}
 
 async function viewSettings(el) {
   const cfg = await api('/api/config');
@@ -667,7 +634,7 @@ function closeDrill(restoreFocus = true) {
 }
 
 /* ---------- routing & render ---------- */
-const VIEWS = { overview: viewOverview, squad: viewSquad, sessions: viewSessions, projects: viewProjects, agents: viewAgents, quality: viewQuality, brain: viewBrain, live: viewLive };
+const VIEWS = { overview: viewOverview, squad: viewSquadPage, sessions: viewSessions, projects: viewProjects, agents: viewAgents, quality: viewQualityPage, brain: viewBrain, live: viewLive, integrations: viewIntegrationsPage };
 Object.assign(DRILLS, QUALITY_DRILLS, BRAIN_DRILLS);
 function drawPageCharts() {
   const c = $('#daily-chart'); if (c) drawDaily(c);
@@ -677,17 +644,20 @@ function drawPageCharts() {
 // animate: entrance motion for route/range changes; background refreshes repaint quietly.
 function render(animate = true) {
   const el = $('#view');
-  state.route = (location.hash.slice(1) || 'overview').split('?')[0];
+  [state.route, state.sub = ''] = (location.hash.slice(1) || 'overview').split('?')[0].split('/');
   if (!VIEWS[state.route] && state.route !== 'settings') state.route = 'overview';
-  $('#crumb').textContent = TITLES[state.route];
-  for (const a of $$('nav a')) a.classList.toggle('active', a.dataset.route === state.route);
+  const subMeta = (SUBPAGES[state.route] || []).find(([slug]) => slug && slug === state.sub);
+  if (!subMeta) state.sub = '';
+  $('#crumb').textContent = TITLES[state.route] + (subMeta ? ` / ${subMeta[1].toUpperCase()}` : '');
+  const full = state.sub ? `${state.route}/${state.sub}` : state.route;
+  for (const a of $$('nav a')) a.classList.toggle('active', a.classList.contains('nav-sub') ? a.dataset.route === full : a.dataset.route === state.route);
   $('#sidebar').classList.remove('open');
   hideTip();
   el.classList.toggle('animate', animate && !reduceMotion.matches);
   unmountBrain();
   unmountStages();
   if (state.route === 'settings') return viewSettings(el);
-  if (!state.data && !['live', 'brain'].includes(state.route)) {
+  if (!state.data && !['live', 'brain', 'integrations'].includes(state.route)) {
     el.innerHTML = '<div class="grid kpis">' + '<div class="skeleton"></div>'.repeat(4) + '</div><div class="skeleton" style="height:260px"></div>';
     return;
   }
@@ -695,7 +665,12 @@ function render(animate = true) {
   drawPageCharts();
   if (state.route === 'live') mountLive();
   if (state.route === 'overview') mountOverview();
-  if (state.route === 'squad') mountSquad();
+  if (state.route === 'squad') mountSquadPage();
+  if (state.route === 'quality') mountQualityPage();
+  if (state.route === 'sessions') mountSessions();
+  if (state.route === 'projects') mountProjects();
+  if (state.route === 'agents') mountAgents();
+  if (state.route === 'integrations') mountIntegrations();
   if (state.route === 'brain') mountBrain().catch((err) => { $('#brain-sub').textContent = `Could not read the vault: ${err.message}`; });
   if (animate) { countUp(el); settle(el); }
 }
@@ -775,7 +750,7 @@ function applyTheme() {
   setInterval(async () => {
     await loadSummary();
     if (state.route === 'live' && updateLive()) { /* patched in place */ }
-    else if (!['settings', 'brain'].includes(state.route) && !$('#view').contains(document.activeElement)) render(false);
+    else if (!['settings', 'brain', 'squad'].includes(state.route) && !$('#view').contains(document.activeElement)) render(false); // squad pages poll on their own
     if (drawer.kind && drawer.kind !== 'apps') paintDrawer(false);
   }, 60000);
 })();

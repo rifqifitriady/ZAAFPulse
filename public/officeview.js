@@ -63,7 +63,7 @@ function floorAgents() {
 /* ---------- page ---------- */
 function viewSquad() {
   const s = squadCards(99);
-  return `<div class="holo-deck">
+  return `<div class="holo-deck">${subTabs('squad')}
     <div class="hero"><div><div class="eyebrow">AI SQUAD</div><h1>The AI office</h1>
       <p>Each agent session is a character. It walks to the room for the tool it is using right now, read live from your transcripts.</p></div>
       <div class="hero-actions"><span class="pill live-pill"><i class="live-dot"></i><span id="of-clock">CONNECTING</span></span><span class="pill" id="of-count"></span></div></div>
@@ -113,7 +113,7 @@ function paintOffice() {
     metricTile({ label: 'Waiting for you', value: String(count('waiting')), sub: 'finished a turn or asked', color: STATE_COLOR.waiting, p: ag.length ? count('waiting') / ag.length : 0 }),
     metricTile({ label: 'Needs approval', value: String(count('approval')), sub: 'tool call stuck > 45 s', color: STATE_COLOR.approval, p: ag.length ? count('approval') / ag.length : 0 }),
     metricTile({ label: 'Idle', value: String(count('idle')), sub: 'quiet for 5+ minutes', color: STATE_COLOR.idle }),
-    metricTile({ label: 'Tool calls · 10m', value: whole.format(calls), sub: spark(office.perMinute || []), color: HOLO.pink }),
+    metricTile({ label: 'Tool calls · 10m', value: whole.format(calls), sub: `${(office.perMinute || []).slice(-1)[0] || 0} in the last minute`, color: HOLO.pink, spark: office.perMinute || [] }),
     ...ROOMS.slice(0, 4).map(([z, label, c]) => metricTile({ label: `${label} · 10m`, value: whole.format(zones[z] || 0), sub: `${calls ? Math.round(((zones[z] || 0) / calls) * 100) : 0}% of calls`, color: c, p: calls ? (zones[z] || 0) / calls : 0 })),
     metricTile({ label: 'Busiest agent', value: busiest && busiest.calls10m ? esc(agentName(busiest)) : '—', sub: busiest && busiest.calls10m ? `${busiest.calls10m} calls in 10 min` : 'no tool calls yet', color: HOLO.violet }),
   ].join(''));
