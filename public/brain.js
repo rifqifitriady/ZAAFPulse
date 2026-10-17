@@ -38,7 +38,7 @@ class BrainGraph {
   }
 
   readTheme() {
-    const cs = getComputedStyle(document.documentElement);
+    const cs = getComputedStyle(this.canvas); // the canvas, so a holo deck's tokens apply
     const v = (n) => cs.getPropertyValue(n).trim();
     this.colors = Object.fromEntries(BRAIN_GROUPS.map((g) => [g.id, v(g.color.slice(4, -1))]));
     this.theme = { edge: v('--graph-edge'), edgeHi: v('--graph-edge-hi'), label: v('--text'), labelMuted: v('--muted'), ring: v('--surface'), bg: v('--surface') };
