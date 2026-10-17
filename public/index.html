@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Command Center</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231f7f95'/%3E%3Cpath d='M9 17h4l2-6 3 11 2-5h3' stroke='white' stroke-width='2.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <span class="brand-mark" data-icon="pulse"></span>
+        <div>
+          <div class="brand-name">ZAAF<span>Pulse</span></div>
+          <div class="brand-sub">AI COMMAND CENTER</div>
+        </div>
+      </div>
+
+      <div class="workspace-card">
+        <span class="avatar sm" id="ws-initials">MB</span>
+        <div>
+          <div class="ws-title" id="ws-host">This laptop</div>
+          <div class="ws-sub">Local only · 127.0.0.1</div>
+        </div>
+      </div>
+
+      <nav>
+        <div class="nav-label">WORKSPACE</div>
+        <a href="#overview" data-route="overview"><span data-icon="grid"></span>Overview</a>
+        <a href="#squad" data-route="squad"><span data-icon="bot"></span>AI Squad<b class="badge" id="b-squad"></b></a>
+        <a href="#sessions" data-route="sessions"><span data-icon="list"></span>Sessions<b class="badge" id="b-sessions"></b></a>
+        <a href="#projects" data-route="projects"><span data-icon="folder"></span>Projects</a>
+        <a href="#agents" data-route="agents"><span data-icon="sparkle"></span>Agents &amp; skills</a>
+        <a href="#quality" data-route="quality"><span data-icon="shield"></span>Quality &amp; safety</a>
+        <a href="#brain" data-route="brain"><span data-icon="brain"></span>Second brain</a>
+        <a href="#live" data-route="live"><span data-icon="cpu"></span>Live monitor<b class="badge live" id="b-live"></b></a>
+        <div class="nav-label">PREFERENCES</div>
+        <a href="#settings" data-route="settings"><span data-icon="gear"></span>Settings</a>
+      </nav>
+
+      <div class="sidebar-foot">
+        <div class="status-line"><i class="dot" id="collector-dot"></i>Collector <b id="collector-status">starting</b></div>
+        <div class="user-card">
+          <span class="avatar" id="user-initials">–</span>
+          <div>
+            <div class="user-name" id="user-name">–</div>
+            <div class="user-role">Laptop owner</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn menu-btn" id="menu-btn" aria-label="Open menu"><span data-icon="menu"></span></button>
+        <div class="crumbs">WORKSPACE <span>/</span> <b id="crumb">OVERVIEW</b></div>
+        <div class="topbar-right">
+          <label class="search">
+            <span data-icon="search"></span>
+            <input id="search" type="search" placeholder="Search sessions, projects…" autocomplete="off">
+          </label>
+          <button class="icon-btn" id="rescan" title="Rescan logs now" aria-label="Rescan logs now"><span data-icon="refresh"></span></button>
+        </div>
+      </header>
+
+      <div class="content" id="view" aria-live="polite"></div>
+    </main>
+  </div>
+  <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+  <aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" hidden>
+    <div class="drawer-head">
+      <div>
+        <div class="eyebrow" id="drawer-eyebrow"></div>
+        <h2 id="drawer-title"></h2>
+      </div>
+      <button class="icon-btn" id="drawer-close" aria-label="Close details">×</button>
+    </div>
+    <div class="drawer-body" id="drawer-body"></div>
+  </aside>
+  <div class="tooltip" id="tooltip" role="tooltip"></div>
+  <script src="brain.js"></script>
+  <script src="quality.js"></script>
+  <script src="brainview.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
