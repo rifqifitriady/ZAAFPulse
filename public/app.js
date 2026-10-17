@@ -423,12 +423,6 @@ function projectsTable(rows, compactMode) {
   </tbody></table></div>`;
 }
 
-function viewSquad() {
-  const s = squadCards(99);
-  return hero('AI SQUAD', 'Every AI tool on this laptop', `${s.total} detected · ${s.running} running now. Tools with local logs show usage for the ${rangeText()}.`) +
-    `<div class="grid squad">${s.html}</div>`;
-}
-
 function matches(...fields) {
   const q = state.search.trim().toLowerCase();
   return !q || fields.some((f) => String(f || '').toLowerCase().includes(q));
@@ -701,6 +695,7 @@ function render(animate = true) {
   drawPageCharts();
   if (state.route === 'live') mountLive();
   if (state.route === 'overview') mountOverview();
+  if (state.route === 'squad') mountSquad();
   if (state.route === 'brain') mountBrain().catch((err) => { $('#brain-sub').textContent = `Could not read the vault: ${err.message}`; });
   if (animate) { countUp(el); settle(el); }
 }
