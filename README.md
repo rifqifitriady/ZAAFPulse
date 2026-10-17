@@ -240,7 +240,7 @@ npm run mcp:register -- all        # Claude Code, Kiro and Antigravity (backs up
 | `http` | AION and any REST API | one tool per endpoint you declare |
 | `mcp` | any Streamable HTTP MCP server | the upstream tools, filtered, under a `<id>__` prefix |
 
-Tools are prefixed with the integration id (`dynatrace-saas_list_problems`). Everything is read-only unless an integration sets `"allowWrite": true`. Secrets stay in the macOS Keychain or environment variables, never in `config.json`. The **Integrations** page shows each connection's health, which clients have the server registered, and recent tool calls. Setup per platform: [docs/integrations.md](docs/integrations.md).
+Tools are prefixed with the integration id (`dynatrace-saas_list_problems`). Everything is read-only unless an integration sets `"allowWrite": true`. Secrets stay in the macOS Keychain or environment variables, never in `config.json`. The **Integrations** page shows each connection's health, which clients have the server registered, and recent tool calls. It also lets you **add, configure, test and delete** integrations: the form is built for each type, **Test connection** checks a draft before anything is saved, and a pasted secret goes straight to the macOS Keychain (over stdin, never into `config.json` or a process list). Setup per platform: [docs/integrations.md](docs/integrations.md).
 
 ## How it works
 
@@ -311,6 +311,7 @@ lib/reqlogs.js         recent requests, error traces and stream events (Logs)
 lib/timeline.js        per-agent timeline segments with a per-file cache (Time)
 lib/insights.js        utilization, cache, compression and provider analytics
 lib/omniroute.js       read-only OmniRoute management API client, emails masked
+lib/integration-config.js  per-type field schema, validation, Keychain storage and dry runs for the editor
 public/                dashboard UI: plain HTML, CSS and JavaScript, no build step
 public/iso.js          isometric 3D engine, KPI cards and SVG chart helpers shared by all pages
 scripts/               LaunchAgent install/uninstall, launcher, Chrome opener, MCP client registration, media capture
@@ -339,6 +340,9 @@ docs/assets/           README banner, diagrams, screenshots and GIFs
 | `POST /api/rescan` | re-index changed log files now |
 | `GET /api/integrations` | integration health, client registration and recent MCP tool calls |
 | `POST /api/integrations/test` | fresh health check of one integration (`{ "id": "..." }`) |
+| `GET /api/integrations/config` | field schema per type and each integration's settings, secrets as references only |
+| `POST /api/integrations/test-draft` | dry run of a form: builds the connector with draft secrets in memory and checks health |
+| `POST /api/integrations/save` · `POST /api/integrations/delete` | add, edit (and rename) or remove an integration in `config.json` |
 </details>
 
 <details>
