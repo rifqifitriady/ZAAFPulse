@@ -6,7 +6,10 @@
   "private": true,
   "scripts": {
     "start": "node server.js",
-    "demo": "DEMO=1 PORT=4778 node server.js"
+    "demo": "DEMO=1 PORT=4778 node server.js",
+    "mcp": "node mcp.js",
+    "mcp:register": "node scripts/register-mcp.js",
+    "test": "node --test test/*.test.js"
   },
   "engines": {
     "node": ">=18"
