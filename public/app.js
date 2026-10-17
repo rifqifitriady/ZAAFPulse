@@ -128,6 +128,7 @@ async function loadLive() {
     state.live = await api('/api/live');
     const seen = new Set();
     for (const a of state.live.apps) { (state.history[a.id] ||= []).push(a.cpu); seen.add(a.id); }
+    recordLive(state.live);
     for (const [id, h] of Object.entries(state.history)) {
       if (!seen.has(id)) h.push(0);
       if (h.length > 60) h.splice(0, h.length - 60); // 5 minutes at 5-second polling
@@ -397,62 +398,6 @@ function squadCards(limit) {
   return { html: cards.join(''), total: ids.length, running: live.apps.length };
 }
 
-function viewOverview() {
-  const d = state.data; const k = d.kpis; const live = state.live || { apps: [] };
-  const name = d.config.userName;
-  const today = new Date().toLocaleDateString('en', { weekday: 'long', month: 'long', day: 'numeric' });
-  const budget = d.config.monthlyBudgetUSD;
-  const budgetPct = budget ? k.monthCost / budget : 0;
-  const unpriced = d.unpriced.length
-    ? ` ${d.unpriced.length} model${d.unpriced.length > 1 ? 's have' : ' has'} no price set (${d.unpriced.slice(0, 3).map(esc).join(', ')}${d.unpriced.length > 3 ? '…' : ''}), so their cost shows as $0.` : '';
-  const squad = squadCards(6);
-  const runningNames = live.apps.map((a) => a.name).slice(0, 3).join(', ');
-
-  return hero('AI USAGE OVERVIEW', `${greeting()}, ${esc(name)}.`, `Here's how AI has been working on this laptop over the ${rangeText()}.`,
-    `<span class="pill">${icon('calendar', 14)}${today}</span>`) +
-  `<div class="notice">${icon('alert')}<div><b>Cost is an API-equivalent estimate</b> at list price per token. On a Claude Max or ChatGPT plan you are not billed per token.${unpriced}</div><a href="#settings">Edit prices ${icon('external', 12)}</a></div>
-  <div class="grid kpis">
-    ${kpiCard({ title: 'Active AI apps', chip: 'green', ic: 'cpu', drill: 'apps', value: live.apps.length, fmt: 'pad2',
-      after: `<small class="muted">${squad.total} detected</small>`, sub: runningNames ? `Running now: ${esc(runningNames)}` : 'No AI app is running right now' })}
-    ${kpiCard({ title: 'Sessions', chip: 'violet', ic: 'zap', drill: 'sessions', value: k.sessions, fmt: 'int',
-      after: delta(k.sessions, k.prevSessions), sub: `${whole.format(k.prompts)} prompts typed · ${fmtN(k.calls)} model calls` })}
-    ${kpiCard({ title: 'Tokens processed', chip: 'blue', ic: 'layers', drill: 'tokens', value: k.tokens, fmt: 'n',
-      after: delta(k.tokens, k.prevTokens), sub: `${fmtN(k.output)} output · ${fmtPct(k.cacheHitRate)} served from cache` })}
-    ${kpiCard({ title: 'Est. spend', chip: 'amber', ic: 'dollar', drill: 'spend', value: k.cost, fmt: 'usd',
-      after: delta(k.cost, k.prevCost),
-      sub: `${fmtUSD(k.monthCost)} this month · ${budget ? `${Math.round(budgetPct * 100)}% of ${fmtUSD(budget)} budget` : 'no budget set'}`,
-      extra: budget ? `<div class="meter" title="Month to date vs budget"><i class="${budgetPct > 1 ? 'over' : ''}" style="width:${Math.min(100, budgetPct * 100)}%"></i></div>` : '' })}
-  </div>
-
-  <div class="card">
-    <div class="card-head"><h3>Daily activity</h3><span class="meta">${rangeText()} · by tool</span>
-      <div class="right">${legend()}
-        <div class="segmented" role="group" aria-label="Metric">${[['cost', 'Cost'], ['tokens', 'Tokens'], ['calls', 'Calls']].map(([v, l]) =>
-          `<button data-metric="${v}" aria-pressed="${state.metric === v}">${l}</button>`).join('')}</div></div></div>
-    <div class="chart" id="daily-chart"></div>
-  </div>
-
-  <div class="section-head"><h2>AI quality & safety</h2><span class="meta">— signals from your local logs · click a card for details</span><a class="link" href="#quality">Quality & safety ↗</a></div>
-  ${qualityKpis()}
-
-  <div class="section-head"><h2>AI Squad</h2><span class="meta">— ${squad.total} detected · ${squad.running} running now</span><a class="link" href="#squad">View all ↗</a></div>
-  <div class="grid squad">${squad.html}</div>
-
-  <div class="grid two">
-    <div class="card"><div class="card-head"><h3>Model mix</h3><span class="meta">tokens by model</span><div class="right">${legend()}</div></div>
-      ${barList(d.models.slice(0, 8), { value: (m) => m.tokens, label: (m) => `${esc(m.model)}<small>${fmtN(m.calls)} calls${m.priced ? ' · ' + fmtUSD(m.cost) : ''}</small>`, color: (m) => seriesColor(m.tool) })}</div>
-    <div class="card"><div class="card-head"><h3>When you use AI</h3><span class="meta">model calls by weekday and hour</span></div>${heatmap(d.heatmap)}</div>
-  </div>
-
-  <div class="grid two">
-    <div class="card"><div class="card-head"><h3>Top projects</h3><span class="meta">by tokens</span><div class="right"><a class="link" href="#projects" style="font-size:12.5px;color:var(--accent);text-decoration:none;font-weight:600">All projects ↗</a></div></div>
-      ${projectsTable(d.projects.slice(0, 6), true)}</div>
-    <div class="card"><div class="card-head"><h3>Plan limits</h3><span class="meta">latest reading</span></div>${limitsBlock()}
-      <div class="card-head" style="margin-top:18px"><h3>Most-used subagents</h3></div>
-      ${barList(d.subagents.slice(0, 5), { value: (a) => a.count, label: (a) => esc(a.name), color: () => 'var(--accent)', empty: 'No subagents launched in this range.' })}</div>
-  </div>`;
-}
-
 function limitsBlock() {
   const l = state.data.codexLimits;
   if (!l) return '<div class="empty">No plan-limit readings found. Claude Code does not write its limits to disk.</div>';
@@ -524,26 +469,6 @@ function viewAgents() {
     <div class="grid two">${card('Tool calls', 'across Claude Code and Codex', d.toolUse, 'No tool calls.')}
       <div class="card"><div class="card-head"><h3>Model calls by tool</h3></div>
       ${barList(d.tools, { value: (t) => t.calls, label: (t) => esc(t.name), color: (t) => seriesColor(t.id) })}</div></div>`;
-}
-
-function viewLive() {
-  const live = state.live;
-  if (!live) return '<div class="skeleton"></div>';
-  const ix = live.index || {};
-  return `<div class="hero"><div><div class="eyebrow">LIVE MONITOR</div><h1>Running right now</h1><p>AI apps detected in the process list, refreshed every 5 seconds.</p></div>
-    <div class="hero-actions"><span class="pill">${icon('refresh', 14)}Updated ${new Date(live.ts).toLocaleTimeString()}</span></div></div>
-    <div class="card">${live.apps.length ? `<div class="table-wrap"><table><thead><tr><th>App</th><th>Status</th><th class="r">Processes</th><th class="r">CPU</th><th class="r">Memory</th><th class="r">Uptime</th></tr></thead><tbody>
-    ${live.apps.map((a) => `<tr><td><b>${esc(a.name)}</b></td><td><span class="status running" style="width:auto"><i></i>Running</span></td>
-      <td class="r num">${a.processes}</td><td class="r num">${a.cpu.toFixed(1)}%</td><td class="r num">${whole.format(a.memMB)} MB</td><td class="r num">${dur(a.uptimeSec)}</td></tr>`).join('')}
-    </tbody></table></div>` : '<div class="empty">No AI apps are running.</div>'}</div>
-    <div class="grid two">
-      <div class="card"><div class="card-head"><h3>Plan limits</h3></div>${state.data ? limitsBlock() : ''}</div>
-      <div class="card"><div class="card-head"><h3>Log collector</h3></div>
-        <div class="limit"><div class="limit-top"><b>Status</b><span>${ix.indexing ? `Indexing ${ix.done}/${ix.total} files` : 'Up to date'}</span></div></div>
-        <div class="limit"><div class="limit-top"><b>Last scan</b><span>${ix.lastScan ? `${ago(ix.lastScan)} · took ${(ix.lastDurationMs / 1000).toFixed(1)}s` : 'pending'}</span></div></div>
-        <div class="limit"><div class="limit-top"><b>Sources</b><span>~/.claude/projects · ~/.codex/sessions</span></div></div>
-        <div class="kpi-sub">Logs are rescanned every minute; only changed files are re-read. Message text is never stored.</div></div>
-    </div>`;
 }
 
 async function viewSettings(el) {
@@ -766,6 +691,7 @@ function render(animate = true) {
   hideTip();
   el.classList.toggle('animate', animate && !reduceMotion.matches);
   unmountBrain();
+  unmountStages();
   if (state.route === 'settings') return viewSettings(el);
   if (!state.data && !['live', 'brain'].includes(state.route)) {
     el.innerHTML = '<div class="grid kpis">' + '<div class="skeleton"></div>'.repeat(4) + '</div><div class="skeleton" style="height:260px"></div>';
@@ -773,6 +699,8 @@ function render(animate = true) {
   }
   el.innerHTML = VIEWS[state.route]();
   drawPageCharts();
+  if (state.route === 'live') mountLive();
+  if (state.route === 'overview') mountOverview();
   if (state.route === 'brain') mountBrain().catch((err) => { $('#brain-sub').textContent = `Could not read the vault: ${err.message}`; });
   if (animate) { countUp(el); settle(el); }
 }
@@ -809,7 +737,7 @@ $('#drawer-close').onclick = () => closeDrill();
 $('#drawer-backdrop').onclick = () => closeDrill();
 document.addEventListener('mousemove', (e) => {
   const t = e.target.closest && e.target.closest('[data-tip]');
-  if (t) showTip(e, esc(t.dataset.tip)); else if (!e.target.closest('.chart')) hideTip();
+  if (t) showTip(e, esc(t.dataset.tip)); else if (!e.target.closest('.chart, .stage')) hideTip();
 });
 $('#search').addEventListener('input', (e) => {
   state.search = e.target.value;
@@ -846,12 +774,13 @@ function applyTheme() {
   // Live data refreshes often; summaries follow the server's one-minute rescan.
   setInterval(async () => {
     await loadLive();
-    if (state.route === 'live') render(false);
+    if (state.route === 'live' && !updateLive()) render(false);
     if (drawer.kind === 'apps') paintDrawer(false);
   }, 5000);
   setInterval(async () => {
     await loadSummary();
-    if (!['settings', 'brain'].includes(state.route) && !$('#view').contains(document.activeElement)) render(false);
+    if (state.route === 'live' && updateLive()) { /* patched in place */ }
+    else if (!['settings', 'brain'].includes(state.route) && !$('#view').contains(document.activeElement)) render(false);
     if (drawer.kind && drawer.kind !== 'apps') paintDrawer(false);
   }, 60000);
 })();
