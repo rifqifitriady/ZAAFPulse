@@ -675,3 +675,16 @@ body.drawer-locked { overflow: hidden; }
   .stage-readouts, .stage-legend, .stage-key { display: none; } /* the metric tiles below carry the same numbers */
   .stage-tl { max-width: 90%; }
 }
+
+/* AI office (squad page) */
+.office-stage { height: clamp(440px, 58vw, 640px); }
+.state-pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; color: var(--c); background: color-mix(in srgb, var(--c) 14%, transparent); border: 1px solid color-mix(in srgb, var(--c) 40%, transparent); white-space: nowrap; }
+.state-pill i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 6px currentColor; }
+.holo-table .clip-wide { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.feed { display: flex; flex-direction: column; gap: 2px; max-height: 420px; overflow-y: auto; }
+.feed-row { display: grid; grid-template-columns: 8px 64px minmax(0, 110px) minmax(0, 1fr); gap: 10px; align-items: center; padding: 7px 4px; border-bottom: 1px solid rgba(120, 140, 255, .1); font-size: 12.5px; }
+.feed-row b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.feed-row span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #b9c1ec; }
+.feed-row code { font-size: 11.5px; color: var(--h-cyan); background: rgba(77, 232, 255, .08); padding: 1px 5px; border-radius: 4px; }
+.feed-dot { width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 8px currentColor; }
+@media (max-width: 640px) { .office-stage { height: 380px; } }

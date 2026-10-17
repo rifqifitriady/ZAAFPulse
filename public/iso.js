@@ -41,7 +41,7 @@ const readouts = (items) => items.map(([k, v, s, c]) =>
 const isoStages = new Set();
 
 // draw(g) runs every animation frame with the projection and drawing helpers in g.
-function isoStage(canvas, { draw, yaw = -0.42, pitch = 0.56, fit = [12.6, 8.3], origin = [0.47, 0.66] }) {
+function isoStage(canvas, { draw, yaw = -0.42, pitch = 0.56, fit = [12.6, 8.3], origin = [0.47, 0.66], onDestroy }) {
   const ctx = canvas.getContext('2d');
   const st = { canvas, drag: 0, raf: 0, W: 0, H: 0, s: 1, pointer: null, t0: performance.now() };
   const particles = Array.from({ length: 46 }, () => ({ x: (Math.random() - 0.5) * 10.4, z: -3 + Math.random() * 5.8, y: Math.random() * 5, v: 0.15 + Math.random() * 0.35 }));
@@ -131,13 +131,14 @@ function isoStage(canvas, { draw, yaw = -0.42, pitch = 0.56, fit = [12.6, 8.3], 
         ctx.fillStyle = HOLO.text; ctx.font = '600 11px system-ui, sans-serif'; ctx.fillText(title, tl[0] + 8, tl[1] + 16);
         if (value) { ctx.fillStyle = color; ctx.font = '700 15px system-ui, sans-serif'; ctx.fillText(value, tl[0] + 8, tl[1] + 34); }
       },
-      box(x, z, w, d, h, color, { slices = 0.35, glow = 18, alpha = 1 } = {}) {
-        const x1 = x + w; const z1 = z + d;
+      // y0 lifts the box (a monitor on a desk, a body on legs).
+      box(x, z, w, d, h, color, { slices = 0.35, glow = 18, alpha = 1, y0 = 0 } = {}) {
+        const x1 = x + w; const z1 = z + d; const y1 = y0 + h;
         const faces = [
-          { n: [0, 0, 1], p: [[x, 0, z1], [x1, 0, z1], [x1, h, z1], [x, h, z1]], k: 0.7 },
-          { n: [1, 0, 0], p: [[x1, 0, z], [x1, 0, z1], [x1, h, z1], [x1, h, z]], k: 0.5 },
-          { n: [-1, 0, 0], p: [[x, 0, z], [x, 0, z1], [x, h, z1], [x, h, z]], k: 0.5 },
-          { n: [0, 0, -1], p: [[x, 0, z], [x1, 0, z], [x1, h, z], [x, h, z]], k: 0.7 },
+          { n: [0, 0, 1], p: [[x, y0, z1], [x1, y0, z1], [x1, y1, z1], [x, y1, z1]], k: 0.7 },
+          { n: [1, 0, 0], p: [[x1, y0, z], [x1, y0, z1], [x1, y1, z1], [x1, y1, z]], k: 0.5 },
+          { n: [-1, 0, 0], p: [[x, y0, z], [x, y0, z1], [x, y1, z1], [x, y1, z]], k: 0.5 },
+          { n: [0, 0, -1], p: [[x, y0, z], [x1, y0, z], [x1, y1, z], [x, y1, z]], k: 0.7 },
         ];
         ctx.save(); ctx.globalAlpha = alpha;
         for (const f of faces) {
@@ -150,11 +151,11 @@ function isoStage(canvas, { draw, yaw = -0.42, pitch = 0.56, fit = [12.6, 8.3], 
           ctx.strokeStyle = hexA(color, 0.9); ctx.lineWidth = 1; ctx.stroke();
           if (slices && h > slices) { // glassy floor-by-floor slices
             ctx.strokeStyle = 'rgba(255, 255, 255, .14)'; ctx.beginPath();
-            for (let y = slices; y < h; y += slices) seg(P(f.p[0][0], y, f.p[0][2]), P(f.p[1][0], y, f.p[1][2]));
+            for (let y = y0 + slices; y < y1; y += slices) seg(P(f.p[0][0], y, f.p[0][2]), P(f.p[1][0], y, f.p[1][2]));
             ctx.stroke();
           }
         }
-        poly([P(x, h, z), P(x1, h, z), P(x1, h, z1), P(x, h, z1)]);
+        poly([P(x, y1, z), P(x1, y1, z), P(x1, y1, z1), P(x, y1, z1)]);
         ctx.fillStyle = hexA(color, 0.95); if (glow) { ctx.shadowColor = color; ctx.shadowBlur = glow; } ctx.fill();
         ctx.shadowBlur = 0; ctx.strokeStyle = 'rgba(255, 255, 255, .7)'; ctx.stroke();
         ctx.restore();
@@ -201,7 +202,7 @@ function isoStage(canvas, { draw, yaw = -0.42, pitch = 0.56, fit = [12.6, 8.3], 
     st.raf = requestAnimationFrame(frame);
   }
   st.raf = requestAnimationFrame(frame);
-  st.destroy = () => { cancelAnimationFrame(st.raf); ro.disconnect(); isoStages.delete(st); };
+  st.destroy = () => { cancelAnimationFrame(st.raf); ro.disconnect(); isoStages.delete(st); if (onDestroy) onDestroy(); };
   isoStages.add(st);
   return st;
 }
