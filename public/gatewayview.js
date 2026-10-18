@@ -177,7 +177,7 @@ function gwKeys() {
           <div class="gw-row"><label>Name<input class="input" name="name" placeholder="e.g. my-app, n8n, laptop scripts" required></label>
           <label>Allowed models <small>globs, comma-separated; empty = all</small><input class="input" name="models" placeholder="ollama/*, openrouter/deepseek/*"></label>
           <label>Allowed agents <small>empty = all</small><input class="input" name="agents" placeholder="customer-service, network-ops"></label></div>
-          <fieldset><legend>Scopes</legend>${[['llm', 'LLM: /v1/chat/completions, /v1/embeddings'], ['agents', 'Agents: agent/*, /v1/orchestrate, workflows, sessions'], ['rag', 'RAG: /v1/knowledge search and document ingestion'], ['mcp', 'MCP: /mcp with every integration tool']].map(([v, l]) => `<label class="gw-check"><input type="checkbox" name="scope" value="${v}" ${v === 'llm' || v === 'agents' ? 'checked' : ''}> ${l}</label>`).join('')}</fieldset>
+          <fieldset><legend>Scopes</legend>${[['llm', 'LLM: /v1/chat/completions, /v1/embeddings'], ['agents', 'Agents: agent/*, /v1/orchestrate, workflows, sessions'], ['rag', 'RAG: /v1/knowledge search and ingestion, /v1/brain (second brain, read only)'], ['mcp', 'MCP: /mcp with every integration tool']].map(([v, l]) => `<label class="gw-check"><input type="checkbox" name="scope" value="${v}" ${v === 'llm' || v === 'agents' ? 'checked' : ''}> ${l}</label>`).join('')}</fieldset>
           <label class="gw-check"><input type="checkbox" name="privateOnly"> Private models only (your own hardware: Ollama, LM Studio, vLLM, TGI)</label>
           <div class="gw-row"><label>Budget / month (USD)<input class="input" name="budgetUSD" type="number" min="0" step="0.01" placeholder="none"></label>
             <label>Requests / minute<input class="input" name="rpm" type="number" min="1" value="60"></label>
@@ -355,12 +355,26 @@ function gwTools() {
   ${secret ? `<div class="ie-result good gw-secret"><b>${esc(secret.name)}: copy this now. The key is masked after you copy it or in 60 seconds.</b>
     <div class="gw-code"><button class="btn ghost gw-copy" type="button" data-gwtoolsecret>Copy</button><pre id="gw-tool-secret">${esc(secret.snippet)}</pre></div></div>` : ''}
   ${gw.toolMasked ? `<div class="ie-result gw-secret"><b>Copied and hidden.</b> The key now lives only in that tool's config; ZAAFPulse keeps its hash (Agent Gateway → API keys).</div>` : ''}
+  ${gwSkillsPanel()}
   <div class="pc-grid">${d.tools.map((t) => { const [fl, ep, fc] = FORMAT_LABEL[t.format] || FORMAT_LABEL.openai; const st = t.state === 'connected' ? ['connected', '#5cf0a8'] : t.state === 'unsupported' ? ['not possible', '#8f98cc'] : t.state === 'manual' ? ['manual setup', '#4de8ff'] : ['not connected', '#ffb547'];
     return `<article class="pcard${t.unsupported ? ' off' : ''}" style="--v:${fc}"><div class="pc-head"><span class="pc-logo">${esc(t.name[0])}</span><div class="pc-title"><b>${esc(t.name)}</b><small>${esc(t.vendor)}</small></div><span class="state-pill" style="--c:${st[1]}"><i></i>${st[0]}</span></div>
       <div class="tags"><span class="tag" style="color:${fc}">${fl}</span><span class="tag mono">${ep}</span>${t.path ? `<span class="tag mono">${esc(t.path)}</span>` : ''}</div>
       ${t.unsupported ? `<p class="pc-desc">${esc(t.unsupported)}</p>` : `${t.note ? `<p class="pc-desc">${esc(t.note)}</p>` : ''}<details><summary class="muted">Snippet</summary>${codeBlock(t.snippet || '', `tool-${t.id}`)}</details>`}
       ${t.unsupported ? '' : `<div class="pc-foot">${t.canApply ? `<button class="btn" type="button" data-gwtool="apply" data-id="${esc(t.id)}">${t.state === 'connected' ? 'Re-apply' : 'Set up'}</button>` : ''}<button class="btn ghost" type="button" data-gwtool="key" data-id="${esc(t.id)}">New key + snippet</button>${t.hasBackup ? `<button class="btn ghost danger" type="button" data-gwtool="revert" data-id="${esc(t.id)}">Revert</button>` : ''}</div>`}</article>`; }).join('')}</div>
   <p class="kpi-sub">Set up writes the tool's own config file (mode 0600) with a dedicated key, after saving a backup that Revert restores; Revert also revokes that key. Endpoints: <code>${esc(d.baseUrl)}/v1/messages</code> (Claude Code), <code>/v1/responses</code> (Codex), <code>/v1beta/models/…</code> (Gemini CLI), <code>/v1/chat/completions</code> (everything else). Keys work as <code>Authorization: Bearer</code>, <code>x-api-key</code> or <code>x-goog-api-key</code>.</p>`;
+}
+
+// Agent skills: SKILL.md files that teach an AI to use ZAAFPulse, served here and installable into Claude Code.
+function gwSkillsPanel() {
+  const d = gw.data; const list = d.skills || []; const inst = list.filter((x) => x.claude === 'installed').length; const old = list.filter((x) => x.claude === 'outdated').length;
+  const pill = (st) => { const [c, l] = { installed: ['#5cf0a8', 'installed'], outdated: ['#ffb547', 'outdated'], yours: ['#8f98cc', 'your own skill'], 'not installed': ['#8f98cc', 'not installed'] }[st] || ['#8f98cc', st]; return `<span class="state-pill" style="--c:${c}"><i></i>${l}</span>`; };
+  return `<section class="holo panel"><div class="panel-head"><h3>Agent skills</h3><span class="meta">${list.length} skills · Claude Code: ${inst} installed${old ? `, ${old} outdated` : ''} · served from this version at ${esc(d.baseUrl)}/skills</span></div>
+    <p class="kpi-sub">Skills teach an AI agent to use ZAAFPulse: chat on any provider, the 17 agents, collaboration, workflows with approval gates, RAG, the second brain, MCP and A2A. Install them into Claude Code, or paste the line below to any AI. They are read from this gateway, so they always match what is running.</p>
+    <div class="table-wrap"><table class="holo-table"><thead><tr><th>Skill</th><th>What it teaches</th><th>Claude Code</th><th></th></tr></thead><tbody>
+      ${list.map((x) => `<tr><td><b class="mono">${esc(x.name)}</b></td><td class="muted wrap">${esc(((d) => (d.length > 140 ? `${d.slice(0, 140).replace(/\s+\S*$/, '')}…` : `${d}.`))(x.description.split('. ')[0]))}</td><td>${pill(x.claude)}</td><td><a class="btn ghost" href="${esc(x.path)}" target="_blank" rel="noopener">View</a></td></tr>`).join('')}</tbody></table></div>
+    <div class="gw-row"><button class="btn" type="button" data-gwskills="install">${inst ? 'Update in Claude Code' : 'Install into Claude Code'}</button>${inst || old ? '<button class="btn ghost danger" type="button" data-gwskills="uninstall">Remove from Claude Code</button>' : ''}<button class="btn ghost" type="button" data-gwskills="key">New key for skills</button></div>
+    ${codeBlock(`Read this skill and use it: ${d.baseUrl}/skills/zaafpulse/SKILL.md`, 'gw-skill-line')}
+    <p class="kpi-sub">The skills read <code>ZAAFPULSE_URL</code> and <code>ZAAFPULSE_KEY</code> from the environment; "New key for skills" makes a key with all four scopes and shows the two exports once. Install writes <code>~/.claude/skills/zaafpulse*</code> and never overwrites a skill of your own with the same name.</p></section>`;
 }
 
 /* ---------- Model router: quota, token saver, model map ---------- */
@@ -745,6 +759,18 @@ document.addEventListener('click', (e) => {
       const r = await gwPost('tools', { action: act, id: tool.id, model });
       if (r.errors) { alert(r.errors[0]); return; }
       if (act === 'key') { gw.toolSecret = { name: tool.name, snippet: r.snippet }; gw.toolMasked = false; clearTimeout(gw.toolTimer); gw.toolTimer = setTimeout(() => { if (gw.toolSecret) { gw.toolSecret = null; gw.toolMasked = true; paintGateway(); } }, 60000); }
+      await refreshGateway();
+    });
+    return;
+  }
+  const sk = t('[data-gwskills]');
+  if (sk) {
+    const act = sk.dataset.gwskills;
+    if (act === 'uninstall' && !confirm('Remove the ZAAFPulse skills from ~/.claude/skills?')) return;
+    gwAct(async () => {
+      const r = await gwPost('skills', { action: act }); if (r.errors) { alert(r.errors[0]); return; }
+      if (act === 'key') { gw.toolSecret = { name: 'Agent skills key', snippet: r.snippet }; gw.toolMasked = false; clearTimeout(gw.toolTimer); gw.toolTimer = setTimeout(() => { if (gw.toolSecret) { gw.toolSecret = null; gw.toolMasked = true; paintGateway(); } }, 60000); }
+      if (act === 'install' && r.skipped && r.skipped.length) alert(`Skipped (you already have skills with these names): ${r.skipped.join(', ')}`);
       await refreshGateway();
     });
     return;
