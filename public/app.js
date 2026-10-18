@@ -71,6 +71,8 @@ const ICON_PATHS = {
   target: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r=".8"/>',
   ghost: '<path d="M5 20V10a7 7 0 0 1 14 0v10l-2.3-1.6L14.4 20 12 18.4 9.6 20l-2.3-1.6z"/><path d="M9.5 10.5h.01M14.5 10.5h.01"/>',
   undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
+  compass: '<circle cx="12" cy="12" r="8.5"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',
+  anchor: '<circle cx="12" cy="5.5" r="2"/><path d="M12 7.5V20"/><path d="M5 13a7 7 0 0 0 14 0"/><path d="M8.5 11h7"/>',
 };
 function icon(name, size = 16) {
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] || ''}</svg>`;
@@ -113,7 +115,7 @@ const state = {
   route: 'overview',
   history: {}, // app id -> recent CPU samples
 };
-const TITLES = { overview: 'OVERVIEW', squad: 'AI SQUAD', sessions: 'SESSIONS', projects: 'PROJECTS', agents: 'AGENTS & SKILLS', quality: 'QUALITY & SAFETY', brain: 'SECOND BRAIN', live: 'LIVE MONITOR', integrations: 'INTEGRATIONS', settings: 'SETTINGS' };
+const TITLES = { overview: 'OVERVIEW', squad: 'AI SQUAD', sessions: 'SESSIONS', projects: 'PROJECTS', agents: 'AGENTS & SKILLS', quality: 'QUALITY & SAFETY', brain: 'SECOND BRAIN', live: 'LIVE MONITOR', integrations: 'INTEGRATIONS', gateway: 'AGENT GATEWAY', rag: 'RAG SERVICE', a2a: 'AGENT-TO-AGENT', settings: 'SETTINGS' };
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -613,7 +615,7 @@ function closeDrill(restoreFocus = true) {
 }
 
 /* ---------- routing & render ---------- */
-const VIEWS = { overview: viewOverview, squad: viewSquadPage, sessions: viewSessions, projects: viewProjects, agents: viewAgents, quality: viewQualityPage, brain: viewBrain, live: viewLive, integrations: viewIntegrationsPage };
+const VIEWS = { overview: viewOverview, squad: viewSquadPage, sessions: viewSessions, projects: viewProjects, agents: viewAgents, quality: viewQualityPage, brain: viewBrain, live: viewLive, integrations: viewIntegrationsPage, gateway: viewGateway, rag: viewRag, a2a: viewA2a };
 Object.assign(DRILLS, QUALITY_DRILLS, BRAIN_DRILLS, OPENROUTER_DRILLS);
 function drawPageCharts() {
   const c = $('#daily-chart'); if (c) drawDaily(c);
@@ -629,7 +631,7 @@ function render(animate = true) {
   if (!subMeta) state.sub = '';
   $('#crumb').textContent = TITLES[state.route] + (subMeta ? ` / ${subMeta[1].toUpperCase()}` : '');
   const full = state.sub ? `${state.route}/${state.sub}` : state.route;
-  for (const a of $$('nav a')) a.classList.toggle('active', a.classList.contains('nav-sub') ? a.dataset.route === full : a.dataset.route === state.route);
+  for (const a of $$('nav a')) a.classList.toggle('active', a.classList.contains('nav-sub') ? a.dataset.route === full || (!state.sub && a.dataset.route === `${state.route}/`) : a.dataset.route === state.route);
   $('#sidebar').classList.remove('open');
   hideTip();
   el.classList.toggle('animate', animate && !reduceMotion.matches);
@@ -650,6 +652,7 @@ function render(animate = true) {
   if (state.route === 'projects') mountProjects();
   if (state.route === 'agents') mountAgents();
   if (state.route === 'integrations') mountIntegrations();
+  if (['gateway', 'rag', 'a2a'].includes(state.route)) mountGateway();
   if (state.route === 'brain') mountBrain().catch((err) => { $('#brain-sub').textContent = `Could not read the vault: ${err.message}`; });
   if (animate) { countUp(el); settle(el); }
 }
@@ -706,7 +709,7 @@ addEventListener('resize', () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => { drawPageCharts(); drawDrawerCharts(); }, 120);
 });
-addEventListener('hashchange', () => { closeDrill(false); render(); });
+addEventListener('hashchange', () => { closeDrill(false); if (typeof forgetSecret === 'function') forgetSecret(); render(); });
 
 function applyTheme() {
   const t = store.get('theme', 'system');
