@@ -11,6 +11,7 @@ const { summarize } = require('./lib/aggregate');
 const { DEFAULT_PRICING } = require('./lib/pricing');
 const processes = require('./lib/processes');
 const { getVault } = require('./lib/vault');
+const { createBrain } = require('./lib/brain');
 const office = require('./lib/office');
 const { insights } = require('./lib/insights');
 const reqlogs = require('./lib/reqlogs');
@@ -117,6 +118,23 @@ const gateway = createGateway({
   baseUrl: `http://127.0.0.1:${PORT}`,
 });
 
+// Second brain sources: Obsidian by default, plus Logseq, Notion, Tana, Roam, mem.ai, Reflect, Heybrain,
+// PARA folders, the RAG knowledge bases and vector databases. Settings in config.json under "brain";
+// tokens in the Keychain as acc.brain-<id>.
+const brain = createBrain({
+  getConfig: rawConfig,
+  writeBrainConfig: (b) => {
+    if (DEMO) { rawCache.value = { ...rawCache.value, brain: b }; return; }
+    const raw = { ...rawConfig(), brain: b };
+    fs.writeFileSync(`${CONFIG_FILE}.tmp`, JSON.stringify(raw, null, 2)); fs.renameSync(`${CONFIG_FILE}.tmp`, CONFIG_FILE);
+  },
+  secrets: createSecrets(),
+  resolveSecret: (id, input, current) => gatewaySecret(`brain-${id}`, { key: 'token', label: 'secret', required: false }, input, current),
+  knowledge: gateway.knowledge,
+  getVaultPaths: () => config.vaultPaths || [],
+});
+gateway.setBrain(brain);
+
 // OpenRouter data for Models and Rankings. The key (for credits) comes from an enabled openrouter
 // integration; demo mode serves whatever is cached and never fetches.
 const openRouter = createOpenRouter({
@@ -219,6 +237,23 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/office') {
       return send(res, 200, DEMO ? office.demoSnapshot() : office.snapshot());
+    }
+    if (url.pathname === '/api/brain' && req.method === 'GET') {
+      if (DEMO) return send(res, 200, { types: brain.TYPES, sources: [{ id: 'obsidian', type: 'obsidian', name: 'Obsidian (demo)', enabled: true, builtin: true, label: 'Obsidian', family: 'Notes' }] });
+      return send(res, 200, { types: brain.TYPES, sources: brain.sources() });
+    }
+    if (url.pathname === '/api/brain/graph') {
+      const id = url.searchParams.get('source') || 'obsidian';
+      if (DEMO) return send(res, 200, { ...demo.vault(), source: { id: 'obsidian', type: 'obsidian', name: 'Obsidian (demo)', label: 'Obsidian' }, layout: 'network' });
+      return send(res, 200, await brain.graph(id, { fresh: url.searchParams.get('fresh') === '1' }));
+    }
+    if (url.pathname === '/api/brain/sources' && req.method === 'POST') {
+      if (!(req.headers['content-type'] || '').startsWith('application/json')) return send(res, 415, { error: 'json only' });
+      const body = JSON.parse(await readBody(req));
+      if (body.action === 'save') return send(res, 200, brain.save(body));
+      if (body.action === 'delete') return send(res, 200, brain.remove(body.id));
+      if (body.action === 'test') return send(res, 200, await brain.test(body.id));
+      return send(res, 200, { errors: ['unknown action'] });
     }
     if (url.pathname === '/api/vault') {
       return send(res, 200, DEMO ? demo.vault() : getVault(config.vaultPaths));
