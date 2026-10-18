@@ -1,5 +1,5 @@
 'use strict';
-/* AI Squad page as a 3D office: every agent session (and each subagent) is a character that walks to
+/* AI Office page as a 3D office: every agent session (and each subagent) is a character that walks to
    the room for the tool it is using right now, read from the live transcripts via /api/office. */
 
 const STATE_COLOR = { working: '#4de8ff', thinking: '#8b7bff', waiting: '#ffb547', approval: '#ff4f6d', idle: '#7d86b8', done: '#5cf0a8', running: '#5b8cff' };
@@ -64,7 +64,7 @@ function floorAgents() {
 function viewSquad() {
   const s = squadCards(99);
   return `<div class="holo-deck">${subTabs('squad')}
-    <div class="hero"><div><div class="eyebrow">AI SQUAD</div><h1>The AI office</h1>
+    <div class="hero"><div><div class="eyebrow">AI OFFICE</div><h1>The AI office</h1>
       <p>Each agent session is a character. It walks to the room for the tool it is using right now, read live from your transcripts.</p></div>
       <div class="hero-actions"><span class="pill live-pill"><i class="live-dot"></i><span id="of-clock">CONNECTING</span></span><span class="pill" id="of-count"></span></div></div>
 
