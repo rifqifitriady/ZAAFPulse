@@ -1,5 +1,5 @@
 'use strict';
-/* AI Squad subpages: Logs (requests, error traces, stream inspector), Proxy logs (router upstream
+/* AI Office subpages: Logs (requests, error traces, stream inspector), Proxy logs (router upstream
    attempts and MCP hub calls) and Time (a timeline of every agent and subagent). */
 
 const ZONE_COLOR = { code: '#6d7cff', read: '#3ee6b0', terminal: '#4de8ff', web: '#ffb547', meeting: '#c45cf2', tools: '#ff5ca8' };
@@ -20,7 +20,7 @@ function viewSquadPage() {
   const extra = state.sub === 'logs' ? `<span class="pill live-pill"><i class="live-dot"></i><span id="sq-clock">CONNECTING</span></span><button class="btn ghost" id="sq-pause" aria-pressed="${sq.paused}">${sq.paused ? 'Resume' : 'Pause'}</button>`
     : state.sub === 'time' ? `<div class="segmented" role="group" aria-label="Time window">${['1', '6', '24'].map((h) => `<button data-hours="${h}" aria-pressed="${sq.hours === h}">${h}h</button>`).join('')}</div>`
       : '<span class="pill live-pill"><i class="live-dot"></i><span id="sq-clock">CONNECTING</span></span>';
-  return `<div class="holo-deck">${subTabs('squad')}${subHero(`AI SQUAD · ${title.toUpperCase()}`, title, copy, extra)}<div id="sq-body">${'<div class="skeleton" style="height:140px"></div>'.repeat(2)}</div></div>`;
+  return `<div class="holo-deck">${subTabs('squad')}${subHero(`AI OFFICE · ${title.toUpperCase()}`, title, copy, extra)}<div id="sq-body">${'<div class="skeleton" style="height:140px"></div>'.repeat(2)}</div></div>`;
 }
 
 function mountSquadPage() {

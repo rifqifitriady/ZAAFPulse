@@ -11,7 +11,7 @@ ZAAFPulse is the user's own AI gateway and agent platform, running on this machi
 
 ```bash
 export ZAAFPULSE_URL="http://127.0.0.1:4777"   # the gateway only listens on this Mac
-export ZAAFPULSE_KEY="zp_..."                   # Dashboard → Agent Gateway → API keys (or Code tools → New key)
+export ZAAFPULSE_KEY="zp_..."                   # Dashboard → Endpoint → API keys (or Agent Skills → New key for skills)
 ```
 
 Every API call goes to `$ZAAFPULSE_URL/v1/...` with `Authorization: Bearer $ZAAFPULSE_KEY`. Two other headers also work: `x-api-key` (Anthropic-style) and `x-goog-api-key` (Gemini-style).
