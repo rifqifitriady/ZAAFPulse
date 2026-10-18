@@ -46,10 +46,10 @@ function brainSourcesPanel() {
       <div class="pc-foot"><button class="btn ghost" type="button" data-brainsrc="open" data-id="${esc(src.id)}">Map it</button><button class="btn ghost" type="button" data-brainsrc="test" data-id="${esc(src.id)}">Test</button>${src.builtin ? '' : `<button class="btn ghost" type="button" data-brainsrc="edit" data-id="${esc(src.id)}">Edit</button><button class="btn ghost danger" type="button" data-brainsrc="delete" data-id="${esc(src.id)}">Remove</button>`}</div></article>`;
   const form = e ? (() => { const t = T[e.type]; return `<form class="gw-form holo panel brain-form" id="brain-src-form"><div class="panel-head"><h3>${e.originalId ? `Edit ${esc(e.name)}` : `Connect ${esc(t.label)}`}</h3><span class="meta">${esc(t.about || '')}</span></div>
       <div class="gw-row"><label>ID<input class="input" name="id" value="${esc(e.id || e.type)}" ${e.originalId ? 'readonly' : ''}></label><label>Name<input class="input" name="name" value="${esc(e.name || t.label)}"></label></div>
-      ${t.fields.map((f) => f.kind === 'secret' ? `<label>${esc(f.label)} ${e.hasSecret ? '<small>stored; leave empty to keep</small>' : '<small>saved to the macOS Keychain</small>'}<input class="input" type="password" autocomplete="off" name="secret" placeholder="${esc(f.placeholder || '')}"></label>`
+      ${t.fields.map((f) => f.kind === 'secret' ? `<label>${esc(f.label)} ${e.hasSecret ? '<small>stored; leave empty to keep</small>' : `<small>saved to the ${storeLong()}</small>`}<input class="input" type="password" autocomplete="off" name="secret" placeholder="${esc(f.placeholder || '')}"></label>`
         : `<label>${esc(f.label)}<input class="input${f.kind === 'path' ? ' mono' : ''}" name="${f.key}" value="${esc(f.key === 'path' ? e.path || '' : f.key === 'url' ? e.url || '' : (e.options || {})[f.key] || '')}" placeholder="${esc(f.placeholder || '')}"></label>`).join('')}
       <div id="brain-src-errors"></div><div class="gw-row"><button class="btn" type="submit">Save &amp; map</button><button class="btn ghost" type="button" data-brainsrc="cancel">Cancel</button></div></form>`; })() : '';
-  return `<div class="panel-head"><h3>Sources</h3><span class="meta">Obsidian is the default · tokens go to the Keychain · note text never leaves your Mac except to the source's own API</span></div>
+  return `<div class="panel-head"><h3>Sources</h3><span class="meta">Obsidian is the default · tokens go to the ${storeName()} · note text never leaves this machine except to the source's own API</span></div>
     <div class="pc-grid">${S.map(card).join('')}</div>${form}
     <div class="brain-connect">${Object.entries(fam).map(([f, list]) => `<div><small class="muted">${esc(f)}</small><div class="tags">${list.map(([k, t]) => `<button class="tag brain-type" type="button" data-braintype="${k}" title="${esc(t.about || '')}">+ ${esc(t.label)}</button>`).join('')}</div></div>`).join('')}</div>`;
 }
@@ -154,7 +154,7 @@ document.addEventListener('click', (e) => {
     if (act === 'open') { brainUi.source = id; brainUi.layout = null; state.vault = null; mountBrain(); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
     const post = (body) => api('/api/brain/sources', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (act === 'test') { sa.textContent = 'Testing…'; post({ action: 'test', id }).then((r) => { sa.textContent = r.ok ? `${whole.format(r.notes)} notes` : 'Failed'; if (!r.ok) alert(r.error); loadBrainSources(); }); return; }
-    if (act === 'delete' && confirm(`Remove the source "${src.name}"? Its Keychain item stays.`)) post({ action: 'delete', id }).then(() => { if (brainUi.source === id) { brainUi.source = 'obsidian'; state.vault = null; mountBrain(); } else loadBrainSources(); });
+    if (act === 'delete' && confirm(`Remove the source "${src.name}"? Its ${storeName()} item stays.`)) post({ action: 'delete', id }).then(() => { if (brainUi.source === id) { brainUi.source = 'obsidian'; state.vault = null; mountBrain(); } else loadBrainSources(); });
     return;
   }
   const note = e.target.closest('[data-note]');

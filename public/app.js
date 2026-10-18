@@ -120,9 +120,17 @@ const TITLES = { overview: 'OVERVIEW', squad: 'AI OFFICE', sessions: 'SESSIONS',
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
+  if (r.status === 401) { location.href = '/login.html'; throw new Error('signed out'); } // server mode: session ended
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
   return r.json();
 }
+
+// Where this copy runs (from /api/platform): OS, secret store, server mode. Defaults suit a Mac.
+const ZP = { os: 'macos', secretStore: { id: 'keychain', label: 'macOS Keychain' }, serverMode: false, auth: false, baseUrl: location.origin };
+const storeName = () => ({ keychain: 'Keychain', libsecret: 'keyring' }[ZP.secretStore.id] || 'secret file');
+const storeLong = () => ZP.secretStore.label || 'secret store';
+const localOnlyLabel = () => (ZP.serverMode ? 'server mode · sign-in' : '127.0.0.1 only');
+async function signOut() { await fetch('/api/logout', { method: 'POST' }).catch(() => {}); location.href = '/login.html'; }
 async function loadSummary() {
   state.data = await api(`/api/summary?range=${state.range}`);
   paintChrome();
@@ -726,6 +734,9 @@ function applyTheme() {
 }
 
 (async function boot() {
+  Object.assign(ZP, await api('/api/platform').catch(() => ({})));
+  if (ZP.auth) { const role = $('.user-role'); if (role) role.innerHTML = '<button class="link-btn" type="button" id="sign-out">Admin · sign out</button>'; $('#sign-out')?.addEventListener('click', signOut); }
+  else if (ZP.os !== 'macos') { const role = $('.user-role'); if (role) role.textContent = `${ZP.osLabel} · local`; }
   applyTheme();
   hydrateIcons();
   render(false);

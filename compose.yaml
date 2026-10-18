@@ -1,0 +1,21 @@
+# ZAAFPulse on a server with Docker Compose:
+#   echo "ZAAFPULSE_ADMIN_PASSWORD=$(openssl rand -base64 18)" > .env   # keep this file private
+#   echo "ZAAFPULSE_MASTER_KEY=$(openssl rand -base64 32)" >> .env      # encrypts stored secrets
+#   docker compose up -d
+# Then open http://SERVER:4777 and sign in. Put a TLS reverse proxy in front for the internet.
+services:
+  zaafpulse:
+    build: .
+    image: zaafpulse:latest
+    restart: unless-stopped
+    ports:
+      - "4777:4777"            # "127.0.0.1:4777:4777" to reach it only through a proxy on this host
+    environment:
+      ZAAFPULSE_ADMIN_PASSWORD: ${ZAAFPULSE_ADMIN_PASSWORD:?set it in .env}
+      ZAAFPULSE_MASTER_KEY: ${ZAAFPULSE_MASTER_KEY:-}
+      ZAAFPULSE_PUBLIC_URL: ${ZAAFPULSE_PUBLIC_URL:-}   # e.g. https://ai.example.com, shown in API snippets
+      ZAAFPULSE_TRUST_PROXY: ${ZAAFPULSE_TRUST_PROXY:-0} # 1 behind a reverse proxy that sets X-Forwarded-*
+    volumes:
+      - zaafpulse-data:/data
+volumes:
+  zaafpulse-data:

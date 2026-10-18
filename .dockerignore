@@ -1,0 +1,11 @@
+.git
+.data
+.cache
+config.json
+dist
+docs
+reports
+research_notes
+test
+node_modules
+*.log
