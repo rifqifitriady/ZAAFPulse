@@ -17,6 +17,7 @@ const reqlogs = require('./lib/reqlogs');
 const timeline = require('./lib/timeline');
 const { createOmniRoute } = require('./lib/omniroute');
 const { createIntegrationConfig, describe: describeIntegrations } = require('./lib/integration-config');
+const { createPriceSync } = require('./lib/price-sync');
 const { createIntegrations } = require('./lib/integrations');
 const { createSecrets } = require('./lib/secrets');
 const { createAudit } = require('./lib/audit');
@@ -42,6 +43,9 @@ function computerName() {
 }
 const HOSTNAME = DEMO ? demo.config.host : computerName();
 
+// Live model prices (OpenRouter's public list). onChange runs after a refresh, once the server is up.
+const priceSync = createPriceSync({ cacheFile: path.join(DIR, '.cache', 'prices.json'), onChange: () => { config = loadConfig(); memo.clear(); insightMemo.clear(); } });
+
 function loadConfig() {
   let c = {};
   if (DEMO) c = { userName: demo.config.userName, monthlyBudgetUSD: demo.config.monthlyBudgetUSD };
@@ -49,7 +53,13 @@ function loadConfig() {
   return {
     userName: c.userName || fullName(),
     monthlyBudgetUSD: Number.isFinite(c.monthlyBudgetUSD) ? c.monthlyBudgetUSD : 0,
-    pricing: { ...DEFAULT_PRICING, ...(c.pricing || {}) },
+    ...(() => {
+      // config.json keeps only your own prices; live and default prices are merged in at runtime.
+      const manualPricing = c.pricing && typeof c.pricing === 'object' ? c.pricing : {};
+      const pricingSync = { enabled: !(c.pricingSync && c.pricingSync.enabled === false), pinned: Array.isArray(c.pricingSync?.pinned) ? c.pricingSync.pinned.filter((k) => typeof k === 'string') : [] };
+      const eff = priceSync.effective(DEFAULT_PRICING, manualPricing, DEMO ? { enabled: false } : pricingSync);
+      return { pricing: eff.pricing, pricingSource: eff.source, manualPricing, pricingSync };
+    })(),
     vaultPaths: Array.isArray(c.vaultPaths) ? c.vaultPaths.filter((p) => typeof p === 'string') : [],
     integrations: c.integrations && typeof c.integrations === 'object' && !Array.isArray(c.integrations) ? c.integrations : {},
   };
@@ -187,10 +197,41 @@ const server = http.createServer(async (req, res) => {
         next.pricing = p;
       }
       if (DEMO) config = next;
-      else { fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2)); config = loadConfig(); }
+      else {
+        // Write the stored settings only, never the merged runtime prices.
+        let raw = {}; try { raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); } catch { /* new file */ }
+        Object.assign(raw, { userName: next.userName, monthlyBudgetUSD: next.monthlyBudgetUSD, vaultPaths: next.vaultPaths });
+        if (body.pricing && typeof body.pricing === 'object') raw.pricing = next.pricing;
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(raw, null, 2)); config = loadConfig();
+      }
       memo.clear();
       const { integrations, ...rest } = config;
       return send(res, 200, rest);
+    }
+    if (url.pathname === '/api/prices' && req.method === 'GET') {
+      return send(res, 200, { status: priceSync.status(), sync: config.pricingSync, catalog: priceSync.catalog(), manual: config.manualPricing, effective: config.pricing, source: config.pricingSource, demo: DEMO });
+    }
+    if (url.pathname === '/api/prices' && req.method === 'POST') {
+      if (!(req.headers['content-type'] || '').startsWith('application/json')) return send(res, 415, { error: 'json only' });
+      const body = JSON.parse(await readBody(req));
+      if (DEMO) return send(res, 200, { error: 'Demo mode: prices are not saved.' });
+      if (body.action === 'refresh') { await priceSync.refresh(); return send(res, 200, { status: priceSync.status() }); }
+      let raw = {}; try { raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); } catch { /* new file */ }
+      const manual = raw.pricing && typeof raw.pricing === 'object' ? raw.pricing : {};
+      const sync = { enabled: !(raw.pricingSync && raw.pricingSync.enabled === false), pinned: Array.isArray(raw.pricingSync?.pinned) ? raw.pricingSync.pinned : [] };
+      const key = typeof body.key === 'string' ? body.key.trim() : '';
+      if (body.action !== 'toggle' && !/^[\w.\-]{1,60}$/.test(key)) return send(res, 400, { error: 'model key: letters, digits, dots and dashes' });
+      if (body.action === 'toggle') sync.enabled = body.enabled !== false;
+      else if (body.action === 'set') {
+        const clean = {}; for (const f of ['input', 'output', 'cacheRead', 'cacheWrite5m', 'cacheWrite1h']) clean[f] = Math.max(0, Number(body.price && body.price[f]) || 0);
+        manual[key] = clean; if (!sync.pinned.includes(key)) sync.pinned.push(key); // your price for this key wins over the live one
+      } else if (body.action === 'unpin' || body.action === 'remove') { delete manual[key]; sync.pinned = sync.pinned.filter((k) => k !== key); }
+      else return send(res, 400, { error: 'unknown action' });
+      raw.pricing = manual; raw.pricingSync = sync;
+      fs.writeFileSync(CONFIG_FILE, JSON.stringify(raw, null, 2));
+      config = loadConfig(); memo.clear(); insightMemo.clear();
+      if (body.action === 'toggle' && sync.enabled && priceSync.stale()) priceSync.refresh();
+      return send(res, 200, { ok: true });
     }
     if (url.pathname === '/api/integrations/config' && req.method === 'GET') {
       if (DEMO) return send(res, 200, describeIntegrations(Object.fromEntries(demo.integrations().integrations.filter((i) => i.type !== 'acc')
@@ -244,4 +285,8 @@ server.listen(PORT, HOST, () => {
   const t = Date.now();
   indexer.refresh().then(() => console.log(`Indexed logs in ${((Date.now() - t) / 1000).toFixed(1)}s`));
   setInterval(() => indexer.refresh(), RESCAN_MS).unref();
+  // Live prices: refresh now if the cached list is older than 12 hours, then check hourly. Never in demo mode.
+  const syncPrices = () => { if (!DEMO && config.pricingSync.enabled && priceSync.stale()) priceSync.refresh(); };
+  syncPrices();
+  setInterval(syncPrices, 3600 * 1000).unref();
 });
