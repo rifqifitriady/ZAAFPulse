@@ -8,7 +8,8 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 const NAME = 'ai-command-center';
-const MCP = path.resolve(__dirname, '..', 'mcp.js');
+// node + mcp.js, or the single-file binary with "mcp" (lib/platform.js).
+const { mcpCommand } = require('../lib/platform');
 
 function clients(home = os.homedir()) {
   return {
@@ -17,7 +18,7 @@ function clients(home = os.homedir()) {
     antigravity: { name: 'Antigravity', file: path.join(home, '.gemini', 'config', 'mcp_config.json') },
   };
 }
-const entry = () => ({ command: process.execPath, args: [MCP] });
+const entry = () => mcpCommand();
 
 function readJson(file) {
   let text;
@@ -39,7 +40,8 @@ function writeJson(file, data) {
 }
 
 function claudeArgs(remove) {
-  return remove ? ['mcp', 'remove', '--scope', 'user', NAME] : ['mcp', 'add', '--scope', 'user', NAME, '--', process.execPath, MCP];
+  const m = mcpCommand();
+  return remove ? ['mcp', 'remove', '--scope', 'user', NAME] : ['mcp', 'add', '--scope', 'user', NAME, '--', m.command, ...m.args];
 }
 
 function run(target, { remove = false, dryRun = false, home, exec = execFileSync, log = console.log } = {}) {
@@ -52,7 +54,9 @@ function run(target, { remove = false, dryRun = false, home, exec = execFileSync
       const args = claudeArgs(remove);
       if (dryRun) { log(`[dry-run] claude ${args.join(' ')}`); continue; }
       if (isRegistered(c.file) !== remove) { log(`${c.name}: already ${remove ? 'absent' : 'registered'}`); continue; }
-      try { exec('claude', args, { stdio: 'inherit' }); log(`${c.name}: ${remove ? 'removed' : 'registered'} (user scope)`); } catch (err) {
+      // Windows: claude is claude.cmd, which runs through cmd.exe, so quote paths with spaces.
+      const win = process.platform === 'win32';
+      try { exec('claude', win ? args.map((x) => (/\s/.test(x) ? `"${x}"` : x)) : args, { stdio: 'inherit', ...(win ? { shell: true } : {}) }); log(`${c.name}: ${remove ? 'removed' : 'registered'} (user scope)`); } catch (err) {
         if (err.code !== 'ENOENT') throw err;
         log(`claude CLI not found. Run this yourself:\n  claude ${args.join(' ')}`);
       }

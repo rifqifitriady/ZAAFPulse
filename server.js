@@ -1,11 +1,13 @@
 #!/usr/bin/env node
-// AI Command Center: a local dashboard of AI usage on this laptop.
-// Listens on 127.0.0.1 only; nothing leaves the machine except calls to integrations you configure.
+// ZAAFPulse: AI command center and agentic workspace. Runs on macOS, Linux and Windows.
+// Listens on 127.0.0.1 by default; nothing leaves the machine except calls to the providers and
+// integrations you configure. Server mode (HOST=0.0.0.0 or another address) requires a dashboard
+// password; TLS with ZAAFPULSE_TLS_CERT and ZAAFPULSE_TLS_KEY, or put it behind a reverse proxy.
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execFileSync } = require('child_process');
 const { Indexer } = require('./lib/indexer');
 const { summarize } = require('./lib/aggregate');
 const { DEFAULT_PRICING } = require('./lib/pricing');
@@ -26,25 +28,34 @@ const { createSecrets } = require('./lib/secrets');
 const { createAudit } = require('./lib/audit');
 const { createLocal } = require('./lib/local');
 const register = require('./scripts/register-mcp');
+const platform = require('./lib/platform');
+const { createAuth, isLoopback } = require('./lib/auth');
 
-const PORT = Number(process.env.PORT) || 4777;
-const HOST = '127.0.0.1';
-const DIR = __dirname;
+const PORT = Number(process.env.ZAAFPULSE_PORT || process.env.PORT) || 4777;
+const HOST = process.env.ZAAFPULSE_HOST || process.env.HOST || '127.0.0.1';
+const SERVER_MODE = !isLoopback(HOST);
+// config.json, .data/ and .cache/: ZAAFPULSE_DATA when set (installers set it), else next to the code.
+const DIR = platform.dataDir();
 const CONFIG_FILE = path.join(DIR, 'config.json');
-const PUBLIC = path.join(DIR, 'public');
+const PUBLIC = path.join(platform.APP_DIR, 'public');
+const TLS = process.env.ZAAFPULSE_TLS_CERT && process.env.ZAAFPULSE_TLS_KEY ? { cert: fs.readFileSync(process.env.ZAAFPULSE_TLS_CERT), key: fs.readFileSync(process.env.ZAAFPULSE_TLS_KEY) } : null;
+// The address apps use to reach the gateway (shown in snippets): ZAAFPULSE_PUBLIC_URL behind a proxy.
+const BASE_URL = (process.env.ZAAFPULSE_PUBLIC_URL || `${TLS ? 'https' : 'http'}://${!SERVER_MODE ? '127.0.0.1' : ['0.0.0.0', '::'].includes(HOST) ? os.hostname() : HOST}:${PORT}`).replace(/\/+$/, '');
+// Hosts the dashboard answers to (DNS-rebinding guard). Server mode accepts any host, since sign-in is
+// required, unless ZAAFPULSE_ALLOWED_HOSTS lists them.
+const ALLOWED_HOSTS = (process.env.ZAAFPULSE_ALLOWED_HOSTS || '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
 const RESCAN_MS = 60 * 1000;
 // DEMO=1 serves seeded synthetic data (for screenshots) and never reads logs or writes config.
 const DEMO = process.env.DEMO === '1';
 const demo = DEMO ? require('./lib/demo') : null;
 
-function fullName() {
-  try { return execFileSync('id', ['-F'], { encoding: 'utf8' }).trim().split(/\s+/)[0]; } catch { return os.userInfo().username; }
-}
-
-function computerName() {
-  try { return execFileSync('scutil', ['--get', 'ComputerName'], { encoding: 'utf8' }).trim(); } catch { return os.hostname().replace(/\.local$/, ''); }
-}
+const { fullName, computerName } = platform;
 const HOSTNAME = DEMO ? demo.config.host : computerName();
+const auth = createAuth({ dataDir: DIR, host: HOST });
+if (auth.required && !auth.configured() && !DEMO) {
+  console.error(`ZAAFPulse listens on ${HOST}, so the dashboard needs a password first.\nRun \`zaafpulse set-password\` (or set ZAAFPULSE_ADMIN_PASSWORD), then start again.`);
+  process.exit(78);
+}
 
 // Live model prices (OpenRouter's public list). onChange runs after a refresh, once the server is up.
 const priceSync = createPriceSync({ cacheFile: path.join(DIR, '.cache', 'prices.json'), onChange: () => { config = loadConfig(); memo.clear(); insightMemo.clear(); } });
@@ -120,7 +131,7 @@ const gateway = createGateway({
   getPricing: () => config.pricing,
   getIntegrations: () => getIntegrations(),
   version: require('./package.json').version,
-  baseUrl: `http://127.0.0.1:${PORT}`,
+  baseUrl: BASE_URL,
 });
 
 // Second brain sources: Obsidian by default, plus Logseq, Notion, Tana, Roam, mem.ai, Reflect, Heybrain,
@@ -151,9 +162,10 @@ const openRouter = createOpenRouter({
     try { return createSecrets().resolve(e.apiKey, 'apiKey'); } catch { return null; }
   },
 });
+// MCP clients and whether our server is registered in each (demo mode never reads your client configs).
 function clientRows() {
   return Object.entries(register.clients()).map(([id, c]) => ({
-    id, name: c.name, file: c.file.replace(os.homedir(), '~'), registered: DEMO ? id !== 'kiro' : register.isRegistered(c.file), // demo never reads your client configs command: `npm run mcp:register -- ${id}`,
+    id, name: c.name, file: c.file.replace(os.homedir(), '~'), registered: DEMO ? id !== 'kiro' : register.isRegistered(c.file), command: `npm run mcp:register -- ${id}`,
   }));
 }
 
@@ -193,14 +205,25 @@ function readBody(req) {
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 'text/javascript', '.svg': 'image/svg+xml' };
 
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${HOST}`);
-  // Reject requests from other sites (DNS rebinding / cross-origin writes).
-  const host = (req.headers.host || '').split(':')[0];
-  if (!['127.0.0.1', 'localhost'].includes(host)) return send(res, 403, { error: 'forbidden' });
+const handler = async (req, res) => {
+  const url = new URL(req.url, 'http://localhost');
+  // Reject requests addressed to other names (DNS rebinding / cross-origin writes).
+  const host = String(req.headers.host || '').replace(/:\d+$/, '').toLowerCase();
+  if (!isLoopback(host) && !(SERVER_MODE && (!ALLOWED_HOSTS.length || ALLOWED_HOSTS.includes(host)))) return send(res, 403, { error: 'forbidden' });
 
   try {
+    // The gateway authenticates its own callers with ZAAFPulse API keys.
     if (await gateway.handle(req, res, url)) return;
+    // Dashboard and /api: a signed-in session in server mode.
+    if (await auth.handle(req, res, url)) return;
+    if (!auth.check(req) && url.pathname !== '/login.html') {
+      if (url.pathname.startsWith('/api/')) return send(res, 401, { error: 'sign in first' });
+      res.writeHead(302, { location: '/login.html' }); return res.end();
+    }
+    if (url.pathname === '/api/platform') {
+      return send(res, 200, { os: platform.OS, osLabel: platform.OS_LABEL, secretStore: { id: require('./lib/secret-store').defaultStore().id, label: require('./lib/secret-store').defaultStore().label },
+        serverMode: SERVER_MODE, host: HOST, port: PORT, tls: !!TLS, baseUrl: BASE_URL, auth: auth.required, single: platform.isSea(), version: require('./package.json').version });
+    }
     if (url.pathname === '/api/gateway' && req.method === 'GET') return send(res, 200, await gateway.admin('', 'GET'));
     const gwAdmin = url.pathname.match(/^\/api\/gateway\/([a-z]+)$/);
     if (gwAdmin) {
@@ -283,7 +306,7 @@ const server = http.createServer(async (req, res) => {
       const next = { ...config };
       if (typeof body.userName === 'string') next.userName = body.userName.slice(0, 60);
       if (Number.isFinite(body.monthlyBudgetUSD) && body.monthlyBudgetUSD >= 0) next.monthlyBudgetUSD = body.monthlyBudgetUSD;
-      if (typeof body.vaultPath === 'string') next.vaultPaths = body.vaultPath.trim() ? [body.vaultPath.trim().replace(/^~(?=\/)/, os.homedir())] : [];
+      if (typeof body.vaultPath === 'string') next.vaultPaths = body.vaultPath.trim() ? [require('./lib/platform').expandHome(body.vaultPath)] : [];
       if (body.pricing && typeof body.pricing === 'object') {
         const p = {};
         for (const [k, v] of Object.entries(body.pricing)) {
@@ -362,7 +385,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/integrations' && req.method === 'GET') {
       if (DEMO) return send(res, 200, demo.integrations());
-      return send(res, 200, { integrations: await getIntegrations().status(), clients: clientRows(), calls: audit.tail(100), mcpCommand: `${process.execPath} ${path.join(DIR, 'mcp.js')}` });
+      return send(res, 200, { integrations: await getIntegrations().status(), clients: clientRows(), calls: audit.tail(100), mcpCommand: (({ command, args }) => [command, ...args].map((x) => (/\s/.test(x) ? `"${x}"` : x)).join(' '))(platform.mcpCommand()) });
     }
     if (url.pathname === '/api/integrations/test' && req.method === 'POST') {
       if (!(req.headers['content-type'] || '').startsWith('application/json')) return send(res, 415, { error: 'json only' });
@@ -385,10 +408,13 @@ const server = http.createServer(async (req, res) => {
   } catch (err) {
     send(res, 500, { error: err.message });
   }
-});
+};
+const server = TLS ? https.createServer(TLS, handler) : http.createServer(handler);
+server.on('error', (err) => { console.error(err.code === 'EADDRINUSE' ? `Port ${PORT} is already in use: is ZAAFPulse running? (zaafpulse status)` : err.message); process.exit(1); });
 
 server.listen(PORT, HOST, () => {
-  console.log(`AI Command Center${DEMO ? ' (demo data)' : ''} → http://localhost:${PORT}`);
+  console.log(`ZAAFPulse${DEMO ? ' (demo data)' : ''} → ${TLS ? 'https' : 'http'}://${SERVER_MODE ? HOST : 'localhost'}:${PORT}${SERVER_MODE ? `  (server mode: sign-in required; apps use ${BASE_URL})` : ''}`);
+  console.log(`Data: ${DIR}`);
   const t = Date.now();
   indexer.refresh().then(() => console.log(`Indexed logs in ${((Date.now() - t) / 1000).toFixed(1)}s`));
   setInterval(() => indexer.refresh(), RESCAN_MS).unref();
