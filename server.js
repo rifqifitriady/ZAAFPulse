@@ -57,7 +57,7 @@ function loadConfig() {
       // config.json keeps only your own prices; live and default prices are merged in at runtime.
       const manualPricing = c.pricing && typeof c.pricing === 'object' ? c.pricing : {};
       const pricingSync = { enabled: !(c.pricingSync && c.pricingSync.enabled === false), pinned: Array.isArray(c.pricingSync?.pinned) ? c.pricingSync.pinned.filter((k) => typeof k === 'string') : [] };
-      const eff = priceSync.effective(DEFAULT_PRICING, manualPricing, DEMO ? { enabled: false } : pricingSync);
+      const eff = priceSync.effective(DEFAULT_PRICING, manualPricing, pricingSync); // demo uses the cached public list too, but never fetches
       return { pricing: eff.pricing, pricingSource: eff.source, manualPricing, pricingSync };
     })(),
     vaultPaths: Array.isArray(c.vaultPaths) ? c.vaultPaths.filter((p) => typeof p === 'string') : [],
