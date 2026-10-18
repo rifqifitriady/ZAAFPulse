@@ -24,7 +24,7 @@ let tileSeq = 0;
 function metricTile({ label, value, sub = '', color, drill = '', p = null, spark = null }) {
   const art = spark && spark.length > 1 && spark.some((v) => v > 0) ? tileSpark(spark, color) : p != null ? tileRing(p, color) : '';
   return `<div class="metric${art ? '' : ' plain'}" style="--c:${color}"${drill ? ` role="button" tabindex="0" data-drill="${drill}" aria-label="${esc(label)}: open details"` : ''}>
-    <span>${label}</span><b class="num">${value}</b><small>${sub}</small>${art}</div>`;
+    <span>${label}</span><b class="num" title="${esc(String(value).replace(/<[^>]+>/g, ''))}">${value}</b><small title="${esc(String(sub).replace(/<[^>]+>/g, ''))}">${sub}</small>${art}</div>`;
 }
 // Smooth (Catmull-Rom) line with a gradient stroke from the tile color to violet, and a soft area.
 function tileSpark(vals, color) {
@@ -115,6 +115,7 @@ function isoStage(canvas, { draw, yaw = -0.42, pitch = 0.56, fit = [12.6, 8.3], 
     const poly = (pts) => { ctx.beginPath(); pts.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]))); ctx.closePath(); };
     const seg = (a, b) => { ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); };
 
+    const reserved = []; // screen boxes callouts must not cover this frame (wall titles)
     const g = {
       ctx, t, still, s, W: st.W, H: st.H, P, facing, poly, pointer: st.pointer,
       glow() {
@@ -166,7 +167,9 @@ function isoStage(canvas, { draw, yaw = -0.42, pitch = 0.56, fit = [12.6, 8.3], 
         ctx.setLineDash([]); ctx.restore();
         const tl = P(ax, H, az);
         ctx.fillStyle = HOLO.text; ctx.font = '600 11px system-ui, sans-serif'; ctx.fillText(title, tl[0] + 8, tl[1] + 16);
-        if (value) { ctx.fillStyle = color; ctx.font = '700 15px system-ui, sans-serif'; ctx.fillText(value, tl[0] + 8, tl[1] + 34); }
+        let tw = ctx.measureText(title).width;
+        if (value) { ctx.fillStyle = color; ctx.font = '700 15px system-ui, sans-serif'; ctx.fillText(value, tl[0] + 8, tl[1] + 34); tw = Math.max(tw, ctx.measureText(value).width); }
+        reserved.push({ x: tl[0] + 4, w: tw + 10, y0: tl[1] + 2, y1: tl[1] + (value ? 40 : 22) });
       },
       // y0 lifts the box (a monitor on a desk, a body on legs).
       box(x, z, w, d, h, color, { slices = 0.35, glow = 18, alpha = 1, y0 = 0 } = {}) {
@@ -217,12 +220,15 @@ function isoStage(canvas, { draw, yaw = -0.42, pitch = 0.56, fit = [12.6, 8.3], 
         const ls = items.map((it) => { const w = ctx.measureText(it.text).width + 12; return { ...it, w, x: it.at[0] - 26 - w, y: it.at[1] - 30 }; });
         const placed = [];
         for (const l of [...ls].sort((p, q) => q.y - p.y)) {
-          for (let moved = true; moved;) {
+          l.x = Math.max(6, l.x);
+          for (let moved = true, guard = 0; moved && guard < 60; guard++) {
             moved = false;
             // Overlap test (< 21) is looser than the 22px move, so float rounding cannot re-trigger it forever.
             for (const o of placed) if (l.x < o.x + o.w + 4 && o.x < l.x + l.w + 4 && Math.abs(l.y - o.y) < 21) { l.y = o.y - 22; moved = true; }
+            // Wall titles stay readable: a callout over one moves above it, or below it near the top edge.
+            for (const r of reserved) if (l.x < r.x + r.w && r.x < l.x + l.w && l.y + 10 > r.y0 && l.y - 11 < r.y1) { l.y = r.y0 - 13 > 14 ? r.y0 - 13 : r.y1 + 12; moved = true; }
           }
-          l.x = Math.max(6, l.x); placed.push(l);
+          placed.push(l);
         }
         for (const l of ls) {
           ctx.strokeStyle = 'rgba(223, 230, 255, .55)'; ctx.lineWidth = 1;
@@ -253,7 +259,7 @@ function unmountStages() {
 // [slug, label, description] per page; '' is the page's own overview.
 const SUBPAGES = {
   quality: [['', 'Overview'], ['utilization', 'Utilization'], ['cache', 'Cache'], ['compression', 'Compression'], ['providers', 'Provider stats'], ['models', 'Models'], ['rankings', 'Rankings']],
-  gateway: [['', 'Overview'], ['keys', 'API keys'], ['providers', 'Providers'], ['router', 'Model router'], ['sessions', 'Sessions & memory'], ['playground', 'Playground'], ['connect', 'Connect']],
+  gateway: [['', 'Overview'], ['keys', 'API keys'], ['providers', 'Providers'], ['router', 'Model router'], ['tools', 'Code tools'], ['sessions', 'Sessions & memory'], ['playground', 'Playground'], ['connect', 'Connect']],
   rag: [['', 'Knowledge bases'], ['connect', 'API & usage']],
   a2a: [['', 'Workflows'], ['collaborate', 'Collaborate'], ['runs', 'Runs'], ['agents', 'Specialist agents'], ['collaboration', 'Collaboration']],
   squad: [['', 'Office'], ['logs', 'Logs'], ['proxy', 'Proxy logs'], ['time', 'Time']],
