@@ -5,6 +5,7 @@
 //   npm run media            all screenshots and GIFs
 //   npm run media -- shots   screenshots only
 //   npm run media -- gifs    GIFs only
+//   npm run media -- shots screen-settings   one screenshot
 const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
@@ -15,7 +16,7 @@ const OUT = path.join(ROOT, 'docs', 'assets');
 const PORT = 4791; const CDP_PORT = 9339;
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const VIEW = { width: 1440, height: 900 };
-const only = process.argv[2];
+const only = process.argv[2]; const pick = process.argv[3]; // optional: one shot name
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const SHOTS = [
@@ -23,6 +24,7 @@ const SHOTS = [
   ['screen-proxy', '#squad/proxy'], ['screen-time', '#squad/time'], ['screen-quality', '#quality'], ['screen-utilization', '#quality/utilization'],
   ['screen-cache', '#quality/cache'], ['screen-compression', '#quality/compression'], ['screen-providers', '#quality/providers'],
   ['screen-sessions', '#sessions'], ['screen-projects', '#projects'], ['screen-agents', '#agents'], ['screen-brain', '#brain'], ['screen-integrations', '#integrations'],
+  ['screen-settings', '#settings', 'js:document.querySelector("#prices-panel").scrollIntoView()'], ['screen-integration-editor', '#integrations', '[data-integ-edit="omniroute"]'],
   ['screen-drawer-spend', '#overview', '[data-drill="spend"]'], ['screen-drawer-poisoning', '#quality', '[data-drill="poisoning"]'],
 ];
 // [file, hash, seconds, before(): waits before recording, onStart: page script, crop: true = content only, no sidebar]
@@ -72,14 +74,15 @@ async function main() {
     const open = async (hash) => {
       await cdp.send('Page.navigate', { url: 'about:blank' }); await sleep(200);
       await cdp.send('Page.navigate', { url: `http://localhost:${PORT}/${hash}` });
-      await waitFor(async () => (await cdp.send('Runtime.evaluate', { expression: "!!document.querySelector('.holo-deck') && !document.querySelector('#view .skeleton')", returnByValue: true })).result.value, 20000);
+      await waitFor(async () => (await cdp.send('Runtime.evaluate', { expression: "!!document.querySelector('.holo-deck') && !document.querySelector('#view .skeleton') && !document.querySelector('#prices-panel .skeleton')", returnByValue: true })).result.value, 20000);
     };
     const evaluate = (expression) => cdp.send('Runtime.evaluate', { expression, awaitPromise: true });
 
     if (only !== 'gifs') {
-      for (const [name, hash, click] of SHOTS) {
+      for (const [name, hash, click] of SHOTS.filter(([n]) => !pick || n === pick)) {
         await open(hash); await sleep(5000); // let scenes grow and polls land
-        if (click) { await evaluate(`document.querySelector('${click}').click()`); await sleep(1400); }
+        // click: a selector to click, or `js:<script>` to run (e.g. scroll to a section).
+        if (click) { await evaluate(click.startsWith('js:') ? click.slice(3) : `document.querySelector('${click}').click()`); await sleep(1400); }
         // JPEG keeps the dark gradients small; PNG is several times larger for no visible gain.
         const { data } = await cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 90 });
         fs.writeFileSync(path.join(OUT, `${name}.jpg`), Buffer.from(data, 'base64'));
