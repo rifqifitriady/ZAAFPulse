@@ -16,7 +16,8 @@ const { insights } = require('./lib/insights');
 const reqlogs = require('./lib/reqlogs');
 const timeline = require('./lib/timeline');
 const { createOmniRoute } = require('./lib/omniroute');
-const { createIntegrationConfig, describe: describeIntegrations } = require('./lib/integration-config');
+const { createIntegrationConfig, describe: describeIntegrations, secretResolver, keychainStore } = require('./lib/integration-config');
+const { createGateway } = require('./lib/gateway');
 const { createPriceSync } = require('./lib/price-sync');
 const { createOpenRouter } = require('./lib/openrouter');
 const { createIntegrations } = require('./lib/integrations');
@@ -88,6 +89,33 @@ function getIntegrations() {
   return integ.registry;
 }
 const integrationConfig = createIntegrationConfig({ file: CONFIG_FILE, secrets: createSecrets() });
+// Agent Gateway: OpenAI-compatible /v1 API, agents, orchestrator and MCP over HTTP, behind ZAAFPulse
+// API keys. Provider settings live in config.json under "gateway"; keys, agents, sessions and memory
+// in .data/ (demo mode uses a throwaway folder so it never touches your data).
+let rawCache = { mtime: -1, value: {} };
+function rawConfig() {
+  if (DEMO) return rawCache.value;
+  let mtime = 0; try { mtime = fs.statSync(CONFIG_FILE).mtimeMs; } catch { /* none yet */ }
+  if (mtime !== rawCache.mtime) { try { rawCache = { mtime, value: JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) }; } catch { rawCache = { mtime, value: {} }; } }
+  return rawCache.value;
+}
+const gatewaySecret = secretResolver({ store: keychainStore });
+const gateway = createGateway({
+  dataDir: DEMO ? fs.mkdtempSync(path.join(os.tmpdir(), 'zp-demo-')) : path.join(DIR, '.data'),
+  getConfig: rawConfig,
+  writeGatewayConfig: (g) => {
+    if (DEMO) { rawCache.value = { ...rawCache.value, gateway: g }; return; }
+    const raw = { ...rawConfig(), gateway: g };
+    fs.writeFileSync(`${CONFIG_FILE}.tmp`, JSON.stringify(raw, null, 2)); fs.renameSync(`${CONFIG_FILE}.tmp`, CONFIG_FILE);
+  },
+  secrets: createSecrets(),
+  // Provider keys go to the Keychain as acc.gw-<provider id>, apart from integration keys.
+  resolveSecret: (id, input, current) => gatewaySecret(`gw-${id}`, { key: 'apiKey', label: 'API key', required: false }, input, current),
+  getPricing: () => config.pricing,
+  getIntegrations: () => getIntegrations(),
+  version: require('./package.json').version,
+});
+
 // OpenRouter data for Models and Rankings. The key (for credits) comes from an enabled openrouter
 // integration; demo mode serves whatever is cached and never fetches.
 const openRouter = createOpenRouter({
@@ -147,6 +175,14 @@ const server = http.createServer(async (req, res) => {
   if (!['127.0.0.1', 'localhost'].includes(host)) return send(res, 403, { error: 'forbidden' });
 
   try {
+    if (await gateway.handle(req, res, url)) return;
+    if (url.pathname === '/api/gateway' && req.method === 'GET') return send(res, 200, await gateway.admin('', 'GET'));
+    const gwAdmin = url.pathname.match(/^\/api\/gateway\/([a-z]+)$/);
+    if (gwAdmin) {
+      if (req.method === 'GET') return send(res, 200, await gateway.admin(gwAdmin[1], 'GET'));
+      if (!(req.headers['content-type'] || '').startsWith('application/json')) return send(res, 415, { error: 'json only' });
+      try { return send(res, 200, await gateway.admin(gwAdmin[1], 'POST', JSON.parse(await readBody(req)))); } catch (err) { return send(res, 200, { errors: [err.message] }); }
+    }
     if (url.pathname === '/api/summary') {
       const r = url.searchParams.get('range') || '30';
       const range = r === 'all' ? 'all' : Math.min(365, Math.max(1, parseInt(r, 10) || 30));
@@ -310,3 +346,6 @@ server.listen(PORT, HOST, () => {
   syncPrices();
   setInterval(syncPrices, 3600 * 1000).unref();
 });
+
+// Sessions are written within a second; flush them when launchd or Ctrl-C stops the server.
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { try { gateway.flush(); } finally { process.exit(0); } });

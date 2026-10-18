@@ -42,6 +42,7 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 | **⚠** | *Did anything unsafe happen?* | Prompt-injection attempts in web and MCP content, secrets that surfaced in tool output, and risky commands such as `rm -rf` or force pushes. |
 | **◈** | *What are my agents doing right now?* | A live 3D office: every session and subagent walks to the room for the tool it is using, waits at the help desk when it needs you, and shows up in a request log, a stream inspector and a timeline. |
 | **◉** | *Is my second brain growing?* | A live, animated graph of your Obsidian vault: hubs, orphans, unresolved links, and a replay of how it grew. |
+| **⌁** | *Can my apps use any model and my agents through one API?* | An Agent Gateway on 127.0.0.1: ZAAFPulse API keys with scopes, budgets and rate limits, an OpenAI-compatible `/v1` API for Ollama, LM Studio and any hosted provider, an orchestrator that plans and routes tasks to 17 domain agents with memory and sessions, and MCP over HTTP. |
 | **⇄** | *Can my agents reach the rest of my stack?* | An MCP server for Claude Code, Kiro and Antigravity with connectors to Dynatrace, Arize Phoenix and AX, n8n, OmniRoute, 9router and any HTTP or MCP service, plus a page that shows every connection's health. |
 
 ## Features
@@ -57,7 +58,7 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 <td width="33%" valign="top">
 
 **Quality & safety**<br>
-<sub>Accuracy, hallucination signals, poisoning, corrections, secrets, risky commands, API errors, loops and compactions, plus subpages for <b>Utilization</b>, <b>Cache</b>, <b>Compression</b> and <b>Provider stats</b>.</sub>
+<sub>Accuracy, hallucination signals, poisoning, corrections, relevance, faithfulness, secrets, risky commands, API errors, loops and compactions, plus subpages for <b>Utilization</b>, <b>Cache</b>, <b>Compression</b> and <b>Provider stats</b>.</sub>
 
 </td>
 <td width="33%" valign="top">
@@ -280,6 +281,61 @@ npm run mcp:register -- all        # Claude Code, Kiro and Antigravity (backs up
 
 Tools are prefixed with the integration id (`dynatrace-saas_list_problems`). Everything is read-only unless an integration sets `"allowWrite": true`. Secrets stay in the macOS Keychain or environment variables, never in `config.json`. The **Integrations** page shows each connection's health, which clients have the server registered, and recent tool calls. It also lets you **add, configure, test and delete** integrations: the form is built for each type, **Test connection** checks a draft before anything is saved, and a pasted secret goes straight to the macOS Keychain (over stdin, never into `config.json` or a process list). Setup per platform: [docs/integrations.md](docs/integrations.md).
 
+## Agent Gateway
+
+ZAAFPulse can sit in front of your models and agents. Everything listens on **127.0.0.1 only**.
+
+| Layer | What it does |
+|---|---|
+| **Agent Gateway** | AuthN with ZAAFPulse API keys (`zp_…`, shown once, stored as SHA-256 hashes); AuthZ by scope (`llm`, `agents`, `mcp`) and allowed model and agent globs; per-key rate limit (requests per minute), monthly budget in USD and expiry; session management (24 h sessions per key). |
+| **Orchestrator / Planner** | Task planning (the planner model breaks a task into 1-4 steps), routing (each step goes to the best domain agent, with keyword routing as a fallback), and memory (session history plus long-term notes that agents save and recall). |
+| **LLM Gateway / Model Router** | Private LLMs on your own hardware (Ollama, LM Studio, **vLLM** and **TGI** GPU serving) are always allowed; external models serve traffic only once **approved**; keys can be limited to private models. Routes are virtual models (`router/fast`) that try their targets in order (fallback or round-robin) and move on after overload, rate-limit or server errors. |
+| **RAG Service** | Knowledge bases with document ingestion (text, Markdown, HTML, CSV, JSON, files or a URL) and a local vector database: chunks with embeddings from any provider's embedding model, searched by hybrid cosine + BM25 (keyword-only without an embedding model). Agents search attached knowledge bases with `zp_knowledge_search`. |
+| **Agent-to-Agent** | A multi-agent collaboration engine with seven patterns (below), the **A2A protocol** (agent card + JSON-RPC/SSE, v1.0 with v0.3 accepted) for other agents to call in, and remote A2A agents that join a team. Agents consult each other with `zp_ask_agent` and hand conversations on with `zp_handoff`. **24 ready-to-use workflows** (incident triage to mitigation, postmortem, helpdesk, ticket triage, refunds, phishing triage, cited research, RFP and security questionnaires, contract redlines, code review, lead outreach, meeting actions, change risk, vulnerability plans, access requests, onboarding, month-end commentary, procurement, feedback to PRD, release notes, project status, PDP/OJK compliance, knowledge-base gaps, agent quality review) with risk tiers and **approval gates** that pause a run until someone approves. |
+| **Domain agents** | 17 editable specialists: Customer Service, Sales & Marketing, Network Operations, HR & Finance, IT Helpdesk, SRE & Observability, Security, Data Analyst, DevOps, Code Reviewer, Research, Legal & Compliance, Product Manager, Project Manager, Procurement, Content Writer and AI Ops. Each has a prompt, a model and the integration tools it may call (function calling over the MCP connectors). |
+
+**Providers**: any OpenAI-compatible API, with presets for Ollama, LM Studio, vLLM, TGI, OpenAI, OpenRouter, Anthropic (OpenAI-compatible endpoint), Google Gemini, DeepSeek, xAI and Groq. Provider keys go to the macOS Keychain.
+
+```bash
+# Models are provider/model; agent/<id> is a domain agent; agent/auto lets the orchestrator plan and route.
+curl http://127.0.0.1:4777/v1/chat/completions -H "Authorization: Bearer zp_…" -H "Content-Type: application/json" \
+  -d '{"model": "agent/auto", "messages": [{"role": "user", "content": "Checkout is slow. Check the network and draft a customer update."}]}'
+```
+
+| Endpoint | Scope | |
+|---|---|---|
+| `GET /v1/models` | any | provider models and agents this key may use |
+| `POST /v1/chat/completions` | `llm` / `agents` | OpenAI format, streaming; `x-zp-session` header continues a session |
+| `POST /v1/embeddings` | `llm` | passthrough |
+| `GET /v1/agents` · `POST /v1/agents/<id>/run` · `POST /v1/orchestrate` | `agents` | run one agent or the orchestrator, with the plan, tool calls and usage |
+| `GET /v1/sessions` · `GET`/`DELETE /v1/sessions/<id>` | `agents` | the key's own sessions |
+| `GET /v1/knowledge` · `POST /v1/knowledge/<id>/search` · `POST /v1/knowledge/<id>/documents` | `rag` | search a knowledge base, add documents |
+| `GET /v1/workflows` · `POST /v1/workflows/<id>/run` | `agents` | run a multi-agent workflow (it pauses at approval gates) |
+| `POST /v1/collaborate` | `agents` | a collaboration run: `pattern` (auto, parallel, vote, debate, review, group, handoff, agent, workflow), `effort`, `budget`, pattern options; `async: true` returns at once |
+| `GET /v1/runs` · `GET /v1/runs/<id>` · `POST /v1/runs/<id>/cancel` · `POST /v1/runs/<id>/resume` | `agents` | run state, verdict, trace and blackboard; approve or reject a paused step (`{"approve": true, "note": "…"}`) |
+| `GET /.well-known/agent-card.json` · `POST /a2a` | card public · `agents` | Agent2Agent: `SendMessage`, `SendStreamingMessage` (SSE), `GetTask`, `ListTasks`, `CancelTask`, `SubscribeToTask`; skill in `message.metadata.skill` |
+| `POST /mcp` | `mcp` | MCP over HTTP with every integration tool (`claude mcp add --transport http zaafpulse http://127.0.0.1:4777/mcp --header "Authorization: Bearer zp_…"`) |
+
+### Multi-agent collaboration
+
+Built from the research in `reports/Multi agent collaboration design.md` (Anthropic's multi-agent research system, OpenAI Agents SDK, LangGraph, AutoGen/Magentic-One, CrewAI, MetaGPT, the A2A spec, debate and voting studies, and the MAST failure taxonomy). Default to one agent; collaborate when the task needs it.
+
+| Pattern | When | How it stops |
+|---|---|---|
+| `auto` orchestrator | parts that need different specialists | the planner writes a dependency graph; independent steps run in parallel; leaf outputs are forwarded verbatim; `verify` adds a critic pass |
+| `parallel` | several views of one question | specialists answer at once, one synthesis |
+| `vote` | buy accuracy (the default way) | majority with a quorum; no majority → two more samples → a judge asked twice in swapped order; low agreement is flagged for a person |
+| `debate` | contested questions (rarely beats `vote` at equal cost) | 2 rounds by default (max 3); stops when everyone agrees or nobody changes their argument; ends in a vote |
+| `review` | drafts with clear criteria | a critic scores against a rubric; stops on pass, on no improvement or a repeated critique; keeps the best draft |
+| `group` | open-ended investigations | Magentic-One ledger each turn (done? looping? progress? who next? what instruction?); stall counter, two replans, then stop |
+| `handoff` | conversations that belong to another domain | the agent in charge passes the conversation on; the session remembers who is active |
+
+Every run has a budget (tokens, model calls, time, optional cost) scaled by effort: workers stop at 85% so judging and the final answer always fit, and past 80% patterns stop adding rounds. Agent output reaches other agents as quoted data (`<agent_output>`), never as instructions; a third identical tool call is refused; consulting an agent already on the request is refused; repeated questions are answered from a per-run cache. Each run keeps a trace with OpenTelemetry GenAI span names (`invoke_workflow`, `plan`, `invoke_agent`, `execute_tool`, `chat`) carrying tokens, cost and timing but no prompt text, plus a shared blackboard. From any OpenAI client, `model: "collab/vote"` (or `collab/debate`, `collab/group`, …) runs a pattern.
+
+Workflow approval gates fail closed: a run pauses before the gated step until someone approves (the note reaches the next agent) or rejects, an unclear A2A reply never counts as approval, nobody deciding within 72 hours rejects the run, and a step whose agent is missing fails the run rather than being skipped.
+
+A new key is shown once and masked (`zp_ZW_j••••••••••••BBYm`) as soon as it is copied, after 60 seconds or when you leave the page. Every request is logged with key, model, agent, tokens, cost (live list prices), latency and time to first token, never prompt text. Three menus manage it: **Agent Gateway** (overview in 3D, API keys, providers, model router, sessions and memory, playground, snippets), **RAG Service** (knowledge bases, ingestion, search, API) and **Agent-to-Agent** (ready-to-use and custom workflows, a Collaborate console with a live trace, run history, specialist agents, patterns and the A2A endpoint). Keys, agents, sessions and memory live in `.data/` (git-ignored); provider settings in `config.json` under `gateway`.
+
 ## How it works
 
 <picture>
@@ -312,6 +368,8 @@ These are **signals detected in the logs, not a graded evaluation**. Every card 
 | **Correction rate** | (Correction prompts + interrupts) ÷ typed prompts. Corrections are matched in English and Indonesian ("that's not what I asked", "kamu salah", "masih belum", "perbaiki"); correcting your own input does not count. |
 | **Safety** | Secrets that appeared in tool output (type only, never the value) and risky commands the AI ran: force deletes, force pushes, hard resets, pipe-to-shell, `sudo`, `chmod 777`, `kill -9`/`pkill`, `DROP TABLE`, raw disk writes. |
 | **Reliability** | API errors, network and timeout failures, repeat loops (the same call three or more times in a row), and context compactions. |
+| **Relevance** | Per turn (a typed prompt and everything until the next one): the share of the prompt's key terms (stop words removed in English and Indonesian, plus file names, identifiers and numbers) that the reply or the turn's tool calls address; half of the terms counts as fully relevant. Prompts with fewer than three key terms are not graded. Replies in another language than the prompt score lower. |
+| **Faithfulness** | Of the checkable references in replies (file names, `identifiers` in backticks, URLs, numbers with three or more digits, decimals or %), the share that appeared earlier in the session: in your prompts, the model's tool inputs or the tool results. Context the transcript does not record (system prompts) can make a correct reference look unsupported, and a computed sum is unsupported by design: read the list before acting on it. |
 
 **Cost** is an API-equivalent estimate: tokens × list price per million, matched by the longest model prefix, with separate cache-read and cache-write rates. On a subscription plan you are not billed per token.
 
@@ -324,7 +382,8 @@ These are **signals detected in the logs, not a graded evaluation**. Every card 
 - Model prices are kept current with one GET to OpenRouter's public model list every 12 hours (no credentials, no data from this laptop); turn **Auto-update** off in Settings to stop it. Otherwise nothing is sent anywhere unless you configure an integration, and then only to the URL you configured: when an AI client calls a tool, or when the Integrations page checks health (at most once a minute per integration, or when you press Test). No telemetry, no accounts. Integration secrets stay in the macOS Keychain or environment variables, never in `config.json`.
 - The office, logs and timeline read transcript tails on demand and keep only tool names, sizes, file and command names, hostnames, timing and state; message text is never shown.
 - Message text is never stored. The cache keeps token counts, metadata and, for flagged quality or safety items only, a masked snippet of up to 160 characters. Secret values are never kept.
-- `config.json` and `.cache/` are git-ignored.
+- The Agent Gateway listens on 127.0.0.1 only; API keys are stored as hashes, provider keys in the Keychain, and sessions and memory (which hold conversation text you send to agents) stay in `.data/` on this Mac.
+- `config.json`, `.cache/` and `.data/` are git-ignored.
 
 <details>
 <summary><b>Project structure</b></summary>
@@ -340,7 +399,7 @@ lib/audit.js           tool-call log (.cache/mcp-audit.jsonl)
 lib/local.js           dashboard data for the acc connector
 lib/claude.js          Claude Code log parser (usage + signals)
 lib/codex.js           Codex log parser (usage + signals)
-lib/signals.js         hallucination, injection, secret, risky-command and correction detectors
+lib/signals.js         hallucination, injection, secret, risky-command and correction detectors; relevance and faithfulness grader
 lib/indexer.js         incremental cache keyed by mtime + size
 lib/aggregate.js       usage, cost and session roll-ups for a time range
 lib/quality.js         quality and safety roll-ups for a time range
@@ -356,6 +415,9 @@ lib/omniroute.js       read-only OmniRoute management API client, emails masked
 lib/integration-config.js  per-type field schema, validation, Keychain storage and dry runs for the editor
 lib/price-sync.js      live model prices from OpenRouter's public list, cached in .cache/prices.json
 lib/openrouter.js      OpenRouter models, endpoints, providers, account and the rankings-page parser (cached in .cache/)
+lib/gateway/           Agent Gateway: keys and rate limits, providers and model router, usage, sessions and memory, agents, orchestrator,
+                       knowledge (RAG vector store), workflows and the ready-to-use catalog, the collaboration engine
+                       (collab.js), the A2A server (a2a.js), /v1, /a2a and /mcp
 public/                dashboard UI: plain HTML, CSS and JavaScript, no build step
 public/iso.js          isometric 3D engine, KPI cards and SVG chart helpers shared by all pages
 scripts/               LaunchAgent install/uninstall, launcher, Chrome opener, MCP client registration, media capture
