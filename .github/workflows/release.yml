@@ -12,6 +12,7 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false   # report every OS, not just the first failure
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
