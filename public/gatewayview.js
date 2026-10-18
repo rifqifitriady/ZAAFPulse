@@ -7,6 +7,7 @@ const GW_COPY = {
   keys: ['API keys', 'Who may call the gateway: scopes, allowed models and agents, budgets, rate limits and expiry.'],
   providers: ['Providers', 'OpenAI-compatible LLM providers behind the gateway: local Ollama and LM Studio, or any hosted API.'],
   agents: ['Domain agents', 'Specialists the orchestrator routes to, each with its prompt, model, tools and knowledge, and able to consult each other.'],
+  tools: ['Code tools', 'Claude Code, Codex, Gemini CLI, OpenCode, Cline, Copilot and more on any provider: each in its own wire format, translated here.'],
   router: ['Model router', 'Private LLMs on your hardware, GPU serving, approved external models, and virtual models that fall back across targets.'],
   knowledge: ['Knowledge (RAG)', 'Knowledge bases with document ingestion and a local vector database; agents search them with zp_knowledge_search.'],
   workflows: ['Workflows', 'Agent-to-agent pipelines: each step hands its output to the next specialist.'],
@@ -27,7 +28,7 @@ const codeBlock = (text, id) => `<div class="gw-code"><button class="btn ghost g
 // Three menus share this module: Agent Gateway (#gateway), RAG Service (#rag) and Agent-to-Agent (#a2a).
 const GW_ROUTES = ['gateway', 'rag', 'a2a'];
 const SECTION = {
-  gateway: { eyebrow: 'AGENT GATEWAY', copy: (sub) => GW_COPY[sub] || GW_COPY[''], pages: { '': gwOverview, keys: gwKeys, providers: gwProviders, router: gwRouter, sessions: gwSessions, playground: gwPlayground, connect: gwConnect } },
+  gateway: { eyebrow: 'AGENT GATEWAY', copy: (sub) => GW_COPY[sub] || GW_COPY[''], pages: { '': gwOverview, keys: gwKeys, providers: gwProviders, router: gwRouter, tools: gwTools, sessions: gwSessions, playground: gwPlayground, connect: gwConnect } },
   rag: { eyebrow: 'RAG SERVICE', copy: (sub) => RAG_COPY[sub] || RAG_COPY[''], pages: { '': gwKnowledge, connect: ragConnect } },
   a2a: { eyebrow: 'AGENT-TO-AGENT', copy: (sub) => A2A_COPY[sub] || A2A_COPY[''], pages: { '': gwWorkflows, collaborate: a2aCollaborate, runs: a2aRuns, agents: gwAgents, collaboration: a2aCollaboration } },
 };
@@ -161,7 +162,6 @@ function gwKeys() {
       <div class="gw-code"><button class="btn ghost gw-copy" type="button" data-gwsecret>Copy</button><pre id="gw-new-secret">${esc(gw.newSecret)}</pre></div></div>`
     : gw.maskedSecret ? `<div class="ie-result gw-secret"><b>Key copied and hidden.</b><div class="gw-code"><pre class="gw-masked">${esc(gw.maskedSecret)}</pre></div><small class="muted">Store it in your app's secret store; ZAAFPulse only keeps its hash.</small></div>` : '';
   return `${secret}
-    <div class="live-grid">
       <section class="holo panel"><div class="panel-head"><h3>API keys</h3><span class="meta">${d.keys.length} keys · stored as SHA-256 hashes</span></div>
         ${d.keys.length ? `<div class="table-wrap"><table class="holo-table"><thead><tr><th>Name</th><th>Scopes</th><th>Allowed</th><th>Spend · month</th><th class="r">Limit</th><th class="r">Last used</th><th>Status</th><th></th></tr></thead><tbody>
           ${d.keys.map((k) => { const spent = d.spend[k.id] || 0; const st = k.revokedAt ? ['revoked', '#ff4f6d'] : k.expiresAt && Date.now() > k.expiresAt ? ['expired', '#ffb547'] : ['active', '#5cf0a8'];
@@ -171,21 +171,20 @@ function gwKeys() {
               <td class="r num">${k.rpm}/min${k.expiresAt ? `<small class="block muted">until ${new Date(k.expiresAt).toLocaleDateString()}</small>` : ''}</td><td class="r muted">${k.lastUsedAt ? ago(k.lastUsedAt) : 'never'}</td>
               <td><span class="state-pill" style="--c:${st[1]}"><i></i>${st[0]}</span></td>
               <td class="nowrap">${k.revokedAt ? '' : `<button class="btn ghost" type="button" data-gwkey="revoke" data-id="${k.id}">Revoke</button> `}<button class="btn ghost danger" type="button" data-gwkey="delete" data-id="${k.id}">Delete</button></td></tr>`; }).join('')}
-        </tbody></table></div>` : holoEmpty('No keys yet. Create one on the right.')}</section>
-      <section class="holo panel"><div class="panel-head"><h3>New key</h3></div>
-        <form class="gw-form" id="gw-key-form">
-          <label>Name<input class="input" name="name" placeholder="e.g. my-app, n8n, laptop scripts" required></label>
+        </tbody></table></div>` : holoEmpty('No keys yet. Create one below.')}</section>
+      <section class="holo panel"><div class="panel-head"><h3>New key</h3><span class="meta">shown once, then only its hash is kept</span></div>
+        <form class="gw-form gw-key-form" id="gw-key-form">
+          <div class="gw-row"><label>Name<input class="input" name="name" placeholder="e.g. my-app, n8n, laptop scripts" required></label>
+          <label>Allowed models <small>globs, comma-separated; empty = all</small><input class="input" name="models" placeholder="ollama/*, openrouter/deepseek/*"></label>
+          <label>Allowed agents <small>empty = all</small><input class="input" name="agents" placeholder="customer-service, network-ops"></label></div>
           <fieldset><legend>Scopes</legend>${[['llm', 'LLM: /v1/chat/completions, /v1/embeddings'], ['agents', 'Agents: agent/*, /v1/orchestrate, workflows, sessions'], ['rag', 'RAG: /v1/knowledge search and document ingestion'], ['mcp', 'MCP: /mcp with every integration tool']].map(([v, l]) => `<label class="gw-check"><input type="checkbox" name="scope" value="${v}" ${v === 'llm' || v === 'agents' ? 'checked' : ''}> ${l}</label>`).join('')}</fieldset>
           <label class="gw-check"><input type="checkbox" name="privateOnly"> Private models only (your own hardware: Ollama, LM Studio, vLLM, TGI)</label>
-          <label>Allowed models <small>globs, comma-separated; empty = all</small><input class="input" name="models" placeholder="ollama/*, openrouter/deepseek/*"></label>
-          <label>Allowed agents <small>empty = all</small><input class="input" name="agents" placeholder="customer-service, network-ops"></label>
           <div class="gw-row"><label>Budget / month (USD)<input class="input" name="budgetUSD" type="number" min="0" step="0.01" placeholder="none"></label>
             <label>Requests / minute<input class="input" name="rpm" type="number" min="1" value="60"></label>
-            <label>Expires in (days)<input class="input" name="expiresInDays" type="number" min="1" placeholder="never"></label></div>
+            <label>Expires in (days)<input class="input" name="expiresInDays" type="number" min="1" placeholder="never"></label>
+            <button class="btn" type="submit">Create key</button></div>
           <div id="gw-key-errors"></div>
-          <button class="btn" type="submit">Create key</button>
-        </form></section>
-    </div>`;
+        </form></section>`;
 }
 
 /* ---------- Providers ---------- */
@@ -197,7 +196,12 @@ function gwProviders() {
         <div class="gw-row"><label>ID <small>used in model names: id/model</small><input class="input" name="id" value="${esc(e.id || '')}" required></label>
           <label>Preset<select class="input" name="preset">${Object.entries(d.presets).map(([k, v]) => `<option value="${k}" ${k === e.preset ? 'selected' : ''}>${esc(v.label)}</option>`).join('')}</select></label></div>
         <label>Base URL<input class="input" name="baseUrl" value="${esc(e.baseUrl || d.presets[e.preset].baseUrl)}" placeholder="https://…/v1"></label>
-        <label>API key ${e.apiKey ? `<small>current: ${e.apiKey.keychain ? `Keychain · ${esc(e.apiKey.keychain)}` : `env · ${esc(e.apiKey.env)}`}</small>` : d.presets[e.preset].keyRequired ? '<small>required</small>' : '<small>not needed for local servers</small>'}
+        ${(() => { const pre = d.presets[e.preset]; const auths = e.preset === 'custom' ? ['key', 'oauth2', 'google-sa'] : pre.auths || ['key']; const at = e.authType || (e.auth && e.auth.type) || pre.auth || 'key'; const o = { ...(pre.oauth || {}), ...(e.auth || {}) };
+          return `<div class="gw-row"><label>Wire format<select class="input" name="format"><option value="openai" ${(e.format || pre.format || 'openai') === 'openai' ? 'selected' : ''}>OpenAI chat completions</option><option value="anthropic" ${(e.format || pre.format) === 'anthropic' ? 'selected' : ''}>Anthropic Messages (native)</option></select></label>
+            <label>Auth<select class="input" name="authType">${auths.map((a) => `<option value="${a}" ${a === at ? 'selected' : ''}>${{ key: 'API key', oauth2: 'OAuth2 token (refreshes itself)', 'google-sa': 'Google service account (refreshes itself)' }[a]}</option>`).join('')}</select></label></div>
+            ${at === 'oauth2' ? `<div class="gw-row"><label>Token URL<input class="input" name="tokenUrl" value="${esc(o.tokenUrl || '')}" placeholder="https://login.example.com/oauth2/token"></label><label>Client id<input class="input" name="clientId" value="${esc(o.clientId || '')}"></label></div>
+              <div class="gw-row"><label>Scope<input class="input" name="scope" value="${esc(o.scope || '')}"></label><label>Grant<select class="input" name="grant"><option value="client_credentials" ${o.grant !== 'refresh_token' ? 'selected' : ''}>Client credentials</option><option value="refresh_token" ${o.grant === 'refresh_token' ? 'selected' : ''}>Refresh token</option></select></label></div>` : ''}`; })()}
+        <label>${(e.authType || (e.auth && e.auth.type) || d.presets[e.preset].auth) === 'google-sa' ? 'Service account JSON' : (e.authType || (e.auth && e.auth.type)) === 'oauth2' ? 'Client secret, or JSON {"client_secret", "refresh_token"}' : 'API key'} ${e.apiKey ? `<small>current: ${e.apiKey.keychain ? `Keychain · ${esc(e.apiKey.keychain)}` : `env · ${esc(e.apiKey.env)}`}</small>` : d.presets[e.preset].keyRequired ? '<small>required</small>' : '<small>not needed for local servers</small>'}
           <div class="ie-secret"><select class="input" name="secretMode">${[...(e.apiKey ? [['keep', 'Keep current']] : []), ['store', 'Paste → save to Keychain'], ['keychain', 'Keychain item'], ['env', 'Environment variable'], ['none', 'None']].map(([v, l]) => `<option value="${v}" ${v === (e.apiKey ? 'keep' : d.presets[e.preset].keyRequired ? 'store' : 'none') ? 'selected' : ''}>${l}</option>`).join('')}</select>
           <input class="input" name="secretValue" type="password" autocomplete="off" placeholder="key, Keychain service or env name"></div></label>
         <label>Extra models <small>comma-separated, added to what the provider lists</small><input class="input" name="models" value="${esc((e.models || []).join(', '))}"></label>
@@ -213,13 +217,15 @@ function gwProviders() {
         <label>Default model<input class="input" name="model" list="gw-models" value="${esc(d.defaults.model)}" placeholder="ollama/llama3.3"></label>
         <label>Planner model <small>optional</small><input class="input" name="plannerModel" list="gw-models" value="${esc(d.defaults.plannerModel)}" placeholder="same as default"></label>
         <button class="btn" type="submit">Save defaults</button></form></section>
-    <section class="holo panel"><div class="panel-head"><h3>Add a provider</h3><span class="meta">any OpenAI-compatible API</span></div>
-      <div class="ie-types gw-presets">${Object.entries(d.presets).map(([k, v]) => `<button type="button" class="ie-type" data-gwpreset="${k}"><span class="chip ${v.local ? 'green' : 'blue'}">${icon(v.local ? 'cube' : 'external', 16)}</span><b>${esc(v.label)}</b><small>${esc(v.hint || v.baseUrl || 'your base URL')}</small></button>`).join('')}</div></section>
+    <section class="holo panel"><div class="panel-head"><h3>Add a provider</h3><span class="meta">${Object.keys(d.presets).length} presets · OpenAI-compatible or native Anthropic · models come from each provider's /models</span></div>
+      ${(() => { const cats = [...new Set(Object.values(d.presets).map((v) => v.category || 'Custom'))]; return `<div class="segmented wf-cats" role="group" aria-label="Provider category">${['', ...cats].map((c) => `<button type="button" data-gwpcat="${esc(c)}" aria-pressed="${(gw.presetCat || '') === c}">${c ? esc(c) : 'All'} <small>${c ? Object.values(d.presets).filter((v) => (v.category || 'Custom') === c).length : Object.keys(d.presets).length}</small></button>`).join('')}</div>`; })()}
+      <div class="ie-types gw-presets">${Object.entries(d.presets).filter(([, v]) => !gw.presetCat || (v.category || 'Custom') === gw.presetCat).map(([k, v]) => `<button type="button" class="ie-type" data-gwpreset="${k}"><span class="chip ${v.local ? 'green' : 'blue'}">${icon(v.local ? 'cube' : 'external', 16)}</span><b>${esc(v.label)}</b><small>${esc(v.hint || v.baseUrl || 'your base URL')}</small></button>`).join('')}</div></section>
     ${form}
     ${d.providers.length ? `<div class="pc-grid">${d.providers.map((p) => `<article class="pcard" style="--v:${d.presets[p.preset]?.local ? '#5cf0a8' : '#5b8cff'}">
       <div class="pc-head"><span class="pc-logo">${esc(p.id[0].toUpperCase())}</span><div class="pc-title"><b>${esc(p.id)}</b><small>${esc(d.presets[p.preset]?.label || p.preset)}</small></div>
         <span class="state-pill" style="--c:${p.enabled ? '#5cf0a8' : '#8f98cc'}"><i></i>${p.enabled ? 'enabled' : 'disabled'}</span></div>
       <div class="pc-kv"><span>Base URL</span><b class="mono">${esc(p.baseUrl)}</b></div>
+      <div class="pc-kv"><span>Format · auth</span><b>${p.format === 'anthropic' ? 'Anthropic Messages' : 'OpenAI chat'} · ${({ key: 'API key', oauth2: 'OAuth2 (auto refresh)', 'google-sa': 'service account (auto refresh)' })[(p.auth && p.auth.type) || 'key']}</b></div>
       <div class="pc-kv"><span>Key</span><b>${p.apiKey ? (p.apiKey.keychain ? `Keychain · ${esc(p.apiKey.keychain)}` : `env · ${esc(p.apiKey.env)}`) : 'none'}</b></div>
       <div class="pc-kv"><span>Tier</span><b>${p.tier === 'private' ? '<span class="good-text">Private · your hardware</span>' : p.approved ? 'External · <span class="good-text">approved</span>' : 'External · <span style="color:#ffb547">waiting for approval</span>'}</b></div>
       <div class="pc-kv"><span>Aliases</span><b>${esc(Object.keys(p.aliases).join(', ') || '—')}</b></div>
@@ -248,6 +254,7 @@ function gwRouter() {
       ${tierCard('Private LLMs', 'your own hardware: Ollama, LM Studio, vLLM, TGI · always allowed', priv, '#5cf0a8', 'No private provider. Add Ollama, LM Studio or a vLLM GPU server under Providers.')}
       ${tierCard('External models', 'hosted APIs · serve traffic only once approved', ext, '#5b8cff', 'No external provider.')}
     </div>
+    ${routerExtras()}
     <div class="gw-toolbar"><span class="meta">Routes are virtual models: use <code>router/&lt;name&gt;</code> anywhere a model is accepted. Keys marked "private models only" skip external targets.</span><button class="btn" type="button" data-gwroute="new">+ New route</button></div>
     ${form}
     ${d.routes.length ? `<div class="pc-grid">${d.routes.map((r) => `<article class="pcard" style="--v:#8b7bff"><div class="pc-head"><span class="pc-logo">R</span><div class="pc-title"><b>${esc(r.name)}</b><small>${esc(r.strategy)} · ${r.targets.length} targets</small></div></div>
@@ -325,6 +332,64 @@ function gwWorkflows() {
 
 // Risk tier of the step after an approval gate (workflow catalog convention).
 const WF_TIER = { R0: ['#5cf0a8', 'read-only research and analysis'], R1: ['#4de8ff', 'internal drafts'], R2: ['#ffb547', 'sends or changes something'], R3: ['#ff5ca8', 'money, access or decisions about a person'] };
+
+/* ---------- Code tools: connect AI coding tools to the gateway ---------- */
+const FORMAT_LABEL = { anthropic: ['Anthropic Messages', '/v1/messages', '#ff8a4c'], responses: ['OpenAI Responses', '/v1/responses', '#5cf0a8'], gemini: ['Gemini', '/v1beta/models', '#4de8ff'], openai: ['OpenAI Chat', '/v1/chat/completions', '#8b7bff'] };
+function gwTools() {
+  const d = gw.data; const model = gw.toolModel ?? (d.defaults.codeModel || d.defaults.model || '');
+  const allModels = d.providers.flatMap((p) => (p.models || []).map((m) => `${p.id}/${m}`)).concat(d.routes.map((r) => r.name));
+  const ok = d.tools.filter((t) => !t.unsupported); const connected = d.tools.filter((t) => t.state === 'connected');
+  const secret = gw.toolSecret;
+  return `<div class="live-metrics">${[
+    metricTile({ label: 'Tools supported', value: whole.format(ok.length), sub: `${d.tools.length - ok.length} cannot reach localhost`, color: HOLO.cyan }),
+    metricTile({ label: 'Connected', value: whole.format(connected.length), sub: connected.map((t) => esc(t.name)).join(' · ') || 'none yet', color: '#5cf0a8' }),
+    metricTile({ label: 'Wire formats', value: '4', sub: 'Messages · Responses · Gemini · Chat', color: HOLO.violet }),
+    metricTile({ label: 'Requests by format', value: whole.format(Object.values(d.usage.byFormat || {}).reduce((a, b) => a + b, 0)), sub: Object.entries(d.usage.byFormat || {}).map(([k, v]) => `${k} ${v}`).join(' · ') || 'this month', color: HOLO.orange }),
+    metricTile({ label: 'Tokens saved', value: fmtN(d.usage.totals.savedTokens || 0), sub: `${fmtUSD(d.usage.totals.savedCost || 0)} · token saver`, color: HOLO.pink }),
+  ].join('')}</div>
+  <section class="holo panel"><div class="panel-head"><h3>Model for tools</h3><span class="meta">tools send their own model names (claude-…, gpt-…-codex, gemini-…); unknown names go to the model map, then this model</span></div>
+    <form class="gw-form gw-row" id="gw-tool-model"><datalist id="gw-tool-models">${allModels.map((m) => `<option value="${esc(m)}">`).join('')}</datalist>
+      <label>Model written into tool configs<input class="input" name="model" list="gw-tool-models" value="${esc(model)}" placeholder="router/coding or provider/model"></label>
+      <label>Default for unknown tool models (code model)<input class="input" name="codeModel" list="gw-tool-models" value="${esc(d.defaults.codeModel || '')}" placeholder="${esc(d.defaults.model || 'provider/model')}"></label>
+      <button class="btn" type="submit">Save</button></form></section>
+  ${secret ? `<div class="ie-result good gw-secret"><b>${esc(secret.name)}: copy this now. The key is masked after you copy it or in 60 seconds.</b>
+    <div class="gw-code"><button class="btn ghost gw-copy" type="button" data-gwtoolsecret>Copy</button><pre id="gw-tool-secret">${esc(secret.snippet)}</pre></div></div>` : ''}
+  ${gw.toolMasked ? `<div class="ie-result gw-secret"><b>Copied and hidden.</b> The key now lives only in that tool's config; ZAAFPulse keeps its hash (Agent Gateway → API keys).</div>` : ''}
+  <div class="pc-grid">${d.tools.map((t) => { const [fl, ep, fc] = FORMAT_LABEL[t.format] || FORMAT_LABEL.openai; const st = t.state === 'connected' ? ['connected', '#5cf0a8'] : t.state === 'unsupported' ? ['not possible', '#8f98cc'] : t.state === 'manual' ? ['manual setup', '#4de8ff'] : ['not connected', '#ffb547'];
+    return `<article class="pcard${t.unsupported ? ' off' : ''}" style="--v:${fc}"><div class="pc-head"><span class="pc-logo">${esc(t.name[0])}</span><div class="pc-title"><b>${esc(t.name)}</b><small>${esc(t.vendor)}</small></div><span class="state-pill" style="--c:${st[1]}"><i></i>${st[0]}</span></div>
+      <div class="tags"><span class="tag" style="color:${fc}">${fl}</span><span class="tag mono">${ep}</span>${t.path ? `<span class="tag mono">${esc(t.path)}</span>` : ''}</div>
+      ${t.unsupported ? `<p class="pc-desc">${esc(t.unsupported)}</p>` : `${t.note ? `<p class="pc-desc">${esc(t.note)}</p>` : ''}<details><summary class="muted">Snippet</summary>${codeBlock(t.snippet || '', `tool-${t.id}`)}</details>`}
+      ${t.unsupported ? '' : `<div class="pc-foot">${t.canApply ? `<button class="btn" type="button" data-gwtool="apply" data-id="${esc(t.id)}">${t.state === 'connected' ? 'Re-apply' : 'Set up'}</button>` : ''}<button class="btn ghost" type="button" data-gwtool="key" data-id="${esc(t.id)}">New key + snippet</button>${t.hasBackup ? `<button class="btn ghost danger" type="button" data-gwtool="revert" data-id="${esc(t.id)}">Revert</button>` : ''}</div>`}</article>`; }).join('')}</div>
+  <p class="kpi-sub">Set up writes the tool's own config file (mode 0600) with a dedicated key, after saving a backup that Revert restores; Revert also revokes that key. Endpoints: <code>${esc(d.baseUrl)}/v1/messages</code> (Claude Code), <code>/v1/responses</code> (Codex), <code>/v1beta/models/…</code> (Gemini CLI), <code>/v1/chat/completions</code> (everything else). Keys work as <code>Authorization: Bearer</code>, <code>x-api-key</code> or <code>x-goog-api-key</code>.</p>`;
+}
+
+/* ---------- Model router: quota, token saver, model map ---------- */
+function routerExtras() {
+  const d = gw.data; const t = d.usage.totals; const s = d.settings || { tokenSaver: true, modelMap: [] };
+  const left = (x) => (x && x.remaining != null ? `${fmtN(x.remaining)}${x.limit ? ` / ${fmtN(x.limit)}` : ''}` : '—');
+  const reset = (x) => (x && x.resetAt ? (x.resetAt > Date.now() ? `in ${msFmt(x.resetAt - Date.now())}` : 'reset') : '—');
+  const rows = (d.quota || []).filter((q) => q.at || q.cooldown || q.token || q.balance);
+  const map = gw.editMap || s.modelMap.map((m) => ({ ...m }));
+  const quota = rows.length ? `<div class="table-wrap"><table class="holo-table"><thead><tr><th>Provider</th><th class="r">Requests left</th><th class="r">Tokens left</th><th class="r">Resets</th><th>Cooldown</th><th>Token</th><th class="r">Balance</th></tr></thead><tbody>
+    ${rows.map((q) => `<tr><td><b>${esc(q.id)}</b>${q.at ? `<small class="block muted">read ${ago(q.at)}${q.status ? ` · HTTP ${q.status}` : ''}</small>` : ''}</td><td class="r num">${left(q.requests)}</td><td class="r num">${left(q.tokens)}</td><td class="r muted">${reset((q.requests && q.requests.resetAt) ? q.requests : q.tokens)}</td>
+      <td>${q.cooldown ? `<span class="state-pill" style="--c:#ffb547"><i></i>${esc(q.cooldown.reason)} · ${msFmt(q.cooldown.until - Date.now())}</span>` : '<span class="muted">—</span>'}</td>
+      <td class="muted">${q.token ? `refreshes itself · expires in ${msFmt(q.token.expiresAt - Date.now())}` : '—'}</td>
+      <td class="r num">${q.balance ? (q.balance.error ? `<small class="ie-err">${esc(q.balance.error)}</small>` : `${q.balance.remaining != null ? Number(q.balance.remaining).toFixed(2) : '—'} ${esc(q.balance.currency || '')}`) : '—'}</td></tr>`).join('')}</tbody></table></div>`
+    : holoEmpty('No readings yet. Every answer from a provider updates its rate-limit reading; balances load when you refresh.');
+  return `<div class="live-grid even">
+    ${panel('Quota & cooldown', 'from rate-limit headers and balance APIs', `${quota}<div class="gw-row"><button class="btn ghost" type="button" data-gwquota>Refresh balances</button><span class="muted">After a 429 a provider cools down (its reset time, or 1 s doubling to 5 min) and routes try the next target.</span></div>`)}
+    ${panel('Token saver', 'shortens long tool results before they go upstream', `<div class="live-metrics three">${[
+      metricTile({ label: 'Tokens saved', value: fmtN(t.savedTokens || 0), sub: 'this month', color: HOLO.pink }),
+      metricTile({ label: 'Est. cost saved', value: fmtUSD(t.savedCost || 0), sub: 'at input price', color: '#5cf0a8' }),
+      metricTile({ label: 'Requests shortened', value: whole.format(t.saverHits || 0), sub: `of ${whole.format(t.requests || 0)}`, color: HOLO.cyan }),
+    ].join('')}</div>
+      <label class="ie-switch"><input type="checkbox" data-gwsaver ${s.tokenSaver ? 'checked' : ''}><span></span>Token saver ${s.tokenSaver ? 'on' : 'off'} <small class="muted">(per request: header <code>x-zp-token-saver: off</code>)</small></label>
+      <p class="kpi-sub">Results over 600 characters are cut by a filter picked from the tool call and the output: git diff (60 lines per hunk), git log, git status, build and test output (errors kept, progress counted), grep (10 matches per file), file listings (noise folders dropped), large JSON (arrays cut to 20), long reads (start and end) and logs (repeats collapsed). ANSI colours are removed. Error results are never touched.</p>`)}
+  </div>
+  <section class="holo panel"><div class="panel-head"><h3>Model map</h3><span class="meta">tool model names → your models · first match wins · globs with *</span></div>
+    <form class="gw-form" id="gw-map-form">${map.map((m, i) => `<div class="gw-row"><label>When the model is<input class="input mono" name="match-${i}" value="${esc(m.match)}" placeholder="claude-*opus*"></label><label>Use<input class="input mono" name="to-${i}" list="gw-models" value="${esc(m.to)}" placeholder="router/coding"></label><button class="icon-btn" type="button" data-gwmap="rm" data-i="${i}" aria-label="Remove">×</button></div>`).join('') || '<p class="muted">No rules: unknown names go to the code model, then the default model.</p>'}
+      <div class="gw-row"><button class="btn ghost" type="button" data-gwmap="add">+ Add rule</button><button class="btn" type="submit">Save map</button><span class="muted">e.g. claude-*haiku* → ollama/qwen2.5-coder, claude-* → router/coding, gpt-*-codex → openrouter/…</span></div></form></section>`;
+}
 
 /* ---------- RAG: API & usage ---------- */
 function ragConnect() {
@@ -660,6 +725,38 @@ document.addEventListener('click', (e) => {
     return;
   }
   const wc = t('[data-gwwfcat]'); if (wc) { gw.wfCat = wc.dataset.gwwfcat; paintGateway(); return; }
+  if (t('[data-gwtoolsecret]')) {
+    const v = gw.toolSecret && gw.toolSecret.snippet; if (!v) return;
+    Promise.resolve(navigator.clipboard ? navigator.clipboard.writeText(v) : Promise.reject(new Error('no clipboard'))).then(() => { gw.toolSecret = null; gw.toolMasked = true; paintGateway(); }).catch(() => {
+      const pre = $('#gw-tool-secret'); if (!pre) return; const range = document.createRange(); range.selectNodeContents(pre); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
+      const btn = t('[data-gwtoolsecret]'); if (btn) btn.textContent = 'Press ⌘C';
+    });
+    return;
+  }
+  const tl = t('[data-gwtool]');
+  if (tl) {
+    const act = tl.dataset.gwtool; const tool = gw.data.tools.find((x) => x.id === tl.dataset.id); const model = gw.toolModel ?? (gw.data.defaults.codeModel || gw.data.defaults.model || '');
+    if (act === 'apply') {
+      const warn = tool.id === 'claude-code' ? '\n\nEvery Claude Code session on this Mac, including one you are using right now, will then send its requests through ZAAFPulse to the model you chose. Use Revert to undo.' : '';
+      if (!confirm(`Write ${tool.path} for ${tool.name} with a new key (llm scope) and model "${model || 'tool default'}"? The current file is backed up first.${warn}`)) return;
+    }
+    if (act === 'revert' && !confirm(`Restore ${tool.path} from the backup and revoke ${tool.name}'s key?`)) return;
+    gwAct(async () => {
+      const r = await gwPost('tools', { action: act, id: tool.id, model });
+      if (r.errors) { alert(r.errors[0]); return; }
+      if (act === 'key') { gw.toolSecret = { name: tool.name, snippet: r.snippet }; gw.toolMasked = false; clearTimeout(gw.toolTimer); gw.toolTimer = setTimeout(() => { if (gw.toolSecret) { gw.toolSecret = null; gw.toolMasked = true; paintGateway(); } }, 60000); }
+      await refreshGateway();
+    });
+    return;
+  }
+  if (t('[data-gwquota]')) { gwAct(async () => { const r = await gwPost('quota', {}); gw.data.quota = r.quota; paintGateway(); }); return; }
+  const gm = t('[data-gwmap]');
+  if (gm) {
+    const f = $('#gw-map-form'); const cur = (gw.editMap || (gw.data.settings.modelMap || []).map((m) => ({ ...m }))).map((m, i) => ({ match: f ? f[`match-${i}`].value : m.match, to: f ? f[`to-${i}`].value : m.to }));
+    if (gm.dataset.gwmap === 'add') cur.push({ match: '', to: '' }); else cur.splice(Number(gm.dataset.i), 1);
+    gw.editMap = cur; paintGateway(); return;
+  }
+  const pc = t('[data-gwpcat]'); if (pc) { gw.presetCat = pc.dataset.gwpcat; paintGateway(); return; }
   const pat = t('[data-a2apattern]'); if (pat) { a2aSync(); gw.collab.pattern = pat.dataset.a2apattern; paintGateway(); return; }
   const ar = t('[data-a2arun]');
   if (ar) {
@@ -679,6 +776,8 @@ document.addEventListener('click', (e) => {
 
 document.addEventListener('change', (e) => {
   if (e.target.name === 'effort' && e.target.closest('#a2a-form')) { a2aSync(); paintGateway(); return; }
+  if (e.target.matches && e.target.matches('[data-gwsaver]')) { gwAct(async () => { await gwPost('settings', { tokenSaver: e.target.checked }); await refreshGateway(); }); return; }
+  if (e.target.name === 'authType' && e.target.closest('#gw-prov-form')) { const f = e.target.form; gw.editingProvider = { ...gw.editingProvider, authType: e.target.value, id: f.id.value, baseUrl: f.baseUrl.value }; paintGateway(); return; }
   const c = e.target.closest && e.target.closest('[data-a2acollab]'); if (!c) return;
   const a = gw.data.agents.find((x) => x.id === c.dataset.a2acollab); if (!a) return;
   gwAct(async () => { const r = await gwPost('agents', { action: 'save', ...a, originalId: a.id, collaborate: c.checked }); if (r.errors) alert(r.errors[0]); await refreshGateway(); });
@@ -696,7 +795,8 @@ document.addEventListener('submit', (e) => {
     let aliases = {}; try { aliases = JSON.parse(v('aliases') || '{}'); } catch { $('#gw-prov-errors').innerHTML = errList(['Aliases: not valid JSON']); return; }
     const mode = v('secretMode'); const val = v('secretValue');
     const secret = mode === 'keep' ? { mode } : mode === 'none' ? { mode } : mode === 'store' ? { mode, value: val } : mode === 'keychain' ? { mode, service: val.trim() } : { mode, name: val.trim() };
-    const r = await gwPost('providers', { action: 'save', originalId: gw.editingProvider.originalId, id: v('id'), preset: v('preset'), baseUrl: v('baseUrl'), models: v('models'), aliases, enabled: f.enabled.checked, tier: v('tier'), approved: f.approved.checked, secret });
+    const r = await gwPost('providers', { action: 'save', originalId: gw.editingProvider.originalId, id: v('id'), preset: v('preset'), baseUrl: v('baseUrl'), models: v('models'), aliases, enabled: f.enabled.checked, tier: v('tier'), approved: f.approved.checked, secret,
+      format: v('format'), authType: v('authType'), oauth: f.tokenUrl ? { tokenUrl: v('tokenUrl'), clientId: v('clientId'), scope: v('scope'), grant: v('grant') } : undefined });
     if (r.errors) { $('#gw-prov-errors').innerHTML = errList(r.errors); return; }
     gw.editingProvider = null; await refreshGateway();
     const box = $(`#gw-test-${CSS.escape(r.provider.id)}`); if (box) box.innerHTML = r.test.ok ? `<b class="good-text">Connected · ${r.test.models} models · ${msFmt(r.test.latencyMs)}</b>` : `<code class="ie-err">${esc(r.test.error)}</code>`;
@@ -745,6 +845,12 @@ document.addEventListener('submit', (e) => {
       budget: { tokens: n('tokens'), costUSD: n('costUSD') } };
     gwAct(async () => { const r = await gwPost('collab', body); if (r.errors) { $('#a2a-errors').innerHTML = errList(r.errors); return; } $('#a2a-errors').innerHTML = ''; c.run = r.run; $('#a2a-run').innerHTML = runView(r.run); watchRun(r.run.id); });
   }
+  if (f.id === 'gw-tool-model') gwAct(async () => { gw.toolModel = v('model').trim(); await gwPost('defaults', { model: gw.data.defaults.model, plannerModel: gw.data.defaults.plannerModel, codeModel: v('codeModel').trim() }); await refreshGateway(); });
+  if (f.id === 'gw-map-form') gwAct(async () => {
+    const n = (gw.editMap || gw.data.settings.modelMap || []).length; const modelMap = [];
+    for (let i = 0; i < n; i++) if (f[`match-${i}`]) modelMap.push({ match: f[`match-${i}`].value.trim(), to: f[`to-${i}`].value.trim() });
+    const r = await gwPost('settings', { modelMap }); if (r.errors) { alert(r.errors[0]); return; } gw.editMap = null; await refreshGateway();
+  });
   if (f.id === 'gw-mem-form') gwAct(async () => { await gwPost('memory', { action: 'save', text: v('text'), scope: v('scope') }); await refreshGateway(); });
   if (f.id === 'gw-pg-form') {
     gw.pg.input = v('input'); if (f.agent) gw.pg.agent = f.agent.value; if (f.model) gw.pg.model = f.model.value;
