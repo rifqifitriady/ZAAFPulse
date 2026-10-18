@@ -59,6 +59,7 @@ const ICON_PATHS = {
   alert: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5M12 16h.01"/>',
   terminal: '<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M7 9.5l3 2.5-3 2.5M12.5 15H17"/>',
   plug: '<path d="M9 3v5M15 3v5M6.5 8h11v3a5.5 5.5 0 0 1-11 0zM12 16.5V21"/>',
+  endpoint: '<path d="M8 7l-5 5 5 5M16 7l5 5-5 5M13.5 4.5l-3 15"/>',
   code: '<path d="M8.5 7L3.5 12l5 5M15.5 7l5 5-5 5M13.5 4.5l-3 15"/>',
   chat: '<path d="M4 5.5h16v10H9l-5 4z"/>',
   layers: '<path d="M12 3l9 5-9 5-9-5zM3 13l9 5 9-5"/>',
@@ -115,7 +116,7 @@ const state = {
   route: 'overview',
   history: {}, // app id -> recent CPU samples
 };
-const TITLES = { overview: 'OVERVIEW', squad: 'AI SQUAD', sessions: 'SESSIONS', projects: 'PROJECTS', agents: 'AGENTS & SKILLS', quality: 'QUALITY & SAFETY', brain: 'SECOND BRAIN', live: 'LIVE MONITOR', integrations: 'INTEGRATIONS', gateway: 'AGENT GATEWAY', rag: 'RAG SERVICE', a2a: 'AGENT-TO-AGENT', settings: 'SETTINGS' };
+const TITLES = { overview: 'OVERVIEW', squad: 'AI OFFICE', sessions: 'SESSIONS', projects: 'PROJECTS', agents: 'AGENT SKILLS', quality: 'QUALITY & SAFETY', brain: 'SECOND BRAIN', live: 'LIVE MONITOR', integrations: 'INTEGRATIONS', endpoint: 'ENDPOINT', gateway: 'AGENT GATEWAY', skills: 'AGENT SKILLS', rag: 'RAG SERVICE', a2a: 'AGENT-TO-AGENT', settings: 'SETTINGS' };
 
 async function api(path, opts) {
   const r = await fetch(path, opts);
@@ -541,7 +542,7 @@ const DRILLS = {
           `<p class="drawer-note">${fmtPct(k.cacheHitRate)} of the input context was read from cache. Cache reads cost about a tenth of normal input, so a large token count does not mean a matching cost.</p>`) +
         dsec(2, 'Tokens per day', `<div class="chart" data-chart="tokens"></div>${legend()}`) +
         dsec(3, 'By model', barList(d.models.slice(0, 6), { value: (m) => m.tokens, label: (m) => `${esc(m.model)}<small>${fmtN(m.output)} output</small>`, color: (m) => seriesColor(m.tool) })) +
-        '<a class="btn ghost" href="#agents">See tools and agents →</a>',
+        '<a class="btn ghost" href="#skills/usage">See tools and agents →</a>',
       charts: { tokens: (el) => drawStacked(el, { rows: d.daily, height: 190, fmt: fmtN, label: 'Tokens per day by tool',
         series: SERIES.map((s) => ({ ...s, get: (row) => row[s.id].tokens })) }) },
     };
@@ -615,7 +616,9 @@ function closeDrill(restoreFocus = true) {
 }
 
 /* ---------- routing & render ---------- */
-const VIEWS = { overview: viewOverview, squad: viewSquadPage, sessions: viewSessions, projects: viewProjects, agents: viewAgents, quality: viewQualityPage, brain: viewBrain, live: viewLive, integrations: viewIntegrationsPage, gateway: viewGateway, rag: viewRag, a2a: viewA2a };
+const VIEWS = { overview: viewOverview, squad: viewSquadPage, sessions: viewSessions, projects: viewProjects, agents: viewAgents, quality: viewQualityPage, brain: viewBrain, live: viewLive, integrations: viewIntegrationsPage, endpoint: viewEndpoint, gateway: viewGateway, skills: viewSkillsPage, rag: viewRag, a2a: viewA2a };
+// Pages that moved when the sidebar was regrouped (AI Observability / Agentic Workspace).
+const ROUTE_MOVED = { agents: '#skills/usage' };
 Object.assign(DRILLS, QUALITY_DRILLS, BRAIN_DRILLS, OPENROUTER_DRILLS);
 function drawPageCharts() {
   const c = $('#daily-chart'); if (c) drawDaily(c);
@@ -626,10 +629,12 @@ function drawPageCharts() {
 function render(animate = true) {
   const el = $('#view');
   [state.route, state.sub = ''] = (location.hash.slice(1) || 'overview').split('?')[0].split('/');
+  if (ROUTE_MOVED[state.route]) { location.replace(ROUTE_MOVED[state.route]); return; }
   if (!VIEWS[state.route] && state.route !== 'settings') state.route = 'overview';
   const subMeta = (SUBPAGES[state.route] || []).find(([slug]) => slug && slug === state.sub);
   if (!subMeta) state.sub = '';
   $('#crumb').textContent = TITLES[state.route] + (subMeta ? ` / ${subMeta[1].toUpperCase()}` : '');
+  const group = $('#crumb-group'); if (group) group.textContent = ['endpoint', 'gateway', 'skills', 'integrations', 'a2a', 'rag'].includes(state.route) ? 'AGENTIC WORKSPACE' : state.route === 'settings' ? 'PREFERENCES' : 'AI OBSERVABILITY';
   const full = state.sub ? `${state.route}/${state.sub}` : state.route;
   for (const a of $$('nav a')) a.classList.toggle('active', a.classList.contains('nav-sub') ? a.dataset.route === full || (!state.sub && a.dataset.route === `${state.route}/`) : a.dataset.route === state.route);
   // Sub-pages show only under the section you are in, so the whole menu fits without scrolling.
@@ -653,9 +658,9 @@ function render(animate = true) {
   if (state.route === 'quality') mountQualityPage();
   if (state.route === 'sessions') mountSessions();
   if (state.route === 'projects') mountProjects();
-  if (state.route === 'agents') mountAgents();
+  if (state.route === 'skills' && state.sub === 'usage') mountAgents();
   if (state.route === 'integrations') mountIntegrations();
-  if (['gateway', 'rag', 'a2a'].includes(state.route)) mountGateway();
+  if (['gateway', 'rag', 'a2a', 'endpoint'].includes(state.route) || (state.route === 'skills' && state.sub !== 'usage')) mountGateway();
   if (state.route === 'brain') mountBrain().catch((err) => { $('#brain-sub').textContent = `Could not read the vault: ${err.message}`; });
   if (animate) { countUp(el); settle(el); }
 }

@@ -238,6 +238,17 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/office') {
       return send(res, 200, DEMO ? office.demoSnapshot() : office.snapshot());
     }
+    // Endpoint → MCP server: register this MCP server in (or remove it from) Claude Code, Kiro or Antigravity.
+    // Uses the same script as `npm run mcp:register`: backups first, only our own entry is touched.
+    if (url.pathname === '/api/mcp/register' && req.method === 'POST') {
+      if (!(req.headers['content-type'] || '').startsWith('application/json')) return send(res, 415, { error: 'json only' });
+      if (DEMO) return send(res, 200, { errors: ['not in demo mode'] });
+      const body = JSON.parse(await readBody(req)); const log = [];
+      try {
+        register.run(String(body.client || ''), { remove: body.remove === true, log: (m) => log.push(String(m)), exec: (cmd, args, opts) => require('child_process').execFileSync(cmd, args, { ...opts, stdio: 'pipe', timeout: 30000 }) });
+        return send(res, 200, { ok: true, log, clients: clientRows() });
+      } catch (err) { return send(res, 200, { errors: [err.message], log, clients: clientRows() }); }
+    }
     if (url.pathname === '/api/brain' && req.method === 'GET') {
       if (DEMO) return send(res, 200, { types: brain.TYPES, sources: [{ id: 'obsidian', type: 'obsidian', name: 'Obsidian (demo)', enabled: true, builtin: true, label: 'Obsidian', family: 'Notes' }] });
       return send(res, 200, { types: brain.TYPES, sources: brain.sources() });

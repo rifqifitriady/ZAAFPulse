@@ -259,7 +259,9 @@ function unmountStages() {
 // [slug, label, description] per page; '' is the page's own overview.
 const SUBPAGES = {
   quality: [['', 'Overview'], ['utilization', 'Utilization'], ['cache', 'Cache'], ['compression', 'Compression'], ['providers', 'Provider stats'], ['models', 'Models'], ['rankings', 'Rankings']],
-  gateway: [['', 'Overview'], ['keys', 'API keys'], ['providers', 'Providers'], ['router', 'Model router'], ['tools', 'Code tools'], ['sessions', 'Sessions & memory'], ['playground', 'Playground'], ['connect', 'Connect']],
+  endpoint: [['', 'Overview'], ['keys', 'API keys'], ['mcp', 'MCP server'], ['connect', 'Connect'], ['tools', 'Code tools']],
+  gateway: [['', 'Overview'], ['providers', 'Providers'], ['router', 'Model router'], ['sessions', 'Sessions & memory'], ['playground', 'Playground']],
+  skills: [['', 'ZAAFPulse skills'], ['usage', 'Usage in your tools']],
   rag: [['', 'Knowledge bases'], ['connect', 'API & usage']],
   a2a: [['', 'Workflows'], ['collaborate', 'Collaborate'], ['runs', 'Runs'], ['agents', 'Specialist agents'], ['collaboration', 'Collaboration']],
   squad: [['', 'Office'], ['logs', 'Logs'], ['proxy', 'Proxy logs'], ['time', 'Time']],

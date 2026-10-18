@@ -63,7 +63,7 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 </td>
 <td width="33%" valign="top">
 
-**AI Squad, live**<br>
+**AI Office, live**<br>
 <sub>A 3D office driven by real transcript state: who is editing, reading, running commands, browsing or delegating, who is waiting for you and who needs approval. Subagents appear next to their parent.</sub>
 
 </td>
@@ -141,7 +141,7 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 ## Screenshots
 
 <details open>
-<summary><b>AI Squad</b>: your agents at work in a 3D office</summary>
+<summary><b>AI Office</b>: your agents at work in a 3D office</summary>
 <br>
 <p align="center"><img alt="Agents walk between the coding desks, library, server room, web globe and help desk as their tools change; subagents are linked to their parent" src="docs/assets/demo-office.gif" width="88%"></p>
 <table>
@@ -336,7 +336,7 @@ curl http://127.0.0.1:4777/v1/chat/completions -H "Authorization: Bearer zp_…"
 
 The gateway serves them at `/skills/<name>/SKILL.md`, so an agent always reads the version that is running. That avoids a public branch that can change. To give them to an agent:
 
-- **Claude Code:** Code tools → Agent skills → **Install** writes `~/.claude/skills/zaafpulse*`. Folders are marked, so a skill of yours with the same name is never overwritten, and **Remove** deletes only the marked folders.
+- **Claude Code:** Agent Skills → **Install into Claude Code** writes `~/.claude/skills/zaafpulse*`. Folders are marked, so a skill of yours with the same name is never overwritten, and **Remove** deletes only the marked folders.
 - **Any other AI:** paste `Read this skill and use it: http://127.0.0.1:4777/skills/zaafpulse/SKILL.md`.
 
 A test checks that every endpoint the skills document is one the gateway actually serves.
@@ -359,7 +359,14 @@ Every run has a budget (tokens, model calls, time, optional cost) scaled by effo
 
 Workflow approval gates fail closed: a run pauses before the gated step until someone approves (the note reaches the next agent) or rejects, an unclear A2A reply never counts as approval, nobody deciding within 72 hours rejects the run, and a step whose agent is missing fails the run rather than being skipped.
 
-A new key is shown once and masked (`zp_ZW_j••••••••••••BBYm`) as soon as it is copied, after 60 seconds or when you leave the page. Every request is logged with key, model, agent, tokens, cost (live list prices), latency and time to first token, never prompt text. Three menus manage it: **Agent Gateway** (overview in 3D, API keys, providers, model router, sessions and memory, playground, snippets), **RAG Service** (knowledge bases, ingestion, search, API) and **Agent-to-Agent** (ready-to-use and custom workflows, a Collaborate console with a live trace, run history, specialist agents, patterns and the A2A endpoint). Keys, agents, sessions and memory live in `.data/` (git-ignored); provider settings in `config.json` under `gateway`.
+A new key is shown once and masked (`zp_Q7m_k••••••••••••T4vX`) as soon as it is copied, after 60 seconds or when you leave the page. Every request is logged with key, model, agent, tokens, cost (live list prices), latency and time to first token, never prompt text. The sidebar has two groups. **AI Observability** holds Overview, AI Office, Live monitor, Quality & safety, Second brain, Projects and Sessions. **Agentic Workspace** holds the rest:
+
+- **Endpoint:** the API and its keys, the MCP server (register it in Claude Code, Kiro or Antigravity, or connect over HTTP), connection snippets and code tools.
+- **Agent Gateway:** a 3D overview, providers, model router, sessions and memory, and a playground.
+- **Agent Skills:** ZAAFPulse's own skills, and the usage of subagents, skills and tools in your AI tools.
+- **Integrations.**
+- **Agent-to-Agent:** workflows, Collaborate, runs, specialist agents, patterns and A2A.
+- **RAG Service:** knowledge bases, ingestion, search and the API. Keys, agents, sessions and memory live in `.data/` (git-ignored); provider settings in `config.json` under `gateway`.
 
 ## How it works
 
