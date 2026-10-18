@@ -62,11 +62,11 @@ function mountBrainGrowth(canvas, v) {
         for (const gid of groups) {
           const c = b.groups[gid]; if (!c) continue;
           const h = ease(`br:${b.start}:${gid}`, (c / max) * 3.4, still); const y0 = y;
-          items.push({ depth: P(x, 0, z)[2] + y0 * 0.001, draw: () => g.box(x, z, w, d0, h, BRAIN_NEON[gid] || '#8f98cc', { y0, slices: 0, glow: gid === 'hub' ? 12 : 0 }) });
+          items.push({ depth: P(x, 0, z)[2] + y0 * 0.001, draw: () => g.box(x, z, w, d0, h, brainNeon(gid), { y0, slices: 0, glow: gid === 'hub' ? 12 : 0 }) });
           y += h;
         }
         if (!b.total) items.push({ depth: P(x, 0, z)[2], draw: () => g.box(x, z, w, d0, 0.02, '#2a2f78', { slices: 0, glow: 0, alpha: 0.6 }) });
-        pts.push({ at: P(x + w / 2, y, z + d0 / 2), key: b.start, html: () => `<b>Week of ${new Date(b.start).toLocaleDateString('en', { month: 'short', day: 'numeric', year: 'numeric' })}</b>${groups.filter((gid) => b.groups[gid]).map((gid) => `<div class="row"><span><i style="background:${BRAIN_NEON[gid]}"></i>${esc(groupMeta(gid).name)}</span><span class="num">${b.groups[gid]}</span></div>`).join('')}<div class="row"><span>Total</span><span class="num">${b.total}</span></div>` });
+        pts.push({ at: P(x + w / 2, y, z + d0 / 2), key: b.start, html: () => `<b>Week of ${new Date(b.start).toLocaleDateString('en', { month: 'short', day: 'numeric', year: 'numeric' })}</b>${groups.filter((gid) => b.groups[gid]).map((gid) => `<div class="row"><span><i style="background:${brainNeon(gid)}"></i>${esc(groupMeta(gid).name)}</span><span class="num">${b.groups[gid]}</span></div>`).join('')}<div class="row"><span>Total</span><span class="num">${b.total}</span></div>` });
       });
       items.sort((a, b) => a.depth - b.depth).forEach((it) => it.draw());
       ctx.fillStyle = HOLO.muted; ctx.font = '10.5px system-ui, sans-serif';
