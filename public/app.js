@@ -435,8 +435,7 @@ function matches(...fields) {
 async function viewSettings(el) {
   const cfg = await api('/api/config');
   const theme = store.get('theme', 'system');
-  const rows = Object.entries(cfg.pricing);
-  el.innerHTML = `<div class="hero"><div><div class="eyebrow">SETTINGS</div><h1>Preferences</h1><p>Stored in config.json next to the app. Nothing leaves this laptop.</p></div></div>
+  el.innerHTML = `<div class="holo-deck"><div class="hero"><div><div class="eyebrow">SETTINGS</div><h1>Preferences</h1><p>Stored in config.json next to the app. Model prices stay current from the providers' list prices.</p></div></div>
   <div class="grid two" style="margin-top:0">
     <div class="card"><div class="card-head"><h3>Profile & budget</h3></div>
       <form class="form" id="profile-form">
@@ -448,12 +447,9 @@ async function viewSettings(el) {
       </form></div>
     <div class="card"><div class="card-head"><h3>How cost is estimated</h3></div>
       <p class="muted" style="margin-top:0">Each model call's tokens are multiplied by the price for the longest matching model prefix (for example <code>claude-opus-5-5</code> beats <code>claude-opus-5</code>). Cache reads and cache writes have their own rates. Models with no matching prefix count as $0 and are listed in the banner on Overview.</p>
-      <p class="muted">Prices are USD per 1M tokens. Add a row such as <code>gpt-6</code> to price Codex usage.</p></div>
+      <p class="muted">Prices are USD per 1M tokens and update automatically from OpenRouter's public model list, which carries each provider's list price. Edit a model to pin your own price, or add a prefix such as <code>gpt-6</code> for models the list does not have.</p></div>
   </div>
-  <div class="card" style="margin-top:16px"><div class="card-head"><h3>Model prices</h3><span class="meta">USD per 1M tokens</span>
-    <div class="right"><button class="btn ghost" id="add-price" type="button">Add model</button><button class="btn" id="save-prices" type="button">Save prices</button><span class="saved" id="prices-saved"></span></div></div>
-    <div class="table-wrap"><table class="price-table"><thead><tr><th>Model prefix</th><th class="r">Input</th><th class="r">Output</th><th class="r">Cache read</th><th class="r">Cache write 5m</th><th class="r">Cache write 1h</th><th></th></tr></thead>
-    <tbody id="price-rows">${rows.map(([k, p]) => priceRow(k, p)).join('')}</tbody></table></div></div>`;
+  <section class="holo panel" id="prices-panel" style="margin-top:16px"><div class="skeleton" style="height:220px"></div></section></div>`;
 
   $('#profile-form').onsubmit = async (e) => {
     e.preventDefault();
@@ -465,24 +461,7 @@ async function viewSettings(el) {
     $('#profile-saved').textContent = 'Saved';
     await loadSummary();
   };
-  $('#add-price').onclick = () => $('#price-rows').insertAdjacentHTML('afterbegin', priceRow('', { input: 0, output: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 }));
-  $('#price-rows').onclick = (e) => { if (e.target.closest('[data-remove]')) e.target.closest('tr').remove(); };
-  $('#save-prices').onclick = async () => {
-    const pricing = {};
-    for (const tr of $$('#price-rows tr')) {
-      const v = (n) => Number($(`[name=${n}]`, tr).value) || 0;
-      const key = $('[name=key]', tr).value.trim();
-      if (key) pricing[key] = { input: v('input'), output: v('output'), cacheRead: v('cacheRead'), cacheWrite5m: v('cacheWrite5m'), cacheWrite1h: v('cacheWrite1h') };
-    }
-    await api('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pricing }) });
-    $('#prices-saved').textContent = 'Saved';
-    await loadSummary();
-  };
-}
-function priceRow(key, p) {
-  const n = (name) => `<td class="r"><input class="input num" name="${name}" type="number" min="0" step="0.01" value="${p[name] ?? 0}"></td>`;
-  return `<tr><td><input class="input" name="key" value="${esc(key)}" placeholder="model prefix"></td>${n('input')}${n('output')}${n('cacheRead')}${n('cacheWrite5m')}${n('cacheWrite1h')}
-    <td><button class="icon-btn" type="button" data-remove aria-label="Remove row">×</button></td></tr>`;
+  loadPrices().catch((err) => { $('#prices-panel').innerHTML = holoEmpty(`Could not load prices: ${esc(err.message)}`); });
 }
 
 /* ---------- drill-down drawer ---------- */
