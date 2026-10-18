@@ -252,7 +252,7 @@ function unmountStages() {
 /* ---------- subpages and SVG charts ---------- */
 // [slug, label, description] per page; '' is the page's own overview.
 const SUBPAGES = {
-  quality: [['', 'Overview'], ['utilization', 'Utilization'], ['cache', 'Cache'], ['compression', 'Compression'], ['providers', 'Provider stats']],
+  quality: [['', 'Overview'], ['utilization', 'Utilization'], ['cache', 'Cache'], ['compression', 'Compression'], ['providers', 'Provider stats'], ['models', 'Models'], ['rankings', 'Rankings']],
   squad: [['', 'Office'], ['logs', 'Logs'], ['proxy', 'Proxy logs'], ['time', 'Time']],
 };
 function subTabs(route) {

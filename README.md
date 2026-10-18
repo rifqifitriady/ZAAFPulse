@@ -122,8 +122,8 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 </td>
 <td valign="top">
 
-**Provider stats**<br>
-<sub>A 3D skyline of models by provider with cost and output walls, per-model requests and cost per 1K requests, latency percentiles and reliability per provider.</sub>
+**OpenRouter models & rankings**<br>
+<sub>Every model on OpenRouter with live prices and per-provider uptime, the most-used models and apps this week, benchmark leaders, and the inference-provider directory, all as 3D decks.</sub>
 
 </td>
 </tr>
@@ -170,7 +170,7 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 </details>
 
 <details open>
-<summary><b>Quality & safety</b>: accuracy, utilization, cache, compression and providers</summary>
+<summary><b>Quality & safety</b>: accuracy, utilization, cache, compression, providers, models and rankings</summary>
 <br>
 <img alt="Quality and safety: KPI cards and model-caused failures per day as a 3D stacked city" src="docs/assets/screen-quality.jpg">
 <table>
@@ -183,6 +183,12 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 <tr>
 <td width="50%"><img alt="Compression: compactions, context pressure and tokens avoided" src="docs/assets/screen-compression.jpg"></td>
 <td width="50%"><img alt="Provider stats: a 3D model skyline by provider, metric tiles, requests and cost per model" src="docs/assets/screen-providers.jpg"></td>
+</tr>
+</table>
+<table>
+<tr>
+<td width="50%"><img alt="Models: every OpenRouter model with live prices, per-provider uptime and a 3D price landscape by vendor" src="docs/assets/screen-models.jpg"></td>
+<td width="50%"><img alt="Rankings: the most-used models and apps on OpenRouter this week, vendor share and benchmark leaders" src="docs/assets/screen-rankings.jpg"></td>
 </tr>
 </table>
 </details>
@@ -268,6 +274,7 @@ npm run mcp:register -- all        # Claude Code, Kiro and Antigravity (backs up
 | `arize` | Arize Phoenix and Arize AX | projects, spans, traces, datasets, experiments, monitors (AX) |
 | `n8n` | n8n | workflows, executions; run allowlisted webhooks and (de)activate workflows when writes are on |
 | `router` | OmniRoute, 9router | health, models, providers, combos, usage, telemetry |
+| `openrouter` | OpenRouter | model catalog and prices, which providers serve a model and their uptime, provider directory, rankings of models and apps, benchmarks; credits with a key |
 | `http` | AION and any REST API | one tool per endpoint you declare |
 | `mcp` | any Streamable HTTP MCP server | the upstream tools, filtered, under a `<id>__` prefix |
 
@@ -288,6 +295,7 @@ Tools are prefixed with the integration id (`dynatrace-saas_list_problems`). Eve
 | Running apps | `ps` | which AI apps are open, process count, CPU, memory, uptime |
 | Obsidian | the vault Obsidian has open, or a path in Settings | notes, `[[wikilinks]]`, embeds and `.md` links, tags, frontmatter type; symlinked folders are followed |
 | Live transcripts | the tail of Claude Code and Codex transcripts written in the last 30 minutes to 24 hours | for the office, logs and timeline: tool names, block sizes, file and command names, hostnames, timing and state |
+| OpenRouter | its public API (models, per-model provider endpoints with uptime, provider directory) and the public rankings page; credits and key limits with an optional API key | the Models and Rankings pages, live prices, and the `openrouter` MCP tools |
 | OmniRoute (optional) | its management API, GET only | quota utilization, cache and compression analytics, provider stats, call logs and upstream proxy logs |
 
 Claude Desktop, ChatGPT and Antigravity keep conversations in the cloud, so they are shown by live presence and resource use only.
@@ -312,6 +320,7 @@ These are **signals detected in the logs, not a graded evaluation**. Every card 
 ## Privacy
 
 - The server listens on `127.0.0.1` only and rejects requests whose `Host` is not `localhost`.
+- OpenRouter's public model list, provider directory and rankings page are read with plain GETs (models every 12 hours, rankings every 6, providers daily, per-model endpoints when you open the Models page); an API key is sent only if you add an `openrouter` integration with one.
 - Model prices are kept current with one GET to OpenRouter's public model list every 12 hours (no credentials, no data from this laptop); turn **Auto-update** off in Settings to stop it. Otherwise nothing is sent anywhere unless you configure an integration, and then only to the URL you configured: when an AI client calls a tool, or when the Integrations page checks health (at most once a minute per integration, or when you press Test). No telemetry, no accounts. Integration secrets stay in the macOS Keychain or environment variables, never in `config.json`.
 - The office, logs and timeline read transcript tails on demand and keep only tool names, sizes, file and command names, hostnames, timing and state; message text is never shown.
 - Message text is never stored. The cache keeps token counts, metadata and, for flagged quality or safety items only, a masked snippet of up to 160 characters. Secret values are never kept.
@@ -346,6 +355,7 @@ lib/insights.js        utilization, cache, compression and provider analytics
 lib/omniroute.js       read-only OmniRoute management API client, emails masked
 lib/integration-config.js  per-type field schema, validation, Keychain storage and dry runs for the editor
 lib/price-sync.js      live model prices from OpenRouter's public list, cached in .cache/prices.json
+lib/openrouter.js      OpenRouter models, endpoints, providers, account and the rankings-page parser (cached in .cache/)
 public/                dashboard UI: plain HTML, CSS and JavaScript, no build step
 public/iso.js          isometric 3D engine, KPI cards and SVG chart helpers shared by all pages
 scripts/               LaunchAgent install/uninstall, launcher, Chrome opener, MCP client registration, media capture
@@ -371,6 +381,8 @@ docs/assets/           README banner, diagrams, screenshots and GIFs
 | `GET /api/mcp-calls` | recent MCP hub tool calls from the audit log |
 | `GET /api/vault` | notes, links and unresolved links of the Obsidian vault |
 | `GET /api/config` · `POST /api/config` | name, monthly budget, prices, vault path |
+| `GET /api/openrouter?section=models\|providers\|rankings\|account` | OpenRouter data, cached (models 12 h, providers 24 h, rankings 6 h) |
+| `GET /api/openrouter/endpoints?ids=…` | providers serving up to 40 models, with uptime and per-provider prices |
 | `GET /api/prices` · `POST /api/prices` | live price catalog, sync status, your pinned prices; `refresh`, `toggle`, `set`, `unpin`, `remove` |
 | `POST /api/rescan` | re-index changed log files now |
 | `GET /api/integrations` | integration health, client registration and recent MCP tool calls |

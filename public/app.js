@@ -614,7 +614,7 @@ function closeDrill(restoreFocus = true) {
 
 /* ---------- routing & render ---------- */
 const VIEWS = { overview: viewOverview, squad: viewSquadPage, sessions: viewSessions, projects: viewProjects, agents: viewAgents, quality: viewQualityPage, brain: viewBrain, live: viewLive, integrations: viewIntegrationsPage };
-Object.assign(DRILLS, QUALITY_DRILLS, BRAIN_DRILLS);
+Object.assign(DRILLS, QUALITY_DRILLS, BRAIN_DRILLS, OPENROUTER_DRILLS);
 function drawPageCharts() {
   const c = $('#daily-chart'); if (c) drawDaily(c);
   const q = $('#quality-chart'); if (q) drawQualityChart(q);
