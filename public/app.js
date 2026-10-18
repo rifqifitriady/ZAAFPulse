@@ -632,6 +632,9 @@ function render(animate = true) {
   $('#crumb').textContent = TITLES[state.route] + (subMeta ? ` / ${subMeta[1].toUpperCase()}` : '');
   const full = state.sub ? `${state.route}/${state.sub}` : state.route;
   for (const a of $$('nav a')) a.classList.toggle('active', a.classList.contains('nav-sub') ? a.dataset.route === full || (!state.sub && a.dataset.route === `${state.route}/`) : a.dataset.route === state.route);
+  // Sub-pages show only under the section you are in, so the whole menu fits without scrolling.
+  for (const a of $$('nav a.nav-sub')) a.hidden = a.dataset.route.split('/')[0] !== state.route;
+  for (const a of $$('nav a:not(.nav-sub)')) a.classList.toggle('open', a.dataset.route === state.route && !!document.querySelector(`nav a.nav-sub[data-route^="${state.route}/"]`));
   $('#sidebar').classList.remove('open');
   hideTip();
   el.classList.toggle('animate', animate && !reduceMotion.matches);
