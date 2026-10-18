@@ -27,15 +27,13 @@
       </div>
 
       <nav>
-        <div class="nav-label">WORKSPACE</div>
+        <div class="nav-label">AI OBSERVABILITY</div>
         <a href="#overview" data-route="overview"><span data-icon="grid"></span>Overview</a>
-        <a href="#squad" data-route="squad"><span data-icon="bot"></span>AI Squad<b class="badge" id="b-squad"></b></a>
+        <a href="#squad" data-route="squad"><span data-icon="bot"></span>AI Office<b class="badge" id="b-squad"></b></a>
         <a class="nav-sub" href="#squad/logs" data-route="squad/logs">Logs</a>
         <a class="nav-sub" href="#squad/proxy" data-route="squad/proxy">Proxy logs</a>
         <a class="nav-sub" href="#squad/time" data-route="squad/time">Time</a>
-        <a href="#sessions" data-route="sessions"><span data-icon="list"></span>Sessions<b class="badge" id="b-sessions"></b></a>
-        <a href="#projects" data-route="projects"><span data-icon="folder"></span>Projects</a>
-        <a href="#agents" data-route="agents"><span data-icon="sparkle"></span>Agents &amp; skills</a>
+        <a href="#live" data-route="live"><span data-icon="cpu"></span>Live monitor<b class="badge live" id="b-live"></b></a>
         <a href="#quality" data-route="quality"><span data-icon="shield"></span>Quality &amp; safety</a>
         <a class="nav-sub" href="#quality/utilization" data-route="quality/utilization">Utilization</a>
         <a class="nav-sub" href="#quality/cache" data-route="quality/cache">Cache</a>
@@ -44,22 +42,31 @@
         <a class="nav-sub" href="#quality/models" data-route="quality/models">Models</a>
         <a class="nav-sub" href="#quality/rankings" data-route="quality/rankings">Rankings</a>
         <a href="#brain" data-route="brain"><span data-icon="brain"></span>Second brain</a>
-        <a href="#live" data-route="live"><span data-icon="cpu"></span>Live monitor<b class="badge live" id="b-live"></b></a>
-        <a href="#integrations" data-route="integrations"><span data-icon="plug"></span>Integrations</a>
+        <a href="#projects" data-route="projects"><span data-icon="folder"></span>Projects</a>
+        <a href="#sessions" data-route="sessions"><span data-icon="list"></span>Sessions<b class="badge" id="b-sessions"></b></a>
+        <div class="nav-label">AGENTIC WORKSPACE</div>
+        <a href="#endpoint" data-route="endpoint"><span data-icon="endpoint"></span>Endpoint</a>
+        <a class="nav-sub" href="#endpoint/keys" data-route="endpoint/keys">API keys</a>
+        <a class="nav-sub" href="#endpoint/mcp" data-route="endpoint/mcp">MCP server</a>
+        <a class="nav-sub" href="#endpoint/connect" data-route="endpoint/connect">Connect</a>
+        <a class="nav-sub" href="#endpoint/tools" data-route="endpoint/tools">Code tools</a>
         <a href="#gateway" data-route="gateway"><span data-icon="shield"></span>Agent Gateway</a>
-        <a class="nav-sub" href="#gateway/keys" data-route="gateway/keys">API keys</a>
+        <a class="nav-sub" href="#gateway/providers" data-route="gateway/providers">Providers</a>
         <a class="nav-sub" href="#gateway/router" data-route="gateway/router">Model router</a>
-        <a class="nav-sub" href="#gateway/tools" data-route="gateway/tools">Code tools</a>
         <a class="nav-sub" href="#gateway/playground" data-route="gateway/playground">Playground</a>
-        <a href="#rag" data-route="rag"><span data-icon="layers"></span>RAG Service</a>
-        <a class="nav-sub" href="#rag" data-route="rag/">Knowledge bases</a>
-        <a class="nav-sub" href="#rag/connect" data-route="rag/connect">API &amp; usage</a>
+        <a href="#skills" data-route="skills"><span data-icon="sparkle"></span>Agent Skills</a>
+        <a class="nav-sub" href="#skills" data-route="skills/">ZAAFPulse skills</a>
+        <a class="nav-sub" href="#skills/usage" data-route="skills/usage">Usage in your tools</a>
+        <a href="#integrations" data-route="integrations"><span data-icon="plug"></span>Integrations</a>
         <a href="#a2a" data-route="a2a"><span data-icon="bot"></span>Agent-to-Agent</a>
         <a class="nav-sub" href="#a2a" data-route="a2a/">Workflows</a>
         <a class="nav-sub" href="#a2a/collaborate" data-route="a2a/collaborate">Collaborate</a>
         <a class="nav-sub" href="#a2a/runs" data-route="a2a/runs">Runs</a>
         <a class="nav-sub" href="#a2a/agents" data-route="a2a/agents">Specialist agents</a>
         <a class="nav-sub" href="#a2a/collaboration" data-route="a2a/collaboration">Collaboration</a>
+        <a href="#rag" data-route="rag"><span data-icon="layers"></span>RAG Service</a>
+        <a class="nav-sub" href="#rag" data-route="rag/">Knowledge bases</a>
+        <a class="nav-sub" href="#rag/connect" data-route="rag/connect">API &amp; usage</a>
         <div class="nav-label">PREFERENCES</div>
         <a href="#settings" data-route="settings"><span data-icon="gear"></span>Settings</a>
       </nav>
@@ -79,7 +86,7 @@
     <main class="main">
       <header class="topbar">
         <button class="icon-btn menu-btn" id="menu-btn" aria-label="Open menu"><span data-icon="menu"></span></button>
-        <div class="crumbs">WORKSPACE <span>/</span> <b id="crumb">OVERVIEW</b></div>
+        <div class="crumbs"><span id="crumb-group">AI OBSERVABILITY</span> <span>/</span> <b id="crumb">OVERVIEW</b></div>
         <div class="topbar-right">
           <label class="search">
             <span data-icon="search"></span>
