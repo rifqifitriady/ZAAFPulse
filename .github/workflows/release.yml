@@ -1,0 +1,51 @@
+# Builds the single-file executables and attaches them to a GitHub release.
+# Runs when a version tag (v1.2.3) is pushed, or by hand (Actions → Release → Run workflow), which only
+# uploads the files as a build artifact.
+name: Release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: node --test test/platform.test.js test/secrets.test.js test/register.test.js test/processes.test.js
+      - run: node bin/zaafpulse.js doctor
+  build:
+    needs: test
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest   # Linux and Windows binaries (postject works across formats)
+            targets: linux-x64 linux-arm64 win-x64 win-arm64
+          - runner: macos-latest    # macOS binaries need codesign
+            targets: darwin-arm64 darwin-x64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: node scripts/build-single.js ${{ matrix.targets }}
+      - run: mv dist/SHA256SUMS.txt dist/SHA256SUMS-${{ runner.os }}.txt
+      - uses: actions/upload-artifact@v4
+        with: { name: zaafpulse-${{ runner.os }}, path: dist/* }
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - run: cat dist/SHA256SUMS-*.txt > dist/SHA256SUMS.txt && rm dist/SHA256SUMS-*.txt
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "ZAAFPulse $GITHUB_REF_NAME" --generate-notes

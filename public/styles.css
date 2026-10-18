@@ -1215,3 +1215,7 @@ nav a.open + a.nav-sub { margin-top: 2px; }
 .brain-type:hover { border-color: var(--h-cyan); color: #fff; }
 .brain-form { margin-top: 14px; }
 .holo-table td.wrap { white-space: normal; min-width: 240px; line-height: 1.4; }
+
+/* Server mode: sign out from the user card. */
+.link-btn { background: none; border: 0; padding: 0; color: var(--side-muted); font: inherit; font-size: 11.5px; cursor: pointer; }
+.link-btn:hover { color: #fff; text-decoration: underline; }

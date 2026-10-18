@@ -3,12 +3,12 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="docs/assets/banner-light.svg">
-  <img alt="ZAAFPulse: AI command center and agentic workspace for your Mac" src="docs/assets/banner-dark.svg" width="100%">
+  <img alt="ZAAFPulse: AI command center and agentic workspace for macOS, Linux and Windows" src="docs/assets/banner-dark.svg" width="100%">
 </picture>
 
 <br>
 
-<img alt="macOS" src="https://img.shields.io/badge/macOS-native-0f1b2a?style=flat-square&logo=apple&logoColor=white">
+<img alt="macOS, Linux, Windows" src="https://img.shields.io/badge/runs%20on-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-0f1b2a?style=flat-square">
 <img alt="Node 18+" src="https://img.shields.io/badge/Node-18%2B-1f7f95?style=flat-square&logo=nodedotjs&logoColor=white">
 <img alt="Zero dependencies" src="https://img.shields.io/badge/dependencies-0-1baf7a?style=flat-square">
 <img alt="Local first" src="https://img.shields.io/badge/data-local%20first-6250d6?style=flat-square">
@@ -327,7 +327,27 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 
 ## Quick start
 
-Requires macOS and Node 18 or newer. Nothing to install:
+ZAAFPulse runs on **macOS, Linux (Ubuntu, Debian, RHEL, Rocky, AlmaLinux, Fedora, Amazon Linux, SUSE, Alpine) and Windows 10/11**, on a laptop or a server. Pick one of these:
+
+| | One command |
+|---|---|
+| **macOS / Linux** | `curl -fsSL https://raw.githubusercontent.com/rifqifitriady/ZAAFPulse/main/install.sh \| sh` |
+| **Windows 11** (PowerShell) | `irm https://raw.githubusercontent.com/rifqifitriady/ZAAFPulse/main/install.ps1 \| iex` |
+| **Linux server** | `curl -fsSL https://raw.githubusercontent.com/rifqifitriady/ZAAFPulse/main/install.sh \| sudo sh -s -- --server` |
+| **Docker** | `docker compose up -d` (see [compose.yaml](compose.yaml)) |
+| **Single file** | download `zaafpulse-<version>-<os>-<cpu>` from [Releases](https://github.com/rifqifitriady/ZAAFPulse/releases) and run it |
+
+The installers use your Node.js 18+ or download the official Node.js LTS (checksum verified) into their own folder. They add the `zaafpulse` command and start it in the background (launchd, systemd or Task Scheduler). Then open **http://localhost:4777**.
+
+```bash
+zaafpulse status      # is it running?
+zaafpulse doctor      # OS, Node.js, data folder, secret store, logs found, service
+zaafpulse open        # open the dashboard
+zaafpulse service restart | uninstall
+zaafpulse help
+```
+
+**From source** (any OS with Node 18+, no npm packages):
 
 ```bash
 git clone https://github.com/rifqifitriady/ZAAFPulse.git && cd ZAAFPulse
@@ -337,16 +357,24 @@ npm test           # run the test suite (node:test, no dependencies)
 npm run media      # regenerate README screenshots and GIFs from demo data
 ```
 
-The first start indexes your logs (about 15 seconds for 2 GB). After that the server rescans every minute and only re-reads files that changed.
+The first start indexes your logs (about 15 seconds for 2 GB). After that the server rescans every minute and only re-reads files that changed. Server mode, TLS, Docker, single-file builds and every option are in **[docs/install.md](docs/install.md)**.
 
-### Run it on login
+### Server mode
+
+By default ZAAFPulse listens on 127.0.0.1 only. `--server` (or `zaafpulse start --host 0.0.0.0`) makes it reachable from other machines:
+
+- The dashboard asks for an admin password, set with `zaafpulse set-password` (scrypt hash) or `ZAAFPULSE_ADMIN_PASSWORD`. It refuses to start without one. Sessions are HttpOnly, SameSite=Strict cookies, and repeated wrong guesses are locked out.
+- Apps reach the gateway (`/v1`, `/mcp`, `/a2a`) with ZAAFPulse API keys, as before.
+- Serve HTTPS with `ZAAFPULSE_TLS_CERT` and `ZAAFPULSE_TLS_KEY`, or use a reverse proxy (`ZAAFPULSE_TRUST_PROXY=1`, `ZAAFPULSE_PUBLIC_URL=https://…`).
+
+### Run it on login (macOS, from source)
 
 ```bash
-./scripts/install-autostart.sh     # keep the server running, show the dashboard at login and on wake
-./scripts/uninstall-autostart.sh   # remove it again
+zaafpulse service install          # or: node bin/zaafpulse.js service install
+./scripts/install-autostart.sh     # the older macOS setup: also brings the dashboard to the front in Chrome on wake
 ```
 
-This installs two LaunchAgents: `com.zaaf.aipulse.server` (starts at login, restarts on crash) and `com.zaaf.aipulse.opener` (brings the dashboard tab to the front in Chrome at login and whenever the Mac wakes). macOS asks once for permission to control Chrome. Logs go to `~/Library/Logs/AIPulse/`.
+`scripts/install-autostart.sh` installs two LaunchAgents: `com.zaaf.aipulse.server` (starts at login, restarts on crash) and `com.zaaf.aipulse.opener` (brings the dashboard tab to the front in Chrome at login and whenever the Mac wakes). macOS asks once for permission to control Chrome. Logs go to `~/Library/Logs/AIPulse/`.
 
 ## MCP server and integrations
 
@@ -510,8 +538,8 @@ These are **signals detected in the logs, not a graded evaluation**. Every card 
 - Model prices are kept current with one GET to OpenRouter's public model list every 12 hours (no credentials, no data from this laptop); turn **Auto-update** off in Settings to stop it. Otherwise nothing is sent anywhere unless you configure an integration, and then only to the URL you configured: when an AI client calls a tool, or when the Integrations page checks health (at most once a minute per integration, or when you press Test). No telemetry, no accounts. Integration secrets stay in the macOS Keychain or environment variables, never in `config.json`.
 - The office, logs and timeline read transcript tails on demand and keep only tool names, sizes, file and command names, hostnames, timing and state; message text is never shown.
 - Message text is never stored. The cache keeps token counts, metadata and, for flagged quality or safety items only, a masked snippet of up to 160 characters. Secret values are never kept.
-- The Agent Gateway listens on 127.0.0.1 only; API keys are stored as hashes, provider keys in the Keychain, and sessions and memory (which hold conversation text you send to agents) stay in `.data/` on this Mac.
-- Second-brain sources are read with the token you give each one (kept in the Keychain), only from that source's own API or files; the map keeps titles and links, never note text. Vector databases are sampled read-only (240 records at most), and Postgres is only sent `SELECT`s.
+- The Agent Gateway listens on 127.0.0.1 unless you choose server mode, which requires a dashboard password (see [docs/install.md](docs/install.md)); API keys are stored as hashes, provider keys in the OS secret store (macOS Keychain, Linux keyring, or an AES-256-GCM encrypted file on servers and Windows, its key sealed with DPAPI there), and sessions and memory (which hold conversation text you send to agents) stay in `.data/` on this machine.
+- Second-brain sources are read with the token you give each one (kept in the OS secret store), only from that source's own API or files; the map keeps titles and links, never note text. Vector databases are sampled read-only (240 records at most), and Postgres is only sent `SELECT`s.
 - **Code tools → Set up** writes a coding tool's own config file (mode 0600) with a dedicated key, after a backup that **Revert** restores; **Agent Skills → Install** writes only marked folders under `~/.claude/skills`. Nothing is written to your tools without a click.
 - `config.json`, `.cache/` and `.data/` are git-ignored.
 
@@ -519,12 +547,17 @@ These are **signals detected in the logs, not a graded evaluation**. Every card 
 <summary><b>Project structure</b></summary>
 
 ```
-server.js              HTTP server, API routes, config, demo switch
+bin/zaafpulse.js       the zaafpulse command: start, set-password, service, status, doctor, register-mcp, mcp
+server.js              HTTP server, API routes, config, server mode (sign-in, TLS), demo switch
 mcp.js                 MCP server over stdio for AI clients
 lib/mcp/               MCP protocol (stdio server, Streamable HTTP client)
 lib/integrations.js    builds connectors, prefixes tools, enforces allowWrite, audits calls
 lib/connectors/        acc, dynatrace, arize, n8n, router, http and mcp-proxy connectors
-lib/secrets.js         Keychain and env secret references, masking
+lib/secrets.js         secret references (secret store or env), masking
+lib/secret-store.js    per-OS secret store: macOS Keychain, Linux keyring, AES-256-GCM file (DPAPI-sealed key on Windows)
+lib/platform.js        OS differences: data folder, machine and user name, Obsidian config, open URL, MCP command
+lib/auth.js            dashboard sign-in for server mode (scrypt, sessions, lockout)
+lib/service.js         background service: LaunchAgent, systemd, Startup folder or Task Scheduler
 lib/audit.js           tool-call log (.cache/mcp-audit.jsonl)
 lib/local.js           dashboard data for the acc connector
 lib/claude.js          Claude Code log parser (usage + signals)
@@ -555,7 +588,10 @@ lib/gateway/           Agent Gateway: keys and rate limits, providers and model 
 skills/                nine Agent Skills (SKILL.md) that teach an AI to use ZAAFPulse, served at /skills
 public/                dashboard UI: plain HTML, CSS and JavaScript, no build step
 public/iso.js          isometric 3D engine, KPI cards and SVG chart helpers shared by all pages
-scripts/               LaunchAgent install/uninstall, launcher, Chrome opener, MCP client registration, media capture
+scripts/               macOS LaunchAgent install/uninstall, launcher, Chrome opener, MCP client registration, media capture,
+                       single-file build (build-single.js, sea-main.js)
+install.sh, install.ps1 one-command installers for macOS/Linux and Windows
+Dockerfile, compose.yaml container image for servers
 test/                  node:test suites with fake HTTP and MCP servers
 config.example.json    every integration type with placeholder references
 docs/integrations.md   per-platform setup
@@ -606,7 +642,7 @@ Everything is editable in **Settings** and saved to `config.json`:
 | Theme | follows the system |
 | Price auto-update | on; fetches the public price list every 12 hours (toggle in Settings) |
 
-Environment variables: `PORT` (default `4777`) and `DEMO=1` for synthetic data. Demo mode never writes `config.json`, the Keychain or your coding tools, and fetches nothing: model calls are answered by a scripted model inside the process, and gateway data lives in a temporary folder. It uses the cached price list if one exists.
+Environment variables: `PORT` / `ZAAFPULSE_PORT` (default `4777`), `ZAAFPULSE_HOST`, `ZAAFPULSE_DATA` and the server-mode settings in [docs/install.md](docs/install.md), and `DEMO=1` for synthetic data. Demo mode never writes `config.json`, the Keychain or your coding tools, and fetches nothing: model calls are answered by a scripted model inside the process, and gateway data lives in a temporary folder. It uses the cached price list if one exists.
 </details>
 
 <br>
