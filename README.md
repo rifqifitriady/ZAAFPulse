@@ -37,7 +37,7 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 
 | | Question | What you get |
 |---|---|---|
-| **$** | *What is AI costing me?* | API-equivalent spend per day, model, project and session, a month-end projection, and where the money goes: input, output, cache reads or cache writes. |
+| **$** | *What is AI costing me?* | API-equivalent spend per day, model, project and session at **live provider list prices**, a month-end projection, and where the money goes: input, output, cache reads or cache writes. |
 | **✓** | *Can I trust what it did?* | Tool-call accuracy, hallucination signals (paths, edits, arguments and URLs that did not exist) and how often you had to correct it. |
 | **⚠** | *Did anything unsafe happen?* | Prompt-injection attempts in web and MCP content, secrets that surfaced in tool output, and risky commands such as `rm -rf` or force pushes. |
 | **◈** | *What are my agents doing right now?* | A live 3D office: every session and subagent walks to the room for the tool it is using, waits at the help desk when it needs you, and shows up in a request log, a stream inspector and a timeline. |
@@ -91,7 +91,7 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 <td valign="top">
 
 **MCP hub & integrations**<br>
-<sub>An MCP server for Claude Code, Kiro and Antigravity with connectors to Dynatrace, Arize, n8n, OmniRoute, 9router and any HTTP or MCP service, shown as a 3D hub with health and traffic.</sub>
+<sub>An MCP server for Claude Code, Kiro and Antigravity with connectors to Dynatrace, Arize, n8n, OmniRoute, 9router and any HTTP or MCP service, shown as a 3D hub. Add, configure and test integrations right on the page.</sub>
 
 </td>
 <td valign="top">
@@ -107,13 +107,33 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 
 </td>
 </tr>
+<tr>
+<td valign="top">
+
+**Live model prices**<br>
+<sub>Prices follow each provider's list price automatically (OpenRouter's public list, every 12 h). A card per model with prices, context, tags and your spend; pin your own price anytime.</sub>
+
+</td>
+<td valign="top">
+
+**216-model catalog**<br>
+<sub>Anthropic, OpenAI, Google, DeepSeek, Alibaba, xAI, Meta, Tencent and Z.ai, filterable by vendor and searchable, so any model you start using is priced from day one.</sub>
+
+</td>
+<td valign="top">
+
+**Provider stats**<br>
+<sub>A 3D skyline of models by provider with cost and output walls, per-model requests and cost per 1K requests, latency percentiles and reliability per provider.</sub>
+
+</td>
+</tr>
 </table>
 
 | At a glance | |
 |---|---|
 | Runtime dependencies | **0** (Node standard library only) |
 | First index of 2 GB of logs | **~15 s**, then **~25 ms** per rescan |
-| Network exposure | **127.0.0.1 only**, host-header checked; outbound only to integrations you configure |
+| Network exposure | **127.0.0.1 only**, host-header checked; outbound only to integrations you configure and the public price list |
 | 3D scenes | plain `<canvas>` 2D with an isometric projection: no WebGL, no libraries |
 | Themes | Light and dark chrome, follows your system; the decks stay dark |
 
@@ -162,7 +182,7 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 <table>
 <tr>
 <td width="50%"><img alt="Compression: compactions, context pressure and tokens avoided" src="docs/assets/screen-compression.jpg"></td>
-<td width="50%"><img alt="Provider stats: per provider and model, latency and reliability" src="docs/assets/screen-providers.jpg"></td>
+<td width="50%"><img alt="Provider stats: a 3D model skyline by provider, metric tiles, requests and cost per model" src="docs/assets/screen-providers.jpg"></td>
 </tr>
 </table>
 </details>
@@ -184,6 +204,17 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 </tr>
 </table>
 <img alt="Integrations: the MCP hub in 3D with every connection, its health and recent calls" src="docs/assets/screen-integrations.jpg">
+</details>
+
+<details open>
+<summary><b>Settings & integrations</b>: live model prices and the integration editor</summary>
+<br>
+<table>
+<tr>
+<td width="50%"><img alt="Model prices: vendor filters and a card per model with live list prices, context, tags and your spend" src="docs/assets/screen-settings.jpg"></td>
+<td width="50%"><img alt="Integration editor: configure and test a connection, secrets kept in the macOS Keychain" src="docs/assets/screen-integration-editor.jpg"></td>
+</tr>
+</table>
 </details>
 
 <details>
@@ -274,12 +305,14 @@ These are **signals detected in the logs, not a graded evaluation**. Every card 
 | **Safety** | Secrets that appeared in tool output (type only, never the value) and risky commands the AI ran: force deletes, force pushes, hard resets, pipe-to-shell, `sudo`, `chmod 777`, `kill -9`/`pkill`, `DROP TABLE`, raw disk writes. |
 | **Reliability** | API errors, network and timeout failures, repeat loops (the same call three or more times in a row), and context compactions. |
 
-**Cost** is an API-equivalent estimate: tokens × list price per million, matched by the longest model prefix, with separate cache-read and cache-write rates. On a subscription plan you are not billed per token. Prices are editable in Settings.
+**Cost** is an API-equivalent estimate: tokens × list price per million, matched by the longest model prefix, with separate cache-read and cache-write rates. On a subscription plan you are not billed per token.
+
+**Prices stay current on their own.** At startup and whenever the cached list is older than 12 hours, the server fetches OpenRouter's public model list, which carries each provider's list price, and keeps it in `.cache/prices.json`. Precedence is built-in defaults < your prices < live prices; editing a model in **Settings → Model prices** pins your price for it, and **Use live price** unpins it. Turn **Auto-update** off to rely only on your own and the built-in prices. `config.json` stores only the prices you set.
 
 ## Privacy
 
 - The server listens on `127.0.0.1` only and rejects requests whose `Host` is not `localhost`.
-- Nothing is sent anywhere unless you configure an integration, and then only to the URL you configured: when an AI client calls a tool, or when the Integrations page checks health (at most once a minute per integration, or when you press Test). No telemetry, no accounts. Integration secrets stay in the macOS Keychain or environment variables, never in `config.json`.
+- Model prices are kept current with one GET to OpenRouter's public model list every 12 hours (no credentials, no data from this laptop); turn **Auto-update** off in Settings to stop it. Otherwise nothing is sent anywhere unless you configure an integration, and then only to the URL you configured: when an AI client calls a tool, or when the Integrations page checks health (at most once a minute per integration, or when you press Test). No telemetry, no accounts. Integration secrets stay in the macOS Keychain or environment variables, never in `config.json`.
 - The office, logs and timeline read transcript tails on demand and keep only tool names, sizes, file and command names, hostnames, timing and state; message text is never shown.
 - Message text is never stored. The cache keeps token counts, metadata and, for flagged quality or safety items only, a masked snippet of up to 160 characters. Secret values are never kept.
 - `config.json` and `.cache/` are git-ignored.
@@ -312,6 +345,7 @@ lib/timeline.js        per-agent timeline segments with a per-file cache (Time)
 lib/insights.js        utilization, cache, compression and provider analytics
 lib/omniroute.js       read-only OmniRoute management API client, emails masked
 lib/integration-config.js  per-type field schema, validation, Keychain storage and dry runs for the editor
+lib/price-sync.js      live model prices from OpenRouter's public list, cached in .cache/prices.json
 public/                dashboard UI: plain HTML, CSS and JavaScript, no build step
 public/iso.js          isometric 3D engine, KPI cards and SVG chart helpers shared by all pages
 scripts/               LaunchAgent install/uninstall, launcher, Chrome opener, MCP client registration, media capture
@@ -337,6 +371,7 @@ docs/assets/           README banner, diagrams, screenshots and GIFs
 | `GET /api/mcp-calls` | recent MCP hub tool calls from the audit log |
 | `GET /api/vault` | notes, links and unresolved links of the Obsidian vault |
 | `GET /api/config` · `POST /api/config` | name, monthly budget, prices, vault path |
+| `GET /api/prices` · `POST /api/prices` | live price catalog, sync status, your pinned prices; `refresh`, `toggle`, `set`, `unpin`, `remove` |
 | `POST /api/rescan` | re-index changed log files now |
 | `GET /api/integrations` | integration health, client registration and recent MCP tool calls |
 | `POST /api/integrations/test` | fresh health check of one integration (`{ "id": "..." }`) |
@@ -354,11 +389,12 @@ Everything is editable in **Settings** and saved to `config.json`:
 |---|---|
 | Display name | your macOS account name |
 | Monthly budget (USD, API-equivalent) | none |
-| Model prices per 1M tokens | current list prices for Claude models; add a prefix such as `gpt-6` to price Codex |
+| Model prices per 1M tokens | live provider list prices (OpenRouter's public list, refreshed every 12 h); edit a model to pin your own price, or add a prefix the list does not have |
 | Obsidian vault path | the vault Obsidian has open |
 | Theme | follows the system |
+| Price auto-update | on; fetches the public price list every 12 hours (toggle in Settings) |
 
-Environment variables: `PORT` (default `4777`) and `DEMO=1` for synthetic data.
+Environment variables: `PORT` (default `4777`) and `DEMO=1` for synthetic data (demo mode never writes `config.json` or fetches anything; it uses the cached price list if one exists).
 </details>
 
 <br>
