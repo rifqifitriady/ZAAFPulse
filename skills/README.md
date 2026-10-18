@@ -6,7 +6,7 @@ These skills teach an AI agent (Claude Code, Cursor, ChatGPT, a custom SDK) to u
 
 Choose one of these:
 
-- **Install into Claude Code:** Dashboard → Agent Gateway → Code tools → *Agent skills* → **Install**. This copies the skills to `~/.claude/skills/zaafpulse*`, and **Remove** deletes them again.
+- **Install into Claude Code:** Dashboard → Agent Skills → **Install into Claude Code**. This copies the skills to `~/.claude/skills/zaafpulse*`, and **Remove** deletes them again.
 - **Paste to any AI:** `Read this skill and use it: http://127.0.0.1:4777/skills/zaafpulse/SKILL.md`.
 - **Copy by hand:** copy the folders below into the agent's skills directory.
 
@@ -16,7 +16,7 @@ The gateway serves these files itself, so they always match the running version.
 
 ```bash
 export ZAAFPULSE_URL="http://127.0.0.1:4777"
-export ZAAFPULSE_KEY="zp_..."      # Dashboard → Agent Gateway → API keys (or Code tools → New key)
+export ZAAFPULSE_KEY="zp_..."      # Dashboard → Endpoint → API keys (or Agent Skills → New key for skills)
 ```
 
 ## Skills
