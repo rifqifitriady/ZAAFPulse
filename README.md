@@ -15,12 +15,15 @@
 <img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-supported-2a78d6?style=flat-square">
 <img alt="Codex" src="https://img.shields.io/badge/Codex-supported-eb6834?style=flat-square">
 <img alt="MCP server" src="https://img.shields.io/badge/MCP-server-0f1b2a?style=flat-square">
-<img alt="Obsidian" src="https://img.shields.io/badge/Obsidian-graph-e87ba4?style=flat-square&logo=obsidian&logoColor=white">
+<img alt="Agent Gateway" src="https://img.shields.io/badge/Agent%20Gateway-OpenAI%20%C2%B7%20Anthropic%20%C2%B7%20Gemini-6250d6?style=flat-square">
+<img alt="A2A" src="https://img.shields.io/badge/A2A-v1.0-1f7f95?style=flat-square">
+<img alt="Second brain" src="https://img.shields.io/badge/Second%20brain-15%20sources-e87ba4?style=flat-square&logo=obsidian&logoColor=white">
 
-**One local dashboard for everything AI does on your laptop:**<br>
-what it costs, how often it is wrong, what your agents are doing right now, and how your knowledge grows.
+**One local command center for everything AI does on your laptop:**<br>
+what it costs, how often it is wrong, what your agents are doing right now and how your knowledge grows,<br>
+plus an agentic workspace: one API for every model, 17 agents that work together, workflows, RAG, MCP and A2A.
 
-[Features](#features) · [Screenshots](#screenshots) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Metrics](#what-the-quality-metrics-mean) · [Privacy](#privacy)
+[Features](#features) · [Screenshots](#screenshots) · [Quick start](#quick-start) · [Agentic workspace](#agentic-workspace) · [How it works](#how-it-works) · [Metrics](#what-the-quality-metrics-mean) · [Privacy](#privacy)
 
 </div>
 
@@ -41,8 +44,9 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 | **✓** | *Can I trust what it did?* | Tool-call accuracy, hallucination signals (paths, edits, arguments and URLs that did not exist) and how often you had to correct it. |
 | **⚠** | *Did anything unsafe happen?* | Prompt-injection attempts in web and MCP content, secrets that surfaced in tool output, and risky commands such as `rm -rf` or force pushes. |
 | **◈** | *What are my agents doing right now?* | A live 3D office: every session and subagent walks to the room for the tool it is using, waits at the help desk when it needs you, and shows up in a request log, a stream inspector and a timeline. |
-| **◉** | *Is my second brain growing?* | A live, animated graph of your Obsidian vault: hubs, orphans, unresolved links, and a replay of how it grew. |
-| **⌁** | *Can my apps use any model and my agents through one API?* | An Agent Gateway on 127.0.0.1: ZAAFPulse API keys with scopes, budgets and rate limits, an OpenAI-compatible `/v1` API for Ollama, LM Studio and any hosted provider, an orchestrator that plans and routes tasks to 17 domain agents with memory and sessions, and MCP over HTTP. |
+| **◉** | *Is my second brain growing?* | One animated map of Obsidian, Logseq, Notion, Tana, Roam, mem.ai, Reflect, Heybrain, a PARA workspace, your RAG knowledge and vector databases: hubs, orphans, PARA lanes, a semantic map by meaning, and a replay of how it grew. |
+| **⌁** | *Can my apps and coding tools use any model through one API?* | An Agent Gateway on 127.0.0.1: API keys with scopes, budgets and rate limits; OpenAI, Anthropic, Responses and Gemini endpoints over 52 provider presets with fallback routes, quota and a token saver; Claude Code, Codex, Gemini CLI and more connected in one click. |
+| **⚙** | *Can my agents work together, safely?* | 17 domain agents, an orchestrator, seven collaboration patterns (vote, debate, review, group chat, handoff …) with budgets and traces, 24 ready-made workflows with approval gates, RAG, A2A, and Agent Skills that teach any AI to use all of it. |
 | **⇄** | *Can my agents reach the rest of my stack?* | An MCP server for Claude Code, Kiro and Antigravity with connectors to Dynatrace, Arize Phoenix and AX, n8n, OmniRoute, 9router and any HTTP or MCP service, plus a page that shows every connection's health. |
 
 ## Features
@@ -128,6 +132,46 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 
 </td>
 </tr>
+<tr>
+<td valign="top">
+
+**Endpoint & code tools**<br>
+<sub>API keys, the MCP server (register it in Claude Code, Kiro or Antigravity, or connect over HTTP), snippets, and one-click setup of Claude Code, Codex, Gemini CLI, OpenCode and Aider on any provider, with backup and revert.</sub>
+
+</td>
+<td valign="top">
+
+**Agent Gateway & model router**<br>
+<sub>OpenAI ⇄ Anthropic ⇄ Responses ⇄ Gemini translation, 52 provider presets, fallback routes with cooldown after a 429, quota and balances, self-refreshing OAuth2 and service-account tokens, a token saver for long tool results, and a playground.</sub>
+
+</td>
+<td valign="top">
+
+**Agent-to-Agent & workflows**<br>
+<sub>17 domain agents, an orchestrator with a parallel plan, vote, debate, review loop, group chat and handoff with budgets, verdicts and live traces, 24 ready-made workflows with approval gates, and the A2A protocol.</sub>
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**Agent skills**<br>
+<sub>Nine SKILL.md files that teach any AI agent to use ZAAFPulse, served from the running version and installable into Claude Code, plus a view of the subagents, skills and tools your AI tools actually use.</sub>
+
+</td>
+<td valign="top">
+
+**RAG service**<br>
+<sub>Knowledge bases with ingestion from text, files or a URL, a local vector store, hybrid embedding + BM25 search, an API, and agents that cite the documents they used.</sub>
+
+</td>
+<td valign="top">
+
+**Answer quality**<br>
+<sub>Relevance and faithfulness per turn, computed locally from transcripts: off-topic replies and references (files, identifiers, URLs, numbers) that appeared nowhere in the session.</sub>
+
+</td>
+</tr>
 </table>
 
 | At a glance | |
@@ -195,14 +239,14 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 </details>
 
 <details open>
-<summary><b>Second brain</b>: your Obsidian vault as a living graph</summary>
+<summary><b>Second brain</b>: your knowledge as a living map (Obsidian and 14 more sources)</summary>
 <br>
 <p align="center"><img alt="Notes per week grow in 3D while the note graph replays how the vault grew" src="docs/assets/demo-brain.gif" width="82%"></p>
 <img alt="Second brain: knowledge growth in 3D, vault metrics and the note graph" src="docs/assets/screen-brain.jpg">
 </details>
 
 <details>
-<summary><b>Projects, agents & skills, integrations</b></summary>
+<summary><b>Projects, agent skill usage, integrations</b></summary>
 <br>
 <table>
 <tr>
@@ -239,10 +283,10 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 
 ## Quick start
 
-Requires macOS and Node 18 or newer. Nothing to install. Clone this repository (green **Code** button above), then:
+Requires macOS and Node 18 or newer. Nothing to install:
 
 ```bash
-cd ai-command-center
+git clone https://github.com/rifqifitriady/ZAAFPulse.git && cd ZAAFPulse
 npm start          # reads your logs  → http://localhost:4777
 npm run demo       # synthetic data   → http://localhost:4778
 npm test           # run the test suite (node:test, no dependencies)
@@ -268,6 +312,8 @@ This installs two LaunchAgents: `com.zaaf.aipulse.server` (starts at login, rest
 npm run mcp:register -- all        # Claude Code, Kiro and Antigravity (backs up their config first)
 ```
 
+Or use **Endpoint → MCP server** in the dashboard: it shows where the server is registered, registers or removes it per client, and gives the HTTP connection for clients that connect by URL.
+
 | Type | Platforms | Tools |
 |---|---|---|
 | `acc` (always on) | this dashboard | `usage_summary`, `quality`, `live_apps`, `integrations_status` |
@@ -281,21 +327,32 @@ npm run mcp:register -- all        # Claude Code, Kiro and Antigravity (backs up
 
 Tools are prefixed with the integration id (`dynatrace-saas_list_problems`). Everything is read-only unless an integration sets `"allowWrite": true`. Secrets stay in the macOS Keychain or environment variables, never in `config.json`. The **Integrations** page shows each connection's health, which clients have the server registered, and recent tool calls. It also lets you **add, configure, test and delete** integrations: the form is built for each type, **Test connection** checks a draft before anything is saved, and a pasted secret goes straight to the macOS Keychain (over stdin, never into `config.json` or a process list). Setup per platform: [docs/integrations.md](docs/integrations.md).
 
-## Agent Gateway
+## Agentic workspace
 
 ZAAFPulse can sit in front of your models and agents. Everything listens on **127.0.0.1 only**.
 
+The sidebar has two groups:
+
+- **AI Observability:** Overview, AI Office, Live monitor, Quality & safety, Second brain, Projects and Sessions.
+- **Agentic Workspace:**
+  - **Endpoint:** API keys, the MCP server, connection snippets, code tools, and a table of every endpoint and its scope.
+  - **Agent Gateway:** a 3D overview, providers, model router, sessions and memory, and a playground.
+  - **Agent Skills:** ZAAFPulse's own skills, and what your AI tools use.
+  - **Integrations.**
+  - **Agent-to-Agent:** workflows, Collaborate, runs, specialist agents, patterns and A2A.
+  - **RAG Service.**
+
 | Layer | What it does |
 |---|---|
-| **Agent Gateway** | AuthN with ZAAFPulse API keys (`zp_…`, shown once, stored as SHA-256 hashes); AuthZ by scope (`llm`, `agents`, `mcp`) and allowed model and agent globs; per-key rate limit (requests per minute), monthly budget in USD and expiry; session management (24 h sessions per key). |
-| **Orchestrator / Planner** | Task planning (the planner model breaks a task into 1-4 steps), routing (each step goes to the best domain agent, with keyword routing as a fallback), and memory (session history plus long-term notes that agents save and recall). |
+| **Agent Gateway** | AuthN with ZAAFPulse API keys (`zp_…`, shown once, stored as SHA-256 hashes); AuthZ by scope (`llm`, `agents`, `rag`, `mcp`) and allowed model and agent globs, with a private-models-only option; per-key rate limit (requests per minute), monthly budget in USD and expiry; session management (24 h sessions per key). |
+| **Orchestrator / Planner** | Task planning (the planner model writes a dependency graph of up to 6 steps; independent steps run in parallel), routing (each step goes to the best domain agent, with keyword routing as a fallback), and memory (session history plus long-term notes that agents save and recall). |
 | **LLM Gateway / Model Router** | 52 provider presets: private LLMs on your own hardware (Ollama, LM Studio, **vLLM**, **TGI**, llama.cpp, Jan, LocalAI, LiteLLM) are always allowed; labs, inference clouds, routers, Asian providers and enterprise clouds (Azure OpenAI, Vertex AI, Bedrock) serve traffic only once **approved**; models come from each provider's own `/models`. Routes are virtual models (`router/fast`) that try their targets in order (fallback or round-robin); a 429 cools a target down (its reset time, or back-off to 5 minutes) and the route moves on. Rate-limit headers become a per-provider **quota** reading, with balances from OpenRouter, DeepSeek, Moonshot and SiliconFlow. Short-lived credentials **refresh themselves** (OAuth2 client credentials or refresh token, e.g. Entra ID; Google service accounts for Vertex), with one replay after a 401. |
 | **Code tools** | Claude Code (Anthropic `/v1/messages`), Codex (OpenAI `/v1/responses`), Gemini CLI (`/v1beta/models/*`) and every OpenAI-compatible tool (OpenCode, Cline/Roo/Kilo, Copilot, Continue, Aider, Zed, Qwen Code, OpenClaw, Factory Droid) on **any** provider: requests are **translated** OpenAI ⇄ Anthropic ⇄ Responses ⇄ Gemini (tools, images, streaming, usage), or passed straight through to a native Anthropic provider. A model map sends tool model names (`claude-*`, `gpt-*-codex`) to your models. One click writes a tool's config with its own key (backup + revert). The **token saver** shortens long tool results (diffs, logs, builds, grep, listings, JSON) before they go upstream and logs the tokens saved. Subscription logins are not used: API keys and official OAuth only. |
 | **RAG Service** | Knowledge bases with document ingestion (text, Markdown, HTML, CSV, JSON, files or a URL) and a local vector database: chunks with embeddings from any provider's embedding model, searched by hybrid cosine + BM25 (keyword-only without an embedding model). Agents search attached knowledge bases with `zp_knowledge_search`. |
 | **Agent-to-Agent** | A multi-agent collaboration engine with seven patterns (below), the **A2A protocol** (agent card + JSON-RPC/SSE, v1.0 with v0.3 accepted) for other agents to call in, and remote A2A agents that join a team. Agents consult each other with `zp_ask_agent` and hand conversations on with `zp_handoff`. **24 ready-to-use workflows** (incident triage to mitigation, postmortem, helpdesk, ticket triage, refunds, phishing triage, cited research, RFP and security questionnaires, contract redlines, code review, lead outreach, meeting actions, change risk, vulnerability plans, access requests, onboarding, month-end commentary, procurement, feedback to PRD, release notes, project status, PDP/OJK compliance, knowledge-base gaps, agent quality review) with risk tiers and **approval gates** that pause a run until someone approves. |
 | **Domain agents** | 17 editable specialists: Customer Service, Sales & Marketing, Network Operations, HR & Finance, IT Helpdesk, SRE & Observability, Security, Data Analyst, DevOps, Code Reviewer, Research, Legal & Compliance, Product Manager, Project Manager, Procurement, Content Writer and AI Ops. Each has a prompt, a model and the integration tools it may call (function calling over the MCP connectors). |
 
-**Providers**: any OpenAI-compatible API, with presets for Ollama, LM Studio, vLLM, TGI, OpenAI, OpenRouter, Anthropic (OpenAI-compatible endpoint), Google Gemini, DeepSeek, xAI and Groq. Provider keys go to the macOS Keychain.
+**Providers**: any OpenAI-compatible API or the native Anthropic Messages API, with 52 presets in six groups (private, labs, inference clouds, routers, Asia, enterprise). Models come from each provider's own `/models`. Provider keys go to the macOS Keychain; short-lived tokens stay in memory.
 
 ```bash
 # Models are provider/model; agent/<id> is a domain agent; agent/auto lets the orchestrator plan and route.
@@ -319,6 +376,8 @@ curl http://127.0.0.1:4777/v1/chat/completions -H "Authorization: Bearer zp_…"
 | `POST /v1/responses` | `llm` | OpenAI Responses (Codex), streaming events included |
 | `POST /v1beta/models/<model>:generateContent` · `:streamGenerateContent` · `:countTokens` | `llm` | Gemini (Gemini CLI); `x-goog-api-key` works |
 | `POST /mcp` | `mcp` | MCP over HTTP with every integration tool (`claude mcp add --transport http zaafpulse http://127.0.0.1:4777/mcp --header "Authorization: Bearer zp_…"`) |
+| `GET /v1/brain/sources` · `/v1/brain/search?q=` · `/v1/brain/graph?source=` | `rag` | the second brain, read only: titles, links, PARA buckets and structure, never note text |
+| `GET /skills` · `/skills/<name>/SKILL.md` | none | agent skills (documentation only) |
 
 ### Agent skills
 
@@ -359,14 +418,7 @@ Every run has a budget (tokens, model calls, time, optional cost) scaled by effo
 
 Workflow approval gates fail closed: a run pauses before the gated step until someone approves (the note reaches the next agent) or rejects, an unclear A2A reply never counts as approval, nobody deciding within 72 hours rejects the run, and a step whose agent is missing fails the run rather than being skipped.
 
-A new key is shown once and masked (`zp_Q7m_k••••••••••••T4vX`) as soon as it is copied, after 60 seconds or when you leave the page. Every request is logged with key, model, agent, tokens, cost (live list prices), latency and time to first token, never prompt text. The sidebar has two groups. **AI Observability** holds Overview, AI Office, Live monitor, Quality & safety, Second brain, Projects and Sessions. **Agentic Workspace** holds the rest:
-
-- **Endpoint:** the API and its keys, the MCP server (register it in Claude Code, Kiro or Antigravity, or connect over HTTP), connection snippets and code tools.
-- **Agent Gateway:** a 3D overview, providers, model router, sessions and memory, and a playground.
-- **Agent Skills:** ZAAFPulse's own skills, and the usage of subagents, skills and tools in your AI tools.
-- **Integrations.**
-- **Agent-to-Agent:** workflows, Collaborate, runs, specialist agents, patterns and A2A.
-- **RAG Service:** knowledge bases, ingestion, search and the API. Keys, agents, sessions and memory live in `.data/` (git-ignored); provider settings in `config.json` under `gateway`.
+A new key is shown once and masked (`zp_Q7m_k••••••••••••T4vX`) as soon as it is copied, after 60 seconds or when you leave the page. Every request is logged with key, model, agent, tokens, cost (live list prices), latency and time to first token, never prompt text. Keys, agents, sessions, memory, runs and knowledge bases live in `.data/` (git-ignored); provider, route, second-brain and tool settings live in `config.json`.
 
 ## How it works
 
@@ -381,7 +433,7 @@ A new key is shown once and masked (`zp_Q7m_k•••••••••••�
 | Claude Code | `~/.claude/projects/**/*.jsonl`, subagents included | tokens per call (input, output, cache read, cache write 5m/1h), model, project, branch, prompts, tools, skills, subagents, quality signals |
 | Codex | `~/.codex/sessions/**/*.jsonl` | tokens per turn, model, project, prompts, tool calls, failures, plan rate limits |
 | Running apps | `ps` | which AI apps are open, process count, CPU, memory, uptime |
-| Obsidian | the vault Obsidian has open, or a path in Settings | notes, `[[wikilinks]]`, embeds and `.md` links, tags, frontmatter type; symlinked folders are followed |
+| Second brain | Obsidian (the vault Obsidian has open, or a path in Settings) and the sources you connect: Logseq and PARA folders, Notion, mem.ai and Roam APIs, Tana, Roam, Reflect and Heybrain exports, Heybrain's MCP server, the RAG knowledge bases, and Pinecone, Weaviate, Qdrant, Chroma and pgvector | notes, links, tags, groups, PARA buckets and times; for vector stores, up to 240 sampled records projected by meaning. Note text is read to find links and never returned |
 | Live transcripts | the tail of Claude Code and Codex transcripts written in the last 30 minutes to 24 hours | for the office, logs and timeline: tool names, block sizes, file and command names, hostnames, timing and state |
 | OpenRouter | its public API (models, per-model provider endpoints with uptime, provider directory) and the public rankings page; credits and key limits with an optional API key | the Models and Rankings pages, live prices, and the `openrouter` MCP tools |
 | OmniRoute (optional) | its management API, GET only | quota utilization, cache and compression analytics, provider stats, call logs and upstream proxy logs |
@@ -415,6 +467,8 @@ These are **signals detected in the logs, not a graded evaluation**. Every card 
 - The office, logs and timeline read transcript tails on demand and keep only tool names, sizes, file and command names, hostnames, timing and state; message text is never shown.
 - Message text is never stored. The cache keeps token counts, metadata and, for flagged quality or safety items only, a masked snippet of up to 160 characters. Secret values are never kept.
 - The Agent Gateway listens on 127.0.0.1 only; API keys are stored as hashes, provider keys in the Keychain, and sessions and memory (which hold conversation text you send to agents) stay in `.data/` on this Mac.
+- Second-brain sources are read with the token you give each one (kept in the Keychain), only from that source's own API or files; the map keeps titles and links, never note text. Vector databases are sampled read-only (240 records at most), and Postgres is only sent `SELECT`s.
+- **Code tools → Set up** writes a coding tool's own config file (mode 0600) with a dedicated key, after a backup that **Revert** restores; **Agent Skills → Install** writes only marked folders under `~/.claude/skills`. Nothing is written to your tools without a click.
 - `config.json`, `.cache/` and `.data/` are git-ignored.
 
 <details>
@@ -437,7 +491,9 @@ lib/aggregate.js       usage, cost and session roll-ups for a time range
 lib/quality.js         quality and safety roll-ups for a time range
 lib/pricing.js         default prices and cost function
 lib/processes.js       running-app detection
-lib/vault.js           Obsidian vault scanner
+lib/vault.js           Obsidian vault reader for /api/vault (demo and older clients)
+lib/brain/             second brain: Markdown scanner (Obsidian, Logseq, PARA, exports), Notion, Roam, Tana, mem.ai and
+                       Heybrain (MCP) connectors, vector stores with PCA/kNN/k-means, a tiny Postgres client, the source registry
 lib/demo.js            seeded synthetic dataset for demo mode
 lib/office.js          live agent state from transcript tails (AI office)
 lib/reqlogs.js         recent requests, error traces and stream events (Logs)
@@ -447,9 +503,11 @@ lib/omniroute.js       read-only OmniRoute management API client, emails masked
 lib/integration-config.js  per-type field schema, validation, Keychain storage and dry runs for the editor
 lib/price-sync.js      live model prices from OpenRouter's public list, cached in .cache/prices.json
 lib/openrouter.js      OpenRouter models, endpoints, providers, account and the rankings-page parser (cached in .cache/)
-lib/gateway/           Agent Gateway: keys and rate limits, providers and model router, usage, sessions and memory, agents, orchestrator,
+lib/gateway/           Agent Gateway: keys and rate limits, providers and model router (quota, cooldown, token refresh), format
+                       translation (translate.js), token saver (rtk.js), usage, sessions and memory, agents, orchestrator,
                        knowledge (RAG vector store), workflows and the ready-to-use catalog, the collaboration engine
-                       (collab.js), the A2A server (a2a.js), /v1, /a2a and /mcp
+                       (collab.js), the A2A server (a2a.js), code tools (tools.js), agent skills (skills.js), /v1, /a2a and /mcp
+skills/                nine Agent Skills (SKILL.md) that teach an AI to use ZAAFPulse, served at /skills
 public/                dashboard UI: plain HTML, CSS and JavaScript, no build step
 public/iso.js          isometric 3D engine, KPI cards and SVG chart helpers shared by all pages
 scripts/               LaunchAgent install/uninstall, launcher, Chrome opener, MCP client registration, media capture
@@ -474,6 +532,9 @@ docs/assets/           README banner, diagrams, screenshots and GIFs
 | `GET /api/router?section=…` | OmniRoute data: `utilization`, `cache`, `compression`, `providers`, `calls`, `proxy` |
 | `GET /api/mcp-calls` | recent MCP hub tool calls from the audit log |
 | `GET /api/vault` | notes, links and unresolved links of the Obsidian vault |
+| `GET /api/brain` · `GET /api/brain/graph?source=…` · `POST /api/brain/sources` | second-brain sources and their graphs; save, test and delete a source |
+| `GET /api/gateway` · `POST /api/gateway/<route>` | the dashboard side of the agentic workspace: keys, providers, routes, agents, workflows, runs, knowledge, tools, skills, settings |
+| `POST /api/mcp/register` | register the MCP server in, or remove it from, Claude Code, Kiro or Antigravity (`{ "client": "...", "remove": false }`) |
 | `GET /api/config` · `POST /api/config` | name, monthly budget, prices, vault path |
 | `GET /api/openrouter?section=models\|providers\|rankings\|account` | OpenRouter data, cached (models 12 h, providers 24 h, rankings 6 h) |
 | `GET /api/openrouter/endpoints?ids=…` | providers serving up to 40 models, with uptime and per-provider prices |
@@ -496,7 +557,7 @@ Everything is editable in **Settings** and saved to `config.json`:
 | Display name | your macOS account name |
 | Monthly budget (USD, API-equivalent) | none |
 | Model prices per 1M tokens | live provider list prices (OpenRouter's public list, refreshed every 12 h); edit a model to pin your own price, or add a prefix the list does not have |
-| Obsidian vault path | the vault Obsidian has open |
+| Obsidian vault path | the vault Obsidian has open (more sources under **Second brain → Sources**) |
 | Theme | follows the system |
 | Price auto-update | on; fetches the public price list every 12 hours (toggle in Settings) |
 
