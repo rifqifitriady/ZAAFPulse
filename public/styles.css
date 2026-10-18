@@ -1182,3 +1182,12 @@ nav a.open + a.nav-sub { margin-top: 2px; }
 .pc-grid { grid-template-columns: repeat(auto-fill, minmax(min(330px, 100%), 1fr)); }
 .holo-deck code { overflow-wrap: anywhere; }
 @media (max-width: 640px) { .tl-row { grid-template-columns: 120px minmax(480px, 1fr); } }
+
+/* Second brain: source and layout bars, connect buttons */
+.brain-bar { display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; align-items: center; }
+.brain-bar .segmented { flex-wrap: wrap; }
+.brain-connect { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 14px; }
+.brain-type { cursor: pointer; font: inherit; color: var(--h-text); }
+.brain-type:hover { border-color: var(--h-cyan); color: #fff; }
+.brain-form { margin-top: 14px; }
+.holo-table td.wrap { white-space: normal; min-width: 240px; line-height: 1.4; }

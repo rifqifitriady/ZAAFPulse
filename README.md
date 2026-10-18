@@ -84,7 +84,7 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 <td valign="top">
 
 **Second brain graph**<br>
-<sub>Force-directed graph of your vault with pulses along every link, search, legend filters, backlinks, Open in Obsidian, a growth replay and a 3D chart of notes per week.</sub>
+<sub>Obsidian by default, plus <b>Logseq</b>, <b>Notion</b>, <b>Tana</b>, <b>Roam Research</b>, <b>mem.ai</b>, <b>Reflect</b>, <b>Heybrain</b>, a <b>PARA</b> workspace, the <b>RAG</b> knowledge bases and vector databases (<b>Pinecone</b>, <b>Weaviate</b>, <b>Qdrant</b>, <b>pgvector</b>, <b>Chroma</b>). One animated map with six layouts: network, PARA lanes, semantic map (records placed by embedding meaning, nearest-neighbour links, clusters), hierarchy, timeline and all sources together (same-titled notes joined across tools). Pulses along links, search, legend filters, backlinks, open in the source app, a growth replay and a 3D chart of notes per week.</sub>
 
 </td>
 </tr>
@@ -319,6 +319,27 @@ curl http://127.0.0.1:4777/v1/chat/completions -H "Authorization: Bearer zp_…"
 | `POST /v1/responses` | `llm` | OpenAI Responses (Codex), streaming events included |
 | `POST /v1beta/models/<model>:generateContent` · `:streamGenerateContent` · `:countTokens` | `llm` | Gemini (Gemini CLI); `x-goog-api-key` works |
 | `POST /mcp` | `mcp` | MCP over HTTP with every integration tool (`claude mcp add --transport http zaafpulse http://127.0.0.1:4777/mcp --header "Authorization: Bearer zp_…"`) |
+
+### Agent skills
+
+`skills/` holds nine Agent Skills (`SKILL.md` with name and description frontmatter). They teach any AI agent to use ZAAFPulse:
+
+- `zaafpulse`: the entry point, covering setup, scopes, models and errors
+- `zaafpulse-chat`: chat in all four wire formats, routes, the token saver and embeddings
+- `zaafpulse-agents`: the domain agents and the orchestrator
+- `zaafpulse-collaborate`: the collaboration patterns and runs
+- `zaafpulse-workflows`: the workflows and their approval gates
+- `zaafpulse-rag`: the knowledge bases
+- `zaafpulse-brain`: the second brain, read only through `/v1/brain`
+- `zaafpulse-mcp`: the integration tools
+- `zaafpulse-a2a`: ZAAFPulse as an A2A agent
+
+The gateway serves them at `/skills/<name>/SKILL.md`, so an agent always reads the version that is running. That avoids a public branch that can change. To give them to an agent:
+
+- **Claude Code:** Code tools → Agent skills → **Install** writes `~/.claude/skills/zaafpulse*`. Folders are marked, so a skill of yours with the same name is never overwritten, and **Remove** deletes only the marked folders.
+- **Any other AI:** paste `Read this skill and use it: http://127.0.0.1:4777/skills/zaafpulse/SKILL.md`.
+
+A test checks that every endpoint the skills document is one the gateway actually serves.
 
 ### Multi-agent collaboration
 
