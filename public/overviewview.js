@@ -49,10 +49,10 @@ function viewOverview() {
       <div class="stage-key">One tower per day · height = selected metric · front row Claude Code, back row Codex · hover a tower · drag to rotate</div>
       <div class="stage-ctl">${metricSeg}</div></div>
     <div class="stage-readouts">${readouts([
-      ['Est. spend', `${fmtUSD(k.cost)} ${delta(k.cost, k.prevCost)}`, `${rangeText()} · API list price`, HOLO.orange],
-      ['Tokens', `${fmtN(k.tokens)} ${delta(k.tokens, k.prevTokens)}`, `${fmtPct(k.cacheHitRate)} from cache`, HOLO.violet],
-      ['Sessions', `${whole.format(k.sessions)} ${delta(k.sessions, k.prevSessions)}`, `${whole.format(k.prompts)} prompts typed`, HOLO.cyan],
-      ['This month', fmtUSD(k.monthCost), `projected ${fmtUSD(d.month.projected)}`, HOLO.pink],
+      { label: 'Est. spend', icon: 'dollar', value: fmtUSD(k.cost), delta: delta(k.cost, k.prevCost), sub: `${rangeText()} · API list price`, color: HOLO.orange, spark: dSum('cost') },
+      { label: 'Tokens', icon: 'layers', value: fmtN(k.tokens), delta: delta(k.tokens, k.prevTokens), sub: `${fmtPct(k.cacheHitRate)} from cache`, color: HOLO.violet, spark: dSum('tokens') },
+      { label: 'Sessions', icon: 'zap', value: whole.format(k.sessions), delta: delta(k.sessions, k.prevSessions), sub: `${whole.format(k.prompts)} prompts typed`, color: HOLO.cyan, spark: dSum('sessions') },
+      { label: 'This month', icon: 'calendar', value: fmtUSD(k.monthCost), sub: `of ${fmtUSD(d.month.projected)} projected`, color: HOLO.pink, p: d.month.projected ? k.monthCost / d.month.projected : 0 },
     ])}</div>
     <div class="stage-legend">${SERIES.map((s) => `<span><i style="background:${TOOL_NEON[s.id]}"></i>${s.name}</span>`).join('')}
       <span><i style="background:${HOLO.cyan}"></i>Month-to-date spend</span><span><i style="background:${HOLO.pink}"></i>Projection · now</span></div>

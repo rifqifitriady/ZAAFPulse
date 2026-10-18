@@ -94,10 +94,11 @@ function paintLive() {
   // Stage readouts and legend
   const top = live.apps[0];
   set('lv-readouts', readouts([
-    ['AI CPU', `${st.cpu.toFixed(1)}%`, st.cores ? `${fmtPct(st.cpuOfMachine)} of ${st.cores} cores` : 'of one core = 100%', HOLO.cyan],
-    ['AI memory', gb(st.mem), st.sys ? `${fmtPct(st.aiRam)} of ${gb(st.sys.memTotalMB)}` : 'resident', HOLO.violet],
-    ['Hottest', top ? esc(top.name) : '—', top ? `${top.cpu.toFixed(1)}% CPU` : 'nothing running', HOLO.pink],
-    ['Spend today', state.data ? fmtUSD(st.todayCost) : '—', state.data ? `${fmtN(st.todayTokens)} tokens` : 'loading', HOLO.orange],
+    { label: 'AI CPU', icon: 'cpu', value: `${st.cpu.toFixed(1)}%`, sub: st.cores ? `${fmtPct(st.cpuOfMachine)} of ${st.cores} cores` : 'of one core = 100%', color: HOLO.cyan, spark: liveHist.cpu },
+    { label: 'AI memory', icon: 'layers', value: gb(st.mem), sub: st.sys ? `${fmtPct(st.aiRam)} of ${gb(st.sys.memTotalMB)}` : 'resident', color: HOLO.violet, spark: liveHist.mem },
+    { label: 'Hottest app', icon: 'zap', value: top ? esc(top.name) : '—', sub: top ? `${top.cpu.toFixed(1)}% CPU · ${st.cpu ? fmtPct(top.cpu / st.cpu) : '—'} of AI` : 'nothing running', color: HOLO.pink, p: top && st.cpu ? top.cpu / st.cpu : null },
+    { label: 'Spend today', icon: 'dollar', value: state.data ? fmtUSD(st.todayCost) : '—', sub: state.data ? `${fmtN(st.todayTokens)} tokens` : 'loading', color: HOLO.orange,
+      spark: state.data ? state.data.daily.slice(-14).map((r) => SERIES.reduce((a, s) => a + r[s.id].cost, 0)) : null },
   ]));
   set('lv-legend', live.apps.map((a, i) => `<span><i style="background:${appColor(i)}"></i>${esc(a.name)}</span>`).join(''));
   set('lv-stream-legend', live.apps.slice(0, 5).map((a, i) => `<span><i style="background:${appColor(i)}"></i>${esc(a.name)}</span>`).join(''));

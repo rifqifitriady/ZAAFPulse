@@ -101,10 +101,12 @@ function paintOffice() {
   const clock = document.getElementById('of-clock'); if (clock) clock.textContent = `LIVE · ${new Date(office.ts).toLocaleTimeString()}`;
   set('of-count', `${icon('bot', 14)}${ag.length} agent${ag.length === 1 ? '' : 's'} on the floor`);
   set('of-readouts', readouts([
-    ['Working now', String(count('working') + count('thinking')), `${count('working')} using a tool · ${count('thinking')} thinking`, STATE_COLOR.working],
-    ['Needs you', String(count('waiting') + count('approval')), `${count('approval')} approval · ${count('waiting')} waiting`, count('approval') ? STATE_COLOR.approval : STATE_COLOR.waiting],
-    ['Subagents', String(subs), 'delegated helpers active', '#a99cff'],
-    ['Tool calls · 10m', whole.format(calls), `${(office.perMinute || []).slice(-1)[0] || 0} in the last minute`, HOLO.pink],
+    { label: 'Working now', icon: 'terminal', value: String(count('working') + count('thinking')), sub: `${count('working')} on a tool · ${count('thinking')} thinking`, color: STATE_COLOR.working,
+      pips: ag.filter((a) => a.state === 'working' || a.state === 'thinking').map((a) => STATE_COLOR[a.state]) },
+    { label: 'Needs you', icon: 'alert', value: String(count('waiting') + count('approval')), sub: `${count('approval')} approval · ${count('waiting')} waiting`, color: count('approval') ? STATE_COLOR.approval : STATE_COLOR.waiting,
+      pips: ag.filter((a) => a.state === 'approval' || a.state === 'waiting').map((a) => STATE_COLOR[a.state]) },
+    { label: 'Subagents', icon: 'sparkle', value: String(subs), sub: 'delegated helpers active', color: '#a99cff', pips: ag.filter((a) => a.kind === 'subagent' && a.state !== 'done').map(() => '#a99cff') },
+    { label: 'Tool calls · 10m', icon: 'wave', value: whole.format(calls), sub: `${(office.perMinute || []).slice(-1)[0] || 0} in the last minute`, color: HOLO.pink, spark: office.perMinute || [] },
   ]));
   set('of-metrics', [
     metricTile({ label: 'On the floor', value: String(ag.length).padStart(2, '0'), sub: `${ag.filter((a) => a.kind === 'session').length} sessions · ${subs} subagents`, color: HOLO.cyan }),
