@@ -183,7 +183,7 @@ function mountIntegrations() {
 
 /* ---------- Integration editor: add, configure, test, delete ---------- */
 const ie = { schema: null, form: null, busy: '', result: null, errors: [] };
-const SECRET_MODES = [['keep', 'Keep current'], ['store', 'Paste → save to Keychain'], ['keychain', 'Keychain item'], ['env', 'Environment variable'], ['none', 'None']];
+const SECRET_MODES = () => [['keep', 'Keep current'], ['store', `Paste → save to ${storeName()}`], ['keychain', `${storeName()} item`], ['env', 'Environment variable'], ['none', 'None']];
 
 async function openIntegEditor(id) {
   try { ie.schema = await api('/api/integrations/config'); } catch (err) { alert(`Could not load integration settings: ${err.message}`); return; }
@@ -223,13 +223,13 @@ function secretField(fld, f) {
   f.values[`__${fld.key}Current`] = current;
   const v = f.values[fld.key];
   const mode = v && v.mode ? v.mode : current ? 'keep' : fld.required ? 'store' : 'none';
-  const modes = SECRET_MODES.filter(([m]) => m !== 'keep' || current);
+  const modes = SECRET_MODES().filter(([m]) => m !== 'keep' || current);
   const val = v && (v.service || v.name || v.value) ? (v.service || v.name || v.value) : '';
-  const input = mode === 'store' ? `<input class="input" type="password" name="ie-${fld.key}" autocomplete="off" placeholder="Paste the secret; it goes to the macOS Keychain, not config.json" value="${esc(val)}">`
+  const input = mode === 'store' ? `<input class="input" type="password" name="ie-${fld.key}" autocomplete="off" placeholder="Paste the secret; it goes to the ${storeLong()}, not config.json" value="${esc(val)}">`
     : mode === 'keychain' ? `<input class="input" name="ie-${fld.key}" placeholder="acc.${esc(f.id || 'my-integration')}" value="${esc(val || (current && current.keychain) || '')}">`
       : mode === 'env' ? `<input class="input" name="ie-${fld.key}" placeholder="MY_API_TOKEN" value="${esc(val || (current && current.env) || '')}">` : '';
   return `<div class="ie-field"><label>${esc(fld.label)}${fld.required ? ' <i>required</i>' : ''}</label>
-    ${current ? `<div class="ie-current">Current: <code>${current.keychain ? `Keychain · ${esc(current.keychain)}` : `env · ${esc(current.env)}`}</code></div>` : ''}
+    ${current ? `<div class="ie-current">Current: <code>${current.keychain ? `${storeName()} · ${esc(current.keychain)}` : `env · ${esc(current.env)}`}</code></div>` : ''}
     <div class="ie-secret"><select class="input" name="ie-${fld.key}-mode" data-ie-remode>${modes.map(([m, l]) => `<option value="${m}" ${m === mode ? 'selected' : ''}>${l}</option>`).join('')}</select>${input}</div>
     ${fld.help ? `<small>${esc(fld.help)}</small>` : ''}</div>`;
 }
@@ -283,14 +283,14 @@ async function integEditorAction(kind) {
       else {
         ie.result = { status: r.status || { state: 'unchecked' }, tools: [], saved: true };
         ie.form.originalId = r.id; ie.form.id = r.id;
-        // Pasted secrets are now Keychain references: reload the form so it shows them as current.
+        // Pasted secrets are now secret-store references: reload the form so it shows them as current.
         ie.schema = await api('/api/integrations/config');
         const e = ie.schema.entries.find((x) => x.id === r.id);
         if (e) ie.form.values = { ...e.values };
         integ.data = null; loadIntegrations();
       }
     } else if (kind === 'delete') {
-      if (!confirm(`Remove "${p.originalId}" from config.json? Keychain items are left in place.`)) { ie.busy = ''; paintIntegEditor(); return; }
+      if (!confirm(`Remove "${p.originalId}" from config.json? ${storeName()} items are left in place.`)) { ie.busy = ''; paintIntegEditor(); return; }
       const r = await api('/api/integrations/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: p.originalId }) });
       if (r.errors) ie.errors = r.errors; else { ie.busy = ''; closeIntegEditor(); integ.data = null; loadIntegrations(); return; }
     }

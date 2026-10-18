@@ -57,7 +57,7 @@ const MOVED = { knowledge: '#rag', workflows: '#a2a', agents: '#a2a/agents', key
 
 function viewGatewaySection(route) {
   const sec = SECTION[route]; const [title, copy] = sec.copy(state.sub || '');
-  return `<div class="holo-deck">${subTabs(route)}${subHero(`${sec.eyebrow}${state.sub ? ' · ' + title.toUpperCase() : ''}`, title, copy, `<span class="pill">${icon('shield', 14)}127.0.0.1 only</span>`)}<div id="gw-body">${'<div class="skeleton" style="height:140px"></div>'.repeat(2)}</div></div>`;
+  return `<div class="holo-deck">${subTabs(route)}${subHero(`${sec.eyebrow}${state.sub ? ' · ' + title.toUpperCase() : ''}`, title, copy, `<span class="pill">${icon('shield', 14)}${esc(localOnlyLabel())}</span>`)}<div id="gw-body">${'<div class="skeleton" style="height:140px"></div>'.repeat(2)}</div></div>`;
 }
 const viewGateway = () => viewGatewaySection('gateway');
 const viewRag = () => viewGatewaySection('rag');
@@ -214,9 +214,9 @@ function gwProviders() {
             <label>Auth<select class="input" name="authType">${auths.map((a) => `<option value="${a}" ${a === at ? 'selected' : ''}>${{ key: 'API key', oauth2: 'OAuth2 token (refreshes itself)', 'google-sa': 'Google service account (refreshes itself)' }[a]}</option>`).join('')}</select></label></div>
             ${at === 'oauth2' ? `<div class="gw-row"><label>Token URL<input class="input" name="tokenUrl" value="${esc(o.tokenUrl || '')}" placeholder="https://login.example.com/oauth2/token"></label><label>Client id<input class="input" name="clientId" value="${esc(o.clientId || '')}"></label></div>
               <div class="gw-row"><label>Scope<input class="input" name="scope" value="${esc(o.scope || '')}"></label><label>Grant<select class="input" name="grant"><option value="client_credentials" ${o.grant !== 'refresh_token' ? 'selected' : ''}>Client credentials</option><option value="refresh_token" ${o.grant === 'refresh_token' ? 'selected' : ''}>Refresh token</option></select></label></div>` : ''}`; })()}
-        <label>${(e.authType || (e.auth && e.auth.type) || d.presets[e.preset].auth) === 'google-sa' ? 'Service account JSON' : (e.authType || (e.auth && e.auth.type)) === 'oauth2' ? 'Client secret, or JSON {"client_secret", "refresh_token"}' : 'API key'} ${e.apiKey ? `<small>current: ${e.apiKey.keychain ? `Keychain · ${esc(e.apiKey.keychain)}` : `env · ${esc(e.apiKey.env)}`}</small>` : d.presets[e.preset].keyRequired ? '<small>required</small>' : '<small>not needed for local servers</small>'}
-          <div class="ie-secret"><select class="input" name="secretMode">${[...(e.apiKey ? [['keep', 'Keep current']] : []), ['store', 'Paste → save to Keychain'], ['keychain', 'Keychain item'], ['env', 'Environment variable'], ['none', 'None']].map(([v, l]) => `<option value="${v}" ${v === (e.apiKey ? 'keep' : d.presets[e.preset].keyRequired ? 'store' : 'none') ? 'selected' : ''}>${l}</option>`).join('')}</select>
-          <input class="input" name="secretValue" type="password" autocomplete="off" placeholder="key, Keychain service or env name"></div></label>
+        <label>${(e.authType || (e.auth && e.auth.type) || d.presets[e.preset].auth) === 'google-sa' ? 'Service account JSON' : (e.authType || (e.auth && e.auth.type)) === 'oauth2' ? 'Client secret, or JSON {"client_secret", "refresh_token"}' : 'API key'} ${e.apiKey ? `<small>current: ${e.apiKey.keychain ? `${storeName()} · ${esc(e.apiKey.keychain)}` : `env · ${esc(e.apiKey.env)}`}</small>` : d.presets[e.preset].keyRequired ? '<small>required</small>' : '<small>not needed for local servers</small>'}
+          <div class="ie-secret"><select class="input" name="secretMode">${[...(e.apiKey ? [['keep', 'Keep current']] : []), ['store', `Paste → save to ${storeName()}`], ['keychain', `${storeName()} item`], ['env', 'Environment variable'], ['none', 'None']].map(([v, l]) => `<option value="${v}" ${v === (e.apiKey ? 'keep' : d.presets[e.preset].keyRequired ? 'store' : 'none') ? 'selected' : ''}>${l}</option>`).join('')}</select>
+          <input class="input" name="secretValue" type="password" autocomplete="off" placeholder="key, ${storeName()} item or env name"></div></label>
         <label>Extra models <small>comma-separated, added to what the provider lists</small><input class="input" name="models" value="${esc((e.models || []).join(', '))}"></label>
         <label>Aliases <small>JSON, e.g. {"fast": "llama3.2"}</small><input class="input mono" name="aliases" value="${esc(JSON.stringify(e.aliases || {}))}"></label>
         <div class="gw-row"><label>Tier<select class="input" name="tier"><option value="">Automatic (${d.presets[e.preset].local ? 'private' : 'external'})</option><option value="private" ${e.tier === 'private' ? 'selected' : ''}>Private: my own hardware</option><option value="external" ${e.tier === 'external' ? 'selected' : ''}>External: hosted API</option></select></label>
@@ -239,7 +239,7 @@ function gwProviders() {
         <span class="state-pill" style="--c:${p.enabled ? '#5cf0a8' : '#8f98cc'}"><i></i>${p.enabled ? 'enabled' : 'disabled'}</span></div>
       <div class="pc-kv"><span>Base URL</span><b class="mono">${esc(p.baseUrl)}</b></div>
       <div class="pc-kv"><span>Format · auth</span><b>${p.format === 'anthropic' ? 'Anthropic Messages' : 'OpenAI chat'} · ${({ key: 'API key', oauth2: 'OAuth2 (auto refresh)', 'google-sa': 'service account (auto refresh)' })[(p.auth && p.auth.type) || 'key']}</b></div>
-      <div class="pc-kv"><span>Key</span><b>${p.apiKey ? (p.apiKey.keychain ? `Keychain · ${esc(p.apiKey.keychain)}` : `env · ${esc(p.apiKey.env)}`) : 'none'}</b></div>
+      <div class="pc-kv"><span>Key</span><b>${p.apiKey ? (p.apiKey.keychain ? `${storeName()} · ${esc(p.apiKey.keychain)}` : `env · ${esc(p.apiKey.env)}`) : 'none'}</b></div>
       <div class="pc-kv"><span>Tier</span><b>${p.tier === 'private' ? '<span class="good-text">Private · your hardware</span>' : p.approved ? 'External · <span class="good-text">approved</span>' : 'External · <span style="color:#ffb547">waiting for approval</span>'}</b></div>
       <div class="pc-kv"><span>Aliases</span><b>${esc(Object.keys(p.aliases).join(', ') || '—')}</b></div>
       <div class="gw-test" id="gw-test-${esc(p.id)}"></div>
@@ -401,7 +401,7 @@ function endpointOverview() {
     ['POST', '/a2a', 'agents', 'Agent2Agent JSON-RPC + SSE (card at /.well-known/agent-card.json)'], ['GET', '/skills/<name>/SKILL.md', 'none', 'Agent skills (docs, no key)'],
   ];
   return `<div class="live-metrics">${[
-    metricTile({ label: 'Base URL', value: esc(d.baseUrl.replace(/^https?:\/\//, '')), sub: '127.0.0.1 only', color: HOLO.cyan }),
+    metricTile({ label: 'Base URL', value: esc(d.baseUrl.replace(/^https?:\/\//, '')), sub: localOnlyLabel(), color: HOLO.cyan }),
     metricTile({ label: 'API keys', value: `${active.length} / ${d.keys.length}`, sub: 'active / total', color: HOLO.violet }),
     metricTile({ label: 'MCP clients', value: `${clients.filter((c) => c.registered).length} / ${clients.length}`, sub: 'registered (stdio)', color: '#5cf0a8' }),
     metricTile({ label: 'MCP tools', value: whole.format(tools), sub: 'from connected integrations', color: HOLO.orange }),
@@ -711,7 +711,7 @@ function gwConnect() {
       <p class="kpi-sub">MCP over HTTP: every integration tool in ZAAFPulse, for clients that connect by URL.</p>
       ${codeBlock(`claude mcp add --transport http zaafpulse ${location.origin}/mcp \\\n  --header "Authorization: Bearer ${key}"`, 'gw-c5')}
       ${codeBlock(JSON.stringify({ mcpServers: { zaafpulse: { type: 'http', url: `${location.origin}/mcp`, headers: { Authorization: `Bearer ${key}` } } } }, null, 2), 'gw-c6')}
-      <p class="kpi-sub">The gateway listens on 127.0.0.1 only: apps on this Mac can use it, other devices cannot.</p>`)}
+      <p class="kpi-sub">${ZP.serverMode ? `Server mode: apps on other machines reach the gateway at ${esc(ZP.baseUrl)} with an API key; the dashboard needs a sign-in.` : 'The gateway listens on 127.0.0.1 only: apps on this machine can use it, other devices cannot.'}</p>`)}
     ${panel('RAG, routes and workflows', 'rag and agents scopes', `${codeBlock(`# Search a knowledge base (rag scope)\ncurl ${GW_BASE}/knowledge/company-policies/search -H "Authorization: Bearer ${key}" -H "Content-Type: application/json" \\\n  -d '{"query": "refund limit", "k": 3}'\n\n# Add a document\ncurl ${GW_BASE}/knowledge/company-policies/documents -H "Authorization: Bearer ${key}" -H "Content-Type: application/json" \\\n  -d '{"title": "Refunds", "content": "Refunds up to $100 need no approval."}'\n\n# A virtual model that falls back across targets\ncurl ${GW_BASE}/chat/completions -H "Authorization: Bearer ${key}" -H "Content-Type: application/json" \\\n  -d '{"model": "router/fast", "messages": [{"role": "user", "content": "Hi"}]}'\n\n# Run a multi-agent workflow\ncurl ${GW_BASE}/workflows/incident-response/run -H "Authorization: Bearer ${key}" -H "Content-Type: application/json" \\\n  -d '{"input": "Checkout latency doubled since 10:00"}'`, 'gw-c7')}`)}
   </div>`;
 }
@@ -746,7 +746,7 @@ document.addEventListener('click', (e) => {
     const act = pv.dataset.gwprov; const id = pv.dataset.id;
     if (act === 'cancel') { gw.editingProvider = null; paintGateway(); return; }
     if (act === 'edit') { const p = gw.data.providers.find((x) => x.id === id); gw.editingProvider = { ...p, originalId: p.id }; paintGateway(); return; }
-    if (act === 'delete') { if (confirm(`Remove provider "${id}"? Its Keychain item stays.`)) gwAct(async () => { await gwPost('providers', { action: 'delete', id }); await refreshGateway(); }); return; }
+    if (act === 'delete') { if (confirm(`Remove provider "${id}"? Its ${storeName()} item stays.`)) gwAct(async () => { await gwPost('providers', { action: 'delete', id }); await refreshGateway(); }); return; }
     if (act === 'test') { const box = $(`#gw-test-${CSS.escape(id)}`); box.innerHTML = '<span class="muted">Testing…</span>'; gwAct(async () => { const r = await gwPost('providers', { action: 'models', id }); box.innerHTML = r.errors ? `<code class="ie-err">${esc(r.errors[0])}</code>` : `<b class="good-text">${r.models.length} models</b><div class="ie-tools">${r.models.slice(0, 24).map((m) => `<code>${esc(m)}</code>`).join('')}${r.models.length > 24 ? `<span>+${r.models.length - 24}</span>` : ''}</div>`; gw.data.providers.find((x) => x.id === id).models = r.models || []; }); return; }
   }
   const ag = t('[data-gwagent]');
