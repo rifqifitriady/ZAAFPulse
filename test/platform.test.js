@@ -110,7 +110,8 @@ test('service: unit, plist and Windows launcher carry settings but never secrets
 });
 
 test('platform: home expansion, data folder rules and the MCP command', () => {
-  assert.equal(platform.expandHome('~/x'), path.join(os.homedir(), 'x'));
+  // Separators are kept as typed; Windows accepts both, so compare normalized paths.
+  assert.equal(path.normalize(platform.expandHome('~/x')), path.join(os.homedir(), 'x'));
   assert.equal(platform.expandHome('~\\x'), `${os.homedir()}\\x`);
   const d = tmp('zp-data-'); assert.equal(platform.dataDir({ ZAAFPULSE_DATA: d }), d);
   assert.equal(platform.dataDir({}), platform.APP_DIR, 'a git checkout keeps its data next to the code');
