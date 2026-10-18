@@ -1,8 +1,10 @@
 'use strict';
-/* Second-brain graph: a small force layout on canvas with link pulses, hover focus,
-   drag/zoom, and a growth replay that adds notes in the order they were created. */
+/* Second-brain graph: a small force layout on canvas with link pulses, hover focus, drag/zoom, a growth
+   replay that adds notes in the order they were created, and animated layouts: network (forces), PARA
+   lanes, semantic map (2D meaning coordinates from embeddings), hierarchy (radial tree), timeline, and
+   sources (one cluster per connected tool). Switching layout moves every note to its new place. */
 
-const BRAIN_GROUPS = [
+const BASE_BRAIN_GROUPS = [
   { id: 'hub', name: 'Hubs & MOCs', color: 'var(--g-1)' },
   { id: 'project', name: 'Project memory', color: 'var(--g-2)' },
   { id: 'reference', name: 'Reference', color: 'var(--g-3)' },
@@ -11,6 +13,20 @@ const BRAIN_GROUPS = [
   { id: 'vault', name: 'Vault notes', color: 'var(--g-6)' },
   { id: 'other', name: 'Other', color: 'var(--g-other)' },
 ];
+let BRAIN_GROUPS = BASE_BRAIN_GROUPS.slice();
+const BRAIN_PALETTE = ['#5b8cff', '#ff8a4c', '#3ee6b0', '#ffb547', '#ff5ca8', '#5cf0a8', '#b06cff', '#4de8ff', '#f2e35c', '#ff6b6b', '#8b7bff', '#6ee7b7', '#f59ec8', '#9ad0ff'];
+const PARA_LANES = [['projects', 'Projects'], ['areas', 'Areas'], ['resources', 'Resources'], ['archives', 'Archives'], [null, 'Unsorted']];
+// Groups for one graph: Obsidian keeps its named groups; other sources get theirs from the data.
+function setBrainGroups(v) {
+  const seen = [...new Set(v.notes.map((n) => n.group))];
+  if (seen.every((g) => BASE_BRAIN_GROUPS.some((b) => b.id === g))) { BRAIN_GROUPS = BASE_BRAIN_GROUPS.slice(); return; }
+  const named = new Map((v.groups || []).map((g) => [g.id, g.name]));
+  const counts = {}; for (const n of v.notes) counts[n.group] = (counts[n.group] || 0) + 1;
+  const ids = [...seen].sort((a, b) => (v.groups ? (v.groups.findIndex((g) => g.id === a) - v.groups.findIndex((g) => g.id === b)) : counts[b] - counts[a]));
+  BRAIN_GROUPS = ids.slice(0, 13).map((id, i) => ({ id, name: named.get(id) || String(id).replace(/^db:/, '').replace(/^cluster-/, 'Cluster '), color: BRAIN_PALETTE[i % BRAIN_PALETTE.length] }));
+  if (ids.length > 13) { const rest = new Set(ids.slice(13)); for (const n of v.notes) if (rest.has(n.group)) n.group = 'other'; BRAIN_GROUPS.push({ id: 'other', name: 'Other', color: '#8f98cc' }); }
+}
+const brainNeon = (id) => { const g = BRAIN_GROUPS.find((x) => x.id === id); return !g ? '#8f98cc' : g.color.startsWith('var(') ? (BRAIN_NEON[id] || '#8f98cc') : g.color; };
 
 class BrainGraph {
   constructor(canvas, data, { onHover, onSelect, onReplay } = {}) {
@@ -40,7 +56,7 @@ class BrainGraph {
   readTheme() {
     const cs = getComputedStyle(this.canvas); // the canvas, so a holo deck's tokens apply
     const v = (n) => cs.getPropertyValue(n).trim();
-    this.colors = Object.fromEntries(BRAIN_GROUPS.map((g) => [g.id, v(g.color.slice(4, -1))]));
+    this.colors = Object.fromEntries(BRAIN_GROUPS.map((g) => [g.id, g.color.startsWith('var(') ? v(g.color.slice(4, -1)) : g.color]));
     this.theme = { edge: v('--graph-edge'), edgeHi: v('--graph-edge-hi'), label: v('--text'), labelMuted: v('--muted'), ring: v('--surface'), bg: v('--surface') };
   }
 
@@ -65,6 +81,43 @@ class BrainGraph {
     const created = this.nodes.map((d) => d.created).filter(Boolean);
     this.timeMin = Math.min(...created); this.timeMax = Math.max(...created);
     this.replay = null;
+    this.hasXY = this.nodes.some((p) => p.xy);
+    if (this.layout && this.layout !== 'network') this.setLayout(this.layout);
+  }
+
+  // Target positions per layout; the forces then carry each note there (that movement is the animation).
+  setLayout(mode) {
+    this.layout = mode; this.overlay = null; const N = this.nodes; const n = Math.max(1, N.length); const S = Math.sqrt(n) * 26 + 120;
+    for (const p of N) { p.tx = null; p.ty = null; p.bx = null; p.by = null; }
+    if (mode === 'para') {
+      const lanes = PARA_LANES.map(([k, label], i) => ({ k, label, x: (i - 2) * S * 0.62, count: N.filter((p) => (p.para || null) === k).length }));
+      const w = S * 0.56; const h = S * 1.5;
+      // Each note is kept inside its lane; links no longer drag it across.
+      N.forEach((p) => { const l = lanes.find((x) => x.k === (p.para || null)); p.tx = l.x; p.ty = null; p.bx = [l.x - w * 0.44, l.x + w * 0.44]; p.by = [-h * 0.46, h * 0.46]; });
+      this.overlay = { kind: 'lanes', lanes, w, h };
+    } else if (mode === 'semantic' && this.hasXY) {
+      N.forEach((p) => { if (p.xy) { p.tx = p.xy[0] * S; p.ty = p.xy[1] * S; } });
+      this.overlay = { kind: 'map', r: S };
+    } else if (mode === 'timeline') {
+      const t0 = this.timeMin; const span = Math.max(1, this.timeMax - this.timeMin); const groups = [...new Set(N.map((p) => p.group))];
+      const laneH = Math.max(46, (S * 1.4) / Math.max(1, groups.length)); const y0 = -((groups.length - 1) / 2) * laneH;
+      // x is the creation date; each group gets a lane tall enough for its notes.
+      N.forEach((p) => { const x = ((p.created - t0) / span - 0.5) * S * 2.4; const y = y0 + groups.indexOf(p.group) * laneH; p.tx = x; p.ty = y; p.bx = [x - 6, x + 6]; p.by = [y - laneH * 0.42, y + laneH * 0.42]; });
+      this.overlay = { kind: 'axis', t0, span, w: S * 2.4, groups, y0, laneH };
+    } else if (mode === 'hierarchy') {
+      // Radial tree: breadth-first from the most connected note (or the roots of a page tree).
+      const depth = new Array(n).fill(-1); const order = []; const roots = [...N].sort((a, b) => b.deg - a.deg);
+      for (const r of roots) { if (depth[r.id] >= 0) continue; depth[r.id] = 0; const q = [r.id]; while (q.length) { const id = q.shift(); order.push(id); for (const j of this.adj[id]) if (depth[j] < 0) { depth[j] = depth[id] + 1; q.push(j); } } }
+      const maxD = Math.max(1, ...depth); const byD = {}; order.forEach((id) => { (byD[depth[id]] ||= []).push(id); });
+      for (const [d, ids] of Object.entries(byD)) ids.forEach((id, i) => { const a = (i / ids.length) * Math.PI * 2 + Number(d) * 0.4; const r = Number(d) * (S / maxD) * 0.9; N[id].tx = Math.cos(a) * r; N[id].ty = Math.sin(a) * r; });
+      this.overlay = { kind: 'rings', step: (S / maxD) * 0.9, max: maxD };
+    } else if (mode === 'sources') {
+      const groups = [...new Set(N.map((p) => p.group))]; const R = S * 0.75;
+      const centre = Object.fromEntries(groups.map((g, i) => [g, [Math.cos((i / groups.length) * Math.PI * 2) * R, Math.sin((i / groups.length) * Math.PI * 2) * R]]));
+      N.forEach((p) => { p.tx = centre[p.group][0]; p.ty = centre[p.group][1]; });
+      this.overlay = { kind: 'clusters', centre };
+    }
+    this.alpha = 1; this.alphaTarget = 0; this.startedAt = performance.now(); this.userMoved = false;
   }
 
   /* ---------- simulation ---------- */
@@ -77,7 +130,7 @@ class BrainGraph {
         let dx = q.x - p.x; let dy = q.y - p.y; let d2 = dx * dx + dy * dy;
         if (d2 > 90000) continue; // ignore far pairs
         if (d2 < 1) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = 1; }
-        const f = (-240 * a) / Math.max(d2, 64); // floor the distance so close pairs cannot explode
+        const f = ((this.layout === 'semantic' ? -60 : this.layout === 'para' || this.layout === 'timeline' ? -110 : -240) * a) / Math.max(d2, 64); // floor the distance so close pairs cannot explode
         p.vx += dx * f * 0.5; p.vy += dy * f * 0.5; q.vx -= dx * f * 0.5; q.vy -= dy * f * 0.5;
         const min = p.r + q.r + 3; // collision
         if (d2 < min * min) { const d = Math.sqrt(d2); const push = ((min - d) / d) * 0.25; p.vx -= dx * push; p.vy -= dy * push; q.vx += dx * push; q.vy += dy * push; }
@@ -87,22 +140,30 @@ class BrainGraph {
       const s = e.s; const t = e.t; if (!s.shown || !t.shown) continue;
       const dx = t.x - s.x; const dy = t.y - s.y; const d = Math.sqrt(dx * dx + dy * dy) || 1;
       const L = 34 + Math.min(40, Math.sqrt(Math.min(s.deg, t.deg)) * 4);
-      const k = ((d - L) / d) * a * (0.7 / Math.max(1, Math.min(s.deg, t.deg)));
+      const k = ((d - L) / d) * a * ((this.layout === 'para' || this.layout === 'timeline' ? 0.02 : this.layout && this.layout !== 'network' ? 0.12 : 0.7) / Math.max(1, Math.min(s.deg, t.deg)));
       t.vx -= dx * k; t.vy -= dy * k; s.vx += dx * k; s.vy += dy * k;
     }
     for (const p of N) {
       if (!p.shown) continue;
       // Orphans have no springs holding them, so give them stronger gravity to stay in frame.
-      const g = p.deg === 0 ? 0.035 : 0.004;
-      p.vx += (p.ax - p.x) * 0.006 * a - p.x * g * a;
-      p.vy += (p.ay - p.y) * 0.006 * a - p.y * g * a;
+      if (p.tx != null || p.ty != null) {
+        // Layout targets: strong pull on the axes the layout defines, a light centring on the others.
+        if (p.tx != null) p.vx += (p.tx - p.x) * 0.06 * a; else p.vx -= p.x * 0.004 * a;
+        if (p.ty != null) p.vy += (p.ty - p.y) * 0.06 * a; else p.vy -= p.y * 0.01 * a;
+      } else {
+        const g = p.deg === 0 ? 0.035 : 0.004;
+        p.vx += (p.ax - p.x) * 0.006 * a - p.x * g * a;
+        p.vy += (p.ay - p.y) * 0.006 * a - p.y * g * a;
+      }
       if (p.fixed) { p.x = p.fx; p.y = p.fy; p.vx = p.vy = 0; continue; }
       p.vx *= 0.6; p.vy *= 0.6;
       const sp = Math.hypot(p.vx, p.vy);
       if (sp > 24) { p.vx *= 24 / sp; p.vy *= 24 / sp; } // speed cap keeps the bloom smooth
       p.x += p.vx; p.y += p.vy;
+      if (p.bx) { if (p.x < p.bx[0]) { p.x = p.bx[0]; p.vx = 0; } else if (p.x > p.bx[1]) { p.x = p.bx[1]; p.vx = 0; } }
+      if (p.by) { if (p.y < p.by[0]) { p.y = p.by[0]; p.vy = 0; } else if (p.y > p.by[1]) { p.y = p.by[1]; p.vy = 0; } }
     }
-    this.alpha += ((this.alphaTarget || 0) - this.alpha) * 0.0228;
+    this.alpha += ((this.alphaTarget ?? 0) - this.alpha) * (this.layout && this.layout !== 'network' ? 0.012 : 0.0228);
   }
 
   /* ---------- camera ---------- */
@@ -115,6 +176,10 @@ class BrainGraph {
   bounds() {
     let x0 = Infinity; let y0 = Infinity; let x1 = -Infinity; let y1 = -Infinity;
     for (const p of this.nodes) { if (!p.shown || this.hiddenGroups.has(p.group)) continue; x0 = Math.min(x0, p.x - p.r); y0 = Math.min(y0, p.y - p.r); x1 = Math.max(x1, p.x + p.r); y1 = Math.max(y1, p.y + p.r); }
+    // Lanes, axes and their labels belong in the frame too.
+    const o = this.overlay;
+    if (o && o.kind === 'lanes') { x0 = Math.min(x0, o.lanes[0].x - o.w / 2 - 10); x1 = Math.max(x1, o.lanes[o.lanes.length - 1].x + o.w / 2 + 10); y0 = Math.min(y0, -o.h / 2 - 34); y1 = Math.max(y1, o.h / 2 + 10); }
+    if (o && o.kind === 'axis') { x0 = Math.min(x0, -o.w / 2 - 340); x1 = Math.max(x1, o.w / 2 + 30); y0 = Math.min(y0, o.y0 - o.laneH / 2 - 10); y1 = Math.max(y1, Math.abs(o.y0) + o.laneH * 0.6 + 34); }
     return Number.isFinite(x0) ? { x0, y0, x1, y1 } : { x0: -100, y0: -100, x1: 100, y1: 100 };
   }
   fit(instant) {
@@ -234,12 +299,43 @@ class BrainGraph {
     this.raf = requestAnimationFrame((t) => this.frame(t));
   }
 
+  // Lanes, axes, rings and cluster labels behind the notes, in world coordinates.
+  drawOverlay(k) {
+    const o = this.overlay; if (!o) return; const { ctx } = this;
+    ctx.save(); ctx.font = `600 ${12 / k}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+    if (o.kind === 'lanes') {
+      for (const l of o.lanes) {
+        ctx.globalAlpha = 0.08; ctx.fillStyle = l.k ? '#8b7bff' : '#8f98cc'; ctx.fillRect(l.x - o.w / 2, -o.h / 2, o.w, o.h);
+        ctx.globalAlpha = 0.5; ctx.strokeStyle = '#8b7bff'; ctx.lineWidth = 1 / k; ctx.strokeRect(l.x - o.w / 2, -o.h / 2, o.w, o.h);
+        ctx.globalAlpha = 0.95; ctx.fillStyle = this.theme.label; ctx.fillText(`${l.label} · ${l.count}`, l.x, -o.h / 2 - 6 / k);
+      }
+    } else if (o.kind === 'map') {
+      ctx.globalAlpha = 0.18; ctx.strokeStyle = this.theme.edge; ctx.lineWidth = 1 / k;
+      for (let g = -1; g <= 1.001; g += 0.25) { ctx.beginPath(); ctx.moveTo(-o.r, g * o.r); ctx.lineTo(o.r, g * o.r); ctx.stroke(); ctx.beginPath(); ctx.moveTo(g * o.r, -o.r); ctx.lineTo(g * o.r, o.r); ctx.stroke(); }
+      ctx.globalAlpha = 0.7; ctx.fillStyle = this.theme.labelMuted; ctx.fillText('meaning (1st component) →', 0, o.r + 18 / k);
+    } else if (o.kind === 'axis') {
+      ctx.globalAlpha = 0.4; ctx.strokeStyle = this.theme.edge; ctx.lineWidth = 1 / k; const yA = Math.abs(o.y0) + o.laneH * 0.6;
+      ctx.globalAlpha = 0.05; o.groups.forEach((g, i) => { if (i % 2) { ctx.fillStyle = this.theme.label; ctx.fillRect(-o.w / 2 - 8, o.y0 + i * o.laneH - o.laneH / 2, o.w + 16, o.laneH); } }); ctx.globalAlpha = 0.4;
+      ctx.beginPath(); ctx.moveTo(-o.w / 2, yA); ctx.lineTo(o.w / 2, yA); ctx.stroke(); ctx.textBaseline = 'top'; ctx.fillStyle = this.theme.labelMuted; ctx.globalAlpha = 0.85;
+      for (let i = 0; i <= 6; i++) { const x = -o.w / 2 + (o.w * i) / 6; ctx.fillText(new Date(o.t0 + (o.span * i) / 6).toLocaleDateString('en', o.span < 400 * 86400000 ? { day: 'numeric', month: 'short' } : { month: 'short', year: '2-digit' }), x, yA + 6 / k); }
+      ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+      o.groups.forEach((g, i) => { const meta = BRAIN_GROUPS.find((x) => x.id === g); ctx.fillStyle = this.colors[g] || this.theme.labelMuted; ctx.fillText(meta ? meta.name : g, -o.w / 2 - 12 / k, o.y0 + i * o.laneH); });
+    } else if (o.kind === 'rings') {
+      ctx.globalAlpha = 0.14; ctx.strokeStyle = this.theme.edge; ctx.lineWidth = 1 / k;
+      for (let d = 1; d <= o.max; d++) { ctx.beginPath(); ctx.arc(0, 0, d * o.step, 0, Math.PI * 2); ctx.stroke(); }
+    } else if (o.kind === 'clusters') {
+      for (const [g, [x, y]] of Object.entries(o.centre)) { const meta = BRAIN_GROUPS.find((m) => m.id === g); ctx.globalAlpha = 0.9; ctx.fillStyle = this.colors[g] || this.theme.label; ctx.fillText(meta ? meta.name : g, x, y - 70 / Math.sqrt(k)); }
+    }
+    ctx.restore();
+  }
+
   draw(now, dt) {
     const { ctx } = this; const k = this.cam.k;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.clearRect(0, 0, this.w, this.h);
     ctx.translate(this.w / 2, this.h / 2); ctx.scale(k, k); ctx.translate(-this.cam.x, -this.cam.y);
 
+    this.drawOverlay(k);
     const focusId = this.hover ? this.hover.id : this.selected;
     const near = focusId != null ? this.adj[focusId] : null;
     const isLit = (p) => focusId == null ? (!this.matches || this.matches.has(p.id)) : p.id === focusId || near.has(p.id);
