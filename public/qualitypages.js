@@ -11,18 +11,21 @@ const QUALITY_COPY = {
   cache: ['Cache', 'Monitor provider prompt cache efficiency and local semantic response reuse.'],
   compression: ['Compression', 'Context compression analytics and token savings'],
   providers: ['Provider stats', 'Requests, tokens, cost, latency and reliability per provider and model.'],
+  models: ['Models', 'Every model on OpenRouter: live prices, which providers serve it and how reliably.'],
+  rankings: ['Rankings', 'What the world runs on OpenRouter: most-used models and apps, and benchmark leaders.'],
 };
 
 function viewQualityPage() {
   if (!state.sub || !QUALITY_COPY[state.sub]) return `<div class="holo-deck">${subTabs('quality')}${viewQuality()}</div>`;
   const [title, copy] = QUALITY_COPY[state.sub];
   return `<div class="holo-deck">${subTabs('quality')}
-    ${subHero(`QUALITY &amp; SAFETY · ${title.toUpperCase()}`, title, copy, rangeControl())}
+    ${subHero(`QUALITY &amp; SAFETY · ${title.toUpperCase()}`, title, copy, ['models', 'rankings'].includes(state.sub) ? '<span class="pill">Source: OpenRouter</span>' : rangeControl())}
     <div id="qp-body">${'<div class="skeleton" style="height:140px"></div>'.repeat(2)}</div></div>`;
 }
 
 async function mountQualityPage() {
   if (!state.sub || !QUALITY_COPY[state.sub]) { mountFailureCity(); return; }
+  if (state.sub === 'models' || state.sub === 'rankings') { mountOpenRouterPage(state.sub); return; }
   const sub = state.sub;
   const routerSection = { utilization: 'utilization', cache: 'cache', compression: 'compression', providers: 'providers' }[sub];
   const [ins, router, logs] = await Promise.all([
@@ -34,7 +37,7 @@ async function mountQualityPage() {
   if (!el || state.sub !== sub) return; // navigated away while loading
   el.innerHTML = { utilization: utilizationBody, cache: cacheBody, compression: compressionBody, providers: providersBody }[sub](ins, router, logs);
   if (sub === 'utilization') mountLoadLandscape();
-  if (sub === 'providers') mountProviderSkyline(ins.providers);
+  if (sub === 'providers') { mountProviderSkyline(ins.providers); appendProviderDirectory(); }
 }
 
 const routerNote = (router) => (router.configured ? (router.data && router.data.error ? holoEmpty(`OmniRoute (${esc(router.id)}) did not answer: ${esc(router.data.error)}`) : '')

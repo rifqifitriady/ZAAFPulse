@@ -23,6 +23,7 @@ const SHOTS = [
   ['screen-overview', '#overview'], ['screen-live', '#live'], ['screen-office', '#squad'], ['screen-logs', '#squad/logs'],
   ['screen-proxy', '#squad/proxy'], ['screen-time', '#squad/time'], ['screen-quality', '#quality'], ['screen-utilization', '#quality/utilization'],
   ['screen-cache', '#quality/cache'], ['screen-compression', '#quality/compression'], ['screen-providers', '#quality/providers'],
+  ['screen-models', '#quality/models'], ['screen-rankings', '#quality/rankings'],
   ['screen-sessions', '#sessions'], ['screen-projects', '#projects'], ['screen-agents', '#agents'], ['screen-brain', '#brain'], ['screen-integrations', '#integrations'],
   ['screen-settings', '#settings', 'js:document.querySelector("#prices-panel").scrollIntoView()'], ['screen-integration-editor', '#integrations', '[data-integ-edit="omniroute"]'],
   ['screen-drawer-spend', '#overview', '[data-drill="spend"]'], ['screen-drawer-poisoning', '#quality', '[data-drill="poisoning"]'],

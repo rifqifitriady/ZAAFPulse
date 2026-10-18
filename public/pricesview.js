@@ -8,7 +8,11 @@ const VENDOR = {
   other: ['Custom', '#8f98cc', '#'],
 };
 const VENDOR_ORDER = ['anthropic', 'openai', 'google', 'deepseek', 'alibaba', 'xai', 'meta', 'tencent', 'zai'];
-const pv2 = { data: null, q: '', vendor: 'all', showCatalog: false, editing: null, busy: '' };
+const pv2 = { data: null, q: '', vendor: 'all', showCatalog: false, editing: null, busy: '', sort: null, basis: null }; // sort/basis read lazily: store lives in app.js, loaded later
+// What "price" means when sorting: input and output per 1M summed, or one rate.
+const BASES = [['blend', 'Input + output'], ['input', 'Input'], ['output', 'Output'], ['cacheRead', 'Cache read']];
+const SORTS = [['default', 'Default'], ['desc', 'Highest price'], ['asc', 'Lowest price']];
+const priceOf = (p, basis) => (!p ? 0 : basis === 'blend' ? (p.input || 0) + (p.output || 0) : p[basis] || 0);
 const priceFields = [['input', 'Input'], ['output', 'Output'], ['cacheRead', 'Cache read'], ['cacheWrite5m', 'Cache write 5m'], ['cacheWrite1h', 'Cache write 1h']];
 const money = (v) => (v == null ? '—' : `$${v >= 1 || v === 0 ? +v.toFixed(2) : +v.toPrecision(3)}`);
 const vendorOf = (key, cat) => (cat ? cat.vendor : /^claude|^opus|^sonnet|^haiku/.test(key) ? 'anthropic' : /^gpt|^o\d|^codex/.test(key) ? 'openai'
@@ -62,6 +66,7 @@ function priceCard(key, d, usage, totalCost) {
 
 function paintPrices() {
   const el = $('#prices-panel'); const d = pv2.data; if (!el || !d) return;
+  if (pv2.sort === null) { pv2.sort = store.get('priceSort', 'default'); pv2.basis = store.get('priceBasis', 'blend'); }
   const keys = new Set([...Object.keys(d.effective)]);
   const usage = usageByKey(keys);
   const totalCost = Object.values(usage).reduce((a, u) => a + u.cost, 0);
@@ -72,7 +77,10 @@ function paintPrices() {
   const catalog = d.catalog.map((m) => m.key).filter((k) => !usage[k] && !(k in d.manual));
   const st = d.status;
   const section = (title, meta, list) => (list.length ? `<div class="pc-section"><h4>${title}</h4><span class="meta">${meta}</span></div><div class="pc-grid">${list.map((k) => priceCard(k, d, usage, totalCost)).join('')}</div>` : '');
-  const shownCatalog = catalog.filter(match);
+  // Sort by price when asked; ties keep the default order (cost for In use, list order otherwise).
+  const priceFor = (k) => priceOf(d.effective[k] || (d.catalog.find((m) => m.key === k) || {}).price, pv2.basis);
+  const sorted = (list) => (pv2.sort === 'default' ? list : [...list].sort((a, b) => (pv2.sort === 'desc' ? priceFor(b) - priceFor(a) : priceFor(a) - priceFor(b))));
+  const shownCatalog = sorted(catalog.filter(match));
   const unpriced = (state.data ? state.data.unpriced : []) || [];
   el.innerHTML = `<div class="panel-head pc-toolbar"><h3>Model prices</h3><span class="meta">USD per 1M tokens · your own prices are kept in config.json</span>
       <div class="pc-sync">
@@ -89,8 +97,11 @@ function paintPrices() {
       <label class="pc-newkey"><span>Model prefix</span><input class="input" name="pe-key" placeholder="e.g. gpt-6 or claude-opus-6" autocomplete="off"></label>
       <div class="pc-edit-grid">${priceFields.map(([f, l]) => `<label><span>${l}</span><input class="input num" type="number" min="0" step="0.001" name="pe-${f}" value="0"></label>`).join('')}</div>
       <div class="pc-foot"><div class="pc-actions"><button class="btn" type="button" data-psave="__new">Add &amp; pin</button><button class="btn ghost" type="button" data-pcancel>Cancel</button></div></div></article></div>` : ''}
-    ${section('In use', `${rangeText()} · by estimated cost`, inUse.filter(match))}
-    ${section('Your prices', 'pinned or custom prefixes without usage', yours.filter(match))}
+    <div class="pc-sortbar"><span class="pc-sortlabel">Sort</span>
+      <div class="segmented" role="group" aria-label="Sort by price">${SORTS.map(([v, l]) => `<button type="button" data-psort="${v}" aria-pressed="${pv2.sort === v}">${v === 'desc' ? '↓ ' : v === 'asc' ? '↑ ' : ''}${l}</button>`).join('')}</div>
+      <label class="pc-basis">by <select class="input" data-pbasis ${pv2.sort === 'default' ? 'disabled' : ''}>${BASES.map(([v, l]) => `<option value="${v}" ${pv2.basis === v ? 'selected' : ''}>${l}</option>`).join('')}</select> per 1M</label></div>
+    ${section('In use', pv2.sort === 'default' ? `${rangeText()} · by estimated cost` : `${rangeText()} · ${pv2.sort === 'desc' ? 'highest' : 'lowest'} price first`, sorted(inUse.filter(match)))}
+    ${section('Your prices', 'pinned or custom prefixes without usage', sorted(yours.filter(match)))}
     <div class="pc-section"><h4>Catalog</h4><span class="meta">${catalog.length} live models from ${VENDOR_ORDER.length} vendors${pv2.vendor !== 'all' ? ` · showing ${VENDOR[pv2.vendor][0]}` : ''}</span>
       <div class="filters pc-filters"><label class="search sq-search">${icon('search', 14)}<input id="pc-q" type="search" placeholder="Find a model…" value="${esc(pv2.q)}" autocomplete="off"></label>
         <button class="btn ghost" type="button" data-pcatalog>${pv2.showCatalog || q ? 'Hide catalog' : `Show ${shownCatalog.length} models`}</button></div></div>
@@ -117,6 +128,7 @@ document.addEventListener('click', (e) => {
   if (t('[data-pcatalog]')) { pv2.showCatalog = !(pv2.showCatalog || pv2.q); pv2.q = pv2.showCatalog ? pv2.q : ''; paintPrices(); return; }
   const v = t('[data-pvendor]'); if (v) { pv2.vendor = v.dataset.pvendor; pv2.showCatalog = pv2.vendor !== 'all'; paintPrices(); return; }
   const c = t('[data-pcopy]'); if (c) { navigator.clipboard?.writeText(c.dataset.pcopy); c.classList.add('copied'); setTimeout(() => c.classList.remove('copied'), 900); return; }
+  const so = t('[data-psort]'); if (so) { pv2.sort = so.dataset.psort; store.set('priceSort', pv2.sort); paintPrices(); return; }
   const ed = t('[data-pedit]'); if (ed) { pv2.editing = ed.dataset.pedit; paintPrices(); return; }
   if (t('[data-pcancel]')) { pv2.editing = null; paintPrices(); return; }
   const un = t('[data-punpin]'); if (un) { pricesAction({ action: 'unpin', key: un.dataset.punpin }); return; }
@@ -130,5 +142,9 @@ document.addEventListener('click', (e) => {
     pricesAction({ action: 'set', key, price });
   }
 });
-document.addEventListener('change', (e) => { if (e.target.matches && e.target.matches('[data-psync]')) pricesAction({ action: 'toggle', enabled: e.target.checked }); });
+document.addEventListener('change', (e) => {
+  if (!e.target.matches) return;
+  if (e.target.matches('[data-psync]')) pricesAction({ action: 'toggle', enabled: e.target.checked });
+  if (e.target.matches('[data-pbasis]')) { pv2.basis = e.target.value; store.set('priceBasis', pv2.basis); paintPrices(); }
+});
 document.addEventListener('input', (e) => { if (e.target.id === 'pc-q') { pv2.q = e.target.value; const pos = e.target.selectionStart; paintPrices(); const q = $('#pc-q'); if (q) { q.focus(); q.setSelectionRange(pos, pos); } } });
