@@ -60,8 +60,19 @@ function gauge(label, p, sub, c1, c2) {
     <text x="50" y="54" text-anchor="middle" class="gauge-v">${fmtPct(v)}</text></svg>
     <b>${label}</b><small class="num">${sub}</small></div>`;
 }
-const readouts = (items) => items.map(([k, v, s, c]) =>
-  `<div class="readout" style="--c:${c}"><span>${k}</span><b class="num">${v}</b><small>${s}</small></div>`).join('');
+// Stage readouts: icon + label, value with an optional delta pill, sub line and a small visual from real
+// data: spark (series), pips (one dot per agent, colored by state) or p (0..1 progress). Arrays still work.
+function readouts(items) {
+  return items.map((it) => {
+    const r = Array.isArray(it) ? { label: it[0], value: it[1], sub: it[2], color: it[3] } : it;
+    const art = r.spark && r.spark.length > 1 && r.spark.some((v) => v > 0) ? `<span class="ro-art">${tileSpark(r.spark, r.color)}</span>`
+      : r.pips ? `<span class="ro-pips">${r.pips.length ? r.pips.slice(0, 14).map((c) => `<i style="--p:${c}"></i>`).join('') + (r.pips.length > 14 ? `<em>+${r.pips.length - 14}</em>` : '') : '<em>none</em>'}</span>`
+        : r.p != null ? `<span class="ro-bar"><i style="width:${(Math.max(0, Math.min(1, r.p)) * 100).toFixed(1)}%"></i></span>` : '';
+    return `<div class="readout" style="--c:${r.color}">
+      <div class="ro-top">${r.icon ? `<span class="ro-ic">${icon(r.icon, 13)}</span>` : ''}<span class="ro-label">${r.label}</span>${r.delta || ''}</div>
+      <b class="num">${r.value}</b><div class="ro-foot"><small>${r.sub || ''}</small>${art}</div></div>`;
+  }).join('');
+}
 
 /* ---------- isometric engine ---------- */
 const isoStages = new Set();

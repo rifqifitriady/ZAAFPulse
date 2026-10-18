@@ -34,6 +34,7 @@ async function mountQualityPage() {
   if (!el || state.sub !== sub) return; // navigated away while loading
   el.innerHTML = { utilization: utilizationBody, cache: cacheBody, compression: compressionBody, providers: providersBody }[sub](ins, router, logs);
   if (sub === 'utilization') mountLoadLandscape();
+  if (sub === 'providers') mountProviderSkyline(ins.providers);
 }
 
 const routerNote = (router) => (router.configured ? (router.data && router.data.error ? holoEmpty(`OmniRoute (${esc(router.id)}) did not answer: ${esc(router.data.error)}`) : '')
@@ -253,7 +254,37 @@ function providersBody(ins, router, logs) {
       ${(rd.models || []).map((m) => `<tr><td><b>${esc(m.model)}</b></td><td class="muted">${esc(m.provider)}</td><td class="r num">${whole.format(m.requests)}</td><td class="r num">${pct((m.successfulRequests || 0) / Math.max(1, m.requests))}</td><td class="r num">${msFmt(m.avgLatencyMs)}</td></tr>`).join('')}
     </tbody></table></div>`;
   }
-  return `<div class="prov-grid">${cards || holoEmpty(`No provider traffic in the ${rangeText()}.`)}</div>
+  // Header like Utilization: a 3D skyline of models, a metric strip, then per-model charts.
+  const all = pv.list; const reqs = all.reduce((a, p) => a + p.requests, 0); const cost = all.reduce((a, p) => a + p.cost, 0);
+  const inTok = all.reduce((a, p) => a + p.input + p.cacheRead + p.cacheWrite, 0); const cacheTok = all.reduce((a, p) => a + p.cacheRead, 0);
+  const out = all.reduce((a, p) => a + p.output, 0); const errs = all.reduce((a, p) => a + p.apiErrors, 0); const ref = all.reduce((a, p) => a + p.refusals, 0);
+  const claude = all.find((p) => p.tool === 'claude') || { requests: 0 };
+  const lc = lat('claude'); const daily = ins.utilization.daily;
+  const top = pv.models[0];
+  const tiles = [
+    metricTile({ label: 'Providers', value: whole.format(all.length), sub: `${pv.models.length} models in use`, color: HOLO.cyan }),
+    metricTile({ label: 'Requests', value: fmtN(reqs), sub: rangeText(), color: HOLO.cyan, spark: daily.map((d) => d.claude.calls + d.codex.calls) }),
+    metricTile({ label: 'Anthropic share', value: pct(claude.requests / Math.max(1, reqs)), sub: `${fmtN(claude.requests)} requests`, color: PROV_COLOR.claude, spark: daily.map((d) => d.claude.calls) }),
+    metricTile({ label: 'OpenAI share', value: pct((reqs - claude.requests) / Math.max(1, reqs)), sub: `${fmtN(reqs - claude.requests)} requests`, color: PROV_COLOR.codex, spark: daily.map((d) => d.codex.calls) }),
+    metricTile({ label: 'Est. cost', value: fmtUSD(cost), sub: 'API list price', color: HOLO.orange }),
+    metricTile({ label: 'Cost / 1K requests', value: fmtUSD((cost / Math.max(1, reqs)) * 1000), sub: 'all providers', color: HOLO.orange }),
+    metricTile({ label: 'Avg output', value: fmtN(out / Math.max(1, reqs)), sub: 'tokens per request', color: HOLO.violet }),
+    metricTile({ label: 'Input from cache', value: pct(cacheTok / Math.max(1, inTok)), sub: `${fmtN(cacheTok)} cached tokens`, color: HOLO.violet, p: cacheTok / Math.max(1, inTok) }),
+    metricTile({ label: 'API errors', value: `${((errs / Math.max(1, reqs)) * 1000).toFixed(1)} / 1K`, sub: `${whole.format(errs)} errors · ${whole.format(ref)} refusals`, color: '#ff4f6d' }),
+    metricTile({ label: 'TTFT p50', value: msFmt(lc.ttft), sub: lc.n ? `Anthropic · last 3 h · ${lc.n} requests` : 'no recent requests', color: HOLO.blue }),
+    metricTile({ label: 'TTFT p95', value: msFmt(lc.p95), sub: lc.n ? `turn p50 ${msFmt(lc.dur)}` : '—', color: HOLO.blue }),
+    metricTile({ label: 'Top model', value: top ? esc(top.model.replace(/^claude-/, '')) : '—', sub: top ? `${pct(top.requests / Math.max(1, reqs))} of requests` : 'none', color: HOLO.pink, p: top ? top.requests / Math.max(1, reqs) : null }),
+  ];
+  const topModels = pv.models.slice(0, 12);
+  const header = `<section class="holo stage landscape-stage"><canvas id="qp-providers" aria-label="3D skyline of models by requests, grouped by provider"></canvas>
+      <div class="stage-tl"><div class="holo-kicker">MODEL SKYLINE · BY PROVIDER</div><div class="stage-key">One tower per model: front row Anthropic, back row OpenAI · height = requests · glow = cost · walls: cost and output by model · hover a tower</div></div>
+      <div class="stage-legend"><span><i style="background:${PROV_COLOR.claude}"></i>Anthropic</span><span><i style="background:${PROV_COLOR.codex}"></i>OpenAI</span><span><i style="background:#ff5ca8"></i>Top cost</span></div></section>
+    <div class="live-metrics">${tiles.join('')}</div>
+    <div class="live-grid even">
+      ${panel('Requests by model', 'top 12', holoBars(topModels, { series: [{ name: 'requests', color: HOLO.cyan, get: (m) => m.requests }], label: (m) => m.model.replace(/^claude-/, '').slice(0, 12), every: 1 }))}
+      ${panel('Cost per 1K requests', 'by model · API list price', holoBars(topModels.filter((m) => m.priced), { series: [{ name: '$ / 1K', color: HOLO.orange, get: (m) => (m.cost / Math.max(1, m.requests)) * 1000 }], label: (m) => m.model.replace(/^claude-/, '').slice(0, 12), fmt: fmtUSD, every: 1 }))}
+    </div>`;
+  return `${header}<div class="prov-grid">${cards || holoEmpty(`No provider traffic in the ${rangeText()}.`)}</div>
     ${panel('Models', `${rangeText()} · local transcripts`, `<div class="table-wrap">${models}</div>`)}
     ${panel('Through the router', router.configured ? `OmniRoute · ${esc(router.id)}` : 'router', routerPanel)}`;
 }
@@ -328,6 +359,39 @@ function mountFailureCity() {
         }
         tip = key;
       } else if (tip) { hideTip(); tip = ''; }
+    },
+  });
+}
+
+// Models as towers in two rows by provider; height = requests (sqrt), the three priciest glow pink.
+function mountProviderSkyline(pv) {
+  const canvas = $('#qp-providers'); if (!canvas) return;
+  const rows = { claude: pv.models.filter((m) => m.tool === 'claude').slice(0, 10), codex: pv.models.filter((m) => m.tool === 'codex').slice(0, 10) };
+  const list = [...rows.claude, ...rows.codex]; if (!list.length) return;
+  const maxR = Math.max(1, ...list.map((m) => m.requests));
+  const hot = new Set([...list].sort((a, b) => b.cost - a.cost).slice(0, 3).filter((m) => m.cost > 0).map((m) => m.model));
+  const heights = {}; const hov = { tip: '' };
+  isoStage(canvas, {
+    fit: [13, 8.2], origin: [0.5, 0.6],
+    draw(g) {
+      const { P, still } = g;
+      g.glow(); g.platform(-6, 6, -3.1, 2.6);
+      g.wall(-5.8, -2.6, -0.1, -2.9, { vals: list.map((m) => m.cost), color: HOLO.orange, title: 'COST BY MODEL', value: fmtUSD(list.reduce((a, m) => a + m.cost, 0)), H: 2.4 });
+      g.wall(0.1, -2.9, 5.8, -2.6, { vals: list.map((m) => m.output), color: HOLO.violet, title: 'OUTPUT TOKENS BY MODEL', value: fmtN(list.reduce((a, m) => a + m.output, 0)), H: 2.4 });
+      const items = []; const pts = [];
+      for (const [tool, z] of [['claude', 0.9], ['codex', -1.1]]) {
+        rows[tool].forEach((m, i) => {
+          const x = -5.5 + i * 1.1; const key = `${tool}:${m.model}`;
+          const target = 0.12 + 3.4 * Math.sqrt(m.requests / maxR); heights[key] = (heights[key] ?? 0.05) + (target - (heights[key] ?? 0.05)) * (still ? 1 : 0.08);
+          const h = heights[key]; const color = hot.has(m.model) ? '#ff5ca8' : PROV_COLOR[tool];
+          items.push({ depth: P(x, 0, z)[2], draw: () => g.box(x, z, 0.7, 0.7, h, color, { glow: hot.has(m.model) ? 18 : 6, slices: 0.4 }) });
+          pts.push({ at: P(x + 0.35, h, z + 0.35), key, m, html: () => `<b>${esc(m.model)}</b><div class="row"><span>Provider</span><span>${esc(m.provider)}</span></div><div class="row"><span>Requests</span><span class="num">${whole.format(m.requests)}</span></div><div class="row"><span>Output</span><span class="num">${fmtN(m.output)}</span></div><div class="row"><span>Est. cost</span><span class="num">${m.priced ? fmtUSD(m.cost) : 'no price'}</span></div>` });
+        });
+      }
+      items.sort((a, b) => a.depth - b.depth).forEach((it) => it.draw());
+      g.particles();
+      g.labels(pts.slice().sort((a, b) => b.m.requests - a.m.requests).slice(0, 6).map((p) => ({ at: p.at, text: `${p.m.model.replace(/^claude-/, '')} · ${fmtN(p.m.requests)}`, color: hot.has(p.m.model) ? HOLO.pink : PROV_COLOR[p.m.tool] })));
+      hoverTip(g, pts, hov);
     },
   });
 }
