@@ -18,6 +18,7 @@ const timeline = require('./lib/timeline');
 const { createOmniRoute } = require('./lib/omniroute');
 const { createIntegrationConfig, describe: describeIntegrations } = require('./lib/integration-config');
 const { createPriceSync } = require('./lib/price-sync');
+const { createOpenRouter } = require('./lib/openrouter');
 const { createIntegrations } = require('./lib/integrations');
 const { createSecrets } = require('./lib/secrets');
 const { createAudit } = require('./lib/audit');
@@ -87,6 +88,16 @@ function getIntegrations() {
   return integ.registry;
 }
 const integrationConfig = createIntegrationConfig({ file: CONFIG_FILE, secrets: createSecrets() });
+// OpenRouter data for Models and Rankings. The key (for credits) comes from an enabled openrouter
+// integration; demo mode serves whatever is cached and never fetches.
+const openRouter = createOpenRouter({
+  cacheDir: path.join(DIR, '.cache'), offline: DEMO,
+  getKey: () => {
+    const e = Object.values(config.integrations || {}).find((c) => c && c.type === 'openrouter' && c.enabled !== false && c.apiKey);
+    if (!e) return null;
+    try { return createSecrets().resolve(e.apiKey, 'apiKey'); } catch { return null; }
+  },
+});
 function clientRows() {
   return Object.entries(register.clients()).map(([id, c]) => ({
     id, name: c.name, file: c.file.replace(os.homedir(), '~'), registered: register.isRegistered(c.file), command: `npm run mcp:register -- ${id}`,
@@ -207,6 +218,15 @@ const server = http.createServer(async (req, res) => {
       memo.clear();
       const { integrations, ...rest } = config;
       return send(res, 200, rest);
+    }
+    if (url.pathname === '/api/openrouter') {
+      const fn = { models: openRouter.models, providers: openRouter.providers, rankings: openRouter.rankings, account: openRouter.account }[url.searchParams.get('section')];
+      if (!fn) return send(res, 404, { error: 'unknown section' });
+      return send(res, 200, await fn());
+    }
+    if (url.pathname === '/api/openrouter/endpoints') {
+      const ids = (url.searchParams.get('ids') || '').split(',').map((s) => s.trim()).filter(Boolean).slice(0, 40);
+      return send(res, 200, await openRouter.endpointsMany(ids));
     }
     if (url.pathname === '/api/prices' && req.method === 'GET') {
       return send(res, 200, { status: priceSync.status(), sync: config.pricingSync, catalog: priceSync.catalog(), manual: config.manualPricing, effective: config.pricing, source: config.pricingSource, demo: DEMO });
