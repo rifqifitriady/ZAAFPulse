@@ -19,16 +19,18 @@ const gw = { data: null, logs: null, newSecret: null, editingAgent: null, editin
 const GW_BASE = `${location.origin}/v1`;
 const gwPost = (route, body) => api(`/api/gateway/${route}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 const errList = (errs) => (errs && errs.length ? `<div class="ie-result bad"><b>Fix these first</b><ul>${errs.map((e) => `<li>${esc(e)}</li>`).join('')}</ul></div>` : '');
-// zp_ZW_jGATf…BBYm → zp_ZW_j••••••••••••BBYm: enough to recognise, never enough to use.
+// zp_Q7m_kR2p…T4vX → zp_Q7m_k••••••••••••T4vX: enough to recognise, never enough to use.
 const maskKey = (k) => `${k.slice(0, 7)}${'•'.repeat(12)}${k.slice(-4)}`;
 let gwMaskTimer = null;
 function forgetSecret() { if (!gw.newSecret) return; gw.maskedSecret = maskKey(gw.newSecret); gw.newSecret = null; clearTimeout(gwMaskTimer); const pre = $('#gw-new-secret'); if (pre && GW_ROUTES.includes(state.route)) paintGateway(); }
 const codeBlock = (text, id) => `<div class="gw-code"><button class="btn ghost gw-copy" type="button" data-gwcopy="${id}">Copy</button><pre id="${id}">${esc(text)}</pre></div>`;
 
 // Three menus share this module: Agent Gateway (#gateway), RAG Service (#rag) and Agent-to-Agent (#a2a).
-const GW_ROUTES = ['gateway', 'rag', 'a2a'];
+const GW_ROUTES = ['gateway', 'rag', 'a2a', 'endpoint', 'skills'];
 const SECTION = {
-  gateway: { eyebrow: 'AGENT GATEWAY', copy: (sub) => GW_COPY[sub] || GW_COPY[''], pages: { '': gwOverview, keys: gwKeys, providers: gwProviders, router: gwRouter, tools: gwTools, sessions: gwSessions, playground: gwPlayground, connect: gwConnect } },
+  gateway: { eyebrow: 'AGENT GATEWAY', copy: (sub) => GW_COPY[sub] || GW_COPY[''], pages: { '': gwOverview, providers: gwProviders, router: gwRouter, sessions: gwSessions, playground: gwPlayground } },
+  endpoint: { eyebrow: 'ENDPOINT', copy: (sub) => ENDPOINT_COPY[sub] || ENDPOINT_COPY[''], pages: { '': endpointOverview, keys: gwKeys, mcp: endpointMcp, connect: gwConnect, tools: gwTools } },
+  skills: { eyebrow: 'AGENT SKILLS', copy: () => ['ZAAFPulse skills', 'Skills teach AI agents to use ZAAFPulse. They are served by this gateway and can be installed into Claude Code.'], pages: { '': skillsPage } },
   rag: { eyebrow: 'RAG SERVICE', copy: (sub) => RAG_COPY[sub] || RAG_COPY[''], pages: { '': gwKnowledge, connect: ragConnect } },
   a2a: { eyebrow: 'AGENT-TO-AGENT', copy: (sub) => A2A_COPY[sub] || A2A_COPY[''], pages: { '': gwWorkflows, collaborate: a2aCollaborate, runs: a2aRuns, agents: gwAgents, collaboration: a2aCollaboration } },
 };
@@ -43,8 +45,15 @@ const A2A_COPY = {
   agents: ['Specialist agents', 'The domain agents that workflows, the orchestrator and other agents call on.'],
   collaboration: ['Collaboration', 'How agents work together: patterns, guards, who may consult whom, and the A2A protocol endpoint.'],
 };
+const ENDPOINT_COPY = {
+  '': ['Endpoint', 'Everything that connects to ZAAFPulse: the API and its keys, the MCP server, connection snippets and AI coding tools.'],
+  keys: ['API keys', 'Who may call the gateway: scopes, allowed models and agents, budgets, rate limits and expiry.'],
+  mcp: ['MCP server', 'ZAAFPulse as an MCP server: registered in your AI clients (stdio) and reachable over HTTP with a key.'],
+  connect: ['Connect', 'Point any OpenAI SDK, script or MCP client at ZAAFPulse.'],
+  tools: ['Code tools', 'Claude Code, Codex, Gemini CLI, OpenCode, Cline, Copilot and more on any provider: each in its own wire format, translated here.'],
+};
 // Old Agent Gateway tabs that moved to their own menus.
-const MOVED = { knowledge: '#rag', workflows: '#a2a', agents: '#a2a/agents' };
+const MOVED = { knowledge: '#rag', workflows: '#a2a', agents: '#a2a/agents', keys: '#endpoint/keys', connect: '#endpoint/connect', tools: '#endpoint/tools' };
 
 function viewGatewaySection(route) {
   const sec = SECTION[route]; const [title, copy] = sec.copy(state.sub || '');
@@ -53,11 +62,15 @@ function viewGatewaySection(route) {
 const viewGateway = () => viewGatewaySection('gateway');
 const viewRag = () => viewGatewaySection('rag');
 const viewA2a = () => viewGatewaySection('a2a');
+const viewEndpoint = () => viewGatewaySection('endpoint');
+// Agent Skills: ZAAFPulse's own skills, and (Usage) the subagents, skills and tools your AI tools use.
+const viewSkillsPage = () => (state.sub === 'usage' ? viewAgents().replace('<div class="holo-deck">', `<div class="holo-deck">${subTabs('skills')}`) : viewGatewaySection('skills'));
 
 async function mountGateway() {
   if (state.route === 'gateway' && MOVED[(location.hash.split('/')[1] || '')]) { location.replace(MOVED[location.hash.split('/')[1]]); return; }
   try { gw.data = await api('/api/gateway'); } catch (err) { $('#gw-body').innerHTML = holoEmpty(`Could not load the gateway: ${esc(err.message)}`); return; }
   if (state.route === 'gateway' && !state.sub) gw.logs = (await api('/api/gateway/logs').catch(() => ({ entries: [] }))).entries;
+  if (state.route === 'endpoint' && (!state.sub || state.sub === 'mcp')) gw.mcp = await api('/api/integrations').catch(() => null);
   paintGateway();
 }
 async function refreshGateway() { gw.data = await api('/api/gateway'); paintGateway(); }
@@ -354,14 +367,64 @@ function gwTools() {
       <button class="btn" type="submit">Save</button></form></section>
   ${secret ? `<div class="ie-result good gw-secret"><b>${esc(secret.name)}: copy this now. The key is masked after you copy it or in 60 seconds.</b>
     <div class="gw-code"><button class="btn ghost gw-copy" type="button" data-gwtoolsecret>Copy</button><pre id="gw-tool-secret">${esc(secret.snippet)}</pre></div></div>` : ''}
-  ${gw.toolMasked ? `<div class="ie-result gw-secret"><b>Copied and hidden.</b> The key now lives only in that tool's config; ZAAFPulse keeps its hash (Agent Gateway → API keys).</div>` : ''}
-  ${gwSkillsPanel()}
+  ${gw.toolMasked ? `<div class="ie-result gw-secret"><b>Copied and hidden.</b> The key now lives only in that tool's config; ZAAFPulse keeps its hash (Endpoint → API keys).</div>` : ''}
   <div class="pc-grid">${d.tools.map((t) => { const [fl, ep, fc] = FORMAT_LABEL[t.format] || FORMAT_LABEL.openai; const st = t.state === 'connected' ? ['connected', '#5cf0a8'] : t.state === 'unsupported' ? ['not possible', '#8f98cc'] : t.state === 'manual' ? ['manual setup', '#4de8ff'] : ['not connected', '#ffb547'];
     return `<article class="pcard${t.unsupported ? ' off' : ''}" style="--v:${fc}"><div class="pc-head"><span class="pc-logo">${esc(t.name[0])}</span><div class="pc-title"><b>${esc(t.name)}</b><small>${esc(t.vendor)}</small></div><span class="state-pill" style="--c:${st[1]}"><i></i>${st[0]}</span></div>
       <div class="tags"><span class="tag" style="color:${fc}">${fl}</span><span class="tag mono">${ep}</span>${t.path ? `<span class="tag mono">${esc(t.path)}</span>` : ''}</div>
       ${t.unsupported ? `<p class="pc-desc">${esc(t.unsupported)}</p>` : `${t.note ? `<p class="pc-desc">${esc(t.note)}</p>` : ''}<details><summary class="muted">Snippet</summary>${codeBlock(t.snippet || '', `tool-${t.id}`)}</details>`}
       ${t.unsupported ? '' : `<div class="pc-foot">${t.canApply ? `<button class="btn" type="button" data-gwtool="apply" data-id="${esc(t.id)}">${t.state === 'connected' ? 'Re-apply' : 'Set up'}</button>` : ''}<button class="btn ghost" type="button" data-gwtool="key" data-id="${esc(t.id)}">New key + snippet</button>${t.hasBackup ? `<button class="btn ghost danger" type="button" data-gwtool="revert" data-id="${esc(t.id)}">Revert</button>` : ''}</div>`}</article>`; }).join('')}</div>
   <p class="kpi-sub">Set up writes the tool's own config file (mode 0600) with a dedicated key, after saving a backup that Revert restores; Revert also revokes that key. Endpoints: <code>${esc(d.baseUrl)}/v1/messages</code> (Claude Code), <code>/v1/responses</code> (Codex), <code>/v1beta/models/…</code> (Gemini CLI), <code>/v1/chat/completions</code> (everything else). Keys work as <code>Authorization: Bearer</code>, <code>x-api-key</code> or <code>x-goog-api-key</code>.</p>`;
+}
+
+/* ---------- Agent Skills ---------- */
+function skillsPage() {
+  const d = gw.data; const list = d.skills || [];
+  return `<div class="live-metrics">${[
+    metricTile({ label: 'Skills', value: whole.format(list.length), sub: 'SKILL.md files in this version', color: HOLO.pink }),
+    metricTile({ label: 'In Claude Code', value: whole.format(list.filter((x) => x.claude === 'installed').length), sub: `${list.filter((x) => x.claude === 'outdated').length} outdated`, color: '#5cf0a8' }),
+    metricTile({ label: 'Served at', value: '/skills', sub: esc(d.baseUrl), color: HOLO.cyan }),
+    metricTile({ label: 'Keys with all scopes', value: whole.format(d.keys.filter((k) => !k.revokedAt && ['llm', 'agents', 'rag', 'mcp'].every((x) => k.scopes.includes(x))).length), sub: 'what the skills need', color: HOLO.violet }),
+  ].join('')}</div>
+  ${gwSkillsPanel()}
+  <p class="kpi-sub">Looking for what your AI tools actually used? <a class="link" href="#skills/usage">Usage in your tools →</a> shows the subagents, skills and tools from Claude Code and Codex sessions.</p>`;
+}
+
+/* ---------- Endpoint ---------- */
+function endpointOverview() {
+  const d = gw.data; const m = gw.mcp || {}; const clients = m.clients || []; const active = d.keys.filter((k) => !k.revokedAt && !(k.expiresAt && Date.now() > k.expiresAt));
+  const tools = (m.integrations || []).filter((i) => i.state === 'ok').reduce((a, i) => a + (i.tools || 0), 0);
+  const routes = [
+    ['POST', '/v1/chat/completions', 'llm', 'OpenAI chat, streaming; models, routes, agent/*, collab/*'], ['POST', '/v1/messages', 'llm', 'Anthropic Messages (Claude Code)'], ['POST', '/v1/responses', 'llm', 'OpenAI Responses (Codex)'],
+    ['POST', '/v1beta/models/<m>:generateContent', 'llm', 'Gemini (Gemini CLI)'], ['POST', '/v1/embeddings', 'llm', 'Embeddings'], ['GET', '/v1/models', 'any', 'Models, routes, agents and patterns the key may use'],
+    ['POST', '/v1/agents/<id>/run · /v1/orchestrate', 'agents', 'One agent, or the orchestrator'], ['POST', '/v1/collaborate · /v1/runs', 'agents', 'Multi-agent runs, approvals'], ['POST', '/v1/workflows/<id>/run', 'agents', 'Ready-made workflows'],
+    ['POST', '/v1/knowledge/<id>/search', 'rag', 'RAG search and ingestion'], ['GET', '/v1/brain/search', 'rag', 'Second brain, read only'], ['POST', '/mcp', 'mcp', 'MCP over HTTP: every integration tool'],
+    ['POST', '/a2a', 'agents', 'Agent2Agent JSON-RPC + SSE (card at /.well-known/agent-card.json)'], ['GET', '/skills/<name>/SKILL.md', 'none', 'Agent skills (docs, no key)'],
+  ];
+  return `<div class="live-metrics">${[
+    metricTile({ label: 'Base URL', value: esc(d.baseUrl.replace(/^https?:\/\//, '')), sub: '127.0.0.1 only', color: HOLO.cyan }),
+    metricTile({ label: 'API keys', value: `${active.length} / ${d.keys.length}`, sub: 'active / total', color: HOLO.violet }),
+    metricTile({ label: 'MCP clients', value: `${clients.filter((c) => c.registered).length} / ${clients.length}`, sub: 'registered (stdio)', color: '#5cf0a8' }),
+    metricTile({ label: 'MCP tools', value: whole.format(tools), sub: 'from connected integrations', color: HOLO.orange }),
+    metricTile({ label: 'Code tools', value: whole.format(d.tools.filter((t) => t.state === 'connected').length), sub: 'connected to the API', color: HOLO.pink }),
+    metricTile({ label: 'Requests · month', value: fmtN(d.usage.totals.requests), sub: `${fmtUSD(d.usage.totals.cost)} · ${pct(d.usage.totals.requests ? d.usage.totals.errors / d.usage.totals.requests : 0)} errors`, color: HOLO.blue }),
+  ].join('')}</div>
+  ${panel('Set up a client in three steps', '', `<ol class="gw-run"><li><b><a class="link" href="#endpoint/keys">Create an API key</a></b> with the scopes the client needs.</li><li><b><a class="link" href="#endpoint/mcp">Register the MCP server</a></b> in Claude Code, Kiro or Antigravity, or connect over HTTP.</li><li><b><a class="link" href="#endpoint/connect">Copy a snippet</a></b>, or let <a class="link" href="#endpoint/tools">Code tools</a> write a coding tool's config for you.</li></ol>`)}
+  ${panel('Endpoints', `${esc(d.baseUrl)} · keys as Bearer, x-api-key or x-goog-api-key`, `<div class="table-wrap"><table class="holo-table"><thead><tr><th></th><th>Path</th><th>Scope</th><th>For</th></tr></thead><tbody>${routes.map(([m, p, sc, f]) => `<tr><td class="muted mono">${m}</td><td class="mono">${esc(p)}</td><td><span class="tag">${sc}</span></td><td class="muted wrap">${esc(f)}</td></tr>`).join('')}</tbody></table></div>`)}`;
+}
+function endpointMcp() {
+  const d = gw.data; const m = gw.mcp || {}; const key = 'zp_YOUR_KEY';
+  const clients = m.clients || []; const integ = m.integrations || [];
+  return `${panel('Registered in your AI clients', 'stdio · the MCP server runs on demand', clients.length ? `<div class="table-wrap"><table class="holo-table"><thead><tr><th>Client</th><th>Status</th><th>Config file</th><th></th></tr></thead><tbody>
+      ${clients.map((c) => `<tr><td><b>${esc(c.name)}</b></td><td><span class="state-pill" style="--c:${c.registered ? '#5cf0a8' : '#8f98cc'}"><i></i>${c.registered ? 'registered' : 'not registered'}</span></td><td class="muted mono">${esc(c.file)}</td>
+        <td class="nowrap"><button class="btn ghost${c.registered ? ' danger' : ''}" type="button" data-mcpreg="${esc(c.id)}" data-remove="${c.registered ? '1' : ''}">${c.registered ? 'Remove' : 'Register'}</button></td></tr>`).join('')}</tbody></table></div>
+      <p class="kpi-sub">Register writes only ZAAFPulse's own entry, after a backup of the file. The same as <code>npm run mcp:register -- &lt;client&gt;</code>.</p>${m.mcpCommand ? codeBlock(m.mcpCommand, 'mcp-cmd') : ''}<div id="mcp-reg-log"></div>` : holoEmpty('Could not read the MCP client list.'))}
+    ${panel('Over HTTP', 'for clients that connect by URL · key with the mcp scope', `${codeBlock(`claude mcp add --transport http zaafpulse ${location.origin}/mcp \
+  --header "Authorization: Bearer ${key}"`, 'mcp-c1')}
+      ${codeBlock(JSON.stringify({ mcpServers: { zaafpulse: { type: 'http', url: `${location.origin}/mcp`, headers: { Authorization: `Bearer ${key}` } } } }, null, 2), 'mcp-c2')}
+      <p class="kpi-sub">Keys with the mcp scope: ${d.keys.filter((k) => !k.revokedAt && k.scopes.includes('mcp')).length}. <a class="link" href="#endpoint/keys">Create one →</a></p>`)}
+  ${panel('What the server exposes', `${integ.filter((i) => i.state === 'ok').length} of ${integ.length} integrations connected · configure them under Integrations`, integ.length ? `<div class="table-wrap"><table class="holo-table"><thead><tr><th>Integration</th><th>Status</th><th class="r">Tools</th><th class="r">Write tools</th></tr></thead><tbody>
+    ${integ.map((i) => `<tr><td><b>${esc(i.id)}</b></td><td><span class="state-pill" style="--c:${i.state === 'ok' ? '#5cf0a8' : i.state === 'error' ? '#ff8aa3' : '#8f98cc'}"><i></i>${esc(i.state)}</span></td><td class="r num">${i.tools || 0}</td><td class="r num">${i.writeTools || 0}</td></tr>`).join('')}</tbody></table></div>
+    <div class="gw-row"><a class="btn ghost" href="#integrations">Configure integrations →</a></div>` : holoEmpty('No integrations.'))}`;
 }
 
 // Agent skills: SKILL.md files that teach an AI to use ZAAFPulse, served here and installable into Claude Code.
@@ -772,6 +835,17 @@ document.addEventListener('click', (e) => {
       if (act === 'key') { gw.toolSecret = { name: 'Agent skills key', snippet: r.snippet }; gw.toolMasked = false; clearTimeout(gw.toolTimer); gw.toolTimer = setTimeout(() => { if (gw.toolSecret) { gw.toolSecret = null; gw.toolMasked = true; paintGateway(); } }, 60000); }
       if (act === 'install' && r.skipped && r.skipped.length) alert(`Skipped (you already have skills with these names): ${r.skipped.join(', ')}`);
       await refreshGateway();
+    });
+    return;
+  }
+  const mr = t('[data-mcpreg]');
+  if (mr) {
+    const remove = mr.dataset.remove === '1';
+    if (!confirm(`${remove ? 'Remove' : 'Register'} the ZAAFPulse MCP server ${remove ? 'from' : 'in'} ${mr.closest('tr').querySelector('b').textContent}? The config file is backed up first.`)) return;
+    gwAct(async () => {
+      const r = await api('/api/mcp/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client: mr.dataset.mcpreg, remove }) });
+      if (gw.mcp && r.clients) gw.mcp.clients = r.clients; paintGateway();
+      const box = $('#mcp-reg-log'); if (box) box.innerHTML = `<div class="ie-result ${r.errors ? 'bad' : 'good'}"><b>${r.errors ? esc(r.errors[0]) : 'Done'}</b>${(r.log || []).map((l) => `<small class="block muted">${esc(l)}</small>`).join('')}</div>`;
     });
     return;
   }

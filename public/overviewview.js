@@ -90,7 +90,7 @@ function viewOverview() {
   <div class="section-head"><h2>AI quality & safety</h2><span class="meta">— signals from your local logs · click a card for details</span><a class="link" href="#quality">Quality & safety ↗</a></div>
   ${qualityKpis()}
 
-  <div class="section-head"><h2>AI Squad</h2><span class="meta">— ${squad.total} detected · ${squad.running} running now</span><a class="link" href="#squad">View all ↗</a></div>
+  <div class="section-head"><h2>AI Office</h2><span class="meta">— ${squad.total} detected · ${squad.running} running now</span><a class="link" href="#squad">View all ↗</a></div>
   <div class="grid squad">${squad.html}</div>
 
   <div class="grid two">
