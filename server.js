@@ -114,6 +114,7 @@ const gateway = createGateway({
   getPricing: () => config.pricing,
   getIntegrations: () => getIntegrations(),
   version: require('./package.json').version,
+  baseUrl: `http://127.0.0.1:${PORT}`,
 });
 
 // OpenRouter data for Models and Rankings. The key (for credits) comes from an enabled openrouter
