@@ -1138,8 +1138,8 @@ nav a.nav-sub:hover { color: #fff; }
 .a2a-pattern small { color: var(--h-muted); font-size: 11.5px; line-height: 1.4; }
 .a2a-pattern.on { border-color: #ff5ca8; box-shadow: 0 0 16px rgba(255, 92, 168, .35); background: rgba(255, 92, 168, .08); }
 .a2a-pattern:focus-visible { outline: 2px solid #4de8ff; outline-offset: 2px; }
-.gw-form .a2a-chip, .a2a-chip { cursor: pointer; display: inline-flex; flex-direction: row; gap: 6px; align-items: center; white-space: nowrap; }
-.a2a-chip input { margin: 0; accent-color: #ff5ca8; }
+.gw-form .a2a-chip, .a2a-chip { cursor: pointer; display: inline-flex; flex-direction: row; gap: 6px; align-items: center; white-space: nowrap; flex: none; min-width: auto; }
+.a2a-chip input { margin: 0; width: auto; accent-color: #ff5ca8; }
 .a2a-trace { display: flex; flex-direction: column; gap: 3px; max-height: 420px; overflow: auto; }
 .a2a-span { display: grid; grid-template-columns: minmax(150px, 30%) minmax(0, 1fr) 110px; gap: 8px; align-items: center; font-size: 11.5px; }
 .a2a-span-name { padding-left: calc(var(--d) * 12px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #cdd3f5; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }

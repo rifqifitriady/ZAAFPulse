@@ -3,7 +3,7 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="docs/assets/banner-light.svg">
-  <img alt="ZAAFPulse: AI command center for your Mac" src="docs/assets/banner-dark.svg" width="100%">
+  <img alt="ZAAFPulse: AI command center and agentic workspace for your Mac" src="docs/assets/banner-dark.svg" width="100%">
 </picture>
 
 <br>
@@ -241,8 +241,52 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 <details open>
 <summary><b>Second brain</b>: your knowledge as a living map (Obsidian and 14 more sources)</summary>
 <br>
-<p align="center"><img alt="Notes per week grow in 3D while the note graph replays how the vault grew" src="docs/assets/demo-brain.gif" width="82%"></p>
+<p align="center"><img alt="All sources on one map: the note graph replays how Obsidian, Logseq, PARA, Tana, Heybrain, RAG and two vector stores grew" src="docs/assets/demo-brain.gif" width="82%"></p>
 <img alt="Second brain: knowledge growth in 3D, vault metrics and the note graph" src="docs/assets/screen-brain.jpg">
+<table>
+<tr>
+<td width="33%"><img alt="All sources: every source on one map, notes with the same title joined across sources" src="docs/assets/screen-brain-all.jpg"></td>
+<td width="33%"><img alt="Semantic map: a vector store placed by meaning, nearest neighbours linked" src="docs/assets/screen-brain-semantic.jpg"></td>
+<td width="33%"><img alt="PARA: projects, areas, resources and archives in lanes" src="docs/assets/screen-brain-para.jpg"></td>
+</tr>
+</table>
+</details>
+
+<details open>
+<summary><b>Agentic workspace</b>: endpoint, gateway, agents working together, workflows, skills and RAG</summary>
+<br>
+<p align="center"><img alt="A group chat run from the Collaborate page: the orchestrator picks speakers while the live trace, budget and blackboard fill in" src="docs/assets/demo-collab.gif" width="82%"></p>
+<table>
+<tr>
+<td width="50%"><img alt="Agent Gateway overview: API keys flow through the gateway and orchestrator to 17 domain agents, with month totals" src="docs/assets/screen-gateway.jpg"></td>
+<td width="50%"><img alt="Endpoint: base URL, keys, MCP clients, code tools and every endpoint with its scope" src="docs/assets/screen-endpoint.jpg"></td>
+</tr>
+<tr>
+<td width="50%"><img alt="API keys: scopes, allowed models and agents, monthly spend against budget, rate limit and status" src="docs/assets/screen-keys.jpg"></td>
+<td width="50%"><img alt="MCP server: where it is registered, register or remove per client, and the HTTP connection" src="docs/assets/screen-mcp.jpg"></td>
+</tr>
+<tr>
+<td width="50%"><img alt="Code tools: Claude Code, Codex, Gemini CLI, OpenCode, Aider and more, set up on any provider in their own wire format" src="docs/assets/screen-code-tools.jpg"></td>
+<td width="50%"><img alt="Model router: private and approved external providers, quota and cooldown, and the token saver" src="docs/assets/screen-router.jpg"></td>
+</tr>
+<tr>
+<td width="50%"><img alt="Providers: defaults and 52 presets in six groups" src="docs/assets/screen-gateway-providers.jpg"></td>
+<td width="50%"><img alt="Playground: the orchestrator's plan and the answer, with tokens, cost and model calls" src="docs/assets/screen-playground.jpg"></td>
+</tr>
+<tr>
+<td width="50%"><img alt="Workflows: 24 ready-made workflows by category with risk tier, KPI, steps and approval gates" src="docs/assets/screen-workflows.jpg"></td>
+<td width="50%"><img alt="Collaborate: pick a pattern, set effort and budget, and run" src="docs/assets/screen-collaborate.jpg"></td>
+</tr>
+<tr>
+<td width="50%"><img alt="Runs: every collaboration run with pattern, state and approvals waiting" src="docs/assets/screen-runs.jpg"></td>
+<td width="50%"><img alt="A run: answer, budget, trace with OpenTelemetry GenAI span names, steps and blackboard" src="docs/assets/screen-run-trace.jpg"></td>
+</tr>
+<tr>
+<td width="50%"><img alt="Agent skills: nine SKILL.md files served by the gateway and installable into Claude Code" src="docs/assets/screen-skills.jpg"></td>
+<td width="50%"><img alt="RAG service: knowledge bases with documents, chunks and embeddings" src="docs/assets/screen-rag.jpg"></td>
+</tr>
+</table>
+<p align="center"><img alt="Agent Gateway in 3D: keys on the left, the gateway and orchestrator in the middle, domain agents on the right, with pulses for recent calls" src="docs/assets/demo-gateway.gif" width="82%"></p>
 </details>
 
 <details>
@@ -251,7 +295,7 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 <table>
 <tr>
 <td width="50%"><img alt="Projects: a 3D skyline of projects by tokens, sessions and cost" src="docs/assets/screen-projects.jpg"></td>
-<td width="50%"><img alt="Agents and skills: subagents, skills and tools as a 3D toolbelt city" src="docs/assets/screen-agents.jpg"></td>
+<td width="50%"><img alt="Agent skill usage: subagents, skills and tools your AI tools use, as a 3D toolbelt city" src="docs/assets/screen-agents.jpg"></td>
 </tr>
 </table>
 <img alt="Integrations: the MCP hub in 3D with every connection, its health and recent calls" src="docs/assets/screen-integrations.jpg">
@@ -425,7 +469,7 @@ A new key is shown once and masked (`zp_Q7m_k•••••••••••�
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="docs/assets/architecture-light.svg">
-  <img alt="Sources are collected, cached, aggregated and served on 127.0.0.1" src="docs/assets/architecture-dark.svg" width="100%">
+  <img alt="Local logs, second-brain sources and integrations are collected, cached, aggregated and served on 127.0.0.1; apps and code tools reach every model and the agents through the Agent Gateway" src="docs/assets/architecture-dark.svg" width="100%">
 </picture>
 
 | Source | Read from | Gives |
@@ -495,6 +539,7 @@ lib/vault.js           Obsidian vault reader for /api/vault (demo and older clie
 lib/brain/             second brain: Markdown scanner (Obsidian, Logseq, PARA, exports), Notion, Roam, Tana, mem.ai and
                        Heybrain (MCP) connectors, vector stores with PCA/kNN/k-means, a tiny Postgres client, the source registry
 lib/demo.js            seeded synthetic dataset for demo mode
+lib/demo-gateway.js    demo agentic workspace: fictional providers, keys, history, runs, brain sources, an offline model
 lib/office.js          live agent state from transcript tails (AI office)
 lib/reqlogs.js         recent requests, error traces and stream events (Logs)
 lib/timeline.js        per-agent timeline segments with a per-file cache (Time)
@@ -561,7 +606,7 @@ Everything is editable in **Settings** and saved to `config.json`:
 | Theme | follows the system |
 | Price auto-update | on; fetches the public price list every 12 hours (toggle in Settings) |
 
-Environment variables: `PORT` (default `4777`) and `DEMO=1` for synthetic data (demo mode never writes `config.json` or fetches anything; it uses the cached price list if one exists).
+Environment variables: `PORT` (default `4777`) and `DEMO=1` for synthetic data. Demo mode never writes `config.json`, the Keychain or your coding tools, and fetches nothing: model calls are answered by a scripted model inside the process, and gateway data lives in a temporary folder. It uses the cached price list if one exists.
 </details>
 
 <br>
