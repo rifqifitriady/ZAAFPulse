@@ -93,16 +93,21 @@ const integrationConfig = createIntegrationConfig({ file: CONFIG_FILE, secrets: 
 // Agent Gateway: OpenAI-compatible /v1 API, agents, orchestrator and MCP over HTTP, behind ZAAFPulse
 // API keys. Provider settings live in config.json under "gateway"; keys, agents, sessions and memory
 // in .data/ (demo mode uses a throwaway folder so it never touches your data).
-let rawCache = { mtime: -1, value: {} };
+// DEMO=1 keeps everything in a throwaway folder: gateway data, second-brain files and the code-tool home.
+const demoDir = DEMO ? fs.mkdtempSync(path.join(os.tmpdir(), 'zp-demo-')) : null;
+const demoGw = DEMO ? require('./lib/demo-gateway') : null;
+let demoReady = !DEMO;
+let rawCache = { mtime: -1, value: DEMO ? { gateway: demoGw.CONFIG, brain: { sources: demoGw.BRAIN_SOURCES(path.join(demoDir, 'brain')) } } : {} };
 function rawConfig() {
   if (DEMO) return rawCache.value;
   let mtime = 0; try { mtime = fs.statSync(CONFIG_FILE).mtimeMs; } catch { /* none yet */ }
   if (mtime !== rawCache.mtime) { try { rawCache = { mtime, value: JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) }; } catch { rawCache = { mtime, value: {} }; } }
   return rawCache.value;
 }
-const gatewaySecret = secretResolver({ store: keychainStore });
+const gatewaySecret = secretResolver({ store: DEMO ? () => {} : keychainStore });
 const gateway = createGateway({
-  dataDir: DEMO ? fs.mkdtempSync(path.join(os.tmpdir(), 'zp-demo-')) : path.join(DIR, '.data'),
+  dataDir: DEMO ? demoDir : path.join(DIR, '.data'),
+  ...(DEMO ? { fetchImpl: demoGw.createDemoFetch(), toolsHome: demoDir } : {}),
   getConfig: rawConfig,
   writeGatewayConfig: (g) => {
     if (DEMO) { rawCache.value = { ...rawCache.value, gateway: g }; return; }
@@ -132,6 +137,7 @@ const brain = createBrain({
   resolveSecret: (id, input, current) => gatewaySecret(`brain-${id}`, { key: 'token', label: 'secret', required: false }, input, current),
   knowledge: gateway.knowledge,
   getVaultPaths: () => config.vaultPaths || [],
+  ...(DEMO ? { demoGraph: (s) => (s.type === 'obsidian' ? demo.vault() : demoGw.VECTORS[s.id] ? require('./lib/brain/vectors').semanticGraph(s.name, demoGw.VECTORS[s.id]()) : null) } : {}),
 });
 gateway.setBrain(brain);
 
@@ -147,7 +153,7 @@ const openRouter = createOpenRouter({
 });
 function clientRows() {
   return Object.entries(register.clients()).map(([id, c]) => ({
-    id, name: c.name, file: c.file.replace(os.homedir(), '~'), registered: register.isRegistered(c.file), command: `npm run mcp:register -- ${id}`,
+    id, name: c.name, file: c.file.replace(os.homedir(), '~'), registered: DEMO ? id !== 'kiro' : register.isRegistered(c.file), // demo never reads your client configs command: `npm run mcp:register -- ${id}`,
   }));
 }
 
@@ -208,7 +214,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ...getSummary(range), config: { userName: config.userName, monthlyBudgetUSD: config.monthlyBudgetUSD, host: HOSTNAME }, index: indexer.state });
     }
     if (url.pathname === '/api/live') {
-      return send(res, 200, { ...(DEMO ? demo.live() : await processes.snapshot()), index: indexer.state });
+      return send(res, 200, { ...(DEMO ? { ...demo.live(), demoReady } : await processes.snapshot()), index: indexer.state });
     }
     if (url.pathname === '/api/insights') {
       const r = url.searchParams.get('range') || '30';
@@ -250,12 +256,10 @@ const server = http.createServer(async (req, res) => {
       } catch (err) { return send(res, 200, { errors: [err.message], log, clients: clientRows() }); }
     }
     if (url.pathname === '/api/brain' && req.method === 'GET') {
-      if (DEMO) return send(res, 200, { types: brain.TYPES, sources: [{ id: 'obsidian', type: 'obsidian', name: 'Obsidian (demo)', enabled: true, builtin: true, label: 'Obsidian', family: 'Notes' }] });
       return send(res, 200, { types: brain.TYPES, sources: brain.sources() });
     }
     if (url.pathname === '/api/brain/graph') {
       const id = url.searchParams.get('source') || 'obsidian';
-      if (DEMO) return send(res, 200, { ...demo.vault(), source: { id: 'obsidian', type: 'obsidian', name: 'Obsidian (demo)', label: 'Obsidian' }, layout: 'network' });
       return send(res, 200, await brain.graph(id, { fresh: url.searchParams.get('fresh') === '1' }));
     }
     if (url.pathname === '/api/brain/sources' && req.method === 'POST') {
@@ -392,6 +396,9 @@ server.listen(PORT, HOST, () => {
   const syncPrices = () => { if (!DEMO && config.pricingSync.enabled && priceSync.stale()) priceSync.refresh(); };
   syncPrices();
   setInterval(syncPrices, 3600 * 1000).unref();
+  // Demo: seed the workspace, then run chats, agents, collaboration patterns and workflows once.
+  if (DEMO) demoGw.seed(gateway, { dataDir: demoDir }).then(() => demoGw.warm(`http://127.0.0.1:${PORT}`, gateway))
+    .catch((err) => console.error('demo seed:', err.message)).finally(() => { demoReady = true; });
 });
 
 // Sessions are written within a second; flush them when launchd or Ctrl-C stops the server.
