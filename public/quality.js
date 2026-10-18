@@ -38,7 +38,8 @@ function qualityKpis() {
   const q = state.data.quality;
   const topKind = q.kinds.find((k) => KIND_HELP[k.label]);
   const inj = q.injection; const c = q.corrections;
-  return `<div class="grid kpis">
+  const rel = q.relevance || {}; const fa = q.faithfulness || {};
+  return `<div class="grid kpis six">
     ${kpiCard({ title: 'Accuracy', chip: 'green', ic: 'target', drill: 'accuracy', value: q.accuracy ?? 0, fmt: 'pct',
       after: pts(q.accuracy, q.prevAccuracy), sub: `${whole.format(q.modelFailures)} model-caused failures in ${fmtN(q.results)} tool calls` })}
     ${kpiCard({ title: 'Hallucination signals', chip: 'violet', ic: 'ghost', drill: 'hallucination', value: q.hallucinations, fmt: 'int',
@@ -48,6 +49,10 @@ function qualityKpis() {
     ${kpiCard({ title: 'Correction rate', chip: 'amber', ic: 'undo', drill: 'corrections', value: c.rate, fmt: 'pct',
       after: pts(c.rate, c.prevRate, true),
       sub: `${c.corrections} corrections · ${c.interrupts} interrupts · ${c.rejections} rejections` })}
+    ${kpiCard({ title: 'Relevance', chip: 'blue', ic: 'compass', drill: 'relevance', value: rel.score ?? 0, fmt: 'pct',
+      after: pts(rel.score, rel.prev), sub: rel.turns ? `${fmtN(rel.turns)} turns graded · ${rel.low} off-topic` : 'no graded turns yet' })}
+    ${kpiCard({ title: 'Faithfulness', chip: fa.unsupported ? 'amber' : 'green', ic: 'anchor', drill: 'faithfulness', value: fa.score ?? 0, fmt: 'pct',
+      after: pts(fa.score, fa.prev), sub: fa.claims ? `${fmtN(fa.grounded)} of ${fmtN(fa.claims)} references grounded` : 'no checkable references yet' })}
   </div>`;
 }
 
@@ -58,7 +63,7 @@ function failureSeries() {
 function viewQuality() {
   const q = state.data.quality; const s = q.safety; const r = q.reliability;
   const tile = (drill, label, value, sub, warn) => `<div class="tile clickable${warn ? ' warn' : ''}" role="button" tabindex="0" data-drill="${drill}"><span>${label}</span><b class="num">${counter(value, 'int')}</b><small>${sub}</small></div>`;
-  return hero('QUALITY & SAFETY', 'How well your AI is working', `Accuracy, hallucination, poisoning and safety signals from the ${rangeText()}.`) +
+  return hero('QUALITY & SAFETY', 'How well your AI is working', `Accuracy, relevance, faithfulness, hallucination, poisoning and safety signals from the ${rangeText()}.`) +
     `<div class="notice info">${icon('alert')}<div><b>These are signals detected in your local logs</b>, not a graded evaluation. Every card opens the exact items that were matched, so you can judge them yourself.</div></div>
     ${qualityKpis()}
     <section class="holo stage failures-stage">
@@ -158,6 +163,40 @@ const QUALITY_DRILLS = {
         dsec(2, 'By pattern', barList(Object.entries(labels).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
           { value: (x) => x.count, label: (x) => esc(x.name), color: () => 'var(--accent)', fmt: (v) => whole.format(v), empty: 'No injection patterns matched.' })) +
         dsec(3, 'Every match', eventList(q.events.injection)),
+    };
+  },
+
+  relevance() {
+    const q = state.data.quality; const r = q.relevance;
+    const days = q.daily.filter((d) => d.relevance != null);
+    return {
+      eyebrow: `QUALITY · ${rangeText().toUpperCase()}`, title: 'Answer relevance',
+      body: tiles([
+        ['Relevance', counter(r.score ?? 0, 'pct'), r.prev == null ? 'no earlier period' : `${pct(r.prev)} the period before`],
+        ['Turns graded', counter(r.turns, 'n'), 'prompts with 3+ key terms'],
+        ['Off-topic turns', counter(r.low, 'int'), 'below 30%'],
+        ['Best day', counter(days.length ? Math.max(...days.map((d) => d.relevance)) : 0, 'pct'), days.length ? `${days.length} days with graded turns` : '—'],
+      ]) +
+        dsec(1, 'How relevance is measured', `<p class="drawer-note" style="margin:0">Each typed prompt and everything the model did until your next prompt is one turn. Relevance is the share of the prompt's key terms (words without stop words in English and Indonesian, plus file names, identifiers and numbers) that the reply or the turn's tool calls address. Half of the terms counts as fully relevant, because a good answer does not repeat every word of the question. It is computed on this Mac, with no judge model, and no text is stored. Replies in another language than the prompt score lower: read the list before acting on it.</p>`) +
+        dsec(2, 'Relevance per day', days.length ? barList(days.slice(-14).reverse(), { value: (d) => d.relevance, label: (d) => esc(dayLabel(d.date)), color: () => 'var(--tt-input)', fmt: (v) => pct(v), max: 1 }) : '<div class="empty">No graded turns in this range.</div>') +
+        dsec(3, 'Off-topic turns', eventList(q.events.relevance, 'No low-relevance turns in this range.')),
+    };
+  },
+
+  faithfulness() {
+    const q = state.data.quality; const f = q.faithfulness;
+    const days = q.daily.filter((d) => d.faithfulness != null);
+    return {
+      eyebrow: `QUALITY · ${rangeText().toUpperCase()}`, title: 'Faithfulness',
+      body: tiles([
+        ['Faithfulness', counter(f.score ?? 0, 'pct'), f.prev == null ? 'no earlier period' : `${pct(f.prev)} the period before`],
+        ['References checked', counter(f.claims, 'n'), 'file names, identifiers, URLs, numbers'],
+        ['Grounded', counter(f.grounded, 'n'), 'seen in prompts, tool inputs or results'],
+        ['Unsupported', counter(f.unsupported, 'int'), 'mentioned but never seen'],
+      ]) +
+        dsec(1, 'How faithfulness is measured', `<p class="drawer-note" style="margin:0">A faithful answer only states what its context supports. In every reply, the checkable references are collected: file names, <code>identifiers</code> in backticks, URLs, and numbers with three or more digits, decimals or a percent sign. Each one is grounded when it appeared earlier in the session: in your prompts, in what the model passed to its tools, or in what the tools returned. A reference that appeared nowhere is unsupported. That is not always wrong (a sum it computed, a file it proposes to create), but it is where invented paths, APIs and numbers show up. Computed locally, with no text stored.</p>`) +
+        dsec(2, 'Faithfulness per day', days.length ? barList(days.slice(-14).reverse(), { value: (d) => d.faithfulness, label: (d) => esc(dayLabel(d.date)), color: () => 'var(--tt-cread)', fmt: (v) => pct(v), max: 1 }) : '<div class="empty">No checkable references in this range.</div>') +
+        dsec(3, 'Replies with unsupported references', eventList(q.events.unsupported, 'Every reference in this range was grounded.')),
     };
   },
 
