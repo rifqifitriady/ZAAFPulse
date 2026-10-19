@@ -1,6 +1,6 @@
 ---
 name: zaafpulse
-description: Entry point for ZAAFPulse, the local AI gateway on this Mac (http://127.0.0.1:4777). It offers OpenAI-, Anthropic-, Responses- and Gemini-compatible chat over any configured provider, 17 domain agents, multi-agent collaboration, ready-made workflows, RAG knowledge bases, a second-brain map, MCP tools and A2A. Use it when the user mentions ZAAFPulse, ZAAFPULSE_URL, their local gateway or agents, or wants AI work done through their own keys and models. This skill covers setup and points to one capability skill per task.
+description: Entry point for ZAAFPulse, the local AI gateway on this machine (http://127.0.0.1:4777). It offers OpenAI-, Anthropic-, Responses- and Gemini-compatible chat over any configured provider, 17 domain agents, multi-agent collaboration, ready-made workflows, RAG knowledge bases, a second-brain map, MCP tools and A2A. Use it when the user mentions ZAAFPulse, ZAAFPULSE_URL, their local gateway or agents, or wants AI work done through their own keys and models. This skill covers setup and points to one capability skill per task.
 ---
 
 # ZAAFPulse
@@ -10,7 +10,7 @@ ZAAFPulse is the user's own AI gateway and agent platform, running on this machi
 ## Setup
 
 ```bash
-export ZAAFPULSE_URL="http://127.0.0.1:4777"   # the gateway only listens on this Mac
+export ZAAFPULSE_URL="http://127.0.0.1:4777"   # the gateway only listens on this machine
 export ZAAFPULSE_KEY="zp_..."                   # Dashboard → Endpoint → API keys (or Agent Skills → New key for skills)
 ```
 

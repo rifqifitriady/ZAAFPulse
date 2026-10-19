@@ -11,9 +11,12 @@ const { createRequire } = require('module');
 
 const raw = Buffer.from(sea.getAsset('app.json.gz'));
 const id = crypto.createHash('sha256').update(raw).digest('hex').slice(0, 12);
-const cacheRoot = process.env.ZAAFPULSE_APP_CACHE
-  || (process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'ZAAFPulse', 'app')
-    : process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Caches', 'ZAAFPulse', 'app')
+const cacheRoot =
+  process.env.ZAAFPULSE_APP_CACHE ||
+  (process.platform === 'win32'
+    ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'ZAAFPulse', 'app')
+    : process.platform === 'darwin'
+      ? path.join(os.homedir(), 'Library', 'Caches', 'ZAAFPulse', 'app')
       : path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'), 'zaafpulse', 'app'));
 const dir = path.join(cacheRoot, id);
 
@@ -26,9 +29,14 @@ if (!fs.existsSync(path.join(dir, '.complete'))) {
     fs.writeFileSync(f, Buffer.from(b64, 'base64'));
   }
   fs.writeFileSync(path.join(tmp, '.complete'), new Date().toISOString());
-  try { fs.renameSync(tmp, dir); } catch { fs.rmSync(tmp, { recursive: true, force: true }); } // another copy won the race
+  try {
+    fs.renameSync(tmp, dir);
+  } catch {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  } // another copy won the race
   // Older unpacked builds are no longer needed.
-  for (const old of fs.readdirSync(cacheRoot)) if (old !== id && !old.includes('.tmp-')) fs.rmSync(path.join(cacheRoot, old), { recursive: true, force: true });
+  for (const old of fs.readdirSync(cacheRoot))
+    if (old !== id && !old.includes('.tmp-')) fs.rmSync(path.join(cacheRoot, old), { recursive: true, force: true });
 }
 
 createRequire(path.join(dir, 'bin', 'zaafpulse.js'))('./zaafpulse.js');

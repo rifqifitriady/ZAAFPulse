@@ -10,61 +10,153 @@ const { routeByKeywords, firstJson } = require('../lib/gateway/orchestrator');
 const { TEMPLATES } = require('../lib/gateway/agents');
 
 const PRICING = { 'llama-9': { input: 1, output: 2 } };
-const completion = (content, extra = {}) => ({ id: 'c1', object: 'chat.completion', choices: [{ index: 0, message: { role: 'assistant', content, ...extra }, finish_reason: 'stop' }], usage: { prompt_tokens: 1000, completion_tokens: 500 } });
+const completion = (content, extra = {}) => ({
+  id: 'c1',
+  object: 'chat.completion',
+  choices: [{ index: 0, message: { role: 'assistant', content, ...extra }, finish_reason: 'stop' }],
+  usage: { prompt_tokens: 1000, completion_tokens: 500 },
+});
 
 async function setup(handler) {
-  const upstream = await fakeServer({ 'POST /chat/completions': handler, 'GET /models': { body: { data: [{ id: 'llama-9' }, { id: 'tiny' }] } }, 'POST /embeddings': { body: { data: [{ embedding: [0.1] }], usage: { prompt_tokens: 3 } } } });
+  const upstream = await fakeServer({
+    'POST /chat/completions': handler,
+    'GET /models': { body: { data: [{ id: 'llama-9' }, { id: 'tiny' }] } },
+    'POST /embeddings': { body: { data: [{ embedding: [0.1] }], usage: { prompt_tokens: 3 } } },
+  });
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'acc-gw-'));
-  let gw = { providers: [{ id: 'fake', preset: 'custom', baseUrl: upstream.url, models: [], enabled: true }], defaults: { model: 'fake/llama-9', plannerModel: 'fake/llama-9' } };
-  const tools = [{ name: 'dynatrace_list_problems', description: 'Problems', inputSchema: { type: 'object', properties: {} } }];
+  let gw = {
+    providers: [{ id: 'fake', preset: 'custom', baseUrl: upstream.url, models: [], enabled: true }],
+    defaults: { model: 'fake/llama-9', plannerModel: 'fake/llama-9' },
+  };
+  const tools = [
+    { name: 'dynatrace_list_problems', description: 'Problems', inputSchema: { type: 'object', properties: {} } },
+  ];
   const calls = [];
-  const integrations = { listTools: async () => tools, callTool: async (name, args) => { calls.push([name, args]); return { result: { content: [{ type: 'text', text: '2 open problems' }] } }; } };
-  const gateway = createGateway({ dataDir, getConfig: () => ({ gateway: gw }), writeGatewayConfig: (g) => { gw = g; }, secrets: secretsFor(), resolveSecret: () => undefined, getPricing: () => PRICING, getIntegrations: () => integrations });
-  const server = http.createServer(async (req, res) => { if (!(await gateway.handle(req, res, new URL(req.url, 'http://x')))) { res.writeHead(404); res.end(); } });
+  const integrations = {
+    listTools: async () => tools,
+    callTool: async (name, args) => {
+      calls.push([name, args]);
+      return { result: { content: [{ type: 'text', text: '2 open problems' }] } };
+    },
+  };
+  const gateway = createGateway({
+    dataDir,
+    getConfig: () => ({ gateway: gw }),
+    writeGatewayConfig: (g) => {
+      gw = g;
+    },
+    secrets: secretsFor(),
+    resolveSecret: () => undefined,
+    getPricing: () => PRICING,
+    getIntegrations: () => integrations,
+  });
+  const server = http.createServer(async (req, res) => {
+    if (!(await gateway.handle(req, res, new URL(req.url, 'http://x')))) {
+      res.writeHead(404);
+      res.end();
+    }
+  });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   const call = async (p, { key, method = 'POST', body, headers = {} } = {}) => {
-    const r = await fetch(base + p, { method, headers: { 'content-type': 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}), ...headers }, body: body ? JSON.stringify(body) : undefined });
-    const text = await r.text(); let json = null; try { json = JSON.parse(text); } catch { /* sse */ }
+    const r = await fetch(base + p, {
+      method,
+      headers: { 'content-type': 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}), ...headers },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const text = await r.text();
+    let json = null;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      /* sse */
+    }
     return { status: r.status, json, text, headers: r.headers };
   };
-  return { gateway, upstream, call, calls, close: async () => { server.close(); await upstream.close(); } };
+  return {
+    gateway,
+    upstream,
+    call,
+    calls,
+    close: async () => {
+      server.close();
+      await upstream.close();
+    },
+  };
 }
 
 test('keys: auth, scopes, allowed models, rate limit and budget', async () => {
   const t = await setup(() => ({ body: completion('hi') }));
   try {
     assert.equal((await t.call('/v1/models', { method: 'GET' })).status, 401);
-    const { secret, key } = t.gateway.keys.create({ name: 'app', scopes: ['llm'], models: ['fake/llama-*'], rpm: 4, budgetUSD: 0.002 });
-    assert.match(secret, /^zp_/); assert.ok(!JSON.stringify(t.gateway.keys.list()).includes(secret));
+    const { secret, key } = t.gateway.keys.create({
+      name: 'app',
+      scopes: ['llm'],
+      models: ['fake/llama-*'],
+      rpm: 4,
+      budgetUSD: 0.002,
+    });
+    assert.match(secret, /^zp_/);
+    assert.ok(!JSON.stringify(t.gateway.keys.list()).includes(secret));
     const models = await t.call('/v1/models', { key: secret, method: 'GET' });
-    assert.deepEqual(models.json.data.map((m) => m.id), ['fake/llama-9']); // tiny is not allowed, no agents scope
-    assert.equal((await t.call('/v1/chat/completions', { key: secret, body: { model: 'fake/tiny', messages: [] } })).status, 403);
-    const ok = await t.call('/v1/chat/completions', { key: secret, body: { model: 'fake/llama-9', messages: [{ role: 'user', content: 'x' }] } });
-    assert.equal(ok.status, 200); assert.equal(ok.json.model, 'fake/llama-9');
+    assert.deepEqual(
+      models.json.data.map((m) => m.id),
+      ['fake/llama-9'],
+    ); // tiny is not allowed, no agents scope
+    assert.equal(
+      (await t.call('/v1/chat/completions', { key: secret, body: { model: 'fake/tiny', messages: [] } })).status,
+      403,
+    );
+    const ok = await t.call('/v1/chat/completions', {
+      key: secret,
+      body: { model: 'fake/llama-9', messages: [{ role: 'user', content: 'x' }] },
+    });
+    assert.equal(ok.status, 200);
+    assert.equal(ok.json.model, 'fake/llama-9');
     assert.equal(t.upstream.requests.at(-1).body.model, 'llama-9');
     assert.ok(Math.abs(t.gateway.usage.monthSpend(key.id) - 0.002) < 1e-9); // 1000 in × $1 + 500 out × $2 per 1M
     const broke = await t.call('/v1/chat/completions', { key: secret, body: { model: 'fake/llama-9', messages: [] } });
     assert.equal(broke.status, 402);
     assert.equal((await t.call('/v1/agents', { key: secret, method: 'GET' })).status, 403); // no agents scope
     const limited = await t.call('/v1/models', { key: secret, method: 'GET' });
-    assert.equal(limited.status, 429); assert.ok(Number(limited.headers.get('retry-after')) > 0);
+    assert.equal(limited.status, 429);
+    assert.ok(Number(limited.headers.get('retry-after')) > 0);
     t.gateway.keys.revoke(key.id);
     assert.equal((await t.call('/v1/models', { key: secret, method: 'GET' })).status, 401);
-  } finally { await t.close(); }
+  } finally {
+    await t.close();
+  }
 });
 
 test('streaming passes chunks through and records usage from the final chunk', async () => {
-  const sse = ['{"choices":[{"delta":{"content":"Hel"}}]}', '{"choices":[{"delta":{"content":"lo"}}]}', '{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2}}'].map((d) => `data: ${d}\n\n`).join('') + 'data: [DONE]\n\n';
-  const t = await setup((r) => (r.body.stream ? { headers: { 'content-type': 'text/event-stream' }, body: sse } : { body: completion('x') }));
+  const sse =
+    [
+      '{"choices":[{"delta":{"content":"Hel"}}]}',
+      '{"choices":[{"delta":{"content":"lo"}}]}',
+      '{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2}}',
+    ]
+      .map((d) => `data: ${d}\n\n`)
+      .join('') + 'data: [DONE]\n\n';
+  const t = await setup((r) =>
+    r.body.stream ? { headers: { 'content-type': 'text/event-stream' }, body: sse } : { body: completion('x') },
+  );
   try {
     const { secret } = t.gateway.keys.create({ name: 's', scopes: ['llm'] });
-    const r = await t.call('/v1/chat/completions', { key: secret, body: { model: 'fake/llama-9', stream: true, messages: [{ role: 'user', content: 'x' }] } });
-    assert.equal(r.status, 200); assert.ok(r.text.includes('"Hel"') && r.text.includes('[DONE]'));
+    const r = await t.call('/v1/chat/completions', {
+      key: secret,
+      body: { model: 'fake/llama-9', stream: true, messages: [{ role: 'user', content: 'x' }] },
+    });
+    assert.equal(r.status, 200);
+    assert.ok(r.text.includes('"Hel"') && r.text.includes('[DONE]'));
     assert.equal(t.upstream.requests.at(-1).body.stream_options.include_usage, true);
     const e = t.gateway.usage.recent(1)[0];
-    assert.equal(e.input, 10); assert.equal(e.output, 2); assert.equal(e.stream, true); assert.ok(e.ttft != null);
-  } finally { await t.close(); }
+    assert.equal(e.input, 10);
+    assert.equal(e.output, 2);
+    assert.equal(e.stream, true);
+    assert.ok(e.ttft != null);
+  } finally {
+    await t.close();
+  }
 });
 
 test('agents: tool loop over integration tools, sessions and agent models', async () => {
@@ -72,58 +164,103 @@ test('agents: tool loop over integration tools, sessions and agent models', asyn
   const t = await setup((r) => {
     n++;
     if (r.body.messages.some((m) => m.role === 'tool')) return { body: completion('There are 2 open problems.') };
-    return { body: completion(null, { tool_calls: [{ id: 't1', type: 'function', function: { name: 'dynatrace_list_problems', arguments: '{}' } }] }) };
+    return {
+      body: completion(null, {
+        tool_calls: [{ id: 't1', type: 'function', function: { name: 'dynatrace_list_problems', arguments: '{}' } }],
+      }),
+    };
   });
   try {
     const { secret } = t.gateway.keys.create({ name: 'a', scopes: ['agents'], agents: ['network-ops'] });
     const r = await t.call('/v1/agents/network-ops/run', { key: secret, body: { input: 'any outages?' } });
-    assert.equal(r.status, 200); assert.equal(r.json.text, 'There are 2 open problems.');
-    assert.deepEqual(t.calls, [['dynatrace_list_problems', {}]]); assert.equal(r.json.calls[0].tool, 'dynatrace_list_problems');
+    assert.equal(r.status, 200);
+    assert.equal(r.json.text, 'There are 2 open problems.');
+    assert.deepEqual(t.calls, [['dynatrace_list_problems', {}]]);
+    assert.equal(r.json.calls[0].tool, 'dynatrace_list_problems');
     const toolsSent = t.upstream.requests[0].body.tools.map((x) => x.function.name);
     assert.ok(toolsSent.includes('dynatrace_list_problems') && toolsSent.includes('zp_memory_save'));
     assert.equal((await t.call('/v1/agents/hr-finance/run', { key: secret, body: { input: 'x' } })).status, 403);
     // The same agent through chat completions, continuing the session.
-    const c = await t.call('/v1/chat/completions', { key: secret, headers: { 'x-zp-session': r.json.session_id }, body: { model: 'agent/network-ops', messages: [{ role: 'user', content: 'and now?' }] } });
-    assert.equal(c.status, 200); assert.equal(c.headers.get('x-zp-session'), r.json.session_id);
+    const c = await t.call('/v1/chat/completions', {
+      key: secret,
+      headers: { 'x-zp-session': r.json.session_id },
+      body: { model: 'agent/network-ops', messages: [{ role: 'user', content: 'and now?' }] },
+    });
+    assert.equal(c.status, 200);
+    assert.equal(c.headers.get('x-zp-session'), r.json.session_id);
     const s = await t.call(`/v1/sessions/${r.json.session_id}`, { key: secret, method: 'GET' });
     assert.equal(s.json.messages.length, 4);
     const other = t.gateway.keys.create({ name: 'b', scopes: ['agents'] }).secret;
     assert.equal((await t.call(`/v1/sessions/${r.json.session_id}`, { key: other, method: 'GET' })).status, 404);
     assert.ok(n >= 4);
-  } finally { await t.close(); }
+  } finally {
+    await t.close();
+  }
 });
 
 test('orchestrator: planner JSON picks agents; a bad plan falls back to keyword routing', async () => {
-  let plannerReply = '{"steps":[{"agent":"network-ops","instruction":"check the outage"},{"agent":"content-writer","instruction":"write the status update"}],"reason":"two parts"}';
-  const t = await setup((r) => (r.body.messages[0].content.startsWith('You are the ZAAFPulse planner') ? { body: completion(plannerReply) } : { body: completion(`done by ${r.body.messages[0].content.match(/You are the (.+?) agent/)[1]}`) }));
+  let plannerReply =
+    '{"steps":[{"agent":"network-ops","instruction":"check the outage"},{"agent":"content-writer","instruction":"write the status update"}],"reason":"two parts"}';
+  const t = await setup((r) =>
+    r.body.messages[0].content.startsWith('You are the ZAAFPulse planner')
+      ? { body: completion(plannerReply) }
+      : { body: completion(`done by ${r.body.messages[0].content.match(/You are the (.+?) agent/)[1]}`) },
+  );
   try {
     const { secret } = t.gateway.keys.create({ name: 'o', scopes: ['agents'] });
-    const r = await t.call('/v1/orchestrate', { key: secret, body: { task: 'There is a network outage, tell customers' } });
-    assert.equal(r.json.plan.method, 'planner'); assert.deepEqual(r.json.steps.map((s) => s.agent), ['network-ops', 'content-writer']);
+    const r = await t.call('/v1/orchestrate', {
+      key: secret,
+      body: { task: 'There is a network outage, tell customers' },
+    });
+    assert.equal(r.json.plan.method, 'planner');
+    assert.deepEqual(
+      r.json.steps.map((s) => s.agent),
+      ['network-ops', 'content-writer'],
+    );
     // The writer builds on the network step (a chain), so its output is the answer, forwarded verbatim.
-    assert.equal(r.json.answer, 'done by Content Writer'); assert.equal(r.json.state, 'completed');
+    assert.equal(r.json.answer, 'done by Content Writer');
+    assert.equal(r.json.state, 'completed');
     const writer = t.upstream.requests.find((q) => /You are the Content Writer agent/.test(q.body.messages[0].content));
     assert.match(writer.body.messages[0].content, /<agent_output from="network-ops">\ndone by Network Operations/);
-    assert.ok(r.json.trace.some((s) => s.name === 'invoke_agent network-ops') && r.json.trace.some((s) => s.name === 'plan'));
+    assert.ok(
+      r.json.trace.some((s) => s.name === 'invoke_agent network-ops') && r.json.trace.some((s) => s.name === 'plan'),
+    );
     plannerReply = 'sorry, no JSON';
     const f = await t.call('/v1/orchestrate', { key: secret, body: { task: 'my payroll and leave balance' } });
-    assert.match(f.json.plan.method, /^keywords/); assert.equal(f.json.steps[0].agent, 'hr-finance');
-  } finally { await t.close(); }
+    assert.match(f.json.plan.method, /^keywords/);
+    assert.equal(f.json.steps[0].agent, 'hr-finance');
+  } finally {
+    await t.close();
+  }
 });
 
 test('MCP over HTTP needs the mcp scope and lists integration tools', async () => {
   const t = await setup(() => ({ body: completion('x') }));
   try {
     const noMcp = t.gateway.keys.create({ name: 'n', scopes: ['llm'] }).secret;
-    assert.equal((await t.call('/mcp', { key: noMcp, body: { jsonrpc: '2.0', id: 1, method: 'tools/list' } })).status, 403);
+    assert.equal(
+      (await t.call('/mcp', { key: noMcp, body: { jsonrpc: '2.0', id: 1, method: 'tools/list' } })).status,
+      403,
+    );
     const k = t.gateway.keys.create({ name: 'm', scopes: ['mcp'] }).secret;
-    const init = await t.call('/mcp', { key: k, body: { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } } });
+    const init = await t.call('/mcp', {
+      key: k,
+      body: { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } },
+    });
     assert.equal(init.json.result.serverInfo.name, 'zaafpulse-gateway');
     const list = await t.call('/mcp', { key: k, body: { jsonrpc: '2.0', id: 2, method: 'tools/list' } });
-    assert.deepEqual(list.json.result.tools.map((x) => x.name), ['dynatrace_list_problems']);
-    const callR = await t.call('/mcp', { key: k, body: { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'dynatrace_list_problems', arguments: {} } } });
+    assert.deepEqual(
+      list.json.result.tools.map((x) => x.name),
+      ['dynatrace_list_problems'],
+    );
+    const callR = await t.call('/mcp', {
+      key: k,
+      body: { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'dynatrace_list_problems', arguments: {} } },
+    });
     assert.equal(callR.json.result.content[0].text, '2 open problems');
-  } finally { await t.close(); }
+  } finally {
+    await t.close();
+  }
 });
 
 test('helpers: keyword routing, JSON extraction and 17 agent templates', () => {

@@ -16,16 +16,33 @@ const CONFIG_FILE = process.env.ACC_CONFIG || path.join(DIR, 'config.json');
 const CACHE_DIR = process.env.ACC_CACHE_DIR || path.join(DIR, '.cache');
 const log = (m) => process.stderr.write(`[ai-command-center] ${m}\n`);
 
-const INSTRUCTIONS = 'ZAAFPulse (AI Command Center) on this machine. Tool names are prefixed with an integration id: acc_* reads local AI usage, cost, quality and running apps; other prefixes reach the platforms configured in config.json (Dynatrace, Arize, n8n, AI routers, HTTP APIs, upstream MCP servers). Call acc_integrations_status first to see what is connected. Write tools only appear for integrations with allowWrite enabled.';
+const INSTRUCTIONS =
+  'ZAAFPulse (AI Command Center) on this machine. Tool names are prefixed with an integration id: acc_* reads local AI usage, cost, quality and running apps; other prefixes reach the platforms configured in config.json (Dynatrace, Arize, n8n, AI routers, HTTP APIs, upstream MCP servers). Call acc_integrations_status first to see what is connected. Write tools only appear for integrations with allowWrite enabled.';
 
 let config = {};
-try { config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); } catch (err) { if (err.code !== 'ENOENT') log(`config.json is unreadable, starting with defaults: ${err.message}`); }
+try {
+  config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+} catch (err) {
+  if (err.code !== 'ENOENT') log(`config.json is unreadable, starting with defaults: ${err.message}`);
+}
 
 const secrets = createSecrets();
 const local = createLocal({ cacheDir: CACHE_DIR, config });
-const integrations = createIntegrations({ config, secrets, audit: createAudit(path.join(CACHE_DIR, 'mcp-audit.jsonl')), local });
+const integrations = createIntegrations({
+  config,
+  secrets,
+  audit: createAudit(path.join(CACHE_DIR, 'mcp-audit.jsonl')),
+  local,
+});
 local.integrationsStatus = () => integrations.status();
 
-createServer({ name: 'ai-command-center', version, instructions: INSTRUCTIONS, listTools: integrations.listTools, callTool: integrations.callTool, log })
+createServer({
+  name: 'ai-command-center',
+  version,
+  instructions: INSTRUCTIONS,
+  listTools: integrations.listTools,
+  callTool: integrations.callTool,
+  log,
+})
   .serve()
   .then(() => process.exit(0));

@@ -11,13 +11,20 @@ const fake = {
     if (cfg.broken) throw new Error('bad config key-abcdef');
     return {
       tools: [
-        tool('read', 'Read', { q: S.str('Query'), n: S.int('N') }, async (a) => ({ got: a.q ?? null }), { required: [] }),
+        tool('read', 'Read', { q: S.str('Query'), n: S.int('N') }, async (a) => ({ got: a.q ?? null }), {
+          required: [],
+        }),
         tool('need', 'Needs q', { q: S.str('Query') }, async (a) => a.q, { required: ['q'] }),
         tool('write', 'Write', {}, async () => 'done', { write: true, annotations: { destructiveHint: false } }),
-        tool('boom', 'Fails', {}, async () => { throw new Error('upstream said key-abcdef'); }),
+        tool('boom', 'Fails', {}, async () => {
+          throw new Error('upstream said key-abcdef');
+        }),
         tool('big', 'Large', {}, async () => 'x'.repeat(60000)),
       ],
-      health: async () => { healthCalls++; return { ok: true, latencyMs: 3 }; },
+      health: async () => {
+        healthCalls++;
+        return { ok: true, latencyMs: 3 };
+      },
     };
   },
 };
@@ -29,7 +36,9 @@ const build = (integrations, extra = {}) => {
 };
 
 test('prefixes tools and hides write tools without allowWrite', async () => {
-  const names = (await build({ one: { type: 'fake' }, two: { type: 'fake', allowWrite: true } }).listTools()).map((t) => t.name);
+  const names = (await build({ one: { type: 'fake' }, two: { type: 'fake', allowWrite: true } }).listTools()).map(
+    (t) => t.name,
+  );
   assert.ok(names.includes('one_read'));
   assert.ok(!names.includes('one_write'));
   assert.ok(names.includes('two_write'));
@@ -38,11 +47,20 @@ test('prefixes tools and hides write tools without allowWrite', async () => {
 test('annotations mark read and write tools', async () => {
   const tools = await build({ two: { type: 'fake', allowWrite: true } }).listTools();
   assert.equal(tools.find((t) => t.name === 'two_read').annotations.readOnlyHint, true);
-  assert.deepEqual(tools.find((t) => t.name === 'two_write').annotations, { readOnlyHint: false, destructiveHint: false });
+  assert.deepEqual(tools.find((t) => t.name === 'two_write').annotations, {
+    readOnlyHint: false,
+    destructiveHint: false,
+  });
 });
 
 test('a broken, unknown, disabled or badly named integration does not affect the others', async () => {
-  const reg = build({ bad: { type: 'fake', broken: true }, odd: { type: 'nope' }, off: { type: 'fake', enabled: false }, 'Bad_Id': { type: 'fake' }, good: { type: 'fake' } });
+  const reg = build({
+    bad: { type: 'fake', broken: true },
+    odd: { type: 'nope' },
+    off: { type: 'fake', enabled: false },
+    Bad_Id: { type: 'fake' },
+    good: { type: 'fake' },
+  });
   const st = Object.fromEntries((await reg.status()).map((s) => [s.id, s]));
   assert.equal(st.bad.state, 'error');
   assert.equal(st.bad.error, 'bad config ***');
@@ -72,7 +90,13 @@ test('returns JSON text, masks errors and audits argument names only', async () 
   const bad = await reg.callTool('one_boom', {});
   assert.equal(bad.result.isError, true);
   assert.equal(bad.result.content[0].text, 'upstream said ***');
-  assert.deepEqual(entries.map((e) => [e.integration, e.tool, e.ok, e.args]), [['one', 'one_read', true, ['q']], ['one', 'one_boom', false, []]]);
+  assert.deepEqual(
+    entries.map((e) => [e.integration, e.tool, e.ok, e.args]),
+    [
+      ['one', 'one_read', true, ['q']],
+      ['one', 'one_boom', false, []],
+    ],
+  );
   assert.ok(!JSON.stringify(entries).includes('secret question'));
 });
 
@@ -90,7 +114,8 @@ test('caches health for a minute unless asked for a fresh check', async () => {
   let t = 1000;
   const reg = build({ one: { type: 'fake' } }, { now: () => t });
   healthCalls = 0;
-  await reg.status({ only: 'one' }); await reg.status({ only: 'one' });
+  await reg.status({ only: 'one' });
+  await reg.status({ only: 'one' });
   assert.equal(healthCalls, 1);
   await reg.status({ only: 'one', fresh: true });
   assert.equal(healthCalls, 2);

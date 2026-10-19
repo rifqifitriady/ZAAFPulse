@@ -11,9 +11,15 @@ const log = (...a) => console.log(new Date().toISOString(), ...a);
 
 function serverUp() {
   return new Promise((resolve) => {
-    const req = http.get(`${URL}/api/live`, { timeout: 2000 }, (res) => { res.resume(); resolve(res.statusCode === 200); });
+    const req = http.get(`${URL}/api/live`, { timeout: 2000 }, (res) => {
+      res.resume();
+      resolve(res.statusCode === 200);
+    });
     req.on('error', () => resolve(false));
-    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(false);
+    });
   });
 }
 
