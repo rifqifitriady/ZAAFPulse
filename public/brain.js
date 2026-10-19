@@ -14,19 +14,61 @@ const BASE_BRAIN_GROUPS = [
   { id: 'other', name: 'Other', color: 'var(--g-other)' },
 ];
 let BRAIN_GROUPS = BASE_BRAIN_GROUPS.slice();
-const BRAIN_PALETTE = ['#5b8cff', '#ff8a4c', '#3ee6b0', '#ffb547', '#ff5ca8', '#5cf0a8', '#b06cff', '#4de8ff', '#f2e35c', '#ff6b6b', '#8b7bff', '#6ee7b7', '#f59ec8', '#9ad0ff'];
-const PARA_LANES = [['projects', 'Projects'], ['areas', 'Areas'], ['resources', 'Resources'], ['archives', 'Archives'], [null, 'Unsorted']];
+const BRAIN_PALETTE = [
+  '#5b8cff',
+  '#ff8a4c',
+  '#3ee6b0',
+  '#ffb547',
+  '#ff5ca8',
+  '#5cf0a8',
+  '#b06cff',
+  '#4de8ff',
+  '#f2e35c',
+  '#ff6b6b',
+  '#8b7bff',
+  '#6ee7b7',
+  '#f59ec8',
+  '#9ad0ff',
+];
+const PARA_LANES = [
+  ['projects', 'Projects'],
+  ['areas', 'Areas'],
+  ['resources', 'Resources'],
+  ['archives', 'Archives'],
+  [null, 'Unsorted'],
+];
 // Groups for one graph: Obsidian keeps its named groups; other sources get theirs from the data.
 function setBrainGroups(v) {
   const seen = [...new Set(v.notes.map((n) => n.group))];
-  if (seen.every((g) => BASE_BRAIN_GROUPS.some((b) => b.id === g))) { BRAIN_GROUPS = BASE_BRAIN_GROUPS.slice(); return; }
+  if (seen.every((g) => BASE_BRAIN_GROUPS.some((b) => b.id === g))) {
+    BRAIN_GROUPS = BASE_BRAIN_GROUPS.slice();
+    return;
+  }
   const named = new Map((v.groups || []).map((g) => [g.id, g.name]));
-  const counts = {}; for (const n of v.notes) counts[n.group] = (counts[n.group] || 0) + 1;
-  const ids = [...seen].sort((a, b) => (v.groups ? (v.groups.findIndex((g) => g.id === a) - v.groups.findIndex((g) => g.id === b)) : counts[b] - counts[a]));
-  BRAIN_GROUPS = ids.slice(0, 13).map((id, i) => ({ id, name: named.get(id) || String(id).replace(/^db:/, '').replace(/^cluster-/, 'Cluster '), color: BRAIN_PALETTE[i % BRAIN_PALETTE.length] }));
-  if (ids.length > 13) { const rest = new Set(ids.slice(13)); for (const n of v.notes) if (rest.has(n.group)) n.group = 'other'; BRAIN_GROUPS.push({ id: 'other', name: 'Other', color: '#8f98cc' }); }
+  const counts = {};
+  for (const n of v.notes) counts[n.group] = (counts[n.group] || 0) + 1;
+  const ids = [...seen].sort((a, b) =>
+    v.groups ? v.groups.findIndex((g) => g.id === a) - v.groups.findIndex((g) => g.id === b) : counts[b] - counts[a],
+  );
+  BRAIN_GROUPS = ids.slice(0, 13).map((id, i) => ({
+    id,
+    name:
+      named.get(id) ||
+      String(id)
+        .replace(/^db:/, '')
+        .replace(/^cluster-/, 'Cluster '),
+    color: BRAIN_PALETTE[i % BRAIN_PALETTE.length],
+  }));
+  if (ids.length > 13) {
+    const rest = new Set(ids.slice(13));
+    for (const n of v.notes) if (rest.has(n.group)) n.group = 'other';
+    BRAIN_GROUPS.push({ id: 'other', name: 'Other', color: '#8f98cc' });
+  }
 }
-const brainNeon = (id) => { const g = BRAIN_GROUPS.find((x) => x.id === id); return !g ? '#8f98cc' : g.color.startsWith('var(') ? (BRAIN_NEON[id] || '#8f98cc') : g.color; };
+const brainNeon = (id) => {
+  const g = BRAIN_GROUPS.find((x) => x.id === id);
+  return !g ? '#8f98cc' : g.color.startsWith('var(') ? BRAIN_NEON[id] || '#8f98cc' : g.color;
+};
 
 class BrainGraph {
   constructor(canvas, data, { onHover, onSelect, onReplay } = {}) {
@@ -40,14 +82,19 @@ class BrainGraph {
     this.pulses = !this.reduce;
     this.cam = { x: 0, y: 0, k: 1 };
     this.userMoved = false;
-    this.hover = null; this.selected = null; this.matches = null;
+    this.hover = null;
+    this.selected = null;
+    this.matches = null;
     this.particles = [];
     this.alpha = 1;
     this.readTheme();
     this.setData(data);
     this.bind();
     this.resize();
-    if (this.reduce) { for (let i = 0; i < 320; i++) this.tick(); this.fit(true); }
+    if (this.reduce) {
+      for (let i = 0; i < 320; i++) this.tick();
+      this.fit(true);
+    }
     this.last = performance.now();
     this.startedAt = this.last;
     this.raf = requestAnimationFrame((t) => this.frame(t));
@@ -56,8 +103,17 @@ class BrainGraph {
   readTheme() {
     const cs = getComputedStyle(this.canvas); // the canvas, so a holo deck's tokens apply
     const v = (n) => cs.getPropertyValue(n).trim();
-    this.colors = Object.fromEntries(BRAIN_GROUPS.map((g) => [g.id, g.color.startsWith('var(') ? v(g.color.slice(4, -1)) : g.color]));
-    this.theme = { edge: v('--graph-edge'), edgeHi: v('--graph-edge-hi'), label: v('--text'), labelMuted: v('--muted'), ring: v('--surface'), bg: v('--surface') };
+    this.colors = Object.fromEntries(
+      BRAIN_GROUPS.map((g) => [g.id, g.color.startsWith('var(') ? v(g.color.slice(4, -1)) : g.color]),
+    );
+    this.theme = {
+      edge: v('--graph-edge'),
+      edgeHi: v('--graph-edge-hi'),
+      label: v('--text'),
+      labelMuted: v('--muted'),
+      ring: v('--surface'),
+      bg: v('--surface'),
+    };
   }
 
   setData(data) {
@@ -68,18 +124,34 @@ class BrainGraph {
       const gi = groupIdx[d.group] ?? BRAIN_GROUPS.length - 1;
       const a = (gi / BRAIN_GROUPS.length) * Math.PI * 2;
       return {
-        ...d, deg, gi, r: 3.2 + Math.sqrt(deg) * 1.55,
+        ...d,
+        deg,
+        gi,
+        r: 3.2 + Math.sqrt(deg) * 1.55,
         // Start near the centre so the first frames bloom outward.
-        x: Math.cos(a) * 6 + (Math.random() - 0.5) * 18, y: Math.sin(a) * 6 + (Math.random() - 0.5) * 18,
-        vx: 0, vy: 0, ax: Math.cos(a) * Math.sqrt(n) * 9, ay: Math.sin(a) * Math.sqrt(n) * 9,
-        born: performance.now() + Math.random() * 500, shown: true,
+        x: Math.cos(a) * 6 + (Math.random() - 0.5) * 18,
+        y: Math.sin(a) * 6 + (Math.random() - 0.5) * 18,
+        vx: 0,
+        vy: 0,
+        ax: Math.cos(a) * Math.sqrt(n) * 9,
+        ay: Math.sin(a) * Math.sqrt(n) * 9,
+        born: performance.now() + Math.random() * 500,
+        shown: true,
       };
     });
-    this.edges = data.edges.map(([s, t]) => ({ s: this.nodes[s], t: this.nodes[t], born: performance.now() + 300 + Math.random() * 900 }));
+    this.edges = data.edges.map(([s, t]) => ({
+      s: this.nodes[s],
+      t: this.nodes[t],
+      born: performance.now() + 300 + Math.random() * 900,
+    }));
     this.adj = this.nodes.map(() => new Set());
-    for (const e of this.edges) { this.adj[e.s.id].add(e.t.id); this.adj[e.t.id].add(e.s.id); }
+    for (const e of this.edges) {
+      this.adj[e.s.id].add(e.t.id);
+      this.adj[e.t.id].add(e.s.id);
+    }
     const created = this.nodes.map((d) => d.created).filter(Boolean);
-    this.timeMin = Math.min(...created); this.timeMax = Math.max(...created);
+    this.timeMin = Math.min(...created);
+    this.timeMax = Math.max(...created);
     this.replay = null;
     this.hasXY = this.nodes.some((p) => p.xy);
     if (this.layout && this.layout !== 'network') this.setLayout(this.layout);
@@ -87,81 +159,219 @@ class BrainGraph {
 
   // Target positions per layout; the forces then carry each note there (that movement is the animation).
   setLayout(mode) {
-    this.layout = mode; this.overlay = null; const N = this.nodes; const n = Math.max(1, N.length); const S = Math.sqrt(n) * 26 + 120;
-    for (const p of N) { p.tx = null; p.ty = null; p.bx = null; p.by = null; }
+    this.layout = mode;
+    this.overlay = null;
+    const N = this.nodes;
+    const n = Math.max(1, N.length);
+    const S = Math.sqrt(n) * 26 + 120;
+    for (const p of N) {
+      p.tx = null;
+      p.ty = null;
+      p.bx = null;
+      p.by = null;
+    }
     if (mode === 'para') {
-      const lanes = PARA_LANES.map(([k, label], i) => ({ k, label, x: (i - 2) * S * 0.62, count: N.filter((p) => (p.para || null) === k).length }));
-      const w = S * 0.56; const h = S * 1.5;
+      const lanes = PARA_LANES.map(([k, label], i) => ({
+        k,
+        label,
+        x: (i - 2) * S * 0.62,
+        count: N.filter((p) => (p.para || null) === k).length,
+      }));
+      const w = S * 0.56;
+      const h = S * 1.5;
       // Each note is kept inside its lane; links no longer drag it across.
-      N.forEach((p) => { const l = lanes.find((x) => x.k === (p.para || null)); p.tx = l.x; p.ty = null; p.bx = [l.x - w * 0.44, l.x + w * 0.44]; p.by = [-h * 0.46, h * 0.46]; });
+      N.forEach((p) => {
+        const l = lanes.find((x) => x.k === (p.para || null));
+        p.tx = l.x;
+        p.ty = null;
+        p.bx = [l.x - w * 0.44, l.x + w * 0.44];
+        p.by = [-h * 0.46, h * 0.46];
+      });
       this.overlay = { kind: 'lanes', lanes, w, h };
     } else if (mode === 'semantic' && this.hasXY) {
-      N.forEach((p) => { if (p.xy) { p.tx = p.xy[0] * S; p.ty = p.xy[1] * S; } });
+      N.forEach((p) => {
+        if (p.xy) {
+          p.tx = p.xy[0] * S;
+          p.ty = p.xy[1] * S;
+        }
+      });
       this.overlay = { kind: 'map', r: S };
     } else if (mode === 'timeline') {
-      const t0 = this.timeMin; const span = Math.max(1, this.timeMax - this.timeMin); const groups = [...new Set(N.map((p) => p.group))];
-      const laneH = Math.max(46, (S * 1.4) / Math.max(1, groups.length)); const y0 = -((groups.length - 1) / 2) * laneH;
+      const t0 = this.timeMin;
+      const span = Math.max(1, this.timeMax - this.timeMin);
+      const groups = [...new Set(N.map((p) => p.group))];
+      const laneH = Math.max(46, (S * 1.4) / Math.max(1, groups.length));
+      const y0 = -((groups.length - 1) / 2) * laneH;
       // x is the creation date; each group gets a lane tall enough for its notes.
-      N.forEach((p) => { const x = ((p.created - t0) / span - 0.5) * S * 2.4; const y = y0 + groups.indexOf(p.group) * laneH; p.tx = x; p.ty = y; p.bx = [x - 6, x + 6]; p.by = [y - laneH * 0.42, y + laneH * 0.42]; });
+      N.forEach((p) => {
+        const x = ((p.created - t0) / span - 0.5) * S * 2.4;
+        const y = y0 + groups.indexOf(p.group) * laneH;
+        p.tx = x;
+        p.ty = y;
+        p.bx = [x - 6, x + 6];
+        p.by = [y - laneH * 0.42, y + laneH * 0.42];
+      });
       this.overlay = { kind: 'axis', t0, span, w: S * 2.4, groups, y0, laneH };
     } else if (mode === 'hierarchy') {
       // Radial tree: breadth-first from the most connected note (or the roots of a page tree).
-      const depth = new Array(n).fill(-1); const order = []; const roots = [...N].sort((a, b) => b.deg - a.deg);
-      for (const r of roots) { if (depth[r.id] >= 0) continue; depth[r.id] = 0; const q = [r.id]; while (q.length) { const id = q.shift(); order.push(id); for (const j of this.adj[id]) if (depth[j] < 0) { depth[j] = depth[id] + 1; q.push(j); } } }
-      const maxD = Math.max(1, ...depth); const byD = {}; order.forEach((id) => { (byD[depth[id]] ||= []).push(id); });
-      for (const [d, ids] of Object.entries(byD)) ids.forEach((id, i) => { const a = (i / ids.length) * Math.PI * 2 + Number(d) * 0.4; const r = Number(d) * (S / maxD) * 0.9; N[id].tx = Math.cos(a) * r; N[id].ty = Math.sin(a) * r; });
+      const depth = new Array(n).fill(-1);
+      const order = [];
+      const roots = [...N].sort((a, b) => b.deg - a.deg);
+      for (const r of roots) {
+        if (depth[r.id] >= 0) continue;
+        depth[r.id] = 0;
+        const q = [r.id];
+        while (q.length) {
+          const id = q.shift();
+          order.push(id);
+          for (const j of this.adj[id])
+            if (depth[j] < 0) {
+              depth[j] = depth[id] + 1;
+              q.push(j);
+            }
+        }
+      }
+      const maxD = Math.max(1, ...depth);
+      const byD = {};
+      order.forEach((id) => {
+        (byD[depth[id]] ||= []).push(id);
+      });
+      for (const [d, ids] of Object.entries(byD))
+        ids.forEach((id, i) => {
+          const a = (i / ids.length) * Math.PI * 2 + Number(d) * 0.4;
+          const r = Number(d) * (S / maxD) * 0.9;
+          N[id].tx = Math.cos(a) * r;
+          N[id].ty = Math.sin(a) * r;
+        });
       this.overlay = { kind: 'rings', step: (S / maxD) * 0.9, max: maxD };
     } else if (mode === 'sources') {
-      const groups = [...new Set(N.map((p) => p.group))]; const R = S * 0.75;
-      const centre = Object.fromEntries(groups.map((g, i) => [g, [Math.cos((i / groups.length) * Math.PI * 2) * R, Math.sin((i / groups.length) * Math.PI * 2) * R]]));
-      N.forEach((p) => { p.tx = centre[p.group][0]; p.ty = centre[p.group][1]; });
+      const groups = [...new Set(N.map((p) => p.group))];
+      const R = S * 0.75;
+      const centre = Object.fromEntries(
+        groups.map((g, i) => [
+          g,
+          [Math.cos((i / groups.length) * Math.PI * 2) * R, Math.sin((i / groups.length) * Math.PI * 2) * R],
+        ]),
+      );
+      N.forEach((p) => {
+        p.tx = centre[p.group][0];
+        p.ty = centre[p.group][1];
+      });
       this.overlay = { kind: 'clusters', centre };
     }
-    this.alpha = 1; this.alphaTarget = 0; this.startedAt = performance.now(); this.userMoved = false;
+    this.alpha = 1;
+    this.alphaTarget = 0;
+    this.startedAt = performance.now();
+    this.userMoved = false;
   }
 
   /* ---------- simulation ---------- */
   tick() {
-    const N = this.nodes; const a = this.alpha;
+    const N = this.nodes;
+    const a = this.alpha;
     for (let i = 0; i < N.length; i++) {
-      const p = N[i]; if (!p.shown) continue;
+      const p = N[i];
+      if (!p.shown) continue;
       for (let j = i + 1; j < N.length; j++) {
-        const q = N[j]; if (!q.shown) continue;
-        let dx = q.x - p.x; let dy = q.y - p.y; let d2 = dx * dx + dy * dy;
+        const q = N[j];
+        if (!q.shown) continue;
+        let dx = q.x - p.x;
+        let dy = q.y - p.y;
+        let d2 = dx * dx + dy * dy;
         if (d2 > 90000) continue; // ignore far pairs
-        if (d2 < 1) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = 1; }
-        const f = ((this.layout === 'semantic' ? -60 : this.layout === 'para' || this.layout === 'timeline' ? -110 : -240) * a) / Math.max(d2, 64); // floor the distance so close pairs cannot explode
-        p.vx += dx * f * 0.5; p.vy += dy * f * 0.5; q.vx -= dx * f * 0.5; q.vy -= dy * f * 0.5;
+        if (d2 < 1) {
+          dx = Math.random() - 0.5;
+          dy = Math.random() - 0.5;
+          d2 = 1;
+        }
+        const f =
+          ((this.layout === 'semantic' ? -60 : this.layout === 'para' || this.layout === 'timeline' ? -110 : -240) *
+            a) /
+          Math.max(d2, 64); // floor the distance so close pairs cannot explode
+        p.vx += dx * f * 0.5;
+        p.vy += dy * f * 0.5;
+        q.vx -= dx * f * 0.5;
+        q.vy -= dy * f * 0.5;
         const min = p.r + q.r + 3; // collision
-        if (d2 < min * min) { const d = Math.sqrt(d2); const push = ((min - d) / d) * 0.25; p.vx -= dx * push; p.vy -= dy * push; q.vx += dx * push; q.vy += dy * push; }
+        if (d2 < min * min) {
+          const d = Math.sqrt(d2);
+          const push = ((min - d) / d) * 0.25;
+          p.vx -= dx * push;
+          p.vy -= dy * push;
+          q.vx += dx * push;
+          q.vy += dy * push;
+        }
       }
     }
     for (const e of this.edges) {
-      const s = e.s; const t = e.t; if (!s.shown || !t.shown) continue;
-      const dx = t.x - s.x; const dy = t.y - s.y; const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const s = e.s;
+      const t = e.t;
+      if (!s.shown || !t.shown) continue;
+      const dx = t.x - s.x;
+      const dy = t.y - s.y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 1;
       const L = 34 + Math.min(40, Math.sqrt(Math.min(s.deg, t.deg)) * 4);
-      const k = ((d - L) / d) * a * ((this.layout === 'para' || this.layout === 'timeline' ? 0.02 : this.layout && this.layout !== 'network' ? 0.12 : 0.7) / Math.max(1, Math.min(s.deg, t.deg)));
-      t.vx -= dx * k; t.vy -= dy * k; s.vx += dx * k; s.vy += dy * k;
+      const k =
+        ((d - L) / d) *
+        a *
+        ((this.layout === 'para' || this.layout === 'timeline'
+          ? 0.02
+          : this.layout && this.layout !== 'network'
+            ? 0.12
+            : 0.7) /
+          Math.max(1, Math.min(s.deg, t.deg)));
+      t.vx -= dx * k;
+      t.vy -= dy * k;
+      s.vx += dx * k;
+      s.vy += dy * k;
     }
     for (const p of N) {
       if (!p.shown) continue;
       // Orphans have no springs holding them, so give them stronger gravity to stay in frame.
       if (p.tx != null || p.ty != null) {
         // Layout targets: strong pull on the axes the layout defines, a light centring on the others.
-        if (p.tx != null) p.vx += (p.tx - p.x) * 0.06 * a; else p.vx -= p.x * 0.004 * a;
-        if (p.ty != null) p.vy += (p.ty - p.y) * 0.06 * a; else p.vy -= p.y * 0.01 * a;
+        if (p.tx != null) p.vx += (p.tx - p.x) * 0.06 * a;
+        else p.vx -= p.x * 0.004 * a;
+        if (p.ty != null) p.vy += (p.ty - p.y) * 0.06 * a;
+        else p.vy -= p.y * 0.01 * a;
       } else {
         const g = p.deg === 0 ? 0.035 : 0.004;
         p.vx += (p.ax - p.x) * 0.006 * a - p.x * g * a;
         p.vy += (p.ay - p.y) * 0.006 * a - p.y * g * a;
       }
-      if (p.fixed) { p.x = p.fx; p.y = p.fy; p.vx = p.vy = 0; continue; }
-      p.vx *= 0.6; p.vy *= 0.6;
+      if (p.fixed) {
+        p.x = p.fx;
+        p.y = p.fy;
+        p.vx = p.vy = 0;
+        continue;
+      }
+      p.vx *= 0.6;
+      p.vy *= 0.6;
       const sp = Math.hypot(p.vx, p.vy);
-      if (sp > 24) { p.vx *= 24 / sp; p.vy *= 24 / sp; } // speed cap keeps the bloom smooth
-      p.x += p.vx; p.y += p.vy;
-      if (p.bx) { if (p.x < p.bx[0]) { p.x = p.bx[0]; p.vx = 0; } else if (p.x > p.bx[1]) { p.x = p.bx[1]; p.vx = 0; } }
-      if (p.by) { if (p.y < p.by[0]) { p.y = p.by[0]; p.vy = 0; } else if (p.y > p.by[1]) { p.y = p.by[1]; p.vy = 0; } }
+      if (sp > 24) {
+        p.vx *= 24 / sp;
+        p.vy *= 24 / sp;
+      } // speed cap keeps the bloom smooth
+      p.x += p.vx;
+      p.y += p.vy;
+      if (p.bx) {
+        if (p.x < p.bx[0]) {
+          p.x = p.bx[0];
+          p.vx = 0;
+        } else if (p.x > p.bx[1]) {
+          p.x = p.bx[1];
+          p.vx = 0;
+        }
+      }
+      if (p.by) {
+        if (p.y < p.by[0]) {
+          p.y = p.by[0];
+          p.vy = 0;
+        } else if (p.y > p.by[1]) {
+          p.y = p.by[1];
+          p.vy = 0;
+        }
+      }
     }
     this.alpha += ((this.alphaTarget ?? 0) - this.alpha) * (this.layout && this.layout !== 'network' ? 0.012 : 0.0228);
   }
@@ -170,75 +380,143 @@ class BrainGraph {
   resize() {
     const r = this.canvas.getBoundingClientRect();
     this.dpr = Math.min(2, devicePixelRatio || 1);
-    this.w = r.width; this.h = r.height;
-    this.canvas.width = Math.round(r.width * this.dpr); this.canvas.height = Math.round(r.height * this.dpr);
+    this.w = r.width;
+    this.h = r.height;
+    this.canvas.width = Math.round(r.width * this.dpr);
+    this.canvas.height = Math.round(r.height * this.dpr);
   }
   bounds() {
-    let x0 = Infinity; let y0 = Infinity; let x1 = -Infinity; let y1 = -Infinity;
-    for (const p of this.nodes) { if (!p.shown || this.hiddenGroups.has(p.group)) continue; x0 = Math.min(x0, p.x - p.r); y0 = Math.min(y0, p.y - p.r); x1 = Math.max(x1, p.x + p.r); y1 = Math.max(y1, p.y + p.r); }
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const p of this.nodes) {
+      if (!p.shown || this.hiddenGroups.has(p.group)) continue;
+      x0 = Math.min(x0, p.x - p.r);
+      y0 = Math.min(y0, p.y - p.r);
+      x1 = Math.max(x1, p.x + p.r);
+      y1 = Math.max(y1, p.y + p.r);
+    }
     // Lanes, axes and their labels belong in the frame too.
     const o = this.overlay;
-    if (o && o.kind === 'lanes') { x0 = Math.min(x0, o.lanes[0].x - o.w / 2 - 10); x1 = Math.max(x1, o.lanes[o.lanes.length - 1].x + o.w / 2 + 10); y0 = Math.min(y0, -o.h / 2 - 34); y1 = Math.max(y1, o.h / 2 + 10); }
-    if (o && o.kind === 'axis') { x0 = Math.min(x0, -o.w / 2 - 340); x1 = Math.max(x1, o.w / 2 + 30); y0 = Math.min(y0, o.y0 - o.laneH / 2 - 10); y1 = Math.max(y1, Math.abs(o.y0) + o.laneH * 0.6 + 34); }
+    if (o && o.kind === 'lanes') {
+      x0 = Math.min(x0, o.lanes[0].x - o.w / 2 - 10);
+      x1 = Math.max(x1, o.lanes[o.lanes.length - 1].x + o.w / 2 + 10);
+      y0 = Math.min(y0, -o.h / 2 - 34);
+      y1 = Math.max(y1, o.h / 2 + 10);
+    }
+    if (o && o.kind === 'axis') {
+      x0 = Math.min(x0, -o.w / 2 - 340);
+      x1 = Math.max(x1, o.w / 2 + 30);
+      y0 = Math.min(y0, o.y0 - o.laneH / 2 - 10);
+      y1 = Math.max(y1, Math.abs(o.y0) + o.laneH * 0.6 + 34);
+    }
     return Number.isFinite(x0) ? { x0, y0, x1, y1 } : { x0: -100, y0: -100, x1: 100, y1: 100 };
   }
   fit(instant) {
-    const b = this.bounds(); const pad = 40;
+    const b = this.bounds();
+    const pad = 40;
     const k = Math.min(2.4, Math.min((this.w - pad * 2) / (b.x1 - b.x0 || 1), (this.h - pad * 2) / (b.y1 - b.y0 || 1)));
     const target = { x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2, k };
     if (instant) Object.assign(this.cam, target);
     else this.camTarget = target;
   }
-  toWorld(px, py) { return { x: (px - this.w / 2) / this.cam.k + this.cam.x, y: (py - this.h / 2) / this.cam.k + this.cam.y }; }
+  toWorld(px, py) {
+    return { x: (px - this.w / 2) / this.cam.k + this.cam.x, y: (py - this.h / 2) / this.cam.k + this.cam.y };
+  }
   nodeAt(px, py) {
-    const w = this.toWorld(px, py); let best = null; let bd = Infinity;
+    const w = this.toWorld(px, py);
+    let best = null;
+    let bd = Infinity;
     for (const p of this.nodes) {
       if (!this.visible(p)) continue;
-      const d = (p.x - w.x) ** 2 + (p.y - w.y) ** 2; const hit = (p.r + 5 / this.cam.k) ** 2;
-      if (d < hit && d < bd) { best = p; bd = d; }
+      const d = (p.x - w.x) ** 2 + (p.y - w.y) ** 2;
+      const hit = (p.r + 5 / this.cam.k) ** 2;
+      if (d < hit && d < bd) {
+        best = p;
+        bd = d;
+      }
     }
     return best;
   }
-  visible(p) { return p.shown && !this.hiddenGroups.has(p.group) && (!this.replay || p.created <= this.replay.cut); }
+  visible(p) {
+    return p.shown && !this.hiddenGroups.has(p.group) && (!this.replay || p.created <= this.replay.cut);
+  }
 
   /* ---------- input ---------- */
   bind() {
     const c = this.canvas;
-    const pos = (e) => { const r = c.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+    const pos = (e) => {
+      const r = c.getBoundingClientRect();
+      return { x: e.clientX - r.left, y: e.clientY - r.top };
+    };
     this.handlers = {
       down: (e) => {
-        const p = pos(e); const n = this.nodeAt(p.x, p.y);
+        const p = pos(e);
+        const n = this.nodeAt(p.x, p.y);
         c.setPointerCapture(e.pointerId);
         this.drag = { start: p, node: n, cam: { ...this.cam }, moved: false };
-        if (n) { n.fixed = true; n.fx = n.x; n.fy = n.y; this.alphaTarget = 0.25; this.alpha = Math.max(this.alpha, 0.25); }
+        if (n) {
+          n.fixed = true;
+          n.fx = n.x;
+          n.fy = n.y;
+          this.alphaTarget = 0.25;
+          this.alpha = Math.max(this.alpha, 0.25);
+        }
       },
       move: (e) => {
         const p = pos(e);
         if (this.drag) {
-          const dx = p.x - this.drag.start.x; const dy = p.y - this.drag.start.y;
+          const dx = p.x - this.drag.start.x;
+          const dy = p.y - this.drag.start.y;
           if (Math.abs(dx) + Math.abs(dy) > 3) this.drag.moved = true;
-          if (this.drag.node) { const w = this.toWorld(p.x, p.y); this.drag.node.fx = w.x; this.drag.node.fy = w.y; }
-          else { this.cam.x = this.drag.cam.x - dx / this.cam.k; this.cam.y = this.drag.cam.y - dy / this.cam.k; this.userMoved = true; this.camTarget = null; }
+          if (this.drag.node) {
+            const w = this.toWorld(p.x, p.y);
+            this.drag.node.fx = w.x;
+            this.drag.node.fy = w.y;
+          } else {
+            this.cam.x = this.drag.cam.x - dx / this.cam.k;
+            this.cam.y = this.drag.cam.y - dy / this.cam.k;
+            this.userMoved = true;
+            this.camTarget = null;
+          }
           return;
         }
         const n = this.nodeAt(p.x, p.y);
-        if (n !== this.hover) { this.hover = n; c.style.cursor = n ? 'pointer' : 'grab'; }
+        if (n !== this.hover) {
+          this.hover = n;
+          c.style.cursor = n ? 'pointer' : 'grab';
+        }
         this.onHover(n, e);
       },
       up: (e) => {
-        const d = this.drag; this.drag = null;
+        const d = this.drag;
+        this.drag = null;
         if (!d) return;
-        if (d.node) { d.node.fixed = false; this.alphaTarget = 0; }
-        if (!d.moved) { const n = this.nodeAt(pos(e).x, pos(e).y); this.select(n); this.onSelect(n); }
+        if (d.node) {
+          d.node.fixed = false;
+          this.alphaTarget = 0;
+        }
+        if (!d.moved) {
+          const n = this.nodeAt(pos(e).x, pos(e).y);
+          this.select(n);
+          this.onSelect(n);
+        }
       },
-      leave: () => { this.hover = null; this.onHover(null); },
+      leave: () => {
+        this.hover = null;
+        this.onHover(null);
+      },
       wheel: (e) => {
         e.preventDefault();
-        const p = pos(e); const before = this.toWorld(p.x, p.y);
+        const p = pos(e);
+        const before = this.toWorld(p.x, p.y);
         this.cam.k = Math.max(0.2, Math.min(6, this.cam.k * Math.exp(-e.deltaY * 0.0015)));
         const after = this.toWorld(p.x, p.y);
-        this.cam.x += before.x - after.x; this.cam.y += before.y - after.y;
-        this.userMoved = true; this.camTarget = null;
+        this.cam.x += before.x - after.x;
+        this.cam.y += before.y - after.y;
+        this.userMoved = true;
+        this.camTarget = null;
       },
     };
     c.addEventListener('pointerdown', this.handlers.down);
@@ -246,29 +524,49 @@ class BrainGraph {
     c.addEventListener('pointerup', this.handlers.up);
     c.addEventListener('pointerleave', this.handlers.leave);
     c.addEventListener('wheel', this.handlers.wheel, { passive: false });
-    this.ro = new ResizeObserver(() => { this.resize(); if (!this.userMoved) this.fit(true); });
+    this.ro = new ResizeObserver(() => {
+      this.resize();
+      if (!this.userMoved) this.fit(true);
+    });
     this.ro.observe(c);
   }
   destroy() {
     cancelAnimationFrame(this.raf);
     this.ro.disconnect();
     const c = this.canvas;
-    c.removeEventListener('pointerdown', this.handlers.down); c.removeEventListener('pointermove', this.handlers.move);
-    c.removeEventListener('pointerup', this.handlers.up); c.removeEventListener('pointerleave', this.handlers.leave);
+    c.removeEventListener('pointerdown', this.handlers.down);
+    c.removeEventListener('pointermove', this.handlers.move);
+    c.removeEventListener('pointerup', this.handlers.up);
+    c.removeEventListener('pointerleave', this.handlers.leave);
     c.removeEventListener('wheel', this.handlers.wheel);
   }
 
   /* ---------- public controls ---------- */
-  select(n) { this.selected = n ? n.id : null; }
-  focus(id) {
-    const n = this.nodes[id]; if (!n) return;
-    this.select(n);
-    this.camTarget = { x: n.x, y: n.y, k: Math.max(this.cam.k, 1.8) }; this.userMoved = true;
+  select(n) {
+    this.selected = n ? n.id : null;
   }
-  zoom(f) { this.camTarget = { ...this.cam, k: Math.max(0.2, Math.min(6, this.cam.k * f)) }; this.userMoved = true; }
-  reset() { this.userMoved = false; this.fit(false); }
-  setMatches(ids) { this.matches = ids ? new Set(ids) : null; }
-  toggleGroup(g) { if (this.hiddenGroups.has(g)) this.hiddenGroups.delete(g); else this.hiddenGroups.add(g); }
+  focus(id) {
+    const n = this.nodes[id];
+    if (!n) return;
+    this.select(n);
+    this.camTarget = { x: n.x, y: n.y, k: Math.max(this.cam.k, 1.8) };
+    this.userMoved = true;
+  }
+  zoom(f) {
+    this.camTarget = { ...this.cam, k: Math.max(0.2, Math.min(6, this.cam.k * f)) };
+    this.userMoved = true;
+  }
+  reset() {
+    this.userMoved = false;
+    this.fit(false);
+  }
+  setMatches(ids) {
+    this.matches = ids ? new Set(ids) : null;
+  }
+  toggleGroup(g) {
+    if (this.hiddenGroups.has(g)) this.hiddenGroups.delete(g);
+    else this.hiddenGroups.add(g);
+  }
   startReplay(ms = 9000) {
     if (this.reduce) ms = 1;
     this.replay = { t0: performance.now(), ms, cut: this.timeMin - 1, prevCut: this.timeMin - 1 };
@@ -277,7 +575,8 @@ class BrainGraph {
 
   /* ---------- render ---------- */
   frame(now) {
-    const dt = Math.min(50, now - this.last); this.last = now;
+    const dt = Math.min(50, now - this.last);
+    this.last = now;
     if (this.alpha > 0.002 || this.alphaTarget) this.tick();
     if (this.replay) {
       const p = Math.min(1, (now - this.replay.t0) / this.replay.ms);
@@ -286,13 +585,19 @@ class BrainGraph {
       for (const n of this.nodes) if (n.created <= this.replay.cut && n.created > this.replay.prevCut) n.popAt = now;
       this.replay.prevCut = this.replay.cut;
       this.onReplay(this.replay.cut, p);
-      if (p >= 1) { this.replay = null; this.onReplay(null, 1); }
+      if (p >= 1) {
+        this.replay = null;
+        this.onReplay(null, 1);
+      }
     }
     // Ease the camera toward its target (auto-fit while the layout settles).
     if (!this.userMoved && now - this.startedAt < 4000) this.fit(false);
     if (this.camTarget) {
-      const t = this.camTarget; const s = this.reduce ? 1 : 0.12;
-      this.cam.x += (t.x - this.cam.x) * s; this.cam.y += (t.y - this.cam.y) * s; this.cam.k += (t.k - this.cam.k) * s;
+      const t = this.camTarget;
+      const s = this.reduce ? 1 : 0.12;
+      this.cam.x += (t.x - this.cam.x) * s;
+      this.cam.y += (t.y - this.cam.y) * s;
+      this.cam.k += (t.k - this.cam.k) * s;
       if (Math.abs(t.k - this.cam.k) < 0.001 && Math.abs(t.x - this.cam.x) < 0.1) this.camTarget = null;
     }
     this.draw(now, dt);
@@ -301,55 +606,131 @@ class BrainGraph {
 
   // Lanes, axes, rings and cluster labels behind the notes, in world coordinates.
   drawOverlay(k) {
-    const o = this.overlay; if (!o) return; const { ctx } = this;
-    ctx.save(); ctx.font = `600 ${12 / k}px system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+    const o = this.overlay;
+    if (!o) return;
+    const { ctx } = this;
+    ctx.save();
+    ctx.font = `600 ${12 / k}px system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
     if (o.kind === 'lanes') {
       for (const l of o.lanes) {
-        ctx.globalAlpha = 0.08; ctx.fillStyle = l.k ? '#8b7bff' : '#8f98cc'; ctx.fillRect(l.x - o.w / 2, -o.h / 2, o.w, o.h);
-        ctx.globalAlpha = 0.5; ctx.strokeStyle = '#8b7bff'; ctx.lineWidth = 1 / k; ctx.strokeRect(l.x - o.w / 2, -o.h / 2, o.w, o.h);
-        ctx.globalAlpha = 0.95; ctx.fillStyle = this.theme.label; ctx.fillText(`${l.label} · ${l.count}`, l.x, -o.h / 2 - 6 / k);
+        ctx.globalAlpha = 0.08;
+        ctx.fillStyle = l.k ? '#8b7bff' : '#8f98cc';
+        ctx.fillRect(l.x - o.w / 2, -o.h / 2, o.w, o.h);
+        ctx.globalAlpha = 0.5;
+        ctx.strokeStyle = '#8b7bff';
+        ctx.lineWidth = 1 / k;
+        ctx.strokeRect(l.x - o.w / 2, -o.h / 2, o.w, o.h);
+        ctx.globalAlpha = 0.95;
+        ctx.fillStyle = this.theme.label;
+        ctx.fillText(`${l.label} · ${l.count}`, l.x, -o.h / 2 - 6 / k);
       }
     } else if (o.kind === 'map') {
-      ctx.globalAlpha = 0.18; ctx.strokeStyle = this.theme.edge; ctx.lineWidth = 1 / k;
-      for (let g = -1; g <= 1.001; g += 0.25) { ctx.beginPath(); ctx.moveTo(-o.r, g * o.r); ctx.lineTo(o.r, g * o.r); ctx.stroke(); ctx.beginPath(); ctx.moveTo(g * o.r, -o.r); ctx.lineTo(g * o.r, o.r); ctx.stroke(); }
-      ctx.globalAlpha = 0.7; ctx.fillStyle = this.theme.labelMuted; ctx.fillText('meaning (1st component) →', 0, o.r + 18 / k);
+      ctx.globalAlpha = 0.18;
+      ctx.strokeStyle = this.theme.edge;
+      ctx.lineWidth = 1 / k;
+      for (let g = -1; g <= 1.001; g += 0.25) {
+        ctx.beginPath();
+        ctx.moveTo(-o.r, g * o.r);
+        ctx.lineTo(o.r, g * o.r);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(g * o.r, -o.r);
+        ctx.lineTo(g * o.r, o.r);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 0.7;
+      ctx.fillStyle = this.theme.labelMuted;
+      ctx.fillText('meaning (1st component) →', 0, o.r + 18 / k);
     } else if (o.kind === 'axis') {
-      ctx.globalAlpha = 0.4; ctx.strokeStyle = this.theme.edge; ctx.lineWidth = 1 / k; const yA = Math.abs(o.y0) + o.laneH * 0.6;
-      ctx.globalAlpha = 0.05; o.groups.forEach((g, i) => { if (i % 2) { ctx.fillStyle = this.theme.label; ctx.fillRect(-o.w / 2 - 8, o.y0 + i * o.laneH - o.laneH / 2, o.w + 16, o.laneH); } }); ctx.globalAlpha = 0.4;
-      ctx.beginPath(); ctx.moveTo(-o.w / 2, yA); ctx.lineTo(o.w / 2, yA); ctx.stroke(); ctx.textBaseline = 'top'; ctx.fillStyle = this.theme.labelMuted; ctx.globalAlpha = 0.85;
-      for (let i = 0; i <= 6; i++) { const x = -o.w / 2 + (o.w * i) / 6; ctx.fillText(new Date(o.t0 + (o.span * i) / 6).toLocaleDateString('en', o.span < 400 * 86400000 ? { day: 'numeric', month: 'short' } : { month: 'short', year: '2-digit' }), x, yA + 6 / k); }
-      ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-      o.groups.forEach((g, i) => { const meta = BRAIN_GROUPS.find((x) => x.id === g); ctx.fillStyle = this.colors[g] || this.theme.labelMuted; ctx.fillText(meta ? meta.name : g, -o.w / 2 - 12 / k, o.y0 + i * o.laneH); });
+      ctx.globalAlpha = 0.4;
+      ctx.strokeStyle = this.theme.edge;
+      ctx.lineWidth = 1 / k;
+      const yA = Math.abs(o.y0) + o.laneH * 0.6;
+      ctx.globalAlpha = 0.05;
+      o.groups.forEach((g, i) => {
+        if (i % 2) {
+          ctx.fillStyle = this.theme.label;
+          ctx.fillRect(-o.w / 2 - 8, o.y0 + i * o.laneH - o.laneH / 2, o.w + 16, o.laneH);
+        }
+      });
+      ctx.globalAlpha = 0.4;
+      ctx.beginPath();
+      ctx.moveTo(-o.w / 2, yA);
+      ctx.lineTo(o.w / 2, yA);
+      ctx.stroke();
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = this.theme.labelMuted;
+      ctx.globalAlpha = 0.85;
+      for (let i = 0; i <= 6; i++) {
+        const x = -o.w / 2 + (o.w * i) / 6;
+        ctx.fillText(
+          new Date(o.t0 + (o.span * i) / 6).toLocaleDateString(
+            'en',
+            o.span < 400 * 86400000 ? { day: 'numeric', month: 'short' } : { month: 'short', year: '2-digit' },
+          ),
+          x,
+          yA + 6 / k,
+        );
+      }
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      o.groups.forEach((g, i) => {
+        const meta = BRAIN_GROUPS.find((x) => x.id === g);
+        ctx.fillStyle = this.colors[g] || this.theme.labelMuted;
+        ctx.fillText(meta ? meta.name : g, -o.w / 2 - 12 / k, o.y0 + i * o.laneH);
+      });
     } else if (o.kind === 'rings') {
-      ctx.globalAlpha = 0.14; ctx.strokeStyle = this.theme.edge; ctx.lineWidth = 1 / k;
-      for (let d = 1; d <= o.max; d++) { ctx.beginPath(); ctx.arc(0, 0, d * o.step, 0, Math.PI * 2); ctx.stroke(); }
+      ctx.globalAlpha = 0.14;
+      ctx.strokeStyle = this.theme.edge;
+      ctx.lineWidth = 1 / k;
+      for (let d = 1; d <= o.max; d++) {
+        ctx.beginPath();
+        ctx.arc(0, 0, d * o.step, 0, Math.PI * 2);
+        ctx.stroke();
+      }
     } else if (o.kind === 'clusters') {
-      for (const [g, [x, y]] of Object.entries(o.centre)) { const meta = BRAIN_GROUPS.find((m) => m.id === g); ctx.globalAlpha = 0.9; ctx.fillStyle = this.colors[g] || this.theme.label; ctx.fillText(meta ? meta.name : g, x, y - 70 / Math.sqrt(k)); }
+      for (const [g, [x, y]] of Object.entries(o.centre)) {
+        const meta = BRAIN_GROUPS.find((m) => m.id === g);
+        ctx.globalAlpha = 0.9;
+        ctx.fillStyle = this.colors[g] || this.theme.label;
+        ctx.fillText(meta ? meta.name : g, x, y - 70 / Math.sqrt(k));
+      }
     }
     ctx.restore();
   }
 
   draw(now, dt) {
-    const { ctx } = this; const k = this.cam.k;
+    const { ctx } = this;
+    const k = this.cam.k;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.clearRect(0, 0, this.w, this.h);
-    ctx.translate(this.w / 2, this.h / 2); ctx.scale(k, k); ctx.translate(-this.cam.x, -this.cam.y);
+    ctx.translate(this.w / 2, this.h / 2);
+    ctx.scale(k, k);
+    ctx.translate(-this.cam.x, -this.cam.y);
 
     this.drawOverlay(k);
     const focusId = this.hover ? this.hover.id : this.selected;
     const near = focusId != null ? this.adj[focusId] : null;
-    const isLit = (p) => focusId == null ? (!this.matches || this.matches.has(p.id)) : p.id === focusId || near.has(p.id);
+    const isLit = (p) =>
+      focusId == null ? !this.matches || this.matches.has(p.id) : p.id === focusId || near.has(p.id);
 
     // Edges
     ctx.lineWidth = 0.8 / Math.sqrt(k);
     for (const e of this.edges) {
       if (!this.visible(e.s) || !this.visible(e.t)) continue;
       const lit = focusId != null && (e.s.id === focusId || e.t.id === focusId);
-      const fade = this.replay ? Math.min(1, (now - Math.max(e.s.popAt || 0, e.t.popAt || 0)) / 600) : Math.min(1, Math.max(0, (now - e.born) / 700));
+      const fade = this.replay
+        ? Math.min(1, (now - Math.max(e.s.popAt || 0, e.t.popAt || 0)) / 600)
+        : Math.min(1, Math.max(0, (now - e.born) / 700));
       ctx.globalAlpha = (lit ? 0.85 : focusId != null || this.matches ? 0.06 : 0.32) * fade;
       ctx.strokeStyle = lit ? this.colors[e.s.group] : this.theme.edge;
       ctx.lineWidth = (lit ? 1.6 : 0.8) / Math.sqrt(k);
-      ctx.beginPath(); ctx.moveTo(e.s.x, e.s.y); ctx.lineTo(e.t.x, e.t.y); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(e.s.x, e.s.y);
+      ctx.lineTo(e.t.x, e.t.y);
+      ctx.stroke();
     }
 
     // Pulses travelling from a note to the note it links to
@@ -366,17 +747,24 @@ class BrainGraph {
         e ||= visibleEdges[Math.floor(Math.random() * visibleEdges.length)];
         if (e) this.particles.push({ e, p: 0, v: 0.0009 + Math.random() * 0.0011 });
       }
-      this.particles = this.particles.filter((q) => (q.p += q.v * dt) < 1 && this.visible(q.e.s) && this.visible(q.e.t));
+      this.particles = this.particles.filter(
+        (q) => (q.p += q.v * dt) < 1 && this.visible(q.e.s) && this.visible(q.e.t),
+      );
       for (const q of this.particles) {
         const { s, t } = q.e;
-        const x = s.x + (t.x - s.x) * q.p; const y = s.y + (t.y - s.y) * q.p;
+        const x = s.x + (t.x - s.x) * q.p;
+        const y = s.y + (t.y - s.y) * q.p;
         const lit = focusId == null || q.e.s.id === focusId || q.e.t.id === focusId;
         const env = Math.sin(q.p * Math.PI);
         ctx.fillStyle = this.colors[s.group];
         ctx.globalAlpha = (lit ? 0.25 : 0.05) * env;
-        ctx.beginPath(); ctx.arc(x, y, 4.5 / Math.sqrt(k), 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath();
+        ctx.arc(x, y, 4.5 / Math.sqrt(k), 0, Math.PI * 2);
+        ctx.fill();
         ctx.globalAlpha = (lit ? 0.95 : 0.15) * env;
-        ctx.beginPath(); ctx.arc(x, y, 1.7 / Math.sqrt(k), 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath();
+        ctx.arc(x, y, 1.7 / Math.sqrt(k), 0, Math.PI * 2);
+        ctx.fill();
       }
     }
 
@@ -385,42 +773,64 @@ class BrainGraph {
       if (!this.visible(p)) continue;
       const age = now - p.born;
       let scale = this.reduce ? 1 : Math.min(1, Math.max(0, age / 500));
-      if (p.popAt) { const t = (now - p.popAt) / 700; scale = t < 1 ? 1 + Math.sin(t * Math.PI) * 0.8 : 1; }
+      if (p.popAt) {
+        const t = (now - p.popAt) / 700;
+        scale = t < 1 ? 1 + Math.sin(t * Math.PI) * 0.8 : 1;
+      }
       if (scale <= 0) continue;
       const lit = isLit(p);
       const r = p.r * (scale < 1 ? 1 - (1 - scale) ** 3 : scale);
       ctx.globalAlpha = lit ? 1 : 0.18;
-      if (p.popAt && now - p.popAt < 900) { // ring burst when a note appears during replay
+      if (p.popAt && now - p.popAt < 900) {
+        // ring burst when a note appears during replay
         const t = (now - p.popAt) / 900;
-        ctx.globalAlpha = (1 - t) * 0.6; ctx.strokeStyle = this.colors[p.group]; ctx.lineWidth = 1.5 / k;
-        ctx.beginPath(); ctx.arc(p.x, p.y, p.r + t * 22, 0, Math.PI * 2); ctx.stroke();
+        ctx.globalAlpha = (1 - t) * 0.6;
+        ctx.strokeStyle = this.colors[p.group];
+        ctx.lineWidth = 1.5 / k;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r + t * 22, 0, Math.PI * 2);
+        ctx.stroke();
         ctx.globalAlpha = lit ? 1 : 0.18;
       }
       ctx.fillStyle = this.colors[p.group];
-      ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = this.theme.ring; ctx.lineWidth = 1.5 / k; ctx.stroke(); // 2px-ish surface ring between overlapping marks
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = this.theme.ring;
+      ctx.lineWidth = 1.5 / k;
+      ctx.stroke(); // 2px-ish surface ring between overlapping marks
       if (p.id === this.selected) {
-        ctx.strokeStyle = this.colors[p.group]; ctx.lineWidth = 2 / k;
-        ctx.beginPath(); ctx.arc(p.x, p.y, r + 4 / k + Math.sin(now / 300) * 1.2 / k, 0, Math.PI * 2); ctx.stroke();
+        ctx.strokeStyle = this.colors[p.group];
+        ctx.lineWidth = 2 / k;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r + 4 / k + (Math.sin(now / 300) * 1.2) / k, 0, Math.PI * 2);
+        ctx.stroke();
       }
     }
 
     // Labels: hubs always, more as you zoom in; while focusing, the note and its best-connected neighbours
     if (this.labelFocus !== focusId) {
       this.labelFocus = focusId;
-      this.labelSet = focusId == null ? null
-        : new Set([focusId, ...[...near].sort((x, y) => this.nodes[y].deg - this.nodes[x].deg).slice(0, 14)]);
+      this.labelSet =
+        focusId == null
+          ? null
+          : new Set([focusId, ...[...near].sort((x, y) => this.nodes[y].deg - this.nodes[x].deg).slice(0, 14)]);
     }
-    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
     const fs = 11 / k;
     ctx.font = `600 ${fs}px system-ui, -apple-system, sans-serif`;
     for (const p of this.nodes) {
       if (!this.visible(p)) continue;
-      const show = this.labelSet ? this.labelSet.has(p.id) : (p.deg >= 22 / Math.max(1, k * k) || (this.matches && this.matches.has(p.id)));
+      const show = this.labelSet
+        ? this.labelSet.has(p.id)
+        : p.deg >= 22 / Math.max(1, k * k) || (this.matches && this.matches.has(p.id));
       if (!show) continue;
       const label = p.name.length > 32 ? p.name.slice(0, 31) + '…' : p.name;
       ctx.globalAlpha = 0.95;
-      ctx.lineWidth = 3 / k; ctx.strokeStyle = this.theme.bg; ctx.strokeText(label, p.x, p.y + p.r + 3 / k);
+      ctx.lineWidth = 3 / k;
+      ctx.strokeStyle = this.theme.bg;
+      ctx.strokeText(label, p.x, p.y + p.r + 3 / k);
       ctx.fillStyle = p.id === focusId ? this.theme.label : this.theme.labelMuted;
       ctx.fillText(label, p.x, p.y + p.r + 3 / k);
     }

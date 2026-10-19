@@ -20,7 +20,7 @@
 <img alt="A2A" src="https://img.shields.io/badge/A2A-v1.0-1f7f95?style=flat-square">
 <img alt="Second brain" src="https://img.shields.io/badge/Second%20brain-15%20sources-e87ba4?style=flat-square&logo=obsidian&logoColor=white">
 
-**One local command center for everything AI does on your laptop:**<br>
+**One command center for everything AI does on your laptop or server:**<br>
 what it costs, how often it is wrong, what your agents are doing right now and how your knowledge grows,<br>
 plus an agentic workspace: one API for every model, 17 agents that work together, workflows, RAG, MCP and A2A.
 
@@ -536,7 +536,7 @@ These are **signals detected in the logs, not a graded evaluation**. Every card 
 
 - The server listens on `127.0.0.1` only and rejects requests whose `Host` is not `localhost`.
 - OpenRouter's public model list, provider directory and rankings page are read with plain GETs (models every 12 hours, rankings every 6, providers daily, per-model endpoints when you open the Models page); an API key is sent only if you add an `openrouter` integration with one.
-- Model prices are kept current with one GET to OpenRouter's public model list every 12 hours (no credentials, no data from this laptop); turn **Auto-update** off in Settings to stop it. Otherwise nothing is sent anywhere unless you configure an integration, and then only to the URL you configured: when an AI client calls a tool, or when the Integrations page checks health (at most once a minute per integration, or when you press Test). No telemetry, no accounts. Integration secrets stay in the macOS Keychain or environment variables, never in `config.json`.
+- Model prices are kept current with one GET to OpenRouter's public model list every 12 hours (no credentials, no data from this machine); turn **Auto-update** off in Settings to stop it. Otherwise nothing is sent anywhere unless you configure an integration, and then only to the URL you configured: when an AI client calls a tool, or when the Integrations page checks health (at most once a minute per integration, or when you press Test). No telemetry, no accounts. Integration secrets stay in the macOS Keychain or environment variables, never in `config.json`.
 - The office, logs and timeline read transcript tails on demand and keep only tool names, sizes, file and command names, hostnames, timing and state; message text is never shown.
 - Message text is never stored. The cache keeps token counts, metadata and, for flagged quality or safety items only, a masked snippet of up to 160 characters. Secret values are never kept.
 - The Agent Gateway listens on 127.0.0.1 unless you choose server mode, which requires a dashboard password (see [docs/install.md](docs/install.md)); API keys are stored as hashes, provider keys in the OS secret store (macOS Keychain, Linux keyring, or an AES-256-GCM encrypted file on servers and Windows, its key sealed with DPAPI there), and sessions and memory (which hold conversation text you send to agents) stay in `.data/` on this machine.

@@ -31,6 +31,7 @@ npm start           # your own logs on http://localhost:4777
 | `npm start` | Run with your real data |
 | `npm run demo` | Run with seeded synthetic data and an offline scripted model; it never reads your logs, Keychain or config |
 | `npm test` | Run the whole suite with `node:test` |
+| `npx prettier@3 --write .` | Format the code (settings in `.prettierrc.json`; Prettier is not a dependency) |
 | `npm run media` | Regenerate the README screenshots and GIFs from demo data (needs Chrome and ffmpeg) |
 | `node bin/zaafpulse.js doctor` | Check the OS, Node.js, data folder, secret store and service |
 | `node scripts/build-single.js` | Build a single-file executable for this machine into `dist/` |
@@ -62,7 +63,7 @@ docs/                install guide, integrations, README media
 
 ## Code style
 
-- Write code that reads like the code around it: plain CommonJS, small functions, the same naming and comment density.
+- Write code that reads like the code around it: plain CommonJS, small functions, the same naming and comment density. Format with Prettier before you push.
 - Comments explain *why*, or what a non-obvious piece of logic is for. They should not narrate the code line by line.
 - UI text is short, plain and specific. Say "API key", not "credential artifact".
 - Keep it cross-platform. ZAAFPulse runs on macOS, Linux and Windows:
