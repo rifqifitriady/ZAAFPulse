@@ -324,13 +324,23 @@ test('agents: a write tool needs approval and a tool that was not offered never 
     const r2 = await t.gateway.orchestrator.runAgent(writer, 'list tickets', {});
     assert.deepEqual(t.calls, []);
     assert.match(r2.text, /not available to this agent/);
-    // In a step a person approved, the write tool runs.
+    // In a gated step the write is only proposed; the exact approved call runs afterwards.
     wanted = 'tickets_create';
-    await t.gateway.orchestrator.runAgent(ops, 'open the approved ticket', { writeApproved: true });
+    const proposals = [];
+    await t.gateway.orchestrator.runAgent(ops, 'open the ticket', { proposeWrites: true, proposals });
+    assert.deepEqual(t.calls, [], 'proposed, not run');
+    assert.deepEqual(
+      proposals.map((p) => p.tool),
+      ['tickets_create'],
+    );
+    const done = await t.gateway.orchestrator.runApproved(ops, proposals[0], {});
+    assert.equal(done.ok, true);
     assert.deepEqual(
       t.calls.map((c) => c[0]),
       ['tickets_create'],
     );
+    // A key without the mcp scope cannot run it even after approval.
+    assert.equal((await t.gateway.orchestrator.runApproved(ops, proposals[0], { allowTools: false })).ok, false);
   } finally {
     t.close();
   }
@@ -593,7 +603,129 @@ test('server: data folders stay usable and private after a restart; X-Real-IP pr
     assert.equal(realIp.status, 403);
     const logout = await fetch(`http://127.0.0.1:${port}/api/logout`, { method: 'POST', body: 'x' });
     assert.equal(logout.status, 415);
+    // Without sign-in, a browser page from another host (through a proxy that hides its headers) is refused.
+    const viaProxy = await fetch(`http://127.0.0.1:${port}/api/summary`, {
+      headers: { origin: 'https://ai.example.com' },
+    });
+    assert.equal(viaProxy.status, 403);
+    const crossSite = await fetch(`http://127.0.0.1:${port}/api/summary`, {
+      headers: { 'sec-fetch-site': 'cross-site' },
+    });
+    assert.equal(crossSite.status, 403);
+    const local = await fetch(`http://127.0.0.1:${port}/api/summary`, {
+      headers: { origin: `http://localhost:${port}` },
+    });
+    assert.equal(local.status, 200, 'the dashboard itself still works');
   } finally {
     child.kill();
+  }
+});
+
+/* ---------- owner decisions: budgets, knowledge bases per key, who approves ---------- */
+
+async function gatewayServer({ providers, pricing = {} }) {
+  const dataDir = tmp('zp-sec-gw-');
+  let gw = { providers, defaults: { model: `${providers[0].id}/m` } };
+  const gateway = createGateway({
+    dataDir,
+    getConfig: () => ({ gateway: gw }),
+    writeGatewayConfig: (g) => (gw = g),
+    secrets: secretsFor(),
+    resolveSecret: () => undefined,
+    getPricing: () => pricing,
+    getIntegrations: () => ({ listTools: async () => [], callTool: async () => ({}) }),
+  });
+  const srv = await serve(async (req, res) => {
+    if (!(await gateway.handle(req, res, new URL(req.url, 'http://x')))) (res.writeHead(404), res.end());
+  });
+  const call = async (p, key, body, method = 'POST') => {
+    const r = await fetch(srv.base + p, {
+      method,
+      headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return { status: r.status, json: await r.json().catch(() => null) };
+  };
+  return { gateway, call, close: srv.close };
+}
+
+test('budgets: a key with a budget cannot use a model without a known price; embeddings are billed to the key', async () => {
+  const upstream = await fakeServer({
+    'POST /chat/completions': {
+      body: {
+        choices: [{ index: 0, message: { role: 'assistant', content: 'hi' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 10, completion_tokens: 5 },
+      },
+    },
+    'POST /embeddings': { body: { data: [{ embedding: [0.1, 0.2] }], usage: { prompt_tokens: 3 } } },
+    'GET /models': { body: { data: [] } },
+  });
+  const t = await gatewayServer({
+    providers: [
+      {
+        id: 'cloud',
+        preset: 'custom',
+        baseUrl: upstream.url,
+        models: ['m', 'priced'],
+        enabled: true,
+        tier: 'external',
+        approved: true,
+      },
+      { id: 'local', preset: 'ollama', baseUrl: upstream.url, models: ['m'], enabled: true, tier: 'private' },
+    ],
+    pricing: { priced: { input: 1, output: 2 } },
+  });
+  try {
+    const budgeted = t.gateway.keys.create({ name: 'b', scopes: ['llm', 'rag'], budgetUSD: 5 });
+    const ask = (model) =>
+      t.call('/v1/chat/completions', budgeted.secret, { model, messages: [{ role: 'user', content: 'x' }] });
+    assert.equal((await ask('cloud/m')).status, 402, 'unpriced cloud model refused');
+    assert.equal((await ask('cloud/priced')).status, 200);
+    assert.equal((await ask('local/m')).status, 200, 'private models are free, so allowed');
+    const open = t.gateway.keys.create({ name: 'o', scopes: ['llm'] });
+    assert.equal(
+      (
+        await t.call('/v1/chat/completions', open.secret, {
+          model: 'cloud/m',
+          messages: [{ role: 'user', content: 'x' }],
+        })
+      ).status,
+      200,
+    );
+    // Knowledge-base search embeds the query and bills it to the key that asked.
+    t.gateway.knowledge.create({ id: 'docs', name: 'Docs', embedModel: 'local/m' });
+    await t.gateway.knowledge.ingest('docs', { title: 'A', content: 'refund policy text' });
+    await t.call('/v1/knowledge/docs/search', budgeted.secret, { query: 'refund' });
+    assert.ok(t.gateway.usage.recent(50).some((e) => e.kind === 'embeddings' && e.keyId === budgeted.key.id));
+  } finally {
+    t.close();
+    await upstream.close();
+  }
+});
+
+test('knowledge bases: a key limited to some knowledge bases cannot list, search or add to the others', async () => {
+  const t = await gatewayServer({
+    providers: [{ id: 'p', preset: 'custom', baseUrl: 'http://127.0.0.1:9', models: ['m'], enabled: true }],
+  });
+  try {
+    t.gateway.knowledge.create({ id: 'support', name: 'Support' });
+    t.gateway.knowledge.create({ id: 'finance', name: 'Finance' });
+    await t.gateway.knowledge.ingest('finance', { title: 'Salaries', content: 'confidential salary table' });
+    const k = t.gateway.keys.create({ name: 'support-bot', scopes: ['rag'], knowledge: ['support'] }).secret;
+    assert.deepEqual(
+      (await t.call('/v1/knowledge', k, null, 'GET')).json.data.map((x) => x.id),
+      ['support'],
+    );
+    assert.equal((await t.call('/v1/knowledge/finance/search', k, { query: 'salary' })).status, 403);
+    assert.equal((await t.call('/v1/knowledge/finance/documents', k, { title: 'x', content: 'y' })).status, 403);
+    assert.equal((await t.call('/v1/knowledge/support/search', k, { query: 'x' })).status, 200);
+    const all = t.gateway.keys.create({ name: 'all', scopes: ['rag'] }).secret;
+    assert.equal(
+      (await t.call('/v1/knowledge', all, null, 'GET')).json.data.length,
+      2,
+      'empty list = every knowledge base',
+    );
+  } finally {
+    t.close();
   }
 });

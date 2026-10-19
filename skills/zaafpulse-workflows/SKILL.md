@@ -39,16 +39,18 @@ Two outcomes are possible:
 
 ## Approval gates
 
-Never approve on your own. Show the user `pending.question` and ask.
+A gated step first proposes its actions: tool calls with exact arguments, which have not run yet. `pending.question` lists them as `#1 tool {args}`, `#2 …`, followed by the agent's plan.
 
-When the user decides:
+- Never approve on your own. Show the user `pending.question` and ask.
+- **The user approves in the ZAAFPulse dashboard** (Agent-to-Agent → Runs). Only the approved calls run, exactly as proposed.
+- Your key may stop a run it started:
 
 ```bash
 curl -s $ZAAFPULSE_URL/v1/runs/<run_id>/resume -H "Authorization: Bearer $ZAAFPULSE_KEY" -H "Content-Type: application/json" \
-  -d '{"approve": true, "note": "only roll back payment-api"}'   # or {"approve": false}
+  -d '{"approve": false, "note": "the user declined"}'
 ```
 
-- The note reaches the next agent.
+- A key may approve only when the user turned on **May approve its own paused runs** for it. It then sends `{"approve": true, "calls": [1, 2], "note": "…"}`, where `calls` lists the numbers of the actions to run (all when omitted).
 - A run nobody approves within 72 hours ends as `rejected`.
 - A step whose agent is missing fails the run instead of being skipped.
 

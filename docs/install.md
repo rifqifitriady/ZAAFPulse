@@ -138,7 +138,11 @@ There are three sign-in modes. ZAAFPulse picks one by itself:
 
 On a shared machine, or for extra safety on your own, set `ZAAFPULSE_AUTH=local`.
 
-A request that carries proxy headers (`X-Forwarded-*`, `Forwarded`, `X-Real-IP`, `Via`) while sign-in is off is refused. This catches the usual proxy mistakes. It cannot see a proxy that strips every such header, so behind a proxy always set `ZAAFPULSE_TRUST_PROXY=1` and a password.
+While sign-in is off, ZAAFPulse refuses requests that carry proxy headers (`X-Forwarded-*`, `Forwarded`, `X-Real-IP`, `Via`). It also refuses browser requests whose `Origin` or `Referer` names another host, and cross-site requests.
+
+This catches the usual proxy mistakes and any browser that reaches the dashboard through a proxy. It cannot catch a non-browser client behind a proxy that strips all those headers and rewrites the Host to `localhost`: such a client looks exactly like a program on this machine.
+
+**Any reverse proxy in front of ZAAFPulse needs sign-in.** Set `ZAAFPULSE_TRUST_PROXY=1` and an admin password, or use `ZAAFPULSE_AUTH=local`.
 
 ## Server mode
 
@@ -167,8 +171,15 @@ ZAAFPulse listens on `127.0.0.1` unless told otherwise. Any other address, or a 
 - **Agents and tools:**
   - An agent can only run the integration tools in its allow list.
   - A key needs the `mcp` scope for its agents to use integration tools.
-  - Tools that change something run only in a workflow step a person approved. Everywhere else the agent describes the change instead of making it.
+  - Tools that change something run only after a person approves the exact call:
+    - In a workflow step with an approval gate, the agent first proposes its actions (tool and arguments). Nothing changes yet.
+    - The run waits until you approve those calls in the dashboard, all of them or some by number.
+    - Only the approved calls run, exactly as proposed.
+    - Outside such a step the agent describes the change instead of making it.
+  - Approving is a person's decision in the dashboard. An app's API key may reject or stop its own run, but approves it only when the key has **May approve its own paused runs** (for a pipeline that has its own human approval).
   - Notes agents save under one API key are not visible to another key.
+  - A key can be limited to some knowledge bases, which applies to `/v1/knowledge` and to the agents run with that key.
+  - A key with a monthly budget can only use models whose spend can be counted: a list price, or a private model on your own hardware. Its embeddings count toward the budget too.
 - **Approvals:** approving a paused run keeps the limits of the key that started it. A run of a deleted, revoked or expired key cannot continue.
 - **URL ingestion:** URLs given to the RAG service cannot reach this machine, private networks or cloud metadata, including through redirects or a second DNS answer. Pages are capped at 5 MB. For an on-premises intranet, set `ZAAFPULSE_ALLOW_PRIVATE_URLS=1`.
 - **Files are private.** Everything ZAAFPulse creates in its data folder is readable only by its own account.
@@ -177,6 +188,7 @@ ZAAFPulse listens on `127.0.0.1` unless told otherwise. Any other address, or a 
   - They stop when it cannot be verified; only v1.0.0 predates the checksums.
   - They never fall back to the development branch unless you ask (`--version main`).
   - The checksum comes from the same GitHub release, so it protects against damaged or altered downloads, not against a compromised GitHub account.
+  - From 1.0.3 every release file also has a build-provenance attestation (Sigstore), signed as made by this repository's release workflow from a specific commit. Check one with `gh attestation verify zaafpulse-1.0.3-linux-x64 --repo rifqifitriady/ZAAFPulse`. A file uploaded by hand, even with a stolen token, has no valid attestation.
 
 ### HTTPS
 
