@@ -44,7 +44,8 @@ async function setup(handler, { tools = [] } = {}) {
     resolveSecret: () => undefined,
     getPricing: () => ({}),
     getIntegrations: () => ({
-      listTools: async () => tools,
+      // Like the real registry: every tool says whether it is read-only.
+      listTools: async () => tools.map((t) => ({ annotations: { readOnlyHint: !t.write }, ...t })),
       callTool: async (name) => {
         toolCalls.push(name);
         return { result: { content: [{ type: 'text', text: `result of ${name}` }] } };

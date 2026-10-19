@@ -573,7 +573,7 @@ function viewAgents() {
       metricTile({
         label: 'Model calls',
         value: fmtN(k.calls),
-        sub: d.tools.map((t) => `${t.name} ${fmtN(t.calls)}`).join(' · '),
+        sub: esc(d.tools.map((t) => `${t.name} ${fmtN(t.calls)}`).join(' · ')),
         color: HOLO.blue,
       }),
     ].join('')}</div>

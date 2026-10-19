@@ -33,7 +33,8 @@ async function setup(handler) {
   ];
   const calls = [];
   const integrations = {
-    listTools: async () => tools,
+    // Like the real registry: every tool says whether it is read-only.
+    listTools: async () => tools.map((t) => ({ annotations: { readOnlyHint: !t.write }, ...t })),
     callTool: async (name, args) => {
       calls.push([name, args]);
       return { result: { content: [{ type: 'text', text: '2 open problems' }] } };
@@ -171,13 +172,19 @@ test('agents: tool loop over integration tools, sessions and agent models', asyn
     };
   });
   try {
-    const { secret } = t.gateway.keys.create({ name: 'a', scopes: ['agents'], agents: ['network-ops'] });
+    // Integration tools reach other systems: an agents-only key gets none of them.
+    const agentsOnly = t.gateway.keys.create({ name: 'no-mcp', scopes: ['agents'], agents: ['network-ops'] }).secret;
+    await t.call('/v1/agents/network-ops/run', { key: agentsOnly, body: { input: 'any outages?' } });
+    assert.deepEqual(t.calls, []);
+    const firstWithTools = t.upstream.requests.length;
+    const { secret } = t.gateway.keys.create({ name: 'a', scopes: ['agents', 'mcp'], agents: ['network-ops'] });
     const r = await t.call('/v1/agents/network-ops/run', { key: secret, body: { input: 'any outages?' } });
     assert.equal(r.status, 200);
     assert.equal(r.json.text, 'There are 2 open problems.');
     assert.deepEqual(t.calls, [['dynatrace_list_problems', {}]]);
     assert.equal(r.json.calls[0].tool, 'dynatrace_list_problems');
-    const toolsSent = t.upstream.requests[0].body.tools.map((x) => x.function.name);
+    assert.ok(!t.upstream.requests[0].body.tools.some((x) => x.function.name === 'dynatrace_list_problems'));
+    const toolsSent = t.upstream.requests[firstWithTools].body.tools.map((x) => x.function.name);
     assert.ok(toolsSent.includes('dynatrace_list_problems') && toolsSent.includes('zp_memory_save'));
     assert.equal((await t.call('/v1/agents/hr-finance/run', { key: secret, body: { input: 'x' } })).status, 403);
     // The same agent through chat completions, continuing the session.

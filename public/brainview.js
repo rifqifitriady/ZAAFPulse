@@ -212,7 +212,7 @@ async function mountBrain() {
   $('#brain-legend').innerHTML = BRAIN_GROUPS.filter((g) => counts[g.id])
     .map(
       (g) =>
-        `<button data-bgroup="${g.id}" aria-pressed="true"><i style="background:${g.color}"></i>${g.name}<span class="num">${counts[g.id]}</span></button>`,
+        `<button data-bgroup="${esc(g.id)}" aria-pressed="true"><i style="background:${g.color}"></i>${esc(g.name)}<span class="num">${counts[g.id]}</span></button>`,
     )
     .join('');
   $('#brain-hubs').innerHTML = `<div class="note-list">${hubs
@@ -233,7 +233,7 @@ async function mountBrain() {
       const g = groupMeta(n.group);
       showTip(
         e,
-        `<b>${esc(n.name)}</b><div class="row"><span><i style="background:${g.color}"></i>${g.name}</span></div><div class="row"><span>Links</span><span class="num">${n.inLinks} in · ${n.outLinks} out</span></div>`,
+        `<b>${esc(n.name)}</b><div class="row"><span><i style="background:${g.color}"></i>${esc(g.name)}</span></div><div class="row"><span>Links</span><span class="num">${n.inLinks} in · ${n.outLinks} out</span></div>`,
       );
     },
     onSelect(n) {
@@ -486,7 +486,7 @@ const BRAIN_DRILLS = {
               `<p class="drawer-note" style="margin:0">Position from its embedding: ${n.xy.map((x) => x.toFixed(2)).join(', ')} on the first two principal components. Nearby records mean similar things.</p>`,
             )
           : '') +
-        `<div class="drawer-actions">${uri ? `<a class="btn" href="${esc(uri)}" target="_blank" rel="noopener">Open in ${esc(srcLabel || 'source')} →</a>` : ''}<span class="muted">${esc(n.path)}</span>${n.para ? `<span class="tag">PARA · ${esc(n.para)}</span>` : ''}</div>`,
+        `<div class="drawer-actions">${uri ? `<a class="btn" href="${esc(safeUrl(uri))}" target="_blank" rel="noopener noreferrer">Open in ${esc(srcLabel || 'source')} →</a>` : ''}<span class="muted">${esc(n.path)}</span>${n.para ? `<span class="tag">PARA · ${esc(n.para)}</span>` : ''}</div>`,
     };
   },
   brainNotes() {

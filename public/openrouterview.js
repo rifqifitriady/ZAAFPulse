@@ -600,7 +600,7 @@ function paintRankings() {
 }
 function appsHtml() {
   const apps = or.rankings.data.apps[or.appsPeriod] || [];
-  return `${apps.map((a) => `<div class="or-app"><span class="or-app-rank">${a.rank}</span><div><b>${a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">${esc(a.title)}</a>` : esc(a.title)}</b><small>${esc(a.categories.join(' · ') || 'app')}</small></div><span class="num">${fmtN(a.tokens)}</span></div>`).join('') || holoEmpty('No apps for this period.')}`;
+  return `${apps.map((a) => `<div class="or-app"><span class="or-app-rank">${a.rank}</span><div><b>${a.url ? `<a href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener noreferrer">${esc(a.title)}</a>` : esc(a.title)}</b><small>${esc(a.categories.join(' · ') || 'app')}</small></div><span class="num">${fmtN(a.tokens)}</span></div>`).join('') || holoEmpty('No apps for this period.')}`;
 }
 
 function mountRankSkyline() {
@@ -689,7 +689,7 @@ async function appendProviderDirectory() {
         (
           p,
         ) => `<tr><td><b>${esc(p.name)}</b></td><td class="muted">${esc(p.headquarters || '—')}</td><td class="muted">${p.datacenters.length ? esc(p.datacenters.slice(0, 8).join(', ')) + (p.datacenters.length > 8 ? ` +${p.datacenters.length - 8}` : '') : '—'}</td>
-      <td>${p.statusPage ? `<a class="link" href="${esc(p.statusPage)}" target="_blank" rel="noopener noreferrer">status ↗</a>` : '<span class="muted">—</span>'}</td></tr>`,
+      <td>${p.statusPage ? `<a class="link" href="${esc(safeUrl(p.statusPage))}" target="_blank" rel="noopener noreferrer">status ↗</a>` : '<span class="muted">—</span>'}</td></tr>`,
       )
       .join('')}</tbody></table></div>`
     : holoEmpty(`Could not load the provider directory: ${esc(v.error || 'no data')}`);

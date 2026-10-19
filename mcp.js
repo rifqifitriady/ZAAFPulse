@@ -11,6 +11,7 @@ const { createAudit } = require('./lib/audit');
 const { createLocal } = require('./lib/local');
 const { version } = require('./package.json');
 
+process.umask(0o077); // caches and audit logs are private to this OS account
 const DIR = require('./lib/platform').dataDir(); // the same data folder as the server
 const CONFIG_FILE = process.env.ACC_CONFIG || path.join(DIR, 'config.json');
 const CACHE_DIR = process.env.ACC_CACHE_DIR || path.join(DIR, '.cache');
