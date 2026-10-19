@@ -9,7 +9,7 @@ COPY lib ./lib
 COPY public ./public
 COPY skills ./skills
 COPY scripts/register-mcp.js ./scripts/register-mcp.js
-COPY server.js mcp.js package.json config.example.json ./
+COPY server.js mcp.js package.json config.example.json LICENSE ./
 ENV NODE_ENV=production \
     ZAAFPULSE_HOST=0.0.0.0 \
     ZAAFPULSE_PORT=4777 \
