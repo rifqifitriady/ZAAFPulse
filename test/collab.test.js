@@ -354,16 +354,35 @@ test('workflows: an approval gate pauses the run until it is approved; a rejecti
     const key = t.key();
     const r = await t.call('/v1/workflows/gated/run', key, { input: 'laptop $2,400' });
     assert.equal(r.json.state, 'input-required');
-    assert.equal(r.json.steps.length, 1);
+    // The gated step has already worked out its proposal; nothing that changes anything has run.
+    assert.equal(r.json.steps.length, 2);
+    assert.equal(r.json.steps[1].role, 'proposal');
     assert.equal(r.json.pending.step, 2);
-    const ok = await t.call(`/v1/runs/${r.json.id}/resume`, key, { approve: true, note: 'cap it at $2,000' });
+    // The app that started the run may not approve it; a person does, in the dashboard.
+    assert.equal((await t.call(`/v1/runs/${r.json.id}/resume`, key, { approve: true })).status, 403);
+    assert.deepEqual(
+      (
+        await t.gateway.admin('collab', 'POST', {
+          action: 'resume',
+          id: r.json.id,
+          approve: true,
+          note: 'cap it at $2,000',
+        })
+      ).errors,
+      undefined,
+    );
+    let ok;
+    for (let i = 0; i < 50; i++) {
+      ok = await t.call(`/v1/runs/${r.json.id}`, key, null, 'GET');
+      if (ok.json.state === 'completed') break;
+      await new Promise((res) => setTimeout(res, 20));
+    }
     assert.equal(ok.json.state, 'completed');
-    assert.equal(ok.json.steps.length, 2);
+    assert.equal(ok.json.steps.length, 3);
     assert.match(ok.json.answer, /^Legal & Compliance says: Sign off HR & Finance/);
-    const legal = t.upstream.requests.find((q) => /You are the Legal & Compliance agent/.test(sys(q)));
-    assert.match(sys(legal), /The approver: Approved with this note: cap it at \$2,000/);
+    assert.match(ok.json.answer, /Approved with this note: cap it at \$2,000/);
     assert.equal(ok.json.approvals[0].note, 'cap it at $2,000');
-    assert.equal((await t.call(`/v1/runs/${r.json.id}/resume`, key, {})).status, 409);
+    assert.equal((await t.call(`/v1/runs/${r.json.id}/resume`, key, { approve: false })).status, 409);
     const r2 = await t.call('/v1/workflows/gated/run', key, { input: 'yacht' });
     const no = await t.call(`/v1/runs/${r2.json.id}/resume`, key, { approve: false, note: 'too expensive' });
     assert.equal(no.json.state, 'rejected');
@@ -485,7 +504,7 @@ test('A2A: agent card, SendMessage in v1.0 and v0.3, streaming, tasks, approvals
       (await t.call('/a2a', null, { jsonrpc: '2.0', id: 1, method: 'SendMessage', params: {} })).status,
       401,
     );
-    const key = t.key();
+    const key = t.key({ approveOwnRuns: true }); // this test approves its own tasks over A2A;
     const rpc = (method, params, id = 1) => t.call('/a2a', key, { jsonrpc: '2.0', id, method, params });
     const v1 = await rpc('SendMessage', {
       message: {
@@ -601,7 +620,10 @@ test('A2A: agent card, SendMessage in v1.0 and v0.3, streaming, tasks, approvals
       },
     });
     assert.equal(yes.json.result.task.status.state, 'TASK_STATE_COMPLETED');
-    assert.equal(yes.json.result.task.artifacts[0].parts[0].text, 'answer from Legal & Compliance');
+    assert.match(
+      yes.json.result.task.artifacts[0].parts[0].text,
+      /^answer from Legal & Compliance\n\nApproved with this note: yes, approved\./,
+    );
   } finally {
     await t.close();
   }

@@ -62,7 +62,9 @@ ZAAFPulse was reviewed against this threat model in October 2026. The findings w
 - Content-Security-Policy and anti-framing headers;
 - secrets bound to their address;
 - an SSRF guard for URL ingestion;
-- agent tools limited to their allow list, with approval for anything that changes something;
+- agent tools limited to their allow list, and anything that changes something runs only as the exact call a person approved in the dashboard;
+- per-key knowledge-base limits, and budgets that count embeddings and refuse unpriced models;
+- build-provenance attestations on release files;
 - per-key agent memory;
 - private data files;
 - checksum-verified installers.

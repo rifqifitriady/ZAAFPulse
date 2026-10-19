@@ -77,10 +77,11 @@ function run(target, { remove = false, dryRun = false, home, exec = execFileSync
         log(`${c.name}: already ${remove ? 'absent' : 'registered'}`);
         continue;
       }
-      // Windows: claude is claude.cmd, which runs through cmd.exe, so quote paths with spaces.
+      // Windows: claude is claude.cmd, which runs through cmd.exe: quote every argument, so a path with
+      // spaces or characters such as & or ^ stays one argument instead of starting another command.
       const win = process.platform === 'win32';
       try {
-        exec('claude', win ? args.map((x) => (/\s/.test(x) ? `"${x}"` : x)) : args, {
+        exec('claude', win ? args.map((x) => `"${String(x).replace(/"/g, '')}"`) : args, {
           stdio: 'inherit',
           ...(win ? { shell: true } : {}),
         });
