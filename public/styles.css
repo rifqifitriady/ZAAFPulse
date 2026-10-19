@@ -5234,3 +5234,8 @@ nav a.open + a.nav-sub {
   color: #fff;
   text-decoration: underline;
 }
+
+/* Approval: the proposed actions, one per line, with their exact arguments. */
+.approval-calls { list-style: none; margin: 8px 0 4px; padding: 0; display: grid; gap: 8px; }
+.approval-calls li { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
+.approval-args { margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; max-height: 180px; overflow: auto; }
