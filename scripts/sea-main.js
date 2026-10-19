@@ -20,13 +20,27 @@ const cacheRoot =
       : path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'), 'zaafpulse', 'app'));
 const dir = path.join(cacheRoot, id);
 
+// The unpacked app is code that runs as this user: keep its folder private and refuse one that another
+// account created or can write (someone could otherwise plant files before the first run).
+fs.mkdirSync(cacheRoot, { recursive: true, mode: 0o700 });
+if (process.platform !== 'win32') {
+  const st = fs.statSync(cacheRoot);
+  if (st.uid !== process.getuid() || (st.mode & 0o022) !== 0) {
+    console.error(
+      `${cacheRoot} belongs to another account or is writable by others; remove it or set ZAAFPULSE_APP_CACHE.`,
+    );
+    process.exit(1);
+  }
+  if (fs.existsSync(dir) && fs.statSync(dir).uid !== process.getuid()) fs.rmSync(dir, { recursive: true, force: true });
+}
+
 if (!fs.existsSync(path.join(dir, '.complete'))) {
   const { files } = JSON.parse(zlib.gunzipSync(raw).toString('utf8'));
   const tmp = `${dir}.tmp-${process.pid}`;
   for (const [rel, b64] of Object.entries(files)) {
     const f = path.join(tmp, ...rel.split('/'));
-    fs.mkdirSync(path.dirname(f), { recursive: true });
-    fs.writeFileSync(f, Buffer.from(b64, 'base64'));
+    fs.mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(f, Buffer.from(b64, 'base64'), { mode: 0o600 });
   }
   fs.writeFileSync(path.join(tmp, '.complete'), new Date().toISOString());
   try {

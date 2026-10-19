@@ -757,30 +757,30 @@ test('code tools: snippets for every tool, file-based tools written with a backu
       .every((x) => tools.snippet(x.id, B, 'zp_KEY', 'up/m1').includes('zp_KEY')),
   );
   assert.equal(tools.list(B).find((x) => x.id === 'cursor').state, 'unsupported');
-  tools.apply('claude-code', B, 'zp_SECRET', 'up/m1');
+  tools.apply('claude-code', B, 'zp_SECRETsecretSECRETsecret1234', 'up/m1');
   const cc = JSON.parse(fs.readFileSync(path.join(home, '.claude/settings.json'), 'utf8'));
   assert.equal(cc.theme, 'dark');
   assert.equal(cc.env.FOO, '1');
   assert.equal(cc.env.ANTHROPIC_BASE_URL, B);
-  assert.equal(cc.env.ANTHROPIC_AUTH_TOKEN, 'zp_SECRET');
+  assert.equal(cc.env.ANTHROPIC_AUTH_TOKEN, 'zp_SECRETsecretSECRETsecret1234');
   assert.equal(fs.statSync(path.join(home, '.claude/settings.json')).mode & 0o777, 0o600);
   assert.equal(tools.list(B).find((x) => x.id === 'claude-code').state, 'connected');
-  tools.apply('codex', B, 'zp_SECRET', 'up/m1');
+  tools.apply('codex', B, 'zp_SECRETsecretSECRETsecret1234', 'up/m1');
   const toml = fs.readFileSync(path.join(home, '.codex/config.toml'), 'utf8');
   assert.match(toml, /^model_provider = "zaafpulse"\nmodel = "up\/m1"\napproval_policy/);
   assert.match(toml, /\[mcp_servers\.x\]/);
   assert.match(toml, /wire_api = "responses"/);
   assert.ok(!/model = "o3"/.test(toml));
-  tools.apply('codex', B, 'zp_SECRET2', 'up/m1'); // applying twice keeps one provider block
+  tools.apply('codex', B, 'zp_SECRET2secretSECRETsecret123', 'up/m1'); // applying twice keeps one provider block
   assert.equal(
     (fs.readFileSync(path.join(home, '.codex/config.toml'), 'utf8').match(/\[model_providers\.zaafpulse\]/g) || [])
       .length,
     1,
   );
-  tools.apply('gemini-cli', B, 'zp_G', 'up/m1');
+  tools.apply('gemini-cli', B, 'zp_GgeminiGEMINIgeminiGEMINI12', 'up/m1');
   assert.match(
     fs.readFileSync(path.join(home, '.gemini/.env'), 'utf8'),
-    /GOOGLE_GEMINI_BASE_URL=http:\/\/127\.0\.0\.1:4777\nGEMINI_API_KEY=zp_G/,
+    /GOOGLE_GEMINI_BASE_URL=http:\/\/127\.0\.0\.1:4777\nGEMINI_API_KEY=zp_GgeminiGEMINIgeminiGEMINI12/,
   );
   tools.revert('claude-code');
   tools.revert('codex');

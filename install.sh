@@ -97,20 +97,34 @@ if [ -z "$NODE" ]; then
   NODE="$PREFIX/node/bin/node"; say "Node.js $("$NODE" -v) installed in $PREFIX/node"
 fi
 
-# ---- ZAAFPulse: the latest release, or main when there is none (or --version) ----
+# ---- ZAAFPulse: the latest release (checksum verified), or main only when asked for ----
 if [ -z "$VERSION" ] && [ -z "$SOURCE" ]; then
   VERSION="$(fetch_text "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1 || true)"
-  VERSION="${VERSION:-main}"
+  [ -n "$VERSION" ] || die "could not find the latest release on GitHub; try again, or install the development version with --version main"
 fi
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 if [ -n "$SOURCE" ]; then
   SRC="$(cd "$SOURCE" && pwd)"; say "Installing ZAAFPulse from $SRC"
-else
-  case "$VERSION" in main|master) REF="refs/heads/$VERSION" ;; *) REF="refs/tags/$VERSION" ;; esac
-  say "Downloading ZAAFPulse ($VERSION)"
-  fetch "https://codeload.github.com/$REPO/tar.gz/$REF" "$TMP/app.tar.gz"
+elif [ "$VERSION" = main ] || [ "$VERSION" = master ]; then
+  warn "Installing the development branch ($VERSION): not a release, not checksum-verified."
+  fetch "https://codeload.github.com/$REPO/tar.gz/refs/heads/$VERSION" "$TMP/app.tar.gz"
   tar -xzf "$TMP/app.tar.gz" -C "$TMP"
   SRC="$(find "$TMP" -mindepth 1 -maxdepth 1 -type d | head -n1)"
+else
+  say "Downloading ZAAFPulse $VERSION"
+  REL="https://github.com/$REPO/releases/download/$VERSION"
+  NAME="zaafpulse-${VERSION#v}-source.tar.gz"
+  if fetch "$REL/SHA256SUMS.txt" "$TMP/SHA256SUMS.txt" 2>/dev/null && grep -q "  $NAME\$" "$TMP/SHA256SUMS.txt"; then
+    fetch "$REL/$NAME" "$TMP/app.tar.gz"
+    WANT="$(grep "  $NAME\$" "$TMP/SHA256SUMS.txt" | cut -d' ' -f1)"
+    [ "$(sha256 "$TMP/app.tar.gz")" = "$WANT" ] || die "checksum mismatch for $NAME: the download was changed or damaged"
+    say "Checksum verified ($NAME)"
+  else
+    warn "Release $VERSION has no checksummed source package (it predates them); downloading the tag without verification."
+    fetch "https://codeload.github.com/$REPO/tar.gz/refs/tags/$VERSION" "$TMP/app.tar.gz"
+  fi
+  mkdir "$TMP/x" && tar -xzf "$TMP/app.tar.gz" -C "$TMP/x"
+  SRC="$(find "$TMP/x" -mindepth 1 -maxdepth 1 -type d | head -n1)"
 fi
 [ -f "$SRC/bin/zaafpulse.js" ] || die "the download does not look like ZAAFPulse"
 mkdir -p "$PREFIX"; rm -rf "$PREFIX/app.new"; mkdir "$PREFIX/app.new"
