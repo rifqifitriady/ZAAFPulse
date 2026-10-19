@@ -126,15 +126,50 @@ The image is `node:24-alpine` with only the app files. It runs as the unprivileg
 - **`ZAAFPULSE_MASTER_KEY`:** encrypts provider and integration keys. Without it, a key file is created in the volume.
 - **Reverse proxy:** set `ZAAFPULSE_PUBLIC_URL` and `ZAAFPULSE_TRUST_PROXY=1` when ZAAFPulse sits behind one.
 
+## Who can open the dashboard
+
+There are three sign-in modes. ZAAFPulse picks one by itself:
+
+| Mode | When | How you get in |
+|---|---|---|
+| **none** | 127.0.0.1 on a single-user machine (the default on a laptop) | Open http://localhost:4777 |
+| **local** | Linux with other login users, or `ZAAFPULSE_AUTH=local` | `zaafpulse open`. It writes a one-time code into your private data folder, and the browser swaps it for a 30-day cookie. Other accounts and their programs cannot get in. |
+| **password** | Any address but 127.0.0.1, a reverse proxy (`ZAAFPULSE_TRUST_PROXY`, `ZAAFPULSE_PUBLIC_URL` or `ZAAFPULSE_ALLOWED_HOSTS`), or `ZAAFPULSE_AUTH=1` | The admin password |
+
+On a shared machine, or for extra safety on your own, set `ZAAFPULSE_AUTH=local`. A request that arrives through a proxy while sign-in is off is refused, so a misconfigured proxy cannot expose the dashboard.
+
 ## Server mode
 
-ZAAFPulse listens on `127.0.0.1` unless told otherwise. Any other address turns on server mode:
+ZAAFPulse listens on `127.0.0.1` unless told otherwise. Any other address, or a reverse proxy in front of it, turns on password sign-in:
 
 - **Admin password:** the dashboard and its `/api` need one. Set it with `zaafpulse set-password` (stored as a scrypt hash) or with `ZAAFPULSE_ADMIN_PASSWORD` (or `ZAAFPULSE_ADMIN_PASSWORD_FILE`). ZAAFPulse does not start without one.
-- **Sessions:** a session is an HttpOnly, SameSite=Strict cookie, which is also `Secure` over HTTPS. It lasts 12 hours and is renewed while it is used.
-- **Wrong passwords:** five wrong guesses from one address lock sign-in for five minutes.
+- **Sessions:** a session is an HttpOnly, SameSite=Strict cookie, which is also `Secure` over HTTPS. It lasts 12 hours and is renewed while it is used, up to 7 days.
+- **Wrong passwords:**
+  - One sign-in is checked at a time per address. Every attempt counts before it is checked, so parallel guessing does not help.
+  - Five failures lock that address for five minutes.
+  - Fifty failures from all addresses together lock sign-in for everyone for five minutes.
+  - Behind a proxy, the address is the right-most `X-Forwarded-For` entry, and IPv6 addresses count per /64.
 - **Apps:** `/v1`, `/mcp` and `/a2a` need ZAAFPulse API keys, as they always have.
-- **Host names:** server mode accepts any host name. To restrict it, set `ZAAFPULSE_ALLOWED_HOSTS=ai.example.com,10.0.0.5`.
+- **Host names:** with sign-in on, any host name is accepted. To restrict it, set `ZAAFPULSE_ALLOWED_HOSTS=ai.example.com,10.0.0.5`.
+- **Browser protection:** every dashboard response carries a strict Content-Security-Policy, `X-Frame-Options: DENY` and `Referrer-Policy: no-referrer`.
+
+## Built-in safeguards
+
+- **Stored secrets stay with their address.** Changing the URL of a provider, integration or second-brain source requires entering its secret again. A stored key is never sent to a new host.
+- **Secret references:**
+  - `config.json` can only point at ZAAFPulse's own secret items (`acc.*`).
+  - Environment references can never name ZAAFPulse's own settings (`ZAAFPULSE_*`, which hold the admin password and master key).
+- **Agents and tools:**
+  - An agent can only run the integration tools in its allow list.
+  - A key needs the `mcp` scope for its agents to use integration tools.
+  - Tools that change something run only in a workflow step a person approved. Everywhere else the agent describes the change instead of making it.
+  - Notes agents save under one API key are not visible to another key.
+- **Approvals:** approving a paused run keeps the limits of the key that started it. A run of a deleted, revoked or expired key cannot continue.
+- **URL ingestion:** URLs given to the RAG service cannot reach this machine, private networks or cloud metadata, including through redirects or a second DNS answer. Pages are capped at 5 MB. For an on-premises intranet, set `ZAAFPULSE_ALLOW_PRIVATE_URLS=1`.
+- **Files are private.** Everything ZAAFPulse creates in its data folder is readable only by its own account.
+- **Installer integrity:**
+  - The installers verify each release's source package against `SHA256SUMS.txt`.
+  - They never fall back to the development branch unless you ask (`--version main`).
 
 ### HTTPS
 
@@ -198,7 +233,8 @@ zaafpulse mcp
 | `ZAAFPULSE_PORT` | `4777` | Port (`PORT` also works) |
 | `ZAAFPULSE_DATA` | see the tables above | Folder for `config.json`, `.data/` and `.cache/` |
 | `ZAAFPULSE_ADMIN_PASSWORD` (`_FILE`) | | Admin password for server mode |
-| `ZAAFPULSE_AUTH` | | `1` requires sign-in even on 127.0.0.1 |
+| `ZAAFPULSE_AUTH` | automatic | `1` (password), `local` (only this OS account, with `zaafpulse open`) or `none` |
+| `ZAAFPULSE_ALLOW_PRIVATE_URLS` | | `1` lets RAG URL ingestion fetch private and intranet addresses |
 | `ZAAFPULSE_TLS_CERT`, `ZAAFPULSE_TLS_KEY` | | PEM files for built-in HTTPS |
 | `ZAAFPULSE_PUBLIC_URL` | | The address apps should use, shown in snippets |
 | `ZAAFPULSE_TRUST_PROXY` | | `1` behind a reverse proxy (X-Forwarded-For and -Proto) |

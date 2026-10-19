@@ -48,11 +48,19 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
-      - run: cat dist/SHA256SUMS-*.txt > dist/SHA256SUMS.txt && rm dist/SHA256SUMS-*.txt
+      # The app files the installers use, checksummed with the binaries (install.sh / install.ps1 verify it).
+      - name: Source package
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          git archive --format=tar.gz --prefix="zaafpulse-$V/" -o "dist/zaafpulse-$V-source.tar.gz" "$GITHUB_REF_NAME" \
+            bin lib public skills scripts server.js mcp.js package.json config.example.json README.md LICENSE
+          cat dist/SHA256SUMS-*.txt > dist/SHA256SUMS.txt && rm dist/SHA256SUMS-*.txt
+          (cd dist && sha256sum "zaafpulse-$V-source.tar.gz" >> SHA256SUMS.txt)
       - env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "ZAAFPulse $GITHUB_REF_NAME" --generate-notes

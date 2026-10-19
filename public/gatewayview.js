@@ -568,8 +568,8 @@ function gwKeys() {
       <section class="holo panel"><div class="panel-head"><h3>New key</h3><span class="meta">shown once, then only its hash is kept</span></div>
         <form class="gw-form gw-key-form" id="gw-key-form">
           <div class="gw-row"><label>Name<input class="input" name="name" placeholder="e.g. my-app, n8n, laptop scripts" required></label>
-          <label>Allowed models <small>globs, comma-separated; empty = all</small><input class="input" name="models" placeholder="ollama/*, openrouter/deepseek/*"></label>
-          <label>Allowed agents <small>empty = all</small><input class="input" name="agents" placeholder="customer-service, network-ops"></label></div>
+          <label>Allowed models <small>globs, comma-separated; <b class="warn-text">empty = every model</b>, list them to limit spend</small><input class="input" name="models" placeholder="ollama/*, openrouter/deepseek/*"></label>
+          <label>Allowed agents <small><b class="warn-text">empty = every agent</b>; list the ones this app needs</small><input class="input" name="agents" placeholder="customer-service, network-ops"></label></div>
           <fieldset><legend>Scopes</legend>${[
             ['llm', 'LLM: /v1/chat/completions, /v1/embeddings'],
             ['agents', 'Agents: agent/*, /v1/orchestrate, workflows, sessions'],

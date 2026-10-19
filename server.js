@@ -40,7 +40,16 @@ const PORT = Number(process.env.ZAAFPULSE_PORT || process.env.PORT) || 4777;
 const HOST = process.env.ZAAFPULSE_HOST || process.env.HOST || '127.0.0.1';
 const SERVER_MODE = !isLoopback(HOST);
 // config.json, .data/ and .cache/: ZAAFPULSE_DATA when set (installers set it), else next to the code.
+// Everything ZAAFPulse creates (config, keys, history, caches) is private to this OS account.
+process.umask(0o077);
 const DIR = platform.dataDir();
+try {
+  fs.chmodSync(DIR, 0o700);
+  for (const sub of ['.data', '.cache'])
+    for (const f of fs.readdirSync(path.join(DIR, sub))) fs.chmodSync(path.join(DIR, sub, f), 0o600);
+} catch {
+  /* a fresh install, or a folder we do not own (a git checkout keeps its own modes) */
+}
 const CONFIG_FILE = path.join(DIR, 'config.json');
 const PUBLIC = path.join(platform.APP_DIR, 'public');
 const TLS =
@@ -282,8 +291,20 @@ function getSummary(range) {
   return memo.get(key);
 }
 
+// Dashboard and /api responses only (the gateway sets its own headers, with CORS for other apps): no
+// framing (clickjacking), scripts from this origin only, no referrer, isolated browsing context.
+const SECURITY_HEADERS = {
+  'Content-Security-Policy':
+    "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'",
+  'X-Frame-Options': 'DENY',
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), usb=(), payment=()',
+};
 function send(res, status, body, type = 'application/json') {
-  res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+  res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', ...SECURITY_HEADERS });
   res.end(type === 'application/json' ? JSON.stringify(body) : body);
 }
 
@@ -314,17 +335,26 @@ const handler = async (req, res) => {
   const host = String(req.headers.host || '')
     .replace(/:\d+$/, '')
     .toLowerCase();
-  if (!isLoopback(host) && !(SERVER_MODE && (!ALLOWED_HOSTS.length || ALLOWED_HOSTS.includes(host))))
+  // Names other than loopback are accepted only when sign-in is on (server mode or behind a proxy).
+  if (!isLoopback(host) && !(auth.mode === 'password' && (!ALLOWED_HOSTS.length || ALLOWED_HOSTS.includes(host))))
     return send(res, 403, { error: 'forbidden' });
+  // A proxy in front of a no-sign-in setup would expose the dashboard to everyone behind it: refuse.
+  if (
+    auth.mode === 'none' &&
+    (req.headers['x-forwarded-for'] || req.headers.forwarded || req.headers['x-forwarded-host'])
+  )
+    return send(res, 403, {
+      error: 'ZAAFPulse is behind a proxy without sign-in. Set ZAAFPULSE_TRUST_PROXY=1 and an admin password.',
+    });
 
   try {
     // The gateway authenticates its own callers with ZAAFPulse API keys.
     if (await gateway.handle(req, res, url)) return;
     // Dashboard and /api: a signed-in session in server mode.
     if (await auth.handle(req, res, url)) return;
-    if (!auth.check(req) && url.pathname !== '/login.html') {
+    if (!auth.check(req) && !['/login.html', '/login.js'].includes(url.pathname)) {
       if (url.pathname.startsWith('/api/')) return send(res, 401, { error: 'sign in first' });
-      res.writeHead(302, { location: '/login.html' });
+      res.writeHead(302, { location: '/login.html', ...SECURITY_HEADERS });
       return res.end();
     }
     if (url.pathname === '/api/platform') {
@@ -341,6 +371,7 @@ const handler = async (req, res) => {
         tls: !!TLS,
         baseUrl: BASE_URL,
         auth: auth.required,
+        authMode: auth.mode,
         single: platform.isSea(),
         version: require('./package.json').version,
       });
@@ -648,6 +679,8 @@ const handler = async (req, res) => {
       return s ? send(res, 200, s) : send(res, 404, { error: 'unknown integration' });
     }
     if (url.pathname === '/api/rescan' && req.method === 'POST') {
+      if (!(req.headers['content-type'] || '').startsWith('application/json'))
+        return send(res, 415, { error: 'json only' });
       indexer.refresh().then(() => memo.clear());
       return send(res, 202, indexer.state);
     }

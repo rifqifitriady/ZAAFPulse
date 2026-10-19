@@ -8,6 +8,13 @@ const esc = (v) =>
     /[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
   );
+// Links built from data (note URLs, OpenRouter pages) may only use these schemes; anything else,
+// javascript: and data: included, becomes a dead link. Escape the result as usual.
+const SAFE_SCHEMES = /^(https?|obsidian|logseq|mailto):/i;
+const safeUrl = (v) => {
+  const u = String(v ?? '').trim();
+  return SAFE_SCHEMES.test(u) || /^[/#](?!\/)/.test(u) ? u : '#';
+};
 const store = {
   get(k, d) {
     try {
@@ -342,7 +349,7 @@ function barList(rows, { value, label, color, fmt = fmtN, empty = 'Nothing recor
 }
 const seriesColor = (id) => (SERIES.find((s) => s.id === id) || {}).color || 'var(--accent)';
 const legend = (series = SERIES) =>
-  `<div class="legend">${series.map((s) => `<span><i style="background:${s.color}"></i>${s.name}</span>`).join('')}</div>`;
+  `<div class="legend">${series.map((s) => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join('')}</div>`;
 
 // Token types: a validated 4-slot categorical set, kept apart from the tool colors.
 const TOKEN_TYPES = [
@@ -466,7 +473,7 @@ function drawStacked(el, { rows, series, fmt, height = 240, label = 'Daily value
     const lines = series
       .map(
         (s) =>
-          `<div class="row"><span><i style="background:${s.color}"></i>${s.name}</span><span class="num">${fmt(s.get(d))}</span></div>`,
+          `<div class="row"><span><i style="background:${s.color}"></i>${esc(s.name)}</span><span class="num">${fmt(s.get(d))}</span></div>`,
       )
       .join('');
     showTip(e, `<b>${dayLabel(d.date)}</b>${lines}${extraTip ? extraTip(d) : ''}`);
@@ -571,7 +578,7 @@ function composition(parts, fmt) {
           `<i style="--i:${i};flex-grow:${p.value / total};background:${p.color}" data-tip="${esc(p.name)}: ${esc(fmt(p.value))} (${fmtPct(p.value / total)})"></i>`,
       )
       .join('')}</div>
-    <table class="comp-table"><tbody>${parts.map((p) => `<tr><td><span class="tool-dot" style="background:${p.color}"></span>${p.name}</td><td class="r num">${fmt(p.value)}</td><td class="r num muted">${fmtPct(p.value / total)}</td></tr>`).join('')}</tbody></table>`;
+    <table class="comp-table"><tbody>${parts.map((p) => `<tr><td><span class="tool-dot" style="background:${p.color}"></span>${esc(p.name)}</td><td class="r num">${fmt(p.value)}</td><td class="r num muted">${fmtPct(p.value / total)}</td></tr>`).join('')}</tbody></table>`;
 }
 const HEAT = [0, 1, 2, 3, 4, 5].map((i) => `var(--heat-${i})`);
 function heatmap(h) {
@@ -1212,7 +1219,7 @@ $('#menu-btn').onclick = () => $('#sidebar').classList.toggle('open');
 $('#rescan').onclick = async (e) => {
   const b = e.currentTarget;
   b.classList.add('spinning');
-  await api('/api/rescan', { method: 'POST' });
+  await api('/api/rescan', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
   const wait = setInterval(async () => {
     await loadLive();
     if (!state.live.index.indexing) {
