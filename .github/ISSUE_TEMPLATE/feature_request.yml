@@ -1,0 +1,66 @@
+name: Feature request
+description: Suggest a new capability, connector, provider, agent, workflow or improvement.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ideas are welcome. Describe the problem first; there may be more than one way to solve it.
+        Anything touching the gateway, secrets or sign-in is discussed here before code (see CONTRIBUTING.md).
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what gets in the way today?
+      placeholder: I run several models on a GPU server and want the Live monitor to show its load next to my laptop's.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+      description: How it could work. Screens, endpoints or config, if you have an idea.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - AI observability (usage, cost, quality, live monitor)
+        - Second brain
+        - Agent Gateway / providers / router
+        - Agents / collaboration / workflows
+        - RAG service
+        - MCP / A2A / Agent skills
+        - Integrations
+        - Installer / service / server mode
+        - Dashboard UI
+        - Docs
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Workarounds you use today, or other tools that do this.
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Would you like to build it?
+      options:
+        - Yes, I would like to open a pull request
+        - Maybe, with some guidance
+        - No, just suggesting
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Fits the project
+      description: ZAAFPulse keeps data on the user's machine, has no npm dependencies and stays safe by default.
+      options:
+        - label: This works without sending users' data to a new third party, or makes that an explicit opt-in.
+          required: true
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
