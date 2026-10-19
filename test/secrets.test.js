@@ -9,17 +9,31 @@ test('resolves env references', () => {
 
 test('resolves keychain references through the security tool', () => {
   const calls = [];
-  const s = createSecrets({ env: {}, exec: (cmd, args) => { calls.push([cmd, ...args]); return 'kc-secret-value\n'; } });
+  const s = createSecrets({
+    env: {},
+    exec: (cmd, args) => {
+      calls.push([cmd, ...args]);
+      return 'kc-secret-value\n';
+    },
+  });
   assert.equal(s.resolve({ keychain: 'acc.x' }), 'kc-secret-value');
   assert.deepEqual(calls[0], ['security', 'find-generic-password', '-s', 'acc.x', '-w']);
 });
 
 test('rejects plain-text secrets', () => {
-  assert.throws(() => createSecrets({ env: {} }).resolve('abc', 'apiKey'), /apiKey: plain-text secrets are not allowed/);
+  assert.throws(
+    () => createSecrets({ env: {} }).resolve('abc', 'apiKey'),
+    /apiKey: plain-text secrets are not allowed/,
+  );
 });
 
 test('reports missing env variables and keychain items', () => {
-  const s = createSecrets({ env: {}, exec: () => { throw new Error('exit 44'); } });
+  const s = createSecrets({
+    env: {},
+    exec: () => {
+      throw new Error('exit 44');
+    },
+  });
   assert.throws(() => s.resolve({ env: 'NOPE' }), /NOPE is not set/);
   assert.throws(() => s.resolve({ keychain: 'acc.none' }), /"acc.none" not found/);
 });

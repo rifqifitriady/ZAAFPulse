@@ -1,0 +1,12 @@
+docs/
+reports/
+research_notes/
+dist/
+.data/
+.cache/
+*.md
+*.yml
+*.yaml
+*.json
+*.html
+*.svg
