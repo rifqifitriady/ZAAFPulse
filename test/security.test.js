@@ -248,6 +248,8 @@ async function agentSetup(handler) {
   const tools = [
     { name: 'tickets_list', description: 'List tickets' },
     { name: 'tickets_create', description: 'Create a ticket', write: true },
+    // An upstream that says "true" (a string) is not clearly read-only: treated as a write.
+    { name: 'tickets_odd', description: 'Odd hint', annotations: { readOnlyHint: 'true' } },
   ];
   const calls = [];
   const gateway = createGateway({
@@ -313,6 +315,7 @@ test('agents: a write tool needs approval and a tool that was not offered never 
     const r1 = await t.gateway.orchestrator.runAgent(ops, 'open a ticket', {});
     offered.push(...t.upstream.requests[0].body.tools.map((x) => x.function.name));
     assert.ok(offered.includes('tickets_list') && !offered.includes('tickets_create'), 'write tools are not offered');
+    assert.ok(!offered.includes('tickets_odd'), 'a tool that is not clearly read-only is treated as a write');
     assert.deepEqual(t.calls, [], 'the write tool did not run');
     assert.match(r1.text, /needs a person's approval/);
     // An agent without that tool gets nothing, even if the model names it.
@@ -467,6 +470,129 @@ test('server: security headers, no framing, proxy and foreign-host requests refu
     assert.equal(rebound, 403);
     const rescan = await fetch(`http://127.0.0.1:${port}/api/rescan`, { method: 'POST', body: 'x' });
     assert.equal(rescan.status, 415, 'state changes need JSON (no simple cross-site POST)');
+  } finally {
+    child.kill();
+  }
+});
+
+/* ---------- stage 3: bypasses found by the re-test ---------- */
+
+test('secrets: a new entry cannot borrow a secret saved for another one, nor a remote agent an env var', async () => {
+  const dataDir = tmp('zp-sec-borrow-');
+  let gw = {
+    providers: [
+      {
+        id: 'victim',
+        preset: 'custom',
+        baseUrl: 'https://api.example.com/v1',
+        apiKey: { keychain: 'acc.gw-victim' },
+        enabled: true,
+      },
+    ],
+  };
+  const { secretResolver: resolver } = require('../lib/integration-config');
+  const gateway = createGateway({
+    dataDir,
+    getConfig: () => ({ gateway: gw }),
+    writeGatewayConfig: (g) => (gw = g),
+    secrets: secretsFor(),
+    resolveSecret: (id, input, current) => resolver({ store: () => {} })(`gw-${id}`, { key: 'apiKey' }, input, current),
+    getPricing: () => ({}),
+    getIntegrations: () => ({ listTools: async () => [], callTool: async () => ({}) }),
+    fetchImpl: async () => new Response('{"data":[]}', { status: 200 }),
+  });
+  const r = await gateway.admin('providers', 'POST', {
+    action: 'save',
+    id: 'thief',
+    preset: 'custom',
+    baseUrl: 'https://attacker.example/v1',
+    secret: { mode: 'keychain', service: 'acc.gw-victim' },
+  });
+  assert.match(String(r.errors), /config\.json by hand/);
+  assert.equal(gw.providers.length, 1);
+  // Remote agents: only ZP_SECRET_ variables, never ZAAFPulse's own settings.
+  const bad = gateway.agents.save({
+    id: 'r1',
+    name: 'R1',
+    remoteUrl: 'https://remote.example/a2a',
+    remoteTokenEnv: 'ZAAFPULSE_MASTER_KEY',
+  });
+  assert.match(String(bad.errors), /ZP_SECRET_/);
+  const ok = gateway.agents.save({
+    id: 'r2',
+    name: 'R2',
+    remoteUrl: 'https://remote.example/a2a',
+    remoteTokenEnv: 'ZP_SECRET_R2',
+  });
+  assert.ok(!ok.errors, String(ok.errors));
+  const moved = gateway.agents.save({
+    id: 'r2',
+    originalId: 'r2',
+    name: 'R2',
+    remoteUrl: 'https://attacker.example/a2a',
+    remoteTokenEnv: 'ZP_SECRET_R2',
+  });
+  assert.match(String(moved.errors), /address changed/);
+});
+
+test('net: credentials never follow a redirect to another host', async () => {
+  const { fetchSameOrigin } = require('../lib/net');
+  const seen = [];
+  const other = await serve((req, res) => (seen.push(req.headers['x-api-key']), res.end('{}')));
+  const first = await serve((req, res) => {
+    if (req.url === '/same') return (res.writeHead(307, { location: '/final' }), res.end());
+    if (req.url === '/final') return res.end('{"ok":true}');
+    res.writeHead(307, { location: `${other.base}/steal` });
+    res.end();
+  });
+  try {
+    const r = await fetchSameOrigin(fetch, `${first.base}/same`, { headers: { 'x-api-key': 'k-123' } });
+    assert.equal(r.status, 200, 'a redirect within the same origin is followed');
+    await assert.rejects(
+      fetchSameOrigin(fetch, `${first.base}/away`, { headers: { 'x-api-key': 'k-123' } }),
+      /refused a redirect/,
+    );
+    assert.deepEqual(seen, [], 'the other host never received the key');
+  } finally {
+    first.close();
+    other.close();
+  }
+});
+
+test('server: data folders stay usable and private after a restart; X-Real-IP proxies and cross-site logout refused', async () => {
+  const data = tmp('zp-sec-modes-');
+  fs.mkdirSync(path.join(data, '.data', 'kb'), { recursive: true });
+  fs.writeFileSync(path.join(data, '.data', 'kb', 'docs.json'), '{}');
+  fs.chmodSync(path.join(data, '.data', 'kb'), 0o755);
+  const port = 4900 + Math.floor(Math.random() * 90);
+  const child = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
+    env: {
+      ...process.env,
+      DEMO: '1',
+      ZAAFPULSE_PORT: String(port),
+      ZAAFPULSE_DATA: data,
+      HOME: data,
+      ZAAFPULSE_AUTH: 'none',
+    },
+    stdio: 'ignore',
+  });
+  try {
+    for (let i = 0; i < 60; i++) {
+      try {
+        await fetch(`http://127.0.0.1:${port}/api/session`);
+        break;
+      } catch {
+        await new Promise((s) => setTimeout(s, 150));
+      }
+    }
+    if (process.platform !== 'win32') {
+      assert.equal(fs.statSync(path.join(data, '.data', 'kb')).mode & 0o777, 0o700, 'folders 0700, still openable');
+      assert.equal(fs.statSync(path.join(data, '.data', 'kb', 'docs.json')).mode & 0o777, 0o600);
+    }
+    const realIp = await fetch(`http://127.0.0.1:${port}/api/summary`, { headers: { 'x-real-ip': '203.0.113.9' } });
+    assert.equal(realIp.status, 403);
+    const logout = await fetch(`http://127.0.0.1:${port}/api/logout`, { method: 'POST', body: 'x' });
+    assert.equal(logout.status, 415);
   } finally {
     child.kill();
   }

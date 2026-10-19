@@ -72,7 +72,7 @@ if (-not $node) {
   Say "Node.js $(& $node -v) installed in $Root\node"
 }
 
-# ---- ZAAFPulse: the latest release, or main when there is none ----
+# ---- ZAAFPulse: the latest release (checksum verified), or main only when asked for ----
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ("zp-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $tmp | Out-Null
 if ($Source) { $src = (Resolve-Path $Source).Path; Say "Installing ZAAFPulse from $src" }
@@ -96,9 +96,11 @@ else {
       Invoke-WebRequest -UseBasicParsing "$rel/$name" -OutFile $archive
       if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLower() -ne ($line.Trim() -split '\s+')[0].ToLower()) { throw "Checksum mismatch for $name`: the download was changed or damaged" }
       Say "Checksum verified ($name)"
-    } else {
-      Warn "Release $Version has no checksummed source package (it predates them); downloading the tag without verification."
+    } elseif ($Version -eq 'v1.0.0') {
+      Warn "Release $Version predates checksummed packages; downloading the tag without verification."
       Invoke-WebRequest -UseBasicParsing "https://codeload.github.com/$Repo/tar.gz/refs/tags/$Version" -OutFile $archive
+    } else {
+      throw "Could not get a verified package for $Version (SHA256SUMS.txt missing or unreachable); nothing was installed"
     }
     tar -xzf $archive -C $tmp
     if ($LASTEXITCODE -ne 0) { throw 'Could not unpack the download (tar)' }

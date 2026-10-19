@@ -55,7 +55,7 @@ Please do not report findings from automated scanners without checking that they
 
 ## Built-in protections
 
-ZAAFPulse was reviewed against this threat model in October 2026, and the findings were fixed in 1.0.1. The built-in safeguards are described in [docs/install.md](docs/install.md#built-in-safeguards):
+ZAAFPulse was reviewed against this threat model in October 2026. The findings were fixed in 1.0.1, and an adversarial re-test of those fixes led to 1.0.2. The built-in safeguards are described in [docs/install.md](docs/install.md#built-in-safeguards):
 
 - dashboard sign-in modes: none, local or password;
 - lockout that holds against parallel guessing;
