@@ -136,7 +136,9 @@ There are three sign-in modes. ZAAFPulse picks one by itself:
 | **local** | Linux with other login users, or `ZAAFPULSE_AUTH=local` | `zaafpulse open`. It writes a one-time code into your private data folder, and the browser swaps it for a 30-day cookie. Other accounts and their programs cannot get in. |
 | **password** | Any address but 127.0.0.1, a reverse proxy (`ZAAFPULSE_TRUST_PROXY`, `ZAAFPULSE_PUBLIC_URL` or `ZAAFPULSE_ALLOWED_HOSTS`), or `ZAAFPULSE_AUTH=1` | The admin password |
 
-On a shared machine, or for extra safety on your own, set `ZAAFPULSE_AUTH=local`. A request that arrives through a proxy while sign-in is off is refused, so a misconfigured proxy cannot expose the dashboard.
+On a shared machine, or for extra safety on your own, set `ZAAFPULSE_AUTH=local`.
+
+A request that carries proxy headers (`X-Forwarded-*`, `Forwarded`, `X-Real-IP`, `Via`) while sign-in is off is refused. This catches the usual proxy mistakes. It cannot see a proxy that strips every such header, so behind a proxy always set `ZAAFPULSE_TRUST_PROXY=1` and a password.
 
 ## Server mode
 
@@ -157,8 +159,11 @@ ZAAFPulse listens on `127.0.0.1` unless told otherwise. Any other address, or a 
 
 - **Stored secrets stay with their address.** Changing the URL of a provider, integration or second-brain source requires entering its secret again. A stored key is never sent to a new host.
 - **Secret references:**
-  - `config.json` can only point at ZAAFPulse's own secret items (`acc.*`).
-  - Environment references can never name ZAAFPulse's own settings (`ZAAFPULSE_*`, which hold the admin password and master key).
+  - In the dashboard, a secret is either pasted (it is then saved for that entry only) or kept as it is.
+  - Pointing an entry at another secret item or at an environment variable is done by hand in `config.json`. A dashboard user, or a program that reaches it, cannot borrow a secret that was saved for something else.
+  - References may only name ZAAFPulse's own items (`acc.*`), and never ZAAFPulse's own settings (`ZAAFPULSE_*`, which hold the admin password and master key).
+  - A remote A2A agent's token comes from a `ZP_SECRET_…` environment variable. It is only sent to the address it was set for.
+  - Credentials never follow a redirect to another host.
 - **Agents and tools:**
   - An agent can only run the integration tools in its allow list.
   - A key needs the `mcp` scope for its agents to use integration tools.
@@ -169,7 +174,9 @@ ZAAFPulse listens on `127.0.0.1` unless told otherwise. Any other address, or a 
 - **Files are private.** Everything ZAAFPulse creates in its data folder is readable only by its own account.
 - **Installer integrity:**
   - The installers verify each release's source package against `SHA256SUMS.txt`.
+  - They stop when it cannot be verified; only v1.0.0 predates the checksums.
   - They never fall back to the development branch unless you ask (`--version main`).
+  - The checksum comes from the same GitHub release, so it protects against damaged or altered downloads, not against a compromised GitHub account.
 
 ### HTTPS
 

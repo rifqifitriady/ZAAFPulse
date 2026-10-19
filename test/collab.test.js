@@ -614,14 +614,14 @@ test('remote A2A agents and collab/<pattern> models through chat completions', a
       : `answer from ${agentOf(r)}\nFINAL ANSWER: yes\nCONFIDENCE: 0.9`,
   );
   try {
-    process.env.ZP_REMOTE_TEST_KEY = t.key();
+    process.env.ZP_SECRET_REMOTE_TEST = t.key();
     assert.deepEqual(
       t.gateway.agents.save({
         id: 'remote-helper',
         name: 'Remote helper',
         description: 'A helper on another A2A server',
         remoteUrl: `${t.base}/a2a`,
-        remoteTokenEnv: 'ZP_REMOTE_TEST_KEY',
+        remoteTokenEnv: 'ZP_SECRET_REMOTE_TEST',
       }).errors,
       undefined,
     );
@@ -661,7 +661,7 @@ test('remote A2A agents and collab/<pattern> models through chat completions', a
       404,
     );
   } finally {
-    delete process.env.ZP_REMOTE_TEST_KEY;
+    delete process.env.ZP_SECRET_REMOTE_TEST;
     await t.close();
   }
 });

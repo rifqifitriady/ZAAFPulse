@@ -10,10 +10,21 @@ const esc = (v) =>
   );
 // Links built from data (note URLs, OpenRouter pages) may only use these schemes; anything else,
 // javascript: and data: included, becomes a dead link. Escape the result as usual.
-const SAFE_SCHEMES = /^(https?|obsidian|logseq|mailto):/i;
+// Parsed the way the browser will: web and mail links, same-origin paths and hashes, and the two deep-link
+// shapes ZAAFPulse builds itself (obsidian://open?vault=…, logseq://graph/…). Links from imported data
+// cannot open other app actions (obsidian://new, advanced-uri …).
 const safeUrl = (v) => {
   const u = String(v ?? '').trim();
-  return SAFE_SCHEMES.test(u) || /^[/#](?!\/)/.test(u) ? u : '#';
+  if (/^obsidian:\/\/open\?vault=/i.test(u) || /^logseq:\/\/graph\//i.test(u)) return u;
+  let parsed;
+  try {
+    parsed = new URL(u, location.origin);
+  } catch {
+    return '#';
+  }
+  if (['http:', 'https:', 'mailto:'].includes(parsed.protocol) && /^(https?|mailto):/i.test(u)) return u;
+  if (parsed.origin === location.origin && /^[/#]/.test(u)) return u;
+  return '#';
 };
 const store = {
   get(k, d) {
@@ -245,7 +256,9 @@ const storeName = () => ({ keychain: 'Keychain', libsecret: 'keyring' })[ZP.secr
 const storeLong = () => ZP.secretStore.label || 'secret store';
 const localOnlyLabel = () => (ZP.serverMode ? 'server mode · sign-in' : '127.0.0.1 only');
 async function signOut() {
-  await fetch('/api/logout', { method: 'POST' }).catch(() => {});
+  await fetch('/api/logout', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }).catch(
+    () => {},
+  );
   location.href = '/login.html';
 }
 async function loadSummary() {
