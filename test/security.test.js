@@ -428,7 +428,14 @@ test('server: security headers, no framing, proxy and foreign-host requests refu
   const port = 4800 + Math.floor(Math.random() * 100);
   const data = tmp('zp-sec-srv-');
   const child = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
-    env: { ...process.env, DEMO: '1', ZAAFPULSE_PORT: String(port), ZAAFPULSE_DATA: data, HOME: data },
+    env: {
+      ...process.env,
+      DEMO: '1',
+      ZAAFPULSE_PORT: String(port),
+      ZAAFPULSE_DATA: data,
+      HOME: data,
+      ZAAFPULSE_AUTH: 'none',
+    },
     stdio: 'ignore',
   });
   try {
