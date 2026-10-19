@@ -16,7 +16,13 @@ test('phoenix maps tools to REST /v1 and works without a key', async () => {
   try {
     const c = arize.create('phoenix', { flavor: 'phoenix', baseUrl: srv.url }, { secrets: secretsFor({}) });
     const t = tools(c);
-    assert.deepEqual(Object.keys(t), ['list_projects', 'search_spans', 'list_traces', 'list_datasets', 'list_experiments']);
+    assert.deepEqual(Object.keys(t), [
+      'list_projects',
+      'search_spans',
+      'list_traces',
+      'list_datasets',
+      'list_experiments',
+    ]);
     await t.list_projects.run({ name_contains: 'def' });
     await t.search_spans.run({ project: 'default', span_kind: 'LLM', status_code: 'ERROR', limit: 20 });
     await t.list_traces.run({ project: 'default', error: true });
@@ -26,17 +32,25 @@ test('phoenix maps tools to REST /v1 and works without a key', async () => {
     assert.deepEqual(srv.requests[1].query, { span_kind: 'LLM', status_code: 'ERROR', limit: '20' });
     assert.equal(srv.requests[2].query.error, 'true');
     assert.equal(srv.requests[0].headers.authorization, undefined);
-  } finally { await srv.close(); }
+  } finally {
+    await srv.close();
+  }
 });
 
 test('phoenix sends a bearer key when configured; health lists one project', async () => {
   const srv = await fakeServer({ 'GET /s/space/v1/projects': { body: { data: [] } } });
   try {
-    const c = arize.create('phoenix', { flavor: 'phoenix', baseUrl: `${srv.url}/s/space`, apiKey: { env: 'PX' } }, { secrets: secretsFor({ PX: 'px-key-123' }) });
+    const c = arize.create(
+      'phoenix',
+      { flavor: 'phoenix', baseUrl: `${srv.url}/s/space`, apiKey: { env: 'PX' } },
+      { secrets: secretsFor({ PX: 'px-key-123' }) },
+    );
     assert.equal((await c.health()).ok, true);
     assert.equal(srv.requests[0].headers.authorization, 'Bearer px-key-123');
     assert.equal(srv.requests[0].query.limit, '1');
-  } finally { await srv.close(); }
+  } finally {
+    await srv.close();
+  }
 });
 
 test('ax maps tools to REST /v2, spans and traces are POST searches', async () => {
@@ -49,19 +63,27 @@ test('ax maps tools to REST /v2, spans and traces are POST searches', async () =
     'GET /v2/monitors': { body: {} },
   });
   try {
-    const c = arize.create('ax', { flavor: 'ax', baseUrl: srv.url, apiKey: { env: 'AX' } }, { secrets: secretsFor({ AX: 'ax-key-123' }) });
+    const c = arize.create(
+      'ax',
+      { flavor: 'ax', baseUrl: srv.url, apiKey: { env: 'AX' } },
+      { secrets: secretsFor({ AX: 'ax-key-123' }) },
+    );
     const t = tools(c);
     assert.ok(t.list_monitors);
     await t.list_projects.run({ space_id: 'sp1', limit: 10 });
     await t.search_spans.run({ project_id: 'p1', filter: "status_code = 'ERROR'", limit: 100 });
     await t.list_traces.run({ project_id: 'p1' });
-    await t.list_datasets.run({}); await t.list_experiments.run({ dataset_id: 'd1' }); await t.list_monitors.run({ project_id: 'p1' });
+    await t.list_datasets.run({});
+    await t.list_experiments.run({ dataset_id: 'd1' });
+    await t.list_monitors.run({ project_id: 'p1' });
     assert.equal(srv.requests[0].headers.authorization, 'Bearer ax-key-123');
     assert.deepEqual(srv.requests[1].body, { project_id: 'p1', filter: "status_code = 'ERROR'" });
     assert.equal(srv.requests[1].query.limit, '100');
     assert.equal(srv.requests[2].method, 'POST');
     assert.deepEqual(t.search_spans.inputSchema.required, ['project_id']);
-  } finally { await srv.close(); }
+  } finally {
+    await srv.close();
+  }
 });
 
 test('ax needs a key; unknown flavors are rejected', () => {
