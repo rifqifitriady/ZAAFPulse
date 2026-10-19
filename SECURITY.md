@@ -53,8 +53,23 @@ Please do not report findings from automated scanners without checking that they
 - Model answers that are wrong or unsafe without crossing a security boundary (that is a quality issue; please open a normal issue).
 - Rate limits of third-party providers, and issues in those providers' own services.
 
+## Built-in protections
+
+ZAAFPulse was reviewed against this threat model in October 2026, and the findings were fixed in 1.0.1. The built-in safeguards are described in [docs/install.md](docs/install.md#built-in-safeguards):
+
+- dashboard sign-in modes: none, local or password;
+- lockout that holds against parallel guessing;
+- Content-Security-Policy and anti-framing headers;
+- secrets bound to their address;
+- an SSRF guard for URL ingestion;
+- agent tools limited to their allow list, with approval for anything that changes something;
+- per-key agent memory;
+- private data files;
+- checksum-verified installers.
+
 ## Keeping your installation safe
 
+- **On a shared machine, set `ZAAFPULSE_AUTH=local`** so only your OS account can open the dashboard (it is automatic on Linux with other login users).
 - **Stay on 127.0.0.1** unless you need server mode. For server mode, use a strong admin password (`zaafpulse set-password`) and HTTPS (built-in TLS or a reverse proxy).
 - **Give each app its own API key** with the narrowest scopes, allowed models and agents, and a monthly budget. Revoke keys you no longer use (Endpoint → API keys).
 - **Never paste keys into `config.json`, issues or chats.** If a key leaks, revoke it at once and create a new one.

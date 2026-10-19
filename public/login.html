@@ -34,18 +34,6 @@
     <div class="err" id="err" role="alert"></div>
     <p class="note">This ZAAFPulse runs in server mode. Forgot the password? Run <code>zaafpulse set-password</code> on the server.</p>
   </form>
-  <script>
-    fetch('/api/session').then((r) => r.json()).then((s) => { if (!s.required || s.signedIn) location.replace('/'); }).catch(() => {});
-    document.getElementById('f').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const go = document.getElementById('go'); const err = document.getElementById('err'); go.disabled = true; err.textContent = '';
-      try {
-        const r = await fetch('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: document.getElementById('pw').value }) });
-        if (r.ok) return location.replace('/');
-        err.textContent = (await r.json().catch(() => ({}))).error || `Sign-in failed (${r.status})`;
-      } catch { err.textContent = 'The server did not answer.'; }
-      go.disabled = false;
-    });
-  </script>
+  <script src="login.js"></script>
 </body>
 </html>

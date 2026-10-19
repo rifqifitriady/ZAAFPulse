@@ -153,7 +153,29 @@ const commands = {
     process.exitCode = up ? 0 : 3;
   },
   async open() {
-    const ok = await platform.openUrl(`http://localhost:${port()}`);
+    // Local sign-in mode: a one-time code in the private data folder proves we are the owner.
+    let url = `http://localhost:${port()}`;
+    const mode = await new Promise((resolve) => {
+      http
+        .get(`${localUrl()}/api/session`, { timeout: 2000, headers: { host: '127.0.0.1' } }, (res) => {
+          let d = '';
+          res.on('data', (c) => (d += c));
+          res.on('end', () =>
+            resolve(
+              (() => {
+                try {
+                  return JSON.parse(d).mode;
+                } catch {
+                  return null;
+                }
+              })(),
+            ),
+          );
+        })
+        .on('error', () => resolve(null));
+    });
+    if (mode === 'local') url += `/auth/local?code=${require('../lib/auth').localLoginCode(platform.dataDir())}`;
+    const ok = await platform.openUrl(url);
     if (!ok) console.log(`Open ${localUrl()} in a browser (no desktop found).`);
   },
   async doctor() {

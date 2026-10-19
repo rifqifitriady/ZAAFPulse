@@ -77,11 +77,32 @@ $tmp = Join-Path ([IO.Path]::GetTempPath()) ("zp-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $tmp | Out-Null
 if ($Source) { $src = (Resolve-Path $Source).Path; Say "Installing ZAAFPulse from $src" }
 else {
-  if (-not $Version) { try { $Version = (Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest").tag_name } catch { $Version = 'main' } }
-  $ref = if ($Version -in @('main', 'master')) { "refs/heads/$Version" } else { "refs/tags/$Version" }
-  Say "Downloading ZAAFPulse ($Version)"
-  Invoke-WebRequest -UseBasicParsing "https://codeload.github.com/$Repo/zip/$ref" -OutFile (Join-Path $tmp 'app.zip')
-  Expand-Archive (Join-Path $tmp 'app.zip') -DestinationPath $tmp -Force
+  if (-not $Version) {
+    try { $Version = (Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest").tag_name }
+    catch { throw 'Could not find the latest release on GitHub; try again, or install the development version with -Version main' }
+  }
+  if ($Version -in @('main', 'master')) {
+    Warn "Installing the development branch ($Version): not a release, not checksum-verified."
+    Invoke-WebRequest -UseBasicParsing "https://codeload.github.com/$Repo/zip/refs/heads/$Version" -OutFile (Join-Path $tmp 'app.zip')
+    Expand-Archive (Join-Path $tmp 'app.zip') -DestinationPath $tmp -Force
+  } else {
+    Say "Downloading ZAAFPulse $Version"
+    $rel = "https://github.com/$Repo/releases/download/$Version"
+    $name = "zaafpulse-$($Version.TrimStart('v'))-source.tar.gz"
+    $sums = try { (Invoke-WebRequest -UseBasicParsing "$rel/SHA256SUMS.txt").Content -split "`n" } catch { @() }
+    $line = $sums | Where-Object { $_ -match "  $([regex]::Escape($name))$" } | Select-Object -First 1
+    $archive = Join-Path $tmp 'app.tar.gz'
+    if ($line) {
+      Invoke-WebRequest -UseBasicParsing "$rel/$name" -OutFile $archive
+      if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLower() -ne ($line.Trim() -split '\s+')[0].ToLower()) { throw "Checksum mismatch for $name`: the download was changed or damaged" }
+      Say "Checksum verified ($name)"
+    } else {
+      Warn "Release $Version has no checksummed source package (it predates them); downloading the tag without verification."
+      Invoke-WebRequest -UseBasicParsing "https://codeload.github.com/$Repo/tar.gz/refs/tags/$Version" -OutFile $archive
+    }
+    tar -xzf $archive -C $tmp
+    if ($LASTEXITCODE -ne 0) { throw 'Could not unpack the download (tar)' }
+  }
   $src = (Get-ChildItem $tmp -Directory | Select-Object -First 1).FullName
 }
 if (-not (Test-Path (Join-Path $src 'bin\zaafpulse.js'))) { throw 'The download does not look like ZAAFPulse' }
