@@ -44,12 +44,20 @@ test('secret inputs become references; a pasted value is stored, never written',
   assert.deepEqual(built.entry.apiKey, { keychain: 'acc.n8n-prod' });
   assert.deepEqual(stored, [['acc.n8n-prod', 's3cret']]);
   assert.ok(!JSON.stringify(built.entry).includes('s3cret'));
+  // A new reference to an environment variable is written in config.json by hand, not through the form;
+  // an existing one stays as it is.
   const env = buildEntry(
     { id: 'x', type: 'n8n', values: { baseUrl: 'http://h', apiKey: { mode: 'env', name: 'N8N_KEY' } } },
     null,
     r,
   );
-  assert.deepEqual(env.entry.apiKey, { env: 'N8N_KEY' });
+  assert.match(String(env.errors), /config\.json by hand/);
+  const envKept = buildEntry(
+    { id: 'x', type: 'n8n', values: { baseUrl: 'http://h', apiKey: { mode: 'env', name: 'N8N_KEY' } } },
+    { type: 'n8n', baseUrl: 'http://h', apiKey: { env: 'N8N_KEY' } },
+    r,
+  );
+  assert.deepEqual(envKept.entry.apiKey, { env: 'N8N_KEY' });
   const keep = buildEntry(
     { id: 'x', type: 'n8n', values: { baseUrl: 'http://h' } },
     { type: 'n8n', apiKey: { keychain: 'acc.old' } },
@@ -70,7 +78,22 @@ test('secret inputs become references; a pasted value is stored, never written',
     null,
     r,
   );
-  assert.deepEqual(http.entry.auth, { prefix: 'Bearer ', secret: { keychain: 'acc.api' } });
+  assert.match(String(http.errors), /config\.json by hand/, 'a new entry cannot borrow an existing secret item');
+  const httpKept = buildEntry(
+    {
+      id: 'api',
+      type: 'http',
+      values: {
+        baseUrl: 'https://a.example',
+        authPrefix: 'Bearer ',
+        authSecret: { mode: 'keychain', service: 'acc.api' },
+        endpoints: '[{"name":"x","method":"GET","path":"/x"}]',
+      },
+    },
+    { type: 'http', baseUrl: 'https://a.example', auth: { prefix: 'Bearer ', secret: { keychain: 'acc.api' } } },
+    r,
+  );
+  assert.deepEqual(httpKept.entry.auth, { prefix: 'Bearer ', secret: { keychain: 'acc.api' } });
 });
 
 test('save adds, renames in place and refuses duplicates; remove deletes', () => {

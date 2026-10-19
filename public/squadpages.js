@@ -651,7 +651,7 @@ function paintProxy() {
               (
                 r,
               ) => `<tr class="${r.key === sq.pxSelected ? 'sel' : ''}" data-prx="${esc(r.key)}"><td class="num muted">${fmtDate(r.ts)}</td><td>${r.kind === 'mcp' ? 'MCP hub' : 'Router'}</td><td><b>${esc(r.name)}</b></td><td class="muted">${esc(r.via)}${r.attempt > 1 ? ` · try ${r.attempt}` : ''}</td>
-            <td class="r num">${msFmt(r.latencyMs)}</td><td><span class="state-pill" style="--c:${r.ok ? '#5cf0a8' : '#ff4f6d'}"><i></i>${r.upstreamStatus || (r.ok ? 'ok' : 'failed')}</span></td></tr>`,
+            <td class="r num">${msFmt(r.latencyMs)}</td><td><span class="state-pill" style="--c:${r.ok ? '#5cf0a8' : '#ff4f6d'}"><i></i>${esc(r.upstreamStatus || (r.ok ? 'ok' : 'failed'))}</span></td></tr>`,
             )
             .join('')}</tbody></table>`
             : holoEmpty('No proxied calls yet. Calls through OmniRoute and the MCP hub appear here.')

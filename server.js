@@ -43,13 +43,28 @@ const SERVER_MODE = !isLoopback(HOST);
 // Everything ZAAFPulse creates (config, keys, history, caches) is private to this OS account.
 process.umask(0o077);
 const DIR = platform.dataDir();
+// Make what an older version created private too: folders 0700, files 0600, symlinks left alone.
+function makePrivate(p, depth) {
+  let st;
+  try {
+    st = fs.lstatSync(p);
+  } catch {
+    return;
+  }
+  if (st.isSymbolicLink()) return;
+  try {
+    fs.chmodSync(p, st.isDirectory() ? 0o700 : 0o600);
+  } catch {
+    return; // not ours (a git checkout keeps its own modes)
+  }
+  if (st.isDirectory() && depth > 0) for (const f of fs.readdirSync(p)) makePrivate(path.join(p, f), depth - 1);
+}
 try {
   fs.chmodSync(DIR, 0o700);
-  for (const sub of ['.data', '.cache'])
-    for (const f of fs.readdirSync(path.join(DIR, sub))) fs.chmodSync(path.join(DIR, sub, f), 0o600);
 } catch {
-  /* a fresh install, or a folder we do not own (a git checkout keeps its own modes) */
+  /* not ours */
 }
+for (const sub of ['.data', '.cache']) makePrivate(path.join(DIR, sub), 3);
 const CONFIG_FILE = path.join(DIR, 'config.json');
 const PUBLIC = path.join(platform.APP_DIR, 'public');
 const TLS =
@@ -74,7 +89,7 @@ const demo = DEMO ? require('./lib/demo') : null;
 
 const { fullName, computerName } = platform;
 const HOSTNAME = DEMO ? demo.config.host : computerName();
-const auth = createAuth({ dataDir: DIR, host: HOST });
+const auth = createAuth({ dataDir: DIR, host: HOST, headers: () => SECURITY_HEADERS });
 if (auth.required && !auth.configured() && !DEMO) {
   console.error(
     `ZAAFPulse listens on ${HOST}, so the dashboard needs a password first.\nRun \`zaafpulse set-password\` (or set ZAAFPULSE_ADMIN_PASSWORD), then start again.`,
@@ -341,7 +356,15 @@ const handler = async (req, res) => {
   // A proxy in front of a no-sign-in setup would expose the dashboard to everyone behind it: refuse.
   if (
     auth.mode === 'none' &&
-    (req.headers['x-forwarded-for'] || req.headers.forwarded || req.headers['x-forwarded-host'])
+    [
+      'x-forwarded-for',
+      'forwarded',
+      'x-forwarded-host',
+      'x-forwarded-proto',
+      'x-forwarded-port',
+      'x-real-ip',
+      'via',
+    ].some((h) => req.headers[h])
   )
     return send(res, 403, {
       error: 'ZAAFPulse is behind a proxy without sign-in. Set ZAAFPULSE_TRUST_PROXY=1 and an admin password.',
