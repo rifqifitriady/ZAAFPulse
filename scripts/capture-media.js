@@ -13,89 +13,226 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const OUT = path.join(ROOT, 'docs', 'assets');
-const PORT = 4791; const CDP_PORT = 9339;
+const PORT = 4791;
+const CDP_PORT = 9339;
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const VIEW = { width: 1440, height: 900 };
-const only = process.argv[2]; const pick = process.argv[3]; // optional: one shot name
+const only = process.argv[2];
+const pick = process.argv[3]; // optional: one shot name
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Switch the second-brain map to one source and scroll it into view.
-const brainSource = (id) => `document.querySelector('[data-brainsource="${id}"]')?.click(); setTimeout(() => document.querySelector('#brain-canvas')?.scrollIntoView({ block: 'center' }), 2500)`;
+const brainSource = (id) =>
+  `document.querySelector('[data-brainsource="${id}"]')?.click(); setTimeout(() => document.querySelector('#brain-canvas')?.scrollIntoView({ block: 'center' }), 2500)`;
 const SHOTS = [
-  ['screen-overview', '#overview'], ['screen-live', '#live'], ['screen-office', '#squad'], ['screen-logs', '#squad/logs'],
-  ['screen-proxy', '#squad/proxy'], ['screen-time', '#squad/time'], ['screen-quality', '#quality'], ['screen-utilization', '#quality/utilization'],
-  ['screen-cache', '#quality/cache'], ['screen-compression', '#quality/compression'], ['screen-providers', '#quality/providers'],
-  ['screen-models', '#quality/models'], ['screen-rankings', '#quality/rankings'],
-  ['screen-sessions', '#sessions'], ['screen-projects', '#projects'], ['screen-agents', '#skills/usage'], ['screen-brain', '#brain'], ['screen-integrations', '#integrations'],
-  ['screen-brain-all', '#brain', `js:${brainSource('all')}`], ['screen-brain-semantic', '#brain', `js:${brainSource('qdrant')}`], ['screen-brain-para', '#brain', `js:${brainSource('para')}`],
+  ['screen-overview', '#overview'],
+  ['screen-live', '#live'],
+  ['screen-office', '#squad'],
+  ['screen-logs', '#squad/logs'],
+  ['screen-proxy', '#squad/proxy'],
+  ['screen-time', '#squad/time'],
+  ['screen-quality', '#quality'],
+  ['screen-utilization', '#quality/utilization'],
+  ['screen-cache', '#quality/cache'],
+  ['screen-compression', '#quality/compression'],
+  ['screen-providers', '#quality/providers'],
+  ['screen-models', '#quality/models'],
+  ['screen-rankings', '#quality/rankings'],
+  ['screen-sessions', '#sessions'],
+  ['screen-projects', '#projects'],
+  ['screen-agents', '#skills/usage'],
+  ['screen-brain', '#brain'],
+  ['screen-integrations', '#integrations'],
+  ['screen-brain-all', '#brain', `js:${brainSource('all')}`],
+  ['screen-brain-semantic', '#brain', `js:${brainSource('qdrant')}`],
+  ['screen-brain-para', '#brain', `js:${brainSource('para')}`],
   // Agentic workspace (demo providers, keys, runs and knowledge bases come from lib/demo-gateway.js).
-  ['screen-endpoint', '#endpoint'], ['screen-keys', '#endpoint/keys'], ['screen-mcp', '#endpoint/mcp'], ['screen-code-tools', '#endpoint/tools'],
-  ['screen-gateway', '#gateway'], ['screen-gateway-providers', '#gateway/providers'], ['screen-router', '#gateway/router'], ['screen-playground', '#gateway/playground', "js:(() => { const f = document.querySelector('#gw-pg-form'); f.input.value = 'Customers report slow checkout since 10:00. Check the network and recent deploys, then draft a status update.'; f.requestSubmit(); return new Promise((r) => setTimeout(r, 6000)); })()"],
-  ['screen-skills', '#skills'], ['screen-workflows', '#a2a'], ['screen-collaborate', '#a2a/collaborate'], ['screen-runs', '#a2a/runs'],
-  ['screen-run-trace', '#a2a/runs', 'js:document.querySelectorAll(\'[data-a2arun="view"]\')[2]?.click()'], ['screen-rag', '#rag'],
-  ['screen-settings', '#settings', 'js:document.querySelector("#prices-panel").scrollIntoView()'], ['screen-integration-editor', '#integrations', '[data-integ-edit="omniroute"]'],
-  ['screen-drawer-spend', '#overview', '[data-drill="spend"]'], ['screen-drawer-poisoning', '#quality', '[data-drill="poisoning"]'],
+  ['screen-endpoint', '#endpoint'],
+  ['screen-keys', '#endpoint/keys'],
+  ['screen-mcp', '#endpoint/mcp'],
+  ['screen-code-tools', '#endpoint/tools'],
+  ['screen-gateway', '#gateway'],
+  ['screen-gateway-providers', '#gateway/providers'],
+  ['screen-router', '#gateway/router'],
+  [
+    'screen-playground',
+    '#gateway/playground',
+    "js:(() => { const f = document.querySelector('#gw-pg-form'); f.input.value = 'Customers report slow checkout since 10:00. Check the network and recent deploys, then draft a status update.'; f.requestSubmit(); return new Promise((r) => setTimeout(r, 6000)); })()",
+  ],
+  ['screen-skills', '#skills'],
+  ['screen-workflows', '#a2a'],
+  ['screen-collaborate', '#a2a/collaborate'],
+  ['screen-runs', '#a2a/runs'],
+  ['screen-run-trace', '#a2a/runs', 'js:document.querySelectorAll(\'[data-a2arun="view"]\')[2]?.click()'],
+  ['screen-rag', '#rag'],
+  ['screen-settings', '#settings', 'js:document.querySelector("#prices-panel").scrollIntoView()'],
+  ['screen-integration-editor', '#integrations', '[data-integ-edit="omniroute"]'],
+  ['screen-drawer-spend', '#overview', '[data-drill="spend"]'],
+  ['screen-drawer-poisoning', '#quality', '[data-drill="poisoning"]'],
 ];
 // [file, hash, seconds, before(): waits before recording, onStart: page script, crop: true = content only, no sidebar]
 const GIFS = [
   ['demo-overview', '#overview', 7],
   // Demo agents change activity every 15 s; start just before a change so they walk between rooms.
-  ['demo-office', '#squad', 8, async () => { const ms = 15000 - (Date.now() % 15000); await sleep(ms > 4000 ? ms - 4000 : ms + 11000); }, 'new Promise((r) => setTimeout(r, 1))', true],
-  ['demo-brain', '#brain', 9, null, "document.querySelector('[data-brainsource=\"all\"]')?.click(); new Promise((r) => setTimeout(r, 1800)).then(() => { document.querySelector('#brain-canvas')?.scrollIntoView({ block: 'center' }); document.querySelector('#brain-replay-btn')?.click(); })", true],
+  [
+    'demo-office',
+    '#squad',
+    8,
+    async () => {
+      const ms = 15000 - (Date.now() % 15000);
+      await sleep(ms > 4000 ? ms - 4000 : ms + 11000);
+    },
+    'new Promise((r) => setTimeout(r, 1))',
+    true,
+  ],
+  [
+    'demo-brain',
+    '#brain',
+    9,
+    null,
+    "document.querySelector('[data-brainsource=\"all\"]')?.click(); new Promise((r) => setTimeout(r, 1800)).then(() => { document.querySelector('#brain-canvas')?.scrollIntoView({ block: 'center' }); document.querySelector('#brain-replay-btn')?.click(); })",
+    true,
+  ],
   ['demo-gateway', '#gateway', 7],
   // A group chat run from the Collaborate form, so the live trace and blackboard fill in.
-  ['demo-collab', '#a2a/collaborate', 9, null, "document.querySelector('[data-a2apattern=\"group\"]')?.click(); new Promise((r) => setTimeout(r, 600)).then(() => { const f = document.querySelector('#a2a-form'); f.task.value = 'Checkout p95 is 4.8 s since 10:02 and payment-api v2.14 went out at 09:55. Find the cause and draft a customer update.'; f.task.dispatchEvent(new Event('input', { bubbles: true })); f.requestSubmit(); return new Promise((r) => setTimeout(r, 900)); }).then(() => document.querySelector('#a2a-run')?.scrollIntoView({ block: 'start' }))", true],
+  [
+    'demo-collab',
+    '#a2a/collaborate',
+    9,
+    null,
+    "document.querySelector('[data-a2apattern=\"group\"]')?.click(); new Promise((r) => setTimeout(r, 600)).then(() => { const f = document.querySelector('#a2a-form'); f.task.value = 'Checkout p95 is 4.8 s since 10:02 and payment-api v2.14 went out at 09:55. Find the cause and draft a customer update.'; f.task.dispatchEvent(new Event('input', { bubbles: true })); f.requestSubmit(); return new Promise((r) => setTimeout(r, 900)); }).then(() => document.querySelector('#a2a-run')?.scrollIntoView({ block: 'start' }))",
+    true,
+  ],
 ];
 
 class CDP {
-  constructor(ws) { this.ws = ws; this.id = 0; this.pending = new Map(); this.handlers = new Map();
-    ws.onmessage = (m) => { const msg = JSON.parse(m.data); if (msg.id && this.pending.has(msg.id)) { this.pending.get(msg.id)(msg); this.pending.delete(msg.id); } else if (msg.method) (this.handlers.get(msg.method) || []).forEach((h) => h(msg.params)); }; }
-  send(method, params = {}) { const id = ++this.id; this.ws.send(JSON.stringify({ id, method, params })); return new Promise((res, rej) => this.pending.set(id, (m) => (m.error ? rej(new Error(m.error.message)) : res(m.result)))); }
-  on(method, fn) { (this.handlers.get(method) || this.handlers.set(method, []).get(method)).push(fn); }
-  off(method) { this.handlers.delete(method); }
+  constructor(ws) {
+    this.ws = ws;
+    this.id = 0;
+    this.pending = new Map();
+    this.handlers = new Map();
+    ws.onmessage = (m) => {
+      const msg = JSON.parse(m.data);
+      if (msg.id && this.pending.has(msg.id)) {
+        this.pending.get(msg.id)(msg);
+        this.pending.delete(msg.id);
+      } else if (msg.method) (this.handlers.get(msg.method) || []).forEach((h) => h(msg.params));
+    };
+  }
+  send(method, params = {}) {
+    const id = ++this.id;
+    this.ws.send(JSON.stringify({ id, method, params }));
+    return new Promise((res, rej) =>
+      this.pending.set(id, (m) => (m.error ? rej(new Error(m.error.message)) : res(m.result))),
+    );
+  }
+  on(method, fn) {
+    (this.handlers.get(method) || this.handlers.set(method, []).get(method)).push(fn);
+  }
+  off(method) {
+    this.handlers.delete(method);
+  }
 }
 
 async function waitFor(fn, ms = 15000) {
   const t = Date.now();
-  while (Date.now() - t < ms) { try { if (await fn()) return; } catch { /* not up yet */ } await sleep(250); }
+  while (Date.now() - t < ms) {
+    try {
+      if (await fn()) return;
+    } catch {
+      /* not up yet */
+    }
+    await sleep(250);
+  }
   throw new Error('timed out waiting');
 }
 
 async function main() {
   execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' });
-  const server = spawn(process.execPath, ['server.js'], { cwd: ROOT, env: { ...process.env, DEMO: '1', PORT: String(PORT) }, stdio: 'ignore' });
+  const server = spawn(process.execPath, ['server.js'], {
+    cwd: ROOT,
+    env: { ...process.env, DEMO: '1', PORT: String(PORT) },
+    stdio: 'ignore',
+  });
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'acc-media-'));
-  const chrome = spawn(CHROME, ['--headless=new', `--remote-debugging-port=${CDP_PORT}`, `--user-data-dir=${profile}`, '--hide-scrollbars', '--disable-gpu', `--window-size=${VIEW.width},${VIEW.height}`, 'about:blank'], { stdio: 'ignore' });
+  const chrome = spawn(
+    CHROME,
+    [
+      '--headless=new',
+      `--remote-debugging-port=${CDP_PORT}`,
+      `--user-data-dir=${profile}`,
+      '--hide-scrollbars',
+      '--disable-gpu',
+      `--window-size=${VIEW.width},${VIEW.height}`,
+      'about:blank',
+    ],
+    { stdio: 'ignore' },
+  );
   let cleaned = false;
   const cleanup = () => {
-    if (cleaned) return; cleaned = true;
-    try { chrome.kill(); } catch { /* gone */ } try { server.kill(); } catch { /* gone */ }
-    try { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* Chrome still closing; the OS temp dir is cleaned later */ }
+    if (cleaned) return;
+    cleaned = true;
+    try {
+      chrome.kill();
+    } catch {
+      /* gone */
+    }
+    try {
+      server.kill();
+    } catch {
+      /* gone */
+    }
+    try {
+      fs.rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    } catch {
+      /* Chrome still closing; the OS temp dir is cleaned later */
+    }
   };
   process.on('exit', cleanup);
   try {
     // Demo mode seeds the agentic workspace after start (keys, history, runs); wait until it is done.
-    await waitFor(async () => (await (await fetch(`http://127.0.0.1:${PORT}/api/live`)).json()).demoReady === true, 60000);
+    await waitFor(
+      async () => (await (await fetch(`http://127.0.0.1:${PORT}/api/live`)).json()).demoReady === true,
+      60000,
+    );
     await waitFor(async () => (await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`)).ok);
     const target = await (await fetch(`http://127.0.0.1:${CDP_PORT}/json/new?about:blank`, { method: 'PUT' })).json();
     const ws = new WebSocket(target.webSocketDebuggerUrl);
-    await new Promise((r) => { ws.onopen = r; });
+    await new Promise((r) => {
+      ws.onopen = r;
+    });
     const cdp = new CDP(ws);
-    await cdp.send('Page.enable'); await cdp.send('Runtime.enable');
+    await cdp.send('Page.enable');
+    await cdp.send('Runtime.enable');
     await cdp.send('Emulation.setDeviceMetricsOverride', { ...VIEW, deviceScaleFactor: 1, mobile: false });
     await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] });
     const open = async (hash) => {
-      await cdp.send('Page.navigate', { url: 'about:blank' }); await sleep(200);
+      await cdp.send('Page.navigate', { url: 'about:blank' });
+      await sleep(200);
       await cdp.send('Page.navigate', { url: `http://localhost:${PORT}/${hash}` });
-      await waitFor(async () => (await cdp.send('Runtime.evaluate', { expression: "!!document.querySelector('.holo-deck') && !document.querySelector('#view .skeleton') && !document.querySelector('#prices-panel .skeleton')", returnByValue: true })).result.value, 20000);
+      await waitFor(
+        async () =>
+          (
+            await cdp.send('Runtime.evaluate', {
+              expression:
+                "!!document.querySelector('.holo-deck') && !document.querySelector('#view .skeleton') && !document.querySelector('#prices-panel .skeleton')",
+              returnByValue: true,
+            })
+          ).result.value,
+        20000,
+      );
     };
     const evaluate = (expression) => cdp.send('Runtime.evaluate', { expression, awaitPromise: true });
 
     if (only !== 'gifs') {
       for (const [name, hash, click] of SHOTS.filter(([n]) => !pick || n === pick)) {
-        await open(hash); await sleep(5000); // let scenes grow and polls land
+        await open(hash);
+        await sleep(5000); // let scenes grow and polls land
         // click: a selector to click, or `js:<script>` to run (e.g. scroll to a section).
-        if (click) { await evaluate(click.startsWith('js:') ? click.slice(3) : `document.querySelector('${click}').click()`); await sleep(1400); }
+        if (click) {
+          await evaluate(click.startsWith('js:') ? click.slice(3) : `document.querySelector('${click}').click()`);
+          await sleep(1400);
+        }
         // JPEG keeps the dark gradients small; PNG is several times larger for no visible gain.
         const { data } = await cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 90 });
         fs.writeFileSync(path.join(OUT, `${name}.jpg`), Buffer.from(data, 'base64'));
@@ -110,27 +247,61 @@ async function main() {
         const frames = [];
         cdp.on('Page.screencastFrame', async (p) => {
           const file = path.join(dir, `f${String(frames.length).padStart(4, '0')}.jpg`);
-          fs.writeFileSync(file, Buffer.from(p.data, 'base64')); frames.push({ file, t: p.metadata.timestamp });
+          fs.writeFileSync(file, Buffer.from(p.data, 'base64'));
+          frames.push({ file, t: p.metadata.timestamp });
           cdp.send('Page.screencastFrameAck', { sessionId: p.sessionId }).catch(() => {});
         });
         await open(hash); // record from the first painted frame, so the entrance motion is kept without blank frames
-        await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 88, maxWidth: VIEW.width, maxHeight: VIEW.height, everyNthFrame: 1 });
-        if (onStart) { await sleep(1500); await evaluate(onStart); }
+        await cdp.send('Page.startScreencast', {
+          format: 'jpeg',
+          quality: 88,
+          maxWidth: VIEW.width,
+          maxHeight: VIEW.height,
+          everyNthFrame: 1,
+        });
+        if (onStart) {
+          await sleep(1500);
+          await evaluate(onStart);
+        }
         await sleep(seconds * 1000);
-        await cdp.send('Page.stopScreencast'); cdp.off('Page.screencastFrame');
+        await cdp.send('Page.stopScreencast');
+        cdp.off('Page.screencastFrame');
         // Concat list with each frame's real duration, then a two-pass palette GIF (960 px at 12 fps, or the
         // content area at 820 px and 10 fps for the busier scenes).
-        const list = frames.map((f, i) => `file '${f.file}'\nduration ${Math.max(0.01, ((frames[i + 1] || f).t - f.t) || 1 / 12).toFixed(3)}`).join('\n') + `\nfile '${frames[frames.length - 1].file}'\n`;
+        const list =
+          frames
+            .map(
+              (f, i) =>
+                `file '${f.file}'\nduration ${Math.max(0.01, (frames[i + 1] || f).t - f.t || 1 / 12).toFixed(3)}`,
+            )
+            .join('\n') + `\nfile '${frames[frames.length - 1].file}'\n`;
         fs.writeFileSync(path.join(dir, 'list.txt'), list);
         const gif = path.join(OUT, `${name}.gif`);
-        execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', path.join(dir, 'list.txt'),
-          '-vf', `${crop ? 'fps=10,crop=1192:900:248:0,scale=760:-1' : 'fps=12,scale=960:-1'}:flags=lanczos,split[a][b];[a]palettegen=max_colors=${crop ? 128 : 160}:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`, gif]);
+        execFileSync('ffmpeg', [
+          '-y',
+          '-loglevel',
+          'error',
+          '-f',
+          'concat',
+          '-safe',
+          '0',
+          '-i',
+          path.join(dir, 'list.txt'),
+          '-vf',
+          `${crop ? 'fps=10,crop=1192:900:248:0,scale=760:-1' : 'fps=12,scale=960:-1'}:flags=lanczos,split[a][b];[a]palettegen=max_colors=${crop ? 128 : 160}:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`,
+          gif,
+        ]);
         fs.rmSync(dir, { recursive: true, force: true });
         console.log(`gif   ${name}.gif  ${frames.length} frames  ${(fs.statSync(gif).size / 1e6).toFixed(1)} MB`);
       }
     }
     ws.close();
-  } finally { cleanup(); }
+  } finally {
+    cleanup();
+  }
 }
 
-main().catch((err) => { console.error(err.message); process.exit(1); });
+main().catch((err) => {
+  console.error(err.message);
+  process.exit(1);
+});

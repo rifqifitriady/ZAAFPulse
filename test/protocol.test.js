@@ -3,15 +3,26 @@ const assert = require('node:assert/strict');
 const { PassThrough } = require('stream');
 const { createServer } = require('../lib/mcp/protocol');
 
-const server = () => createServer({
-  name: 'acc', version: '1.0.0',
-  listTools: async () => [{ name: 'acc_x', description: 'x', inputSchema: { type: 'object' } }],
-  callTool: async (name, args) => (name === 'acc_x'
-    ? { result: { content: [{ type: 'text', text: JSON.stringify(args) }] } }
-    : { error: { code: -32602, message: `Unknown tool: ${name}` } }),
+const server = () =>
+  createServer({
+    name: 'acc',
+    version: '1.0.0',
+    listTools: async () => [{ name: 'acc_x', description: 'x', inputSchema: { type: 'object' } }],
+    callTool: async (name, args) =>
+      name === 'acc_x'
+        ? { result: { content: [{ type: 'text', text: JSON.stringify(args) }] } }
+        : { error: { code: -32602, message: `Unknown tool: ${name}` } },
+  });
+const ask = async (s, msg) => {
+  const out = await s.handleLine(JSON.stringify(msg));
+  return out && JSON.parse(out);
+};
+const init = (v) => ({
+  jsonrpc: '2.0',
+  id: 1,
+  method: 'initialize',
+  params: { protocolVersion: v, capabilities: {}, clientInfo: { name: 't', version: '0' } },
 });
-const ask = async (s, msg) => { const out = await s.handleLine(JSON.stringify(msg)); return out && JSON.parse(out); };
-const init = (v) => ({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: v, capabilities: {}, clientInfo: { name: 't', version: '0' } } });
 
 test('initialize echoes a supported protocol version', async () => {
   const r = await ask(server(), init('2025-03-26'));
@@ -29,7 +40,12 @@ test('tools/list and tools/call', async () => {
   const s = server();
   const list = await ask(s, { jsonrpc: '2.0', id: 2, method: 'tools/list' });
   assert.equal(list.result.tools[0].name, 'acc_x');
-  const call = await ask(s, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'acc_x', arguments: { a: 1 } } });
+  const call = await ask(s, {
+    jsonrpc: '2.0',
+    id: 3,
+    method: 'tools/call',
+    params: { name: 'acc_x', arguments: { a: 1 } },
+  });
   assert.equal(call.result.content[0].text, '{"a":1}');
 });
 
@@ -44,7 +60,10 @@ test('unknown method', async () => {
 });
 
 test('notifications get no reply', async () => {
-  assert.equal(await server().handleLine(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })), null);
+  assert.equal(
+    await server().handleLine(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })),
+    null,
+  );
 });
 
 test('malformed JSON is a parse error', async () => {
@@ -53,8 +72,12 @@ test('malformed JSON is a parse error', async () => {
 });
 
 test('serve answers every line before it resolves', async () => {
-  const input = new PassThrough(); const output = new PassThrough(); let text = '';
-  output.on('data', (c) => { text += c; });
+  const input = new PassThrough();
+  const output = new PassThrough();
+  let text = '';
+  output.on('data', (c) => {
+    text += c;
+  });
   const done = server().serve(input, output);
   input.write(JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'ping' }) + '\n');
   input.end();

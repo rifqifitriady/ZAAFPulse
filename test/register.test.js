@@ -53,18 +53,39 @@ test('refuses to touch invalid JSON', () => {
 test('claude: uses the claude CLI, or prints the command when it is missing', () => {
   const home = tmpHome();
   const calls = [];
-  run('claude', { home, log: quiet, exec: (cmd, args) => { calls.push([cmd, ...args]); } });
+  run('claude', {
+    home,
+    log: quiet,
+    exec: (cmd, args) => {
+      calls.push([cmd, ...args]);
+    },
+  });
   assert.deepEqual(calls[0].slice(0, 5), ['claude', 'mcp', 'add', '--scope', 'user']);
   assert.equal(calls[0][5], NAME);
   const logs = [];
-  run('claude', { home, log: (m) => logs.push(m), exec: () => { const e = new Error('missing'); e.code = 'ENOENT'; throw e; } });
+  run('claude', {
+    home,
+    log: (m) => logs.push(m),
+    exec: () => {
+      const e = new Error('missing');
+      e.code = 'ENOENT';
+      throw e;
+    },
+  });
   assert.match(logs[0], /claude CLI not found/);
 });
 
 test('claude dry run prints without running; isRegistered reads mcpServers', () => {
   const home = tmpHome();
   const logs = [];
-  run('claude', { home, dryRun: true, log: (m) => logs.push(m), exec: () => { throw new Error('should not run'); } });
+  run('claude', {
+    home,
+    dryRun: true,
+    log: (m) => logs.push(m),
+    exec: () => {
+      throw new Error('should not run');
+    },
+  });
   assert.match(logs[0], /^\[dry-run\] claude mcp add --scope user ai-command-center -- /);
   fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ mcpServers: { [NAME]: {} } }));
   assert.equal(isRegistered(path.join(home, '.claude.json')), true);

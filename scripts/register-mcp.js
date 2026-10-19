@@ -22,18 +22,33 @@ const entry = () => mcpCommand();
 
 function readJson(file) {
   let text;
-  try { text = fs.readFileSync(file, 'utf8'); } catch (err) { if (err.code === 'ENOENT') return {}; throw err; }
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') return {};
+    throw err;
+  }
   if (!text.trim()) return {};
-  try { return JSON.parse(text); } catch { throw new Error(`${file} is not valid JSON; fix or move it first, nothing was changed`); }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`${file} is not valid JSON; fix or move it first, nothing was changed`);
+  }
 }
 
 function isRegistered(file) {
-  try { const s = readJson(file).mcpServers; return !!(s && s[NAME]); } catch { return false; }
+  try {
+    const s = readJson(file).mcpServers;
+    return !!(s && s[NAME]);
+  } catch {
+    return false;
+  }
 }
 
 function writeJson(file, data) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak-${new Date().toISOString().replace(/\D/g, '').slice(0, 14)}`);
+  if (fs.existsSync(file))
+    fs.copyFileSync(file, `${file}.bak-${new Date().toISOString().replace(/\D/g, '').slice(0, 14)}`);
   const tmp = `${file}.tmp-${process.pid}`;
   fs.writeFileSync(tmp, JSON.stringify(data, null, 2) + '\n');
   fs.renameSync(tmp, file);
@@ -41,7 +56,9 @@ function writeJson(file, data) {
 
 function claudeArgs(remove) {
   const m = mcpCommand();
-  return remove ? ['mcp', 'remove', '--scope', 'user', NAME] : ['mcp', 'add', '--scope', 'user', NAME, '--', m.command, ...m.args];
+  return remove
+    ? ['mcp', 'remove', '--scope', 'user', NAME]
+    : ['mcp', 'add', '--scope', 'user', NAME, '--', m.command, ...m.args];
 }
 
 function run(target, { remove = false, dryRun = false, home, exec = execFileSync, log = console.log } = {}) {
@@ -52,11 +69,23 @@ function run(target, { remove = false, dryRun = false, home, exec = execFileSync
     if (!c) throw new Error(`unknown client "${id}" (use claude, kiro, antigravity or all)`);
     if (c.cli) {
       const args = claudeArgs(remove);
-      if (dryRun) { log(`[dry-run] claude ${args.join(' ')}`); continue; }
-      if (isRegistered(c.file) !== remove) { log(`${c.name}: already ${remove ? 'absent' : 'registered'}`); continue; }
+      if (dryRun) {
+        log(`[dry-run] claude ${args.join(' ')}`);
+        continue;
+      }
+      if (isRegistered(c.file) !== remove) {
+        log(`${c.name}: already ${remove ? 'absent' : 'registered'}`);
+        continue;
+      }
       // Windows: claude is claude.cmd, which runs through cmd.exe, so quote paths with spaces.
       const win = process.platform === 'win32';
-      try { exec('claude', win ? args.map((x) => (/\s/.test(x) ? `"${x}"` : x)) : args, { stdio: 'inherit', ...(win ? { shell: true } : {}) }); log(`${c.name}: ${remove ? 'removed' : 'registered'} (user scope)`); } catch (err) {
+      try {
+        exec('claude', win ? args.map((x) => (/\s/.test(x) ? `"${x}"` : x)) : args, {
+          stdio: 'inherit',
+          ...(win ? { shell: true } : {}),
+        });
+        log(`${c.name}: ${remove ? 'removed' : 'registered'} (user scope)`);
+      } catch (err) {
         if (err.code !== 'ENOENT') throw err;
         log(`claude CLI not found. Run this yourself:\n  claude ${args.join(' ')}`);
       }
@@ -65,10 +94,17 @@ function run(target, { remove = false, dryRun = false, home, exec = execFileSync
     const data = readJson(c.file);
     const servers = { ...(data.mcpServers || {}) };
     const before = JSON.stringify(servers[NAME]);
-    if (remove) delete servers[NAME]; else servers[NAME] = entry();
+    if (remove) delete servers[NAME];
+    else servers[NAME] = entry();
     const next = { ...data, mcpServers: servers };
-    if (dryRun) { log(`[dry-run] ${c.file}\n${JSON.stringify(next, null, 2)}`); continue; }
-    if (before === JSON.stringify(servers[NAME])) { log(`${c.name}: already ${remove ? 'absent' : 'registered'} (${c.file})`); continue; }
+    if (dryRun) {
+      log(`[dry-run] ${c.file}\n${JSON.stringify(next, null, 2)}`);
+      continue;
+    }
+    if (before === JSON.stringify(servers[NAME])) {
+      log(`${c.name}: already ${remove ? 'absent' : 'registered'} (${c.file})`);
+      continue;
+    }
     writeJson(c.file, next);
     log(`${c.name}: ${remove ? 'removed from' : 'registered in'} ${c.file}`);
   }
@@ -79,6 +115,14 @@ module.exports = { run, clients, isRegistered, NAME };
 if (require.main === module) {
   const args = process.argv.slice(2);
   const target = args.find((a) => !a.startsWith('--'));
-  if (!target) { console.error('usage: npm run mcp:register -- <claude|kiro|antigravity|all> [--remove] [--dry-run]'); process.exit(2); }
-  try { run(target, { remove: args.includes('--remove'), dryRun: args.includes('--dry-run') }); } catch (err) { console.error(err.message); process.exit(1); }
+  if (!target) {
+    console.error('usage: npm run mcp:register -- <claude|kiro|antigravity|all> [--remove] [--dry-run]');
+    process.exit(2);
+  }
+  try {
+    run(target, { remove: args.includes('--remove'), dryRun: args.includes('--dry-run') });
+  } catch (err) {
+    console.error(err.message);
+    process.exit(1);
+  }
 }
