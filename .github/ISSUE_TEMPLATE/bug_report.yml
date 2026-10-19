@@ -1,0 +1,114 @@
+name: Bug report
+description: Something in ZAAFPulse does not work as it should.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Security problems do not go here**: report them privately (see SECURITY.md).
+        Before pasting logs or screenshots, remove API keys, tokens, transcript text, note contents and anything personal.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+      placeholder: The Live monitor shows no apps on Ubuntu 24.04, although Claude Code is running.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Install with install.sh
+        2. Open http://localhost:4777/#live
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `zaafpulse version` (or the commit if you run from source).
+      placeholder: 1.0.0
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Ubuntu / Debian
+        - RHEL / Rocky / AlmaLinux / Fedora
+        - Other Linux
+        - Windows 11
+        - Windows 10
+        - Docker
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How it is installed
+      options:
+        - install.sh / install.ps1
+        - Single-file executable
+        - Docker / compose
+        - From source (git clone)
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options:
+        - Local (127.0.0.1, the default)
+        - Server mode (sign-in required)
+        - Demo (npm run demo)
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - Overview / usage / cost
+        - AI Office / logs
+        - Live monitor
+        - Quality & safety
+        - Second brain
+        - Projects / sessions
+        - Endpoint / API keys / MCP server
+        - Agent Gateway / providers / router
+        - Agent skills
+        - Integrations
+        - Agent-to-Agent / workflows
+        - RAG service
+        - Installer / service / CLI
+        - Settings
+  - type: textarea
+    id: doctor
+    attributes:
+      label: zaafpulse doctor
+      description: Paste the output of `zaafpulse doctor` (it contains no secrets).
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: |
+        Server log: `journalctl -u zaafpulse` (Linux), `~/Library/Logs/ZAAFPulse/server.log` (macOS), `%LOCALAPPDATA%\ZAAFPulse\logs\server.log` (Windows), or the terminal.
+        Browser console errors help for dashboard problems.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I removed API keys, tokens, transcript text and personal data from everything above.
+          required: true
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
