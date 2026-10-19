@@ -11,6 +11,7 @@
 <img alt="macOS, Linux, Windows" src="https://img.shields.io/badge/runs%20on-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-0f1b2a?style=flat-square">
 <img alt="Node 18+" src="https://img.shields.io/badge/Node-18%2B-1f7f95?style=flat-square&logo=nodedotjs&logoColor=white">
 <img alt="Zero dependencies" src="https://img.shields.io/badge/dependencies-0-1baf7a?style=flat-square">
+<a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-1f7f95?style=flat-square"></a>
 <img alt="Local first" src="https://img.shields.io/badge/data-local%20first-6250d6?style=flat-square">
 <img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-supported-2a78d6?style=flat-square">
 <img alt="Codex" src="https://img.shields.io/badge/Codex-supported-eb6834?style=flat-square">
@@ -23,7 +24,7 @@
 what it costs, how often it is wrong, what your agents are doing right now and how your knowledge grows,<br>
 plus an agentic workspace: one API for every model, 17 agents that work together, workflows, RAG, MCP and A2A.
 
-[Features](#features) · [Screenshots](#screenshots) · [Quick start](#quick-start) · [Agentic workspace](#agentic-workspace) · [How it works](#how-it-works) · [Metrics](#what-the-quality-metrics-mean) · [Privacy](#privacy)
+[Features](#features) · [Screenshots](#screenshots) · [Quick start](#quick-start) · [Agentic workspace](#agentic-workspace) · [How it works](#how-it-works) · [Metrics](#what-the-quality-metrics-mean) · [Privacy](#privacy) · [Contributing](#contributing)
 
 </div>
 
@@ -635,7 +636,7 @@ Everything is editable in **Settings** and saved to `config.json`:
 
 | Setting | Default |
 |---|---|
-| Display name | your macOS account name |
+| Display name | your OS account name |
 | Monthly budget (USD, API-equivalent) | none |
 | Model prices per 1M tokens | live provider list prices (OpenRouter's public list, refreshed every 12 h); edit a model to pin your own price, or add a prefix the list does not have |
 | Obsidian vault path | the vault Obsidian has open (more sources under **Second brain → Sources**) |
@@ -644,6 +645,23 @@ Everything is editable in **Settings** and saved to `config.json`:
 
 Environment variables: `PORT` / `ZAAFPULSE_PORT` (default `4777`), `ZAAFPULSE_HOST`, `ZAAFPULSE_DATA` and the server-mode settings in [docs/install.md](docs/install.md), and `DEMO=1` for synthetic data. Demo mode never writes `config.json`, the Keychain or your coding tools, and fetches nothing: model calls are answered by a scripted model inside the process, and gateway data lives in a temporary folder. It uses the cached price list if one exists.
 </details>
+
+## Contributing
+
+Contributions are welcome: bug reports, fixes, connectors, providers, agents, workflows, docs and translations.
+
+| | |
+|---|---|
+| [Contributing guide](CONTRIBUTING.md) | Setup, project layout, the rules that matter (data stays local, no plain-text secrets, no dependencies), tests and pull requests |
+| [Code of Conduct](CODE_OF_CONDUCT.md) | How we work together (Contributor Covenant 2.1) |
+| [Security Policy](SECURITY.md) | How to report a vulnerability privately, what is in scope, and how to keep an installation safe |
+| [MIT License](LICENSE) | Use, change and share ZAAFPulse freely; keep the copyright notice |
+
+Found a security problem? Do not open an issue. [Report it privately](https://github.com/rifqifitriady/ZAAFPulse/security/advisories/new).
+
+## License
+
+ZAAFPulse is released under the [MIT License](LICENSE). Copyright © 2026 Rifqi Fitriady and ZAAFPulse contributors.
 
 <br>
 
