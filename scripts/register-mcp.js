@@ -77,14 +77,20 @@ function run(target, { remove = false, dryRun = false, home, exec = execFileSync
         log(`${c.name}: already ${remove ? 'absent' : 'registered'}`);
         continue;
       }
-      // Windows: claude is claude.cmd, which runs through cmd.exe: quote every argument, so a path with
-      // spaces or characters such as & or ^ stays one argument instead of starting another command.
+      // Windows: claude is claude.cmd, which runs through cmd.exe: quote any argument with spaces or cmd
+      // characters (& | < > ^ ( ) % !), so a path stays one argument instead of starting another command.
       const win = process.platform === 'win32';
       try {
-        exec('claude', win ? args.map((x) => `"${String(x).replace(/"/g, '')}"`) : args, {
-          stdio: 'inherit',
-          ...(win ? { shell: true } : {}),
-        });
+        exec(
+          'claude',
+          win
+            ? args.map((x) => (/[\s&|<>^()%!"]/.test(String(x)) ? `"${String(x).replace(/"/g, '')}"` : String(x)))
+            : args,
+          {
+            stdio: 'inherit',
+            ...(win ? { shell: true } : {}),
+          },
+        );
         log(`${c.name}: ${remove ? 'removed' : 'registered'} (user scope)`);
       } catch (err) {
         if (err.code !== 'ENOENT') throw err;
