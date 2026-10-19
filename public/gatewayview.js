@@ -555,7 +555,7 @@ function gwKeys() {
                   ? ['expired', '#ffb547']
                   : ['active', '#5cf0a8'];
               return `<tr><td><b>${esc(k.name)}</b><small class="block muted mono">${esc(k.prefix)}</small></td><td>${k.scopes.map((s) => `<span class="tag">${s}</span>`).join(' ')}</td>
-              <td class="muted"><small class="block">models: ${esc(k.models.join(', ') || 'all')}${k.privateOnly ? ' · <b class="good-text">private only</b>' : ''}</small><small class="block">agents: ${esc(k.agents.join(', ') || 'all')}</small></td>
+              <td class="muted"><small class="block">models: ${esc(k.models.join(', ') || 'all')}${k.privateOnly ? ' · <b class="good-text">private only</b>' : ''}</small><small class="block">agents: ${esc(k.agents.join(', ') || 'all')}</small><small class="block">knowledge: ${esc((k.knowledge || []).join(', ') || 'all')}${k.approveOwnRuns ? ' · <b class="warn-text">approves own runs</b>' : ''}</small></td>
               <td>${k.budgetUSD != null ? `<div class="cell-bar left"><span class="num">${fmtUSD(spent)} / ${fmtUSD(k.budgetUSD)}</span><i style="width:${Math.min(100, (spent / Math.max(k.budgetUSD, 1e-9)) * 100).toFixed(1)}%;background:${spent >= k.budgetUSD ? '#ff4f6d' : HOLO.orange}"></i></div>` : `<span class="num">${fmtUSD(spent)}</span> <small class="muted">no budget</small>`}</td>
               <td class="r num">${k.rpm}/min${k.expiresAt ? `<small class="block muted">until ${new Date(k.expiresAt).toLocaleDateString()}</small>` : ''}</td><td class="r muted">${k.lastUsedAt ? ago(k.lastUsedAt) : 'never'}</td>
               <td><span class="state-pill" style="--c:${st[1]}"><i></i>${st[0]}</span></td>
@@ -569,7 +569,8 @@ function gwKeys() {
         <form class="gw-form gw-key-form" id="gw-key-form">
           <div class="gw-row"><label>Name<input class="input" name="name" placeholder="e.g. my-app, n8n, laptop scripts" required></label>
           <label>Allowed models <small>globs, comma-separated; <b class="warn-text">empty = every model</b>, list them to limit spend</small><input class="input" name="models" placeholder="ollama/*, openrouter/deepseek/*"></label>
-          <label>Allowed agents <small><b class="warn-text">empty = every agent</b>; list the ones this app needs</small><input class="input" name="agents" placeholder="customer-service, network-ops"></label></div>
+          <label>Allowed agents <small><b class="warn-text">empty = every agent</b>; list the ones this app needs</small><input class="input" name="agents" placeholder="customer-service, network-ops"></label>
+          <label>Allowed knowledge bases <small>empty = every knowledge base</small><input class="input" name="knowledge" placeholder="support-handbook, runbooks"></label></div>
           <fieldset><legend>Scopes</legend>${[
             ['llm', 'LLM: /v1/chat/completions, /v1/embeddings'],
             ['agents', 'Agents: agent/*, /v1/orchestrate, workflows, sessions'],
@@ -582,6 +583,7 @@ function gwKeys() {
             )
             .join('')}</fieldset>
           <label class="gw-check"><input type="checkbox" name="privateOnly"> Private models only (your own hardware: Ollama, LM Studio, vLLM, TGI)</label>
+          <label class="gw-check"><input type="checkbox" name="approveOwnRuns"> May approve its own paused runs through the API or A2A (only for a pipeline that has its own human approval; otherwise approve in this dashboard)</label>
           <div class="gw-row"><label>Budget / month (USD)<input class="input" name="budgetUSD" type="number" min="0" step="0.01" placeholder="none"></label>
             <label>Requests / minute<input class="input" name="rpm" type="number" min="1" value="60"></label>
             <label>Expires in (days)<input class="input" name="expiresInDays" type="number" min="1" placeholder="never"></label>
@@ -848,7 +850,7 @@ function gwWorkflows() {
     ${
       run && run.result
         ? `<section class="holo panel"><div class="panel-head"><h3>Run · ${esc(run.result.workflow || '')}</h3>${run.result.usage ? `<span class="meta">${fmtN(run.result.usage.input)} in · ${fmtN(run.result.usage.output)} out · ${fmtUSD(run.result.usage.cost || 0)}</span>` : ''}</div>
-      ${run.result.errors ? errList(run.result.errors) : `${run.result.state && run.result.state !== 'completed' ? `<div class="gw-row">${runPill(run.result.state)}${run.result.state === 'input-required' ? `<button class="btn" type="button" data-a2arun="approve" data-id="${esc(run.result.id)}" data-wf="1">Approve step ${run.result.pending.step}</button><button class="btn ghost danger" type="button" data-a2arun="reject" data-id="${esc(run.result.id)}" data-wf="1">Reject</button><small class="muted">${esc(run.result.pending.question.split('\n')[0])}</small>` : ''}${run.result.error ? `<code class="ie-err">${esc(run.result.error)}</code>` : ''}${run.result.stop ? `<span class="muted">${esc(run.result.stop.reason)}</span>` : ''}</div>` : ''}<ol class="gw-run">${run.result.steps.map((st) => `<li><b>${esc(st.agent)}</b>${st.skipped ? ` <small class="muted">${esc(st.skipped)}</small>` : `<div class="gw-answer">${esc(st.text)}</div>`}</li>`).join('')}</ol>`}</section>`
+      ${run.result.errors ? errList(run.result.errors) : `${run.result.state && run.result.state !== 'completed' ? `<div class="gw-row">${runPill(run.result.state)}${run.result.state === 'input-required' ? `<button class="btn" type="button" data-a2arun="approve" data-id="${esc(run.result.id)}" data-wf="1">Approve step ${run.result.pending.step}</button><button class="btn ghost danger" type="button" data-a2arun="reject" data-id="${esc(run.result.id)}" data-wf="1">Reject</button>` : ''}${run.result.error ? `<code class="ie-err">${esc(run.result.error)}</code>` : ''}${run.result.stop ? `<span class="muted">${esc(run.result.stop.reason)}</span>` : ''}</div>` : ''}${run.result.state === 'input-required' && run.result.pending ? approvalView(run.result.pending) : ''}<ol class="gw-run">${run.result.steps.map((st) => `<li><b>${esc(st.agent)}</b>${st.skipped ? ` <small class="muted">${esc(st.skipped)}</small>` : `<div class="gw-answer">${esc(st.text)}</div>`}</li>`).join('')}</ol>`}</section>`
         : ''
     }`;
 }
@@ -1295,6 +1297,24 @@ function a2aCollaboration() {
 }
 
 /* ---------- Agent-to-Agent: collaborate, runs and the run view ---------- */
+// A gated step: the exact actions the agent proposed (tick the ones to run) and its plan. Only the ticked
+// calls run after Approve, exactly as shown.
+function approvalView(p) {
+  const calls = p.proposals || [];
+  return `<div class="gw-plan approval"><b>Waiting for approval · step ${esc(p.step)} (${esc(p.agent)})</b>
+    ${
+      calls.length
+        ? `<small>These actions run only if you approve them, exactly as shown:</small><ul class="approval-calls">${calls
+            .map(
+              (c) =>
+                `<li><label class="gw-check"><input type="checkbox" data-approve-call="${esc(c.id)}" checked> <b>#${esc(c.id)}</b> <code>${esc(c.tool)}</code></label><pre class="mono approval-args">${esc(JSON.stringify(c.args, null, 2).slice(0, 2000))}</pre></li>`,
+            )
+            .join('')}</ul>`
+        : '<small>No action that changes anything was proposed; approving lets the workflow go on.</small>'
+    }
+    ${p.draft ? `<details><summary class="muted">The agent's plan</summary><div class="gw-answer">${esc(p.draft)}</div></details>` : ''}</div>`;
+}
+
 const RUN_STATE = {
   submitted: ['#8f98cc', 'queued'],
   working: ['#4de8ff', 'working'],
@@ -1426,7 +1446,7 @@ function runView(run) {
       <div class="gw-row">${live ? `<button class="btn ghost danger" type="button" data-a2arun="cancel" data-id="${esc(run.id)}">Cancel</button>` : ''}
         ${run.state === 'input-required' ? `<button class="btn" type="button" data-a2arun="approve" data-id="${esc(run.id)}">Approve step ${run.pending ? run.pending.step : ''}</button><button class="btn ghost danger" type="button" data-a2arun="reject" data-id="${esc(run.id)}">Reject</button>` : ''}
         ${run.stop ? `<span class="muted">${esc(run.stop.reason)}</span>` : ''}${run.error ? `<code class="ie-err">${esc(run.error)}</code>` : ''}</div>
-      ${run.state === 'input-required' && run.pending ? `<div class="gw-plan"><b>Waiting for approval</b><small>${esc(run.pending.question)}</small></div>` : ''}
+      ${run.state === 'input-required' && run.pending ? approvalView(run.pending) : ''}
       ${run.answer ? `<div class="gw-answer">${esc(run.answer)}</div>` : live ? '<div class="skeleton" style="height:70px"></div>' : ''}
       ${verdict}
       <div class="live-grid even">${panel('Budget', `${pct(Math.max(sp.tokens / b.tokens, sp.requests / b.calls))} used · degrade at 80%, reserve 15%`, meter)}${panel('Plan', run.plan ? esc(run.plan.method) : 'pattern', run.plan ? `<ol class="gw-run">${run.plan.steps.map((s) => `<li><span class="tag">${esc(s.id)}</span> <b>${esc(s.agent)}</b> ${esc(s.instruction)}${s.dependsOn.length ? ` <small class="muted">after ${esc(s.dependsOn.join(', '))}</small>` : ''}</li>`).join('')}</ol>` : `<p class="kpi-sub">${esc((gw.data.patterns[run.pattern] || {}).description || '')}</p>`)}</div>
@@ -2187,7 +2207,17 @@ document.addEventListener('click', (e) => {
       });
     if (act === 'approve' || act === 'reject')
       gwAct(async () => {
-        const r = await gwPost('collab', { action: 'resume', id, approve: act === 'approve' });
+        // Approve runs only the ticked actions of the gated step.
+        const boxes = [...document.querySelectorAll('[data-approve-call]')];
+        const calls = boxes.length
+          ? boxes.filter((b) => b.checked).map((b) => Number(b.dataset.approveCall))
+          : undefined;
+        const r = await gwPost('collab', {
+          action: 'resume',
+          id,
+          approve: act === 'approve',
+          ...(act === 'approve' && calls ? { calls } : {}),
+        });
         if (r.errors) {
           alert(r.errors[0]);
           return;
@@ -2274,6 +2304,8 @@ document.addEventListener('submit', (e) => {
         scopes: [...f.querySelectorAll('[name=scope]:checked')].map((x) => x.value),
         models: v('models'),
         agents: v('agents'),
+        knowledge: v('knowledge'),
+        approveOwnRuns: f.approveOwnRuns.checked,
         budgetUSD: v('budgetUSD'),
         rpm: v('rpm'),
         expiresInDays: v('expiresInDays'),

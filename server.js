@@ -353,6 +353,24 @@ const handler = async (req, res) => {
   // Names other than loopback are accepted only when sign-in is on (server mode or behind a proxy).
   if (!isLoopback(host) && !(auth.mode === 'password' && (!ALLOWED_HOSTS.length || ALLOWED_HOSTS.includes(host))))
     return send(res, 403, { error: 'forbidden' });
+  // Without sign-in, a browser request must also come from a local page: an Origin or Referer naming
+  // another host (a browser reaching us through a proxy that hides its own headers), or a cross-site
+  // fetch, is refused. A non-browser client behind such a proxy cannot be told apart from a local one;
+  // that setup needs sign-in (docs/install.md).
+  if (auth.mode === 'none') {
+    const fromElsewhere = ['origin', 'referer'].some((h) => {
+      if (!req.headers[h]) return false;
+      try {
+        return !isLoopback(new URL(req.headers[h]).hostname.replace(/^\[|\]$/g, ''));
+      } catch {
+        return true;
+      }
+    });
+    if (fromElsewhere || req.headers['sec-fetch-site'] === 'cross-site')
+      return send(res, 403, {
+        error: 'this dashboard only answers pages on this machine; sign-in is needed for anything else',
+      });
+  }
   // A proxy in front of a no-sign-in setup would expose the dashboard to everyone behind it: refuse.
   if (
     auth.mode === 'none' &&
