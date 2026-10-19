@@ -119,9 +119,11 @@ else
     WANT="$(grep "  $NAME\$" "$TMP/SHA256SUMS.txt" | cut -d' ' -f1)"
     [ "$(sha256 "$TMP/app.tar.gz")" = "$WANT" ] || die "checksum mismatch for $NAME: the download was changed or damaged"
     say "Checksum verified ($NAME)"
-  else
-    warn "Release $VERSION has no checksummed source package (it predates them); downloading the tag without verification."
+  elif [ "$VERSION" = v1.0.0 ]; then
+    warn "Release $VERSION predates checksummed packages; downloading the tag without verification."
     fetch "https://codeload.github.com/$REPO/tar.gz/refs/tags/$VERSION" "$TMP/app.tar.gz"
+  else
+    die "could not get a verified package for $VERSION (SHA256SUMS.txt missing or unreachable); nothing was installed"
   fi
   mkdir "$TMP/x" && tar -xzf "$TMP/app.tar.gz" -C "$TMP/x"
   SRC="$(find "$TMP/x" -mindepth 1 -maxdepth 1 -type d | head -n1)"

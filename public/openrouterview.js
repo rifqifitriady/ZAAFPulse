@@ -515,7 +515,7 @@ function paintRankings() {
     metricTile({
       label: 'Top app listed',
       value: apps[0] ? esc(apps[0].title) : '—',
-      sub: apps[0] ? `rank #${apps[0].rank} · ${fmtN(apps[0].tokens)} tokens this ${esc(or.appsPeriod)}` : '',
+      sub: apps[0] ? `rank #${esc(apps[0].rank)} · ${fmtN(apps[0].tokens)} tokens this ${esc(or.appsPeriod)}` : '',
       color: HOLO.orange,
     }),
     metricTile({
@@ -600,7 +600,7 @@ function paintRankings() {
 }
 function appsHtml() {
   const apps = or.rankings.data.apps[or.appsPeriod] || [];
-  return `${apps.map((a) => `<div class="or-app"><span class="or-app-rank">${a.rank}</span><div><b>${a.url ? `<a href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener noreferrer">${esc(a.title)}</a>` : esc(a.title)}</b><small>${esc(a.categories.join(' · ') || 'app')}</small></div><span class="num">${fmtN(a.tokens)}</span></div>`).join('') || holoEmpty('No apps for this period.')}`;
+  return `${apps.map((a) => `<div class="or-app"><span class="or-app-rank">${esc(a.rank)}</span><div><b>${a.url ? `<a href="${esc(safeUrl(a.url))}" target="_blank" rel="noopener noreferrer">${esc(a.title)}</a>` : esc(a.title)}</b><small>${esc(a.categories.join(' · ') || 'app')}</small></div><span class="num">${fmtN(a.tokens)}</span></div>`).join('') || holoEmpty('No apps for this period.')}`;
 }
 
 function mountRankSkyline() {

@@ -1,6 +1,6 @@
 {
   "name": "zaafpulse",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "ZAAFPulse: AI command center and agentic workspace for macOS, Linux and Windows.",
   "main": "server.js",
   "bin": {
