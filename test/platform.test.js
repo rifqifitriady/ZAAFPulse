@@ -76,7 +76,15 @@ async function authServer(auth) {
 }
 
 test('auth: localhost needs no sign-in; server mode needs the password and rate-limits guesses', async () => {
-  assert.equal(createAuth({ dataDir: tmp('zp-a-'), host: '127.0.0.1', env: {} }).required, false);
+  // On a single-user machine localhost needs no sign-in; with other login users (Linux) it is local-only.
+  assert.equal(
+    createAuth({ dataDir: tmp('zp-a-'), host: '127.0.0.1', env: {}, platform: 'linux', users: () => 0 }).required,
+    false,
+  );
+  assert.equal(
+    createAuth({ dataDir: tmp('zp-a-'), host: '127.0.0.1', env: {}, platform: 'linux', users: () => 1 }).mode,
+    'local',
+  );
   const dir = tmp('zp-auth-');
   assert.throws(() => setPassword(dir, 'short'), /at least 10/);
   setPassword(dir, 'correct horse battery');
