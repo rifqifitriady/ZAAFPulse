@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/rifqifitriady/ZAAFPulse/security/advisories/new
+    about: Please report security problems privately, never in a public issue.
+  - name: Installation and server-mode guide
+    url: https://github.com/rifqifitriady/ZAAFPulse/blob/main/docs/install.md
+    about: Installers, Docker, single-file builds, server mode, TLS and every option.
+  - name: Contributing guide
+    url: https://github.com/rifqifitriady/ZAAFPulse/blob/main/CONTRIBUTING.md
+    about: Setup, project layout, the rules that matter, tests and pull requests.
