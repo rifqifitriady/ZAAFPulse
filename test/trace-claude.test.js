@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const claudeParser = require('../lib/claude');
 const adapter = require('../lib/trace/claude');
@@ -58,4 +59,76 @@ test('the skeleton reads only the chosen turn (byte range)', async () => {
   const sk = await adapter.skeleton(entries[0], 's1', { turn: 1, entries });
   assert.equal(sk.spans.filter((s) => s.kind === 'chat').length, 1);
   assert.ok(sk.spans.every((s) => !s.text || s.text.s >= entries[0].result.sessions.s1.turns[1][0]));
+});
+
+const root = path.join(__dirname, 'fixtures', 'trace', 'claude');
+
+test('sessions: a failing subagent adds its tools, errors, flag and cost to the parent', async () => {
+  const main = path.join(dir, 's1.jsonl');
+  const bare = adapter.sessions(await entriesFor([main]))[0];
+  const withSub = adapter.sessions(await entriesFor([main, path.join(dir, 's1', 'subagents', 'agent-ag1.jsonl'), path.join(dir, 's1', 'subagents', 'agent-ag3.jsonl')]))[0];
+  assert.equal(bare.errors, 0);
+  assert.equal(bare.flags.errors, false);
+  assert.equal(withSub.tools, bare.tools + 1);
+  assert.equal(withSub.errors, bare.errors + 1);
+  assert.equal(withSub.flags.errors, true);
+  assert.ok(withSub.cost > bare.cost);
+});
+
+test('skeleton: cache writes are in the usage and the chat costs sum to the session cost', async () => {
+  const entries = await entriesFor([path.join(root, 'proj3', 'c1.jsonl')]);
+  const sk = await adapter.skeleton(entries[0], 'c1', { entries });
+  const chats = sk.spans.filter((s) => s.kind === 'chat');
+  assert.equal(chats.length, 3, 'id-less messages are separate chats');
+  assert.deepEqual(chats[0].usage, { input: 100, output: 10, cacheRead: 500, cacheWrite5m: 300, cacheWrite1h: 200 });
+  const row = adapter.sessions(entries)[0];
+  assert.ok(Math.abs(totals(sk.spans).cost - row.cost) < 1e-12, `${totals(sk.spans).cost} vs ${row.cost}`);
+});
+
+test('answer: none when the last chat has no text', async () => {
+  const entries = await entriesFor([path.join(root, 'proj3', 'c1.jsonl')]);
+  const sk = await adapter.skeleton(entries[0], 'c1', { entries });
+  assert.equal(sk.spans.some((s) => s.kind === 'answer'), false);
+});
+
+test('a subagent that spawns a subagent nests two levels', async () => {
+  const sub = path.join(root, 'proj2', 'n1', 'subagents');
+  const entries = await entriesFor([path.join(root, 'proj2', 'n1.jsonl'), path.join(sub, 'agent-nx1.jsonl'), path.join(sub, 'agent-nx2.jsonl')]);
+  const sk = await adapter.skeleton(entries[0], 'n1', { entries });
+  assert.deepEqual(validate(sk.spans), []);
+  const outer = sk.spans.find((s) => s.name === 'invoke_agent Outer');
+  const inner = sk.spans.find((s) => s.name === 'invoke_agent Inner');
+  assert.equal(inner.parent, outer.id);
+  assert.equal(inner.kind, 'agent');
+  const leaf = sk.spans.find((s) => s.kind === 'chat' && s.parent === inner.id);
+  assert.equal(leaf.usage.input, 3);
+});
+
+test('skeleton: an unknown session is a 404, not a TypeError', async () => {
+  const entries = await entriesFor([path.join(dir, 's1.jsonl'), path.join(dir, 's1', 'subagents', 'agent-ag1.jsonl')]);
+  await assert.rejects(adapter.skeleton(entries[0], 'nope', { entries }), (e) => e.status === 404 && e.message === 'unknown session');
+  // A subagent file has no turns of its own.
+  await assert.rejects(adapter.skeleton(entries[1], 's1', { entries }), (e) => e.status === 404);
+});
+
+test('a bad timestamp or a non-object line does not leak NaN or throw', async () => {
+  const f = path.join(os.tmpdir(), `trace-bad-${process.pid}.jsonl`);
+  const lines = [
+    '{"type":"user","sessionId":"b1","timestamp":"2026-10-20T10:00:00.000Z","message":{"role":"user","content":"go"}}',
+    '{"type":"assistant","sessionId":"b1","timestamp":"oops","message":{"id":"msg_b","role":"assistant","model":"claude-opus-5-5","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"hi"}]}}',
+    '[{"type":"assistant"}]', // valid JSON, but not an object
+    '{"type":"user" broken',
+  ];
+  fs.writeFileSync(f, lines.join('\n') + '\n');
+  try {
+    const entries = await entriesFor([f]);
+    const sk = await adapter.skeleton(entries[0], 'b1', { entries });
+    assert.ok(sk.spans.every((s) => !Number.isNaN(s.start) && !Number.isNaN(s.end)));
+    const chat = sk.spans.find((s) => s.kind === 'chat');
+    assert.equal(chat.start, null);
+    assert.equal(sk.spans.filter((s) => s.kind === 'unknown').length, 2);
+    assert.equal(Number.isFinite(sk.spans.find((s) => s.kind === 'turn').end), true);
+  } finally {
+    fs.unlinkSync(f);
+  }
 });
