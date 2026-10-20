@@ -47,17 +47,18 @@ The span model follows the OTel GenAI semantic conventions, so a later export br
 
 ## Index additions (`lib/indexer.js` result per file)
 
-- Per session: source, title (the first prompt, truncated to 80 characters), project, branch, start and end, turn count, tool count, error count, cost and flags (errors, loop, injection).
-- `turns[]`: byte offsets `[start, end)` of each turn within the file, plus each turn's start time.
+- Per session: source, project, branch, start and end, turn count, tool count, error count, cost and flags (errors, loop, injection).
+- The title is **not** stored, so the index stays free of text. It is read on demand from the first turn (the first prompt, masked, one line, at most 80 characters) and cached in memory only.
+- `turns[]`: `[byteStart, ts]` per turn; a turn ends where the next one starts or at the file size.
 - For Claude Code, the subagent-to-parent link: `sessionId`, `agentId`, and the spawning `tool_use` id where the parent transcript records it. The exact field is verified during implementation (P3).
 - `CACHE_VERSION` is bumped. A first index after upgrade re-parses everything once. The size target is under 3% of log size, against about 1.3% today.
 
 ## Adapters (`lib/trace/`)
 
-- One module per source: `claude.js`, `codex.js`, `gateway.js`, `kiro.js`, `antigravity.js`, `gemini.js`. Each exposes the same three functions:
-  - `listSessions(range)`: from the index, with no file reads;
-  - `skeleton(sessionId)`: spans without text, built by ranged reads of the turns' offsets;
-  - `content(ref, { maxBytes })`: one span's text, read from the file or from `tool-results/`.
+- One module per source: `claude.js`, `codex.js`, `gateway.js`, `kiro.js`, `antigravity.js`, `gemini.js`. Each exposes the same two functions:
+  - `sessions(entries)`: from the index, with no file reads;
+  - `skeleton(entry, sessionId, { turn })`: spans without text, built by ranged reads of the turns' offsets.
+- `lib/trace/content.js` is shared by all sources and reads one span's text from the file, from `tool-results/` or from a gateway run. Masking and path checks therefore live in one place.
 - `lib/trace/index.js` is the registry. It handles:
   - routing by source;
   - the LRU skeleton cache (P2);
@@ -71,12 +72,15 @@ The span model follows the OTel GenAI semantic conventions, so a later export br
 
 | Route | Returns |
 |---|---|
-| `GET /api/trace/sessions?range=&source=&q=&flags=` | session rows from the index (P5: title, project and flags only) |
-| `GET /api/trace/session/:id` | skeleton: spans without text, turn list, totals |
-| `GET /api/trace/content/:spanId?part=input\|output&offset=` | masked text for one span, capped at 64 KB per page (P1) |
-| `GET /api/trace/live/:id?since=` | spans appended since an offset, for a running session (P8) |
+| `GET /api/trace/sources` | each source with availability and the reason when unavailable |
+| `GET /api/trace/sessions?range=&source=&q=&flags=` | session rows from the index (P5: project and flags only; no text) |
+| `GET /api/trace/title?key=` | the masked one-line title, read on demand |
+| `GET /api/trace/session?key=&turn=` | skeleton: spans without text, turn list, totals |
+| `GET /api/trace/content?id=&offset=` | masked text for one span, capped at 64 KB per page (P1) |
+| `POST /api/trace/reveal` `{ id, index }` | one masked value, never cached (S2) |
+| `GET /api/trace/live?key=&since=` | spans appended since an offset, for a running session (P8) |
 
-Ids are opaque and resolved through the index only (S3). `ZAAFPULSE_CONTENT=off` makes `content` return 403 with a reason (S10).
+Session keys and content ids are opaque, HMAC-tagged per process and resolved through the index only (S3). `ZAAFPULSE_CONTENT=off` makes `content` return 403 with a reason (S10).
 
 ## UI (`public/traceview.js`, route `#trace`, approved mockup `mockups/split-view-v4.html`)
 
