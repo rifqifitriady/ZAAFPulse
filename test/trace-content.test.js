@@ -625,3 +625,89 @@ test('a ref without src is still read as a Claude line', async () => {
   const cx = codexLog([evt({ type: 'agent_message', message: 'hi' })]);
   assert.equal((await cx.c.read({ f: cx.file, s: cx.all.s, e: cx.all.e, k: 'reply' })).text, '');
 });
+
+// --- gateway runs ({ g: 'run' } refs): the text comes from the run, not from a file ---
+function fakeGateway() {
+  const secret = makeSecret();
+  const long = 'y'.repeat(70000);
+  const runs = {
+    r1: {
+      id: 'r1',
+      answer: 'the answer <b>x</b>',
+      steps: [{ text: `leaked ${secret} here` }, { text: '' }, { text: long }, { text: 'plain step' }],
+    },
+  };
+  return { gateway: { run: (id) => runs[id] || null }, secret };
+}
+
+test('a gateway run step and its answer are read from the run', async () => {
+  const { gateway } = fakeGateway();
+  const c = createContent({ roots: [], gateway });
+  assert.equal((await c.read({ g: 'run', id: 'r1', step: 3 })).text, 'plain step');
+  const a = await c.read({ g: 'run', id: 'r1', answer: true });
+  assert.equal(a.text, 'the answer <b>x</b>');
+  assert.equal(a.next, null);
+});
+
+test('a secret inside a gateway step is masked, and reveal returns it on request', async () => {
+  const { gateway, secret } = fakeGateway();
+  const c = createContent({ roots: [], gateway });
+  const ref = { g: 'run', id: 'r1', step: 0 };
+  const r = await c.read(ref);
+  assert.ok(!r.text.includes(secret));
+  assert.equal(r.masked.length, 1);
+  assert.equal(r.text.slice(r.masked[0].start, r.masked[0].end), '‹Anthropic API key hidden›');
+  assert.equal((await c.reveal(ref, 0)).value, secret);
+  await assert.rejects(c.reveal(ref, 3), /no such masked/);
+});
+
+test('gateway run text is paged at 64 KB', async () => {
+  const { gateway } = fakeGateway();
+  const c = createContent({ roots: [], gateway });
+  const ref = { g: 'run', id: 'r1', step: 2 };
+  const p1 = await c.read(ref);
+  assert.equal(p1.text.length, 65536);
+  assert.equal(p1.truncated, true);
+  const p2 = await c.read(ref, { offset: p1.next });
+  assert.equal(p2.text.length, 70000 - 65536);
+  assert.equal(p2.next, null);
+  await assert.rejects(c.read(ref, { offset: 70001 }), (e) => e.status === 400);
+});
+
+test('gateway refs: unknown run, step without text or out of range is 404', async () => {
+  const { gateway } = fakeGateway();
+  const c = createContent({ roots: [], gateway });
+  for (const ref of [
+    { g: 'run', id: 'nope', step: 0 },
+    { g: 'run', id: 'nope', answer: true },
+    { g: 'run', id: 'r1', step: 1 }, // empty text
+    { g: 'run', id: 'r1', step: 99 },
+  ])
+    await assert.rejects(c.read(ref), (e) => e.status === 404, JSON.stringify(ref));
+  // No gateway wired in: the same answer, not a crash.
+  await assert.rejects(createContent({ roots: [] }).read({ g: 'run', id: 'r1', step: 0 }), (e) => e.status === 404);
+});
+
+test('gateway refs: a bad id, step or kind is 400', async () => {
+  const { gateway } = fakeGateway();
+  const c = createContent({ roots: [], gateway });
+  for (const ref of [
+    { g: 'run', id: 5, step: 0 },
+    { g: 'run', id: '', step: 0 },
+    { g: 'run', id: 'r1', step: -1 },
+    { g: 'run', id: 'r1', step: 1.5 },
+    { g: 'run', id: 'r1', step: '0' },
+    { g: 'run', id: 'r1' },
+    { g: 'run', id: 'r1', step: 0, answer: true },
+    { g: 'run', id: 'r1', answer: false },
+    { g: 'other', id: 'r1', step: 0 },
+  ])
+    await assert.rejects(c.read(ref), (e) => e.status === 400, JSON.stringify(ref));
+});
+
+test('a gateway run ref does not touch the file checks, and file refs still need them', async () => {
+  const { gateway } = fakeGateway();
+  const c = createContent({ roots: [], gateway });
+  await assert.rejects(c.read({ f: '/etc/hosts', s: 0, e: 1, k: 'raw' }), (e) => e.status === 403 || e.status === 404);
+  assert.equal((await c.read({ g: 'run', id: 'r1', step: 3, f: '/etc/hosts' })).text, 'plain step');
+});
