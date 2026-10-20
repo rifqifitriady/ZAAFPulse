@@ -38,7 +38,7 @@ if ($Uninstall) {
   Remove-Item -Recurse -Force (Join-Path $Root 'app'), (Join-Path $Root 'node'), $BinDir -ErrorAction SilentlyContinue
   $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
   if ($userPath) { [Environment]::SetEnvironmentVariable('Path', (($userPath -split ';') | Where-Object { $_ -and $_ -ne $BinDir }) -join ';', 'User') }
-  Remove-Item -Force (Join-Path ([Environment]::GetFolderPath('Programs')) 'ZAAFPulse.url') -ErrorAction SilentlyContinue
+  foreach ($f in 'ZAAFPulse.lnk', 'ZAAFPulse.url') { Remove-Item -Force (Join-Path ([Environment]::GetFolderPath('Programs')) $f) -ErrorAction SilentlyContinue }
   Say 'ZAAFPulse removed.'
   if ($Purge) { Remove-Item -Recurse -Force (Join-Path $env:APPDATA 'ZAAFPulse'), $Root -ErrorAction SilentlyContinue; Say 'Data removed too.' }
   else { Say "Your data (config, keys, history) in $env:APPDATA\ZAAFPulse was kept. Add -Purge to delete it." }
@@ -150,7 +150,20 @@ if (-not $NoService) {
   if ($LASTEXITCODE -ne 0) { Warn 'Not started in the background; start it yourself with: zaafpulse start' }
 }
 $p = if ($Port) { $Port } else { 4777 }
-Set-Content -Path (Join-Path ([Environment]::GetFolderPath('Programs')) 'ZAAFPulse.url') -Value "[InternetShortcut]`r`nURL=http://localhost:$p/`r`n"
+# The shortcut runs `zaafpulse open`, which signs the browser in with a fresh one-time code, so it still works
+# after the 30-day local sign-in cookie expires (a link to the URL would land on the sign-in page). It points at
+# wscript.exe and a hidden launcher in $BinDir, so no console window flashes. The launcher is UTF-16 (Unicode),
+# which Windows Script Host reads, so a user folder with non-ASCII letters still works.
+$programs = [Environment]::GetFolderPath('Programs')
+Remove-Item -Force (Join-Path $programs 'ZAAFPulse.url') -ErrorAction SilentlyContinue   # earlier installs linked the URL
+$opener = Join-Path $BinDir 'zaafpulse-open.vbs'
+$run = "`"$node`" `"$app\bin\zaafpulse.js`" open --port $p" -replace '"', '""'
+Set-Content -Path $opener -Encoding Unicode -Value "' ZAAFPulse: opens the dashboard signed in (zaafpulse open), without a console window.`r`nCreateObject(`"WScript.Shell`").Run `"$run`", 0, False"
+$lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $programs 'ZAAFPulse.lnk'))
+$lnk.TargetPath = Join-Path $env:SystemRoot 'System32\wscript.exe'
+$lnk.Arguments = "//B //NoLogo `"$opener`""
+$lnk.Description = 'Open the ZAAFPulse dashboard'
+$lnk.Save()
 
 Write-Host ''
 Say 'ZAAFPulse is installed.'

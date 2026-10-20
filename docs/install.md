@@ -82,7 +82,7 @@ Where things go:
 How it runs:
 
 - ZAAFPulse starts now and at every logon, through a hidden launcher in your Startup folder. The launcher restarts it if it exits.
-- A Start menu shortcut opens the dashboard.
+- A Start menu shortcut runs `zaafpulse open`, so the dashboard opens signed in.
 - `-System` (from an elevated PowerShell) runs it instead as a Task Scheduler task at boot, as SYSTEM, for a server that has no logged-on user.
 
 Other options: `-HostAddress`, `-Version`, `-Source`, `-NoService`, `-Uninstall [-Purge]`.
@@ -143,7 +143,7 @@ Without sign-in, any program and any other OS account on the machine could use t
 - **After `zaafpulse start`:** run `zaafpulse open` in another terminal, or start with `zaafpulse start --open`. The browser opens signed in.
 - **Background service:** after `zaafpulse service install`, or after a reboot, run `zaafpulse open` once.
 - **macOS autostart** (`scripts/install-autostart.sh`): at login and on wake, the opener focuses the dashboard tab in Chrome. A new tab, or a tab that shows the sign-in page, is signed in by itself.
-- **Windows:** run `zaafpulse open` (for example from a new terminal). The Start menu shortcut opens the dashboard and works while the browser's sign-in is still valid.
+- **Windows:** use the ZAAFPulse Start menu shortcut, or run `zaafpulse open` in a terminal. Both sign the browser in, also after the 30-day sign-in has expired.
 - **Docker and servers** listen on another address, so they always use the admin password.
 - **Demo mode** (`npm run demo`, `zaafpulse start --demo`) needs no sign-in on a single-user machine, because its data is synthetic and it never reads your logs, keys or settings. On Linux with other login users it uses local sign-in too.
 
