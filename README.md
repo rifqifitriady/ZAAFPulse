@@ -525,7 +525,7 @@ curl http://127.0.0.1:4777/v1/chat/completions -H "Authorization: Bearer zp_…"
 
 The gateway serves them at `/skills/<name>/SKILL.md`, so an agent always reads the version that is running. That avoids a public branch that can change. To give them to an agent:
 
-- **Claude Code:** Agent Skills → **Install into Claude Code** writes each skill folder to `~/.claude/skills/zaafpulse*` (or `$CLAUDE_CONFIG_DIR/skills` when that is set). Skills can also go to `~/.agents/skills`, the folder other Agent Skills clients share. Folders are marked, so a skill of yours with the same name is never overwritten, and **Remove** deletes only the marked folders.
+- **Claude Code and other agents:** Agent Skills → pick a location (Claude Code, other agents, or both) → **Install or update** writes each skill folder to `~/.claude/skills/zaafpulse*` (or `$CLAUDE_CONFIG_DIR/skills` when that is set) and/or `~/.agents/skills`, the folder other Agent Skills clients share. Folders are marked, so a skill of yours with the same name is never overwritten, and **Remove** deletes only the marked folders.
 - **Any other AI:** paste `Read this skill and use it: http://127.0.0.1:4777/skills/zaafpulse/SKILL.md`.
 
 A test checks that every endpoint the skills document is one the gateway actually serves.
