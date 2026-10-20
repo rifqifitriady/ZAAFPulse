@@ -33,6 +33,26 @@ test('codex: a turn per user message, with offsets', async () => {
   const s = Object.values(r.sessions)[0];
   assert.equal(s.turns.length, 2);
   assert.match((await readRange(file, s.turns[0][0], s.turns[0][0] + 120)).toString(), /add pagination/);
+  assert.match((await readRange(file, s.turns[1][0], s.turns[1][0] + 120)).toString(), /also sort/);
+  assert.equal(s.turns[0][1], Date.parse('2026-10-20T11:00:01.000Z'));
+  assert.equal(s.turns[1][1], Date.parse('2026-10-20T11:01:00.000Z'));
+});
+
+test('codex: a log with task_started and user_message has one turn per prompt, at the user_message', async () => {
+  const file = path.join(F, 'codex', 'rollout-mixed.jsonl');
+  const s = Object.values((await codex.parseFile(file)).sessions)[0];
+  assert.equal(s.turns.length, 2);
+  assert.match((await readRange(file, s.turns[0][0], s.turns[0][0] + 120)).toString(), /first ask/);
+  assert.match((await readRange(file, s.turns[1][0], s.turns[1][0] + 120)).toString(), /second ask/);
+  assert.equal(s.turns[1][1], Date.parse('2026-10-20T12:01:00.500Z'));
+});
+
+test('codex: a log with only task_started has a turn at each task_started', async () => {
+  const file = path.join(F, 'codex', 'rollout-tasks.jsonl');
+  const s = Object.values((await codex.parseFile(file)).sessions)[0];
+  assert.equal(s.turns.length, 2);
+  for (const t of s.turns) assert.match((await readRange(file, t[0], t[0] + 120)).toString(), /task_started/);
+  assert.equal(s.turns[1][1], Date.parse('2026-10-20T13:01:00.000Z'));
 });
 
 test('usage and signals are unchanged by the line reader', async () => {
