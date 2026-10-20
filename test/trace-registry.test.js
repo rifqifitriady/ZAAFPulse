@@ -448,7 +448,7 @@ test('at most maxReads skeleton builds run at once; the rest wait in order', asy
   await Promise.all(p);
   assert.equal(peak, 2);
   assert.equal(started.length, 6);
-  assert.deepEqual(started, rows.map((r) => Buffer.from(r.key.split('.')[0], 'base64url').toString().slice('kiro:'.length)), 'first in, first out');
+  assert.deepEqual(started, rows.map((r) => r.title.replace(' session ', '-')), 'first in, first out');
   assert.equal(t.stats().active, 0);
 });
 
@@ -564,12 +564,11 @@ test('live: an unchanged file reports changed false, growth rebuilds the last tu
 
 test('a bad, tampered or foreign live cursor counts as from the beginning', async () => {
   const one = tmpClaude([U('s9', '00', 'first'), A('s9', '01', 'm1', [{ type: 'text', text: 'one' }])]);
-  const two = tmpClaude([U('s8', '00', 'other')], 's8');
+  const two = tmpClaude([U('s8', '30', 'other')], 's8'); // ends later, so it lists first
   const e = await tmpEntry(one.file);
   const o = await tmpEntry(two.file);
   const t = createTrace({ indexer: { entries: () => [e, o] }, light: [], roots: [one.root, two.root], listTtlMs: 0 });
-  const keyOf = (sid) => t.sessions({}).find((r) => Buffer.from(r.key.split('.')[0], 'base64url').toString() === `claude:${sid}`).key;
-  const [k9, k8] = [keyOf('s9'), keyOf('s8')];
+  const [k8, k9] = t.sessions({}).map((r) => r.key);
   const good = (await t.live(k9)).cursor;
   assert.equal((await t.live(k9, good)).changed, false);
   const flipped = good.slice(0, -2) + (good.endsWith('AA') ? 'BB' : 'AA');
@@ -578,22 +577,53 @@ test('a bad, tampered or foreign live cursor counts as from the beginning', asyn
   assert.equal((await t.live(k9, e.size)).changed, true, 'a plain size is not a cursor');
 });
 
-test('each live size gets its own cache slot, and old ones are retired by the LRU', async () => {
+test('each live size gets its own cache slot; only the two newest per session are kept', async () => {
   const { root, file } = tmpClaude([U('s9', '00', 'first'), A('s9', '01', 'm1', [{ type: 'text', text: 'one' }])]);
   const e = await tmpEntry(file);
-  const t = createTrace({ indexer: { entries: () => [e] }, light: [], roots: [root], cacheMax: 2, listTtlMs: 0 });
+  const t = createTrace({ indexer: { entries: () => [e] }, light: [], roots: [root], listTtlMs: 0 });
   const key = t.sessions({})[0].key;
+  const turnId = (r) => r.skeleton.spans.find((s) => s.kind === 'turn').text;
   const a = await t.live(key);
-  const idA = a.skeleton.spans.find((s) => s.kind === 'turn').text;
   fs.appendFileSync(file, JSON.stringify(A('s9', '05', 'm2', [{ type: 'text', text: 'two' }])) + '\n');
   const b = await t.live(key, a.cursor);
   assert.equal(t.stats().cached, 2);
-  assert.ok((await t.content(idA, {})).text, 'the earlier slot is still there');
+  assert.ok((await t.content(turnId(a), {})).text, 'the earlier slot is still there');
   fs.appendFileSync(file, JSON.stringify(A('s9', '06', 'm3', [{ type: 'text', text: 'three' }])) + '\n');
   const c = await t.live(key, b.cursor);
   assert.equal(c.changed, true);
-  assert.equal(t.stats().cached, 2);
-  await assert.rejects(t.content(b.skeleton.spans.find((s) => s.kind === 'turn').text, {}), /unknown content/);
+  assert.equal(t.stats().cached, 2, 'growth never holds more than two slots');
+  await assert.rejects(t.content(turnId(a), {}), /unknown content/);
+  assert.ok((await t.content(turnId(b), {})).text);
+  assert.ok((await t.content(turnId(c), {})).text);
+});
+
+test('live growth slots do not push other sessions out of the cache', async () => {
+  const { root, file } = tmpClaude([U('s9', '00', 'first'), A('s9', '01', 'm1', [{ type: 'text', text: 'one' }])]);
+  const e = await tmpEntry(file);
+  const t = createTrace({ indexer: await fakeIndexer([e]), light: [], roots: [root, FIX], listTtlMs: 0, cacheMax: 4 });
+  const rows = t.sessions({});
+  const other = rows.find((r) => r.turns !== 1);
+  const mine = rows.find((r) => r.turns === 1).key;
+  const keep = await t.session(other.key, { turn: 0 });
+  let cursor;
+  for (let i = 0; i < 6; i++) {
+    fs.appendFileSync(file, JSON.stringify(A('s9', String(10 + i), `x${i}`, [{ type: 'text', text: `n${i}` }])) + '\n');
+    cursor = (await t.live(mine, cursor)).cursor;
+  }
+  assert.equal(await t.session(other.key, { turn: 0 }), keep, 'the other session is still cached');
+});
+
+test('repeated live polls without a usable cursor reuse the slot for the same size', async () => {
+  const { root, file } = tmpClaude([U('s9', '00', 'first'), A('s9', '01', 'm1', [{ type: 'text', text: 'one' }])]);
+  const e = await tmpEntry(file);
+  const t = createTrace({ indexer: { entries: () => [e] }, light: [], roots: [root], listTtlMs: 0 });
+  const key = t.sessions({})[0].key;
+  const a = await t.live(key);
+  const b = await t.live(key, 'garbage');
+  const c = await t.live(key, null);
+  assert.equal(b.skeleton, a.skeleton);
+  assert.equal(c.skeleton, a.skeleton);
+  assert.equal(t.stats().cached, 1);
 });
 
 test('live for other sources and demo is not changed', async () => {
@@ -790,4 +820,70 @@ test('a slower build of an older listing does not replace a newer cached skeleto
   assert.equal(late.spans[0].id, fresh.spans[0].id, 'the late build answers with the newer skeleton');
   assert.equal(await t.session(key), fresh, 'and the newer skeleton is still the cached one');
   assert.equal(t.stats().cached, 1);
+});
+
+// ---- review round 2 ----
+
+test('a deleted file the index still lists causes at most one rescan across 100 requests', async () => {
+  const { root, file } = tmpClaude([U('s9', '00', 'hello'), A('s9', '01', 'm1', [{ type: 'text', text: 'hi' }])]);
+  const e = await tmpEntry(file);
+  let listed = 0;
+  const t = createTrace({ indexer: { entries: () => (listed++, [e]) }, light: [], roots: [root] });
+  const key = t.sessions({})[0].key;
+  fs.unlinkSync(file);
+  for (let i = 0; i < 100; i++) await assert.rejects(t.session(key), (er) => er.status === 404 && !/[\\/]/.test(er.message));
+  assert.ok(listed <= 2, `${listed} listings for 100 session() calls`);
+  for (let i = 0; i < 100; i++) await assert.rejects(t.live(key), (er) => er.status === 404);
+  assert.ok(listed <= 2, `${listed} listings after 100 live() polls`);
+  await assert.rejects(t.title(key), (er) => er.status === 404);
+});
+
+test('errors are scrubbed of paths, including paths with spaces', async () => {
+  const cases = [
+    "open 'C:\\Users\\Jane Doe\\a.json'",
+    "open '~/Library/Application Support/Tool/x.json'",
+    'open "~/Library/Application Support/Tool/x.json"',
+    'open /Users/someone/file.json now',
+    "EACCES: permission denied, open '/Users/some one/.kiro/x.json'",
+  ];
+  for (const msg of cases) {
+    const bad = { ...fakeLight('kiro', 1), sessions: () => { throw new Error(msg); } };
+    const t = createTrace({ indexer: { entries: () => [] }, light: [bad], roots: [] });
+    const r = t.sources().find((x) => x.id === 'kiro').reason;
+    assert.ok(!/Users|Jane|Doe|Library|Application|Support|someone|some one|\.json|Tool/.test(r), `${msg} -> ${r}`);
+    assert.match(r, /<path>/);
+  }
+  const plain = { ...fakeLight('kiro', 1), sessions: () => { throw new Error('listing failed'); } };
+  assert.equal(createTrace({ indexer: { entries: () => [] }, light: [plain], roots: [] }).sources().find((x) => x.id === 'kiro').reason, 'listing failed');
+});
+
+test('session keys are opaque: no id in them, only the listing resolves them', async () => {
+  const sid = 'a'.repeat(64); // like a hash of a folder
+  const l = fakeLight('gemini', 0);
+  l.sessions = () => [{ id: sid, source: 'gemini', title: 't', project: 'p', branch: null, start: 1, end: 2, turns: 1, tools: 0, errors: 0, cost: null, flags: {} }];
+  const t = createTrace({ indexer: { entries: () => [] }, light: [l], roots: [] });
+  const [row] = t.sessions({});
+  assert.match(row.key, /^gemini\.[0-9a-f]{32}$/);
+  assert.ok(!row.key.includes(sid) && !Buffer.from(row.key.split('.')[1], 'hex').toString('latin1').includes('aaaa'));
+  const sk = await t.session(row.key);
+  assert.equal(sk.session.id, row.key, 'the skeleton does not repeat the id');
+  assert.ok(!JSON.stringify(sk).includes(sid));
+  // Stable within the process, and a different session has a different key.
+  assert.equal(t.sessions({})[0].key, row.key);
+  const t2 = await make();
+  assert.notEqual(t2.sessions({})[0].key, row.key);
+  for (const bad of [`gemini.${'0'.repeat(32)}`, `gemini.${row.key.split('.')[1].toUpperCase()}`, `claude.${row.key.split('.')[1]}`, `${row.key}0`]) {
+    await assert.rejects(t.session(bad), (er) => er.status === 404 && /unknown session/.test(er.message));
+  }
+});
+
+test('an error status outside 400-599 is a 500', async () => {
+  for (const status of ['oops', 200, 302, 700, 404.5, NaN, 0]) {
+    const bad = fakeLight('kiro', 1, { skeleton: async () => { throw Object.assign(new Error('odd'), { status }); } });
+    const t = createTrace({ indexer: { entries: () => [] }, light: [bad], roots: [], log: () => {}, listTtlMs: 0 });
+    await assert.rejects(t.session(t.sessions({})[0].key), (er) => er.status === 500 && er.message === 'trace read failed', String(status));
+  }
+  const ok = fakeLight('kiro', 1, { skeleton: async () => { throw Object.assign(new Error('teapot'), { status: 418 }); } });
+  const t = createTrace({ indexer: { entries: () => [] }, light: [ok], roots: [] });
+  await assert.rejects(t.session(t.sessions({})[0].key), (er) => er.status === 418);
 });
