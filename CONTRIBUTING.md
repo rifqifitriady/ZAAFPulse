@@ -34,7 +34,7 @@ npm start           # your own logs on http://localhost:4777
 | `npx prettier@3 --write .` | Format the code (settings in `.prettierrc.json`; Prettier is not a dependency) |
 | `npm run media` | Regenerate the README screenshots and GIFs from demo data (needs Chrome and ffmpeg) |
 | `node bin/zaafpulse.js doctor` | Check the OS, Node.js, data folder, secret store and service |
-| `node scripts/build-single.js` | Build a single-file executable for this machine into `dist/` |
+| `npm ci && node scripts/build-single.js` | Build a single-file executable for this machine into `dist/` (see "Releases") |
 
 ## How the project is laid out
 
@@ -75,7 +75,7 @@ docs/                install guide, integrations, README media
 
 - Every change that adds behaviour adds or updates a test in `test/`.
 - Tests must not touch the real Keychain, `config.json`, `.data/` or the network. Use temporary folders, `test/helpers.js` and the fake servers in it.
-- CI runs the platform tests on macOS, Ubuntu and Windows. A change that depends on path separators or the shell will show up there.
+- CI runs the whole suite on macOS, Ubuntu and Windows. A change that depends on path separators or the shell will show up there.
 
 ```bash
 npm test
@@ -92,5 +92,26 @@ npm test
 - Run `npm test`, and for UI changes look at the page in light and dark themes and at a narrow width.
 - Check your diff for secrets, personal paths and real hostnames before pushing.
 - Commits are merged with a merge commit; you do not need to squash.
+
+## Releases
+
+For maintainers. A release is the set of binaries, the source package, `SHA256SUMS.txt` and their attestations that `.github/workflows/release.yml` builds from a version tag.
+
+**Never move a published tag; ship a new patch version.** Once `vX.Y.Z` is pushed, it names that commit for good, even when the release turns out broken. Fix it in `vX.Y.(Z+1)`, and say in the old release's notes which version replaces it. Do not delete or replace the old release's files. A moved tag means two people who installed "the same version" ran different code, and it invalidates the checksums and attestations they relied on. With the tag ruleset and immutable releases switched on ([docs/release-hardening.md](docs/release-hardening.md)), GitHub refuses the move anyway.
+
+1. Set the version in `package.json`, merge to `main` and wait for CI to pass on all three systems.
+2. Tag the merge commit and push only that tag: `git tag vX.Y.Z <commit>` and then `git push origin vX.Y.Z`. The workflow stops if the tag and `package.json` disagree.
+3. The workflow runs the full suite, builds the six binaries, attests every file and publishes the release. It never creates or moves a tag.
+4. Check one file: `gh attestation verify zaafpulse-X.Y.Z-linux-x64 --repo rifqifitriady/ZAAFPulse`.
+
+How the build is kept honest:
+
+- Only files tracked by git are packed. `build-single.js` stops when a file that would ship has uncommitted changes. `--allow-dirty` exists for local test builds only.
+- Each binary carries the SHA-256 of every packed file. On every start it checks the unpacked copy in the cache folder against those hashes, and restores any file that changed, is missing or was added before running anything. This costs about 6 ms per start.
+- postject, the only build tool from npm, is an exact `devDependency` in `package-lock.json`. Run `npm ci` before a local build. The app itself still has no runtime dependencies.
+- The workflows pin every action by commit SHA, with its release in a comment, and Node to an exact version, which is the version the binaries embed. To update:
+  - Node: change `node-version` in both `ci.yml` and `release.yml`.
+  - An action: look up the release's commit with `gh api repos/actions/checkout/commits/v7.0.1 --jq .sha` (replace the action and version), then update the SHA and the comment together.
+  - postject: `npm install --save-dev --save-exact postject@<version>`.
 
 By contributing, you agree that your contribution is licensed under the [MIT License](LICENSE) and that you will follow the [Code of Conduct](CODE_OF_CONDUCT.md).
