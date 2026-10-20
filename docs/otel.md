@@ -108,7 +108,7 @@ When `config.json` does not set a value, the standard variables are used:
 | `OTEL_BSP_MAX_QUEUE_SIZE`, `OTEL_BSP_MAX_EXPORT_BATCH_SIZE`, `OTEL_BSP_SCHEDULE_DELAY` | batching |
 | `OTEL_SDK_DISABLED=true` | forces export off |
 
-The variables never turn export on by themselves: `"enabled": true` in `config.json` is always needed, so an `OTEL_EXPORTER_OTLP_ENDPOINT` set in your shell for other tools does not start sending ZAAFPulse data.
+Export is on when `config.json` has `"enabled": true`, or when `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is set, which is handy in Docker. If your shell sets one of these for other tools and ZAAFPulse should not send, put `"otel": { "enabled": false }` in `config.json` or set `OTEL_SDK_DISABLED=true`.
 
 ### Trace context
 
