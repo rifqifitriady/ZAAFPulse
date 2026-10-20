@@ -1,10 +1,19 @@
 # Release hardening: tag rules and immutable releases
 
-Two repository settings make a published release permanent. **Neither one is switched on yet.** The repository owner runs the commands below once, from a shell where `gh` is signed in with admin rights on `rifqifitriady/ZAAFPulse` (the `repo` scope is enough). Run both before the next version tag is pushed.
+Two repository settings make a published release permanent. **Both were switched on on 2026-10-20** with the commands below, run once from a shell where `gh` is signed in with admin rights on `rifqifitriady/ZAAFPulse` (the `repo` scope is enough). They are kept here so the settings can be checked, recreated or undone.
+
+Applied on 2026-10-20 and checked right after:
+
+| Setting | Check | Result |
+|---|---|---|
+| Tag ruleset "Release tags are permanent" (id 25452193) | `gh api repos/rifqifitriady/ZAAFPulse/rulesets/25452193 --jq '{target, enforcement, include: .conditions.ref_name.include, rules: [.rules[].type], bypass: .bypass_actors}'` | `{"bypass":[],"enforcement":"active","include":["refs/tags/v*"],"rules":["update","deletion","non_fast_forward"],"target":"tag"}` |
+| Immutable releases | `gh api repos/rifqifitriady/ZAAFPulse/immutable-releases` | `{"enabled":true,"enforced_by_owner":false}` |
+
+Releases v1.0.0 to v1.0.3 were published before the switch and stay `immutable: false`.
 
 Why this matters: the `v1.0.3` tag was moved after the release was published (from `1306279` to `f2b198d`). Anyone who checked out the tag before the move got different code than people who checked it out after, and nothing in GitHub stopped it. The release workflow now refuses to create tags (`gh release create --verify-tag`). The two settings below stop the remaining cases: a person or a token moving or deleting a tag, and release files being swapped after publication.
 
-## State on 2026-10-20 (read-only checks)
+## State on 2026-10-20 before the change (read-only checks)
 
 | Check | Command | Result |
 |---|---|---|
