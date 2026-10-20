@@ -234,3 +234,17 @@ test('signals: the Claude parser keeps injection categories and grades correctio
     [Date.parse(at(5))],
   );
 });
+
+test('secretSpans: positions match the masked value, placeholders are skipped', () => {
+  const alphabet = 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789';
+  const key = 'sk-' + 'ant-api03-' + Array.from({ length: 48 }, (_, i) => alphabet[(i * 7) % alphabet.length]).join('');
+  const text = `use ${key} now`;
+  const [m, ...rest] = sig.secretSpans(text);
+  assert.equal(rest.length, 0);
+  assert.equal(text.slice(m.start, m.end), key);
+  assert.deepEqual([m.label], sig.scanSecrets(text));
+  assert.deepEqual(sig.secretSpans('sk-ant-your-key-here-xxxxxxxxxxxxxxxxxxxx'), []);
+  const db = 'postgres://app:' + 'Tr0ub4dor3x' + '@db.local/app';
+  const [d] = sig.secretSpans(db);
+  assert.equal(db.slice(d.start, d.end), 'Tr0ub4dor3x');
+});
