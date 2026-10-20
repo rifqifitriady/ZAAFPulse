@@ -1,0 +1,38 @@
+# Runs the whole test suite on Linux, macOS and Windows for every push and pull request to main.
+# The release workflow calls it too (workflow_call), so a tag is only built when the suite passes.
+# Actions are pinned by commit SHA (the comment names the release); Node is pinned to the exact version
+# the single-file binaries embed. Update both together with release.yml.
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false # report every OS, not just the first failure
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.21.0
+          package-manager-cache: false
+      # No npm install: the app and its tests have no dependencies.
+      - name: Test suite
+        shell: bash
+        run: |
+          export ZAAFPULSE_DATA="$RUNNER_TEMP/zp-data" HOME="$RUNNER_TEMP/zp-home"
+          mkdir -p "$ZAAFPULSE_DATA" "$HOME"
+          node --test test/*.test.js
+      - run: node bin/zaafpulse.js doctor
