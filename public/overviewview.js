@@ -35,6 +35,9 @@ function viewOverview() {
   const unpriced = d.unpriced.length
     ? ` ${d.unpriced.length} model${d.unpriced.length > 1 ? 's have' : ' has'} no price set (${d.unpriced.slice(0, 3).map(esc).join(', ')}${d.unpriced.length > 3 ? '…' : ''}), so their cost shows as $0.`
     : '';
+  const estimated = (d.estimated || []).length
+    ? ` ${d.estimated.slice(0, 3).map(esc).join(', ')} ${d.estimated.length > 1 ? 'are' : 'is'} priced as an estimate (the logs name no model).`
+    : '';
   const squad = squadCards(6);
   const dSum = (f) => d.daily.map((r) => SERIES.reduce((a, s) => a + r[s.id][f], 0)); // daily series for the card sparklines
   let mtdRun = 0;
@@ -60,7 +63,7 @@ function viewOverview() {
     `Here's how AI has been working on this machine over the ${rangeText()}.`,
     `<span class="pill">${icon('calendar', 14)}${today}</span>`,
   )}
-  <div class="notice">${icon('alert')}<div><b>Cost is an API-equivalent estimate</b> at list price per token. On a Claude Max or ChatGPT plan you are not billed per token.${unpriced}</div><a href="#settings">Edit prices ${icon('external', 12)}</a></div>
+  <div class="notice">${icon('alert')}<div><b>Cost is an API-equivalent estimate</b> at list price per token. On a Claude Max or ChatGPT plan you are not billed per token.${unpriced}${estimated}</div><a href="#settings">Edit prices ${icon('external', 12)}</a></div>
 
   <section class="holo stage">
     <canvas id="ov-scene" aria-label="3D city of daily AI usage: one tower per day, front row Claude Code, back row Codex; the back walls show month-to-date spend and calls by hour"></canvas>
