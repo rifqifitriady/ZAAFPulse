@@ -51,3 +51,49 @@ test('lines longer than the read buffer are joined', async () => {
   assert.equal(lines[0].text.length, 5000);
   assert.equal(lines[1].start, 5001);
 });
+
+test('with end on a line boundary, the huge line after it is never read', async () => {
+  const f = tmp('{"a":1}\n{"b":2}\n');
+  // two small lines, then a 50 MB line with no newline (sparse file)
+  const size = fs.statSync(f).size;
+  fs.truncateSync(f, size + 50 * 1024 * 1024);
+  const made = [];
+  const orig = fs.createReadStream;
+  fs.createReadStream = (...a) => {
+    const s = orig(...a);
+    made.push(s);
+    return s;
+  };
+  try {
+    const lines = await all(readLines(f, { start: 0, end: 16 }));
+    assert.deepEqual(
+      lines.map((l) => l.text),
+      ['{"a":1}', '{"b":2}'],
+    );
+  } finally {
+    fs.createReadStream = orig;
+  }
+  assert.equal(made.length, 1);
+  assert.ok(made[0].bytesRead < 8 * 1024 * 1024, `read ${made[0].bytesRead} bytes`);
+});
+
+test('an empty or reversed range reads nothing', async () => {
+  const f = tmp('a\nb\n');
+  assert.deepEqual(await all(readLines(f, { start: 2, end: 2 })), []);
+  assert.deepEqual(await all(readLines(f, { start: 2, end: 1 })), []);
+});
+
+test('maxLine stops a line that is too long with a 413 instead of buffering it', async () => {
+  const f = tmp('ok\n' + 'x'.repeat(5000));
+  const got = [];
+  await assert.rejects(
+    (async () => {
+      for await (const l of readLines(f, { highWaterMark: 1024, maxLine: 2000 })) got.push(l.text);
+    })(),
+    { status: 413 },
+  );
+  assert.deepEqual(got, ['ok']);
+  const g = tmp('x'.repeat(100) + '\n');
+  await assert.rejects(all(readLines(g, { maxLine: 50 })), { status: 413 });
+  assert.equal((await all(readLines(g, { maxLine: 100 }))).length, 1);
+});

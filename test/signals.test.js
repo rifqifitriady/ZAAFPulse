@@ -248,3 +248,22 @@ test('secretSpans: positions match the masked value, placeholders are skipped', 
   const [d] = sig.secretSpans(db);
   assert.equal(db.slice(d.start, d.end), 'Tr0ub4dor3x');
 });
+
+test('secretSpans: overlapping matches merge into their union, and matchStart marks the whole match', () => {
+  const alphabet = 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789';
+  const body = (n) => Array.from({ length: n }, (_, i) => alphabet[(i * 7) % alphabet.length]).join('');
+  // an Anthropic-shaped key whose body is a JWT: the key pattern stops at the first dot, the JWT runs past it
+  const jwt = 'eyJ' + body(20) + '.eyJ' + body(20) + '.' + body(30);
+  const key = 'sk-' + 'ant-' + jwt;
+  const text = `x ${key} y`;
+  const spans = sig.secretSpans(text);
+  assert.equal(spans.length, 1);
+  for (let i = 1; i < spans.length; i++) assert.ok(spans[i].start >= spans[i - 1].end, 'spans never overlap');
+  const hit = spans.find((s) => text.slice(s.start, s.end).startsWith('sk-ant-'));
+  assert.equal(hit.label, 'Anthropic API key');
+  assert.ok(text.slice(hit.start, hit.end).endsWith(key.slice(-8)), 'the JWT tail is inside the span');
+  const db = 'see postgres://app:' + 'Tr0ub4dor3x' + '@db.local/app';
+  const [d] = sig.secretSpans(db);
+  assert.equal(d.matchStart, db.indexOf('postgres'));
+  assert.equal(db.slice(d.start, d.end), 'Tr0ub4dor3x');
+});

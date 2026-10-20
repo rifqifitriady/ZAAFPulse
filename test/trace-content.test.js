@@ -39,6 +39,15 @@ function outsideDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'zp-outside-'));
 }
 
+// A saved-output marker that cannot be followed gives back the original content plus the reason.
+async function unfollowed(c, ref, status, msg) {
+  const r = await c.read(ref);
+  assert.equal(r.saved && r.saved.status, status, JSON.stringify(r.saved));
+  assert.match(r.text, /saved to|Full output saved/, 'the original content is returned');
+  if (msg) assert.match(r.saved.error, msg);
+  return r;
+}
+
 test('prompt text comes back as plain text (HTML is not interpreted here)', async () => {
   const { root, file, off } = fixture();
   const c = createContent({ roots: [root] });
@@ -230,7 +239,7 @@ test('a saved path outside the session tool-results folder is refused with 403',
   fs.writeFileSync(path.join(f.proj, f.sid, 'sibling.txt'), 'sibling');
   for (const p of bad) {
     const off = f.write(p);
-    await assert.rejects(c.read({ f: f.transcript, s: off[1][0], e: off[1][1], k: 'tool_output', i: 't1' }), { status: 403 }, p);
+    await unfollowed(c, { f: f.transcript, s: off[1][0], e: off[1][1], k: 'tool_output', i: 't1' }, 403);
   }
 });
 
@@ -243,7 +252,7 @@ test('a symlink inside tool-results that leads out is refused with 403', { skip:
   fs.symlinkSync(evil, link);
   const off = f.write(link);
   const c = createContent({ roots: [f.root] });
-  await assert.rejects(c.read({ f: f.transcript, s: off[1][0], e: off[1][1], k: 'tool_output', i: 't1' }), { status: 403 });
+  await unfollowed(c, { f: f.transcript, s: off[1][0], e: off[1][1], k: 'tool_output', i: 't1' }, 403);
 });
 
 test('a relative saved path is refused, and a missing saved file is a 404', async () => {
@@ -254,7 +263,7 @@ test('a relative saved path is refused, and a missing saved file is a 404', asyn
   // not a saved-output marker we trust: the marker sentence itself comes back as text
   assert.match(rel.text, /Output has been saved to tool-results/);
   off = f.write(path.join(f.trDir, 'gone.txt'));
-  await assert.rejects(c.read({ f: f.transcript, s: off[1][0], e: off[1][1], k: 'tool_output', i: 't1' }), { status: 404 });
+  await unfollowed(c, { f: f.transcript, s: off[1][0], e: off[1][1], k: 'tool_output', i: 't1' }, 404);
 });
 
 test('a saved output over 16 MB is refused with 413', async () => {
@@ -264,7 +273,7 @@ test('a saved output over 16 MB is refused with 413', async () => {
   fs.truncateSync(saved, 16 * 1024 * 1024 + 1);
   const off = f.write(saved);
   const c = createContent({ roots: [f.root] });
-  await assert.rejects(c.read({ f: f.transcript, s: off[1][0], e: off[1][1], k: 'tool_output', i: 't1' }), { status: 413, message: /saved output too large/ });
+  await unfollowed(c, { f: f.transcript, s: off[1][0], e: off[1][1], k: 'tool_output', i: 't1' }, 413, /saved output too large/);
 });
 
 test('the marker is only honoured for tool_output', async () => {
@@ -336,9 +345,149 @@ test('a subagent marker pointing at another session or its own subagents folder 
   fs.writeFileSync(L.other, 'other body');
   fs.writeFileSync(path.join(path.dirname(L.sub), 'agent-y.txt'), 'sub body');
   const c = createContent({ roots: [L.root] });
-  await assert.rejects(c.read(L.put(L.sub, markerB(L.other))), { status: 403 });
-  await assert.rejects(c.read(L.put(L.main, markerB(L.other))), { status: 403 });
-  await assert.rejects(c.read(L.put(L.sub, markerB(path.join(path.dirname(L.sub), 'agent-y.txt')))), { status: 403 });
+  await unfollowed(c, L.put(L.sub, markerB(L.other)), 403);
+  await unfollowed(c, L.put(L.main, markerB(L.other)), 403);
+  await unfollowed(c, L.put(L.sub, markerB(path.join(path.dirname(L.sub), 'agent-y.txt'))), 403);
   // the folder itself and the transcript folder above it are not files to serve either
-  await assert.rejects(c.read(L.put(L.sub, markerB(path.dirname(L.own)))), { status: 403 });
+  await unfollowed(c, L.put(L.sub, markerB(path.dirname(L.own))), 403);
+});
+
+// --- masking is computed on the whole field, never per page ---
+
+function oneLine(content) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-content-'));
+  const file = path.join(root, 's.jsonl');
+  fs.writeFileSync(file, JSON.stringify({ type: 'user', message: { role: 'user', content } }) + '\n');
+  return { root, ref: { f: file, s: 0, e: 0, k: 'prompt' }, c: createContent({ roots: [root] }) };
+}
+
+async function readAll(c, ref) {
+  const pages = [];
+  for (let off = 0, p; off !== null; off = p.next) {
+    p = await c.read(ref, { offset: off });
+    pages.push(p);
+  }
+  return pages;
+}
+
+test('a database password that straddles a page end is masked on both sides of the cut', async () => {
+  const pw = 'Tr0ub4dor3xQz';
+  for (const cut of [4, 8, 12]) {
+    // the page end falls `cut` characters into the password
+    const prefix = ' postgres://app:';
+    const pad = 'y'.repeat(PAGE_LEN - prefix.length - cut);
+    const { ref, c } = oneLine(pad + prefix + pw + '@db.local/app tail');
+    const pages = await readAll(c, ref);
+    const joined = pages.map((p) => p.text).join('');
+    assert.ok(!joined.includes(pw.slice(0, 6)) && !joined.includes(pw.slice(-6)), `cut ${cut}: ${joined.slice(-60)}`);
+    assert.equal(pages.reduce((n, p) => n + p.masked.length, 0), 1, `cut ${cut}`);
+    assert.ok(joined.includes('@db.local/app tail'), 'the host stays readable');
+  }
+});
+const PAGE_LEN = 65536;
+
+test('an arbitrary offset inside a secret still masks the part that is visible', async () => {
+  const secret = makeSecret();
+  const { ref, c } = oneLine(`before ${secret} after`);
+  const at = 'before '.length;
+  for (const skip of [1, 5, 20, secret.length - 3]) {
+    const r = await c.read(ref, { offset: at + skip });
+    assert.ok(!r.text.includes(secret.slice(skip, skip + 6)), `skip ${skip}: ${r.text}`);
+    assert.equal(r.masked.length, 1);
+    assert.equal((await c.reveal(ref, 0, { offset: at + skip })).value, secret);
+  }
+  // a short page that would end inside the secret stops before it; one that starts at it masks its part
+  const before = await c.read(ref, { offset: 0, max: at + 10 });
+  assert.equal(before.text, 'before ');
+  assert.equal(before.next, at);
+  const r = await c.read(ref, { offset: at, max: 10 });
+  assert.ok(!r.text.includes('sk-ant'), r.text);
+  assert.equal(r.masked.length, 1);
+});
+
+test('masked[i] and reveal(i) refer to the same secrets, in order', async () => {
+  const a = makeSecret();
+  const b = 'postgres://app:' + 'Tr0ub4dor3x' + '@db.local/app';
+  const { ref, c } = oneLine(`one ${a} two ${b} three`);
+  const r = await c.read(ref);
+  assert.deepEqual(r.masked.map((m) => m.label), ['Anthropic API key', 'Database URL with password']);
+  assert.equal((await c.reveal(ref, 0)).value, a);
+  assert.equal((await c.reveal(ref, 1)).value, 'Tr0ub4dor3x');
+  assert.ok(r.text.includes('postgres://app:'));
+});
+
+test('an offset past the end of the text is a 400, the end itself is an empty page', async () => {
+  const { ref, c } = oneLine('hello');
+  await assert.rejects(c.read(ref, { offset: 6 }), { status: 400 });
+  const r = await c.read(ref, { offset: 5 });
+  assert.equal(r.text, '');
+  assert.equal(r.next, null);
+});
+
+// --- markers: anchored, linear, and never hiding the content ---
+
+test('a marker quoted inside a normal tool output does not redirect it', async () => {
+  const f = sessionFixture();
+  const saved = path.join(f.trDir, 'out.txt');
+  fs.writeFileSync(saved, 'file body');
+  const text = `ls shows: Error: result (1 characters across 1 lines) exceeds maximum allowed tokens. Output has been saved to ${saved}.\nand also Full output saved to: ${saved}\n`;
+  const l = toolLines(text);
+  fs.writeFileSync(f.transcript, l.join(''));
+  const off = offsets(l);
+  const c = createContent({ roots: [f.root] });
+  const r = await c.read({ f: f.transcript, s: off[1][0], e: off[1][1], k: 'tool_output', i: 't1' });
+  assert.equal(r.text, text);
+  assert.equal(r.saved, undefined);
+});
+
+test('a megabyte of repeated marker text does not stall the reader', async () => {
+  const f = sessionFixture();
+  const text = 'Output has been saved to '.repeat(Math.ceil((1024 * 1024) / 25));
+  const l = toolLines(text);
+  fs.writeFileSync(f.transcript, l.join(''));
+  const off = offsets(l);
+  const c = createContent({ roots: [f.root] });
+  const t0 = Date.now();
+  const r = await c.read({ f: f.transcript, s: off[1][0], e: off[1][1], k: 'tool_output', i: 't1' });
+  assert.ok(Date.now() - t0 < 200, `took ${Date.now() - t0} ms`);
+  assert.equal(r.total, text.length);
+  // the same text behind a real header is still bounded
+  const longHeader = 'Error: result (' + 'x'.repeat(2000) + ') exceeds maximum allowed tokens. Output has been saved to /nope.';
+  const l2 = toolLines(longHeader);
+  fs.writeFileSync(f.transcript, l2.join(''));
+  const o2 = offsets(l2);
+  assert.equal((await c.read({ f: f.transcript, s: o2[1][0], e: o2[1][1], k: 'tool_output', i: 't1' })).text, longHeader);
+});
+
+test('a tool-results folder that is itself a link to another session is refused', { skip: process.platform === 'win32' }, async () => {
+  const L = layout();
+  fs.writeFileSync(L.other, 'other body');
+  const real = path.join(path.dirname(L.main), 'sess-main', 'tool-results');
+  fs.rmSync(real, { recursive: true });
+  fs.symlinkSync(path.join(path.dirname(L.main), 'sess-other', 'tool-results'), real);
+  const c = createContent({ roots: [L.root] });
+  await unfollowed(c, L.put(L.main, markerB(path.join(real, 'other.txt'))), 403);
+});
+
+// --- size caps, lazy roots ---
+
+test('every kind refuses a range or line over 16 MB with 413', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-content-'));
+  const file = path.join(root, 'big.jsonl');
+  fs.writeFileSync(file, '');
+  fs.truncateSync(file, 17 * 1024 * 1024); // sparse, one 17 MB line with no newline
+  const c = createContent({ roots: [root] });
+  for (const k of ['raw', 'reply', 'tool_input', 'tool_output'])
+    await assert.rejects(c.read({ f: file, s: 0, e: 17 * 1024 * 1024, k, i: 'x' }), { status: 413 }, k);
+  await assert.rejects(c.read({ f: file, s: 0, e: 0, k: 'prompt' }), { status: 413 });
+});
+
+test('a root that is created after the reader was made is honoured', async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-content-'));
+  const later = path.join(base, 'sessions');
+  const c = createContent({ roots: [later] });
+  fs.mkdirSync(later);
+  const file = path.join(later, 'a.jsonl');
+  fs.writeFileSync(file, '{"x":1}\n');
+  assert.equal((await c.read({ f: file, s: 0, e: 7, k: 'raw' })).text, '{"x":1}');
 });
