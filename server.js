@@ -26,6 +26,7 @@ const {
   keychainStore,
 } = require('./lib/integration-config');
 const { createGateway } = require('./lib/gateway');
+const { createTrace } = require('./lib/trace');
 const { createPriceSync } = require('./lib/price-sync');
 const { createOpenRouter } = require('./lib/openrouter');
 const { createIntegrations } = require('./lib/integrations');
@@ -235,6 +236,22 @@ const gateway = createGateway({
   trustProxy: process.env.ZAAFPULSE_TRUST_PROXY === '1',
 });
 
+// Trace explorer: every log source behind opaque keys and ids. Content (prompts, replies, tool output) is off
+// when asked for, and by default in server mode, where other people may sign in. Demo reads no real files.
+const contentOff =
+  process.env.ZAAFPULSE_CONTENT === 'off' || (SERVER_MODE && process.env.ZAAFPULSE_CONTENT !== 'on');
+const trace = createTrace({
+  demo: DEMO,
+  contentOff,
+  ...(DEMO
+    ? {}
+    : {
+        indexer,
+        gateway,
+        roots: [require('./lib/claude').ROOT, require('./lib/codex').ROOT, path.join(DIR, '.data')],
+      }),
+});
+
 // Second brain sources: Obsidian by default, plus Logseq, Notion, Tana, Roam, mem.ai, Reflect, Heybrain,
 // PARA folders, the RAG knowledge bases and vector databases. Settings in config.json under "brain";
 // tokens in the Keychain as acc.brain-<id>.
@@ -340,6 +357,15 @@ function send(res, status, body, type = 'application/json') {
   res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', ...SECURITY_HEADERS });
   res.end(type === 'application/json' ? JSON.stringify(body) : body);
 }
+
+// A trace error reaches the client with its status and path-free message; anything else is a plain 500.
+function traceError(res, e) {
+  const status = e && e.status;
+  if (Number.isInteger(status) && status >= 400 && status <= 599) return send(res, status, { error: e.message });
+  return send(res, 500, { error: 'trace read failed' });
+}
+// A query value that must be a whole number >= 0 (an offset or turn): undefined when absent, NaN when bad.
+const wholeParam = (v) => (v == null || v === '' ? undefined : /^\d{1,15}$/.test(v) ? Number(v) : NaN);
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -500,6 +526,54 @@ const handler = async (req, res) => {
       }[url.searchParams.get('section')];
       if (!fn) return send(res, 404, { error: 'unknown section' });
       return send(res, 200, { configured: true, id: router.id(), data: await fn() });
+    }
+    // Trace & Session Explorer: sessions of every source, one session as spans, and their text on request.
+    // Behind the sign-in above, so a gateway API key never reaches it. Ids are opaque; no path leaves here.
+    if (url.pathname.startsWith('/api/trace/')) {
+      const route = url.pathname.slice('/api/trace/'.length);
+      const q = url.searchParams;
+      const post = route === 'reveal';
+      if (!['sources', 'sessions', 'session', 'title', 'content', 'reveal', 'live'].includes(route))
+        return send(res, 404, { error: 'unknown route' });
+      if (req.method !== (post ? 'POST' : 'GET')) return send(res, 405, { error: 'method not allowed' });
+      try {
+        if (route === 'sources') return send(res, 200, trace.sources());
+        if (route === 'sessions') {
+          const days = parseInt(q.get('range'), 10);
+          const range = Number.isNaN(days) ? 7 : Math.min(30, Math.max(1, days));
+          const rows = trace.sessions({
+            range,
+            source: q.get('source') || undefined,
+            q: q.get('q') || undefined,
+            flags: q.get('flags') || undefined,
+          });
+          return send(res, 200, { sessions: rows });
+        }
+        if (route === 'session')
+          return send(res, 200, await trace.session(q.get('key'), { turn: wholeParam(q.get('turn')) }));
+        if (route === 'title') return send(res, 200, { title: await trace.title(q.get('key')) });
+        if (route === 'content')
+          return send(res, 200, await trace.content(q.get('id'), { offset: wholeParam(q.get('offset')) }));
+        if (route === 'live') return send(res, 200, await trace.live(q.get('key'), q.get('cursor') || undefined));
+        // reveal: the one place a secret leaves, one value per call, so it needs JSON like every state change.
+        if (!(req.headers['content-type'] || '').startsWith('application/json'))
+          return send(res, 415, { error: 'json only' });
+        let body;
+        try {
+          body = JSON.parse(await readBody(req));
+        } catch (err) {
+          return send(res, err.message === 'too large' ? 413 : 400, { error: 'bad request body' });
+        }
+        if (!body || typeof body !== 'object' || Array.isArray(body))
+          return send(res, 400, { error: 'bad request body' });
+        const { id, index, offset } = body;
+        if (index !== undefined && !Number.isInteger(index)) return send(res, 400, { error: 'mask index required' });
+        if (offset !== undefined && !(Number.isInteger(offset) && offset >= 0))
+          return send(res, 400, { error: 'bad offset' });
+        return send(res, 200, await trace.reveal(id, index, { offset }));
+      } catch (err) {
+        return traceError(res, err);
+      }
     }
     if (url.pathname === '/api/logs') {
       return send(res, 200, DEMO ? reqlogs.demoLogs() : reqlogs.logs());
