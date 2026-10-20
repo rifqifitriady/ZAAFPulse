@@ -13,7 +13,7 @@ You do not need to get everything below right, and it is fine if this is your fi
 
 ## Getting set up
 
-You need Node.js 18 or newer and nothing else. ZAAFPulse has no npm dependencies.
+You need Node.js 18 or newer and nothing else. ZAAFPulse has no runtime dependencies: the only npm package is postject, a pinned `devDependency` used only to build the single-file binaries (see [Releases](#releases)).
 
 Fork the repository, then:
 
@@ -57,7 +57,7 @@ docs/                install guide, integrations, README media
 
 1. **Data stays on the machine.** Nothing is sent anywhere except to providers, sources and integrations the user configured. Request logs keep counts and timings, never prompt or note text. No telemetry and no analytics.
 2. **Secrets never touch disk in plain text.** `config.json` holds references only (`{ "keychain": … }` or `{ "env": … }`), and values go through `lib/secret-store.js`. Never log a secret, put it in an error message (use `secrets.mask`), pass it on a command line, or write it into a service file.
-3. **No dependencies.** Use Node's standard library and the browser's APIs. If you think a package is truly needed, open an issue first.
+3. **No runtime dependencies.** Use Node's standard library and the browser's APIs. If you think a package is truly needed, open an issue first.
 4. **The numbers have to be true.** Usage, cost and quality figures come from what the logs actually say. A metric that only looks plausible is a bug.
 5. **Safe by default.** The server listens on 127.0.0.1. Anything reachable from the network requires sign-in or an API key. A change that writes to a user's files (coding-tool configs, MCP client configs, skills) needs an explicit click or command, plus a backup or revert.
 

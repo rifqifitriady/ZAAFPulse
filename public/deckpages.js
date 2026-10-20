@@ -218,11 +218,11 @@ function viewIntegrationsPage() {
   const busiest = Object.entries(callsBy).sort((a, b) => b[1] - a[1])[0];
   const okCalls = calls.filter((c) => c.ok).length;
   return `<div class="holo-deck">
-    ${subHero('INTEGRATIONS', 'MCP connections', `${by('ok')} of ${list.length} connected. AI clients reach these through <code>ai-command-center</code>. Add, configure and test them here; changes are saved to config.json.`, `<span class="pill">${icon('refresh', 14)}Checked ${ago(integ.at)}</span><button class="btn" type="button" data-ig-add>+ Add integration</button>`)}
+    ${subHero('INTEGRATIONS', 'MCP connections', `${by('ok')} of ${list.length} connected. AI clients reach these through <code>zaafpulse</code>. Add, configure and test them here; changes are saved to config.json.`, `<span class="pill">${icon('refresh', 14)}Checked ${ago(integ.at)}</span><button class="btn" type="button" data-ig-add>+ Add integration</button>`)}
     ${workStage(
       'ig-scene',
       'INTEGRATION HUB',
-      'Centre = the ai-command-center MCP server · ring = integrations (height = tools, color = health) · left = AI clients · pulses = recent tool calls · hover a node',
+      'Centre = the zaafpulse MCP server · ring = integrations (height = tools, color = health) · left = AI clients · pulses = recent tool calls · hover a node',
       '3D map of the MCP hub, its integrations and the clients registered to it',
       Object.entries({ ok: 'Connected', error: 'Error', unchecked: 'Not checked', disabled: 'Disabled' })
         .map(([k, l]) => `<span><i style="background:${INTEG_NEON[k]}"></i>${l}</span>`)
@@ -459,13 +459,13 @@ function mountIntegrations() {
           label: `${cl.c.name} · ${cl.c.registered ? 'registered' : 'not registered'}`,
           color: cl.c.registered ? '#5b8cff' : HOLO.muted,
           html: () =>
-            `<b>${esc(cl.c.name)}</b><div class="row"><span>Status</span><span>${cl.c.registered ? 'Registered' : 'Not registered'}</span></div><div class="row"><span>Config</span><span>${esc(cl.c.file)}</span></div>`,
+            `<b>${esc(cl.c.name)}</b><div class="row"><span>Status</span><span>${cl.c.registered ? 'Registered' : cl.c.detected === false ? 'Not installed' : 'Not registered'}</span></div><div class="row"><span>Config</span><span>${esc(cl.c.file)}</span></div>`,
         });
       }
       items.sort((a, b) => a.depth - b.depth).forEach((it) => it.draw());
       g.particles();
       g.labels([
-        { at: P(hub[0] + 0.4, 0.55, hub[1] + 0.4), text: 'ai-command-center · MCP hub', color: '#4de8ff' },
+        { at: P(hub[0] + 0.4, 0.55, hub[1] + 0.4), text: 'zaafpulse · MCP hub', color: '#4de8ff' },
         ...pts.map((p) => ({ at: p.at, text: p.label, color: p.color })),
       ]);
       hoverTip(g, pts, hov);

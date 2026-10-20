@@ -10,7 +10,7 @@ const path = require('path');
 const os = require('os');
 const { Indexer } = require('./lib/indexer');
 const { summarize } = require('./lib/aggregate');
-const { DEFAULT_PRICING } = require('./lib/pricing');
+const { DEFAULT_PRICING, SNAPSHOT_META } = require('./lib/pricing');
 const processes = require('./lib/processes');
 const { getVault } = require('./lib/vault');
 const { createBrain } = require('./lib/brain');
@@ -291,6 +291,7 @@ function clientRows() {
     name: c.name,
     file: c.file.replace(os.homedir(), '~'),
     registered: DEMO ? id !== 'kiro' : register.isRegistered(c.file),
+    detected: DEMO || register.detected(c), // false: the app is not on this machine ("Not installed")
     command: `npm run mcp:register -- ${id}`,
   }));
 }
@@ -631,6 +632,7 @@ const handler = async (req, res) => {
         manual: config.manualPricing,
         effective: config.pricing,
         source: config.pricingSource,
+        snapshot: SNAPSHOT_META, // where and when the offline list was taken, for "snapshot" prices
         demo: DEMO,
       });
     }
