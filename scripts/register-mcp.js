@@ -16,16 +16,36 @@ const KEEP_BACKUPS = 3;
 
 // Every client with its config file. "home" given without "env" (tests) never reads this machine's variables, so a
 // test can never reach a real config through CODEX_HOME, APPDATA or XDG_CONFIG_HOME.
+// Paths follow each vendor's documentation (docs/integrations.md lists the sources).
 function clients(home, { env, platform = process.platform } = {}) {
   const e = env || (home == null ? process.env : {});
   const h = home == null ? os.homedir() : home;
-  const j = (...p) => path.join(h, ...p);
-  const claudeDir = e.CLAUDE_CONFIG_DIR ? path.resolve(expandHome(e.CLAUDE_CONFIG_DIR)) : null;
+  const P = platform === 'win32' ? path.win32 : path.posix;
+  const j = (...p) => P.join(h, ...p);
+  const abs = (p) => P.resolve(expandHome(p));
+  const appData = e.APPDATA || j('AppData', 'Roaming');
+  const xdg = e.XDG_CONFIG_HOME || j('.config');
+  // An app's per-user folder: ~/Library/Application Support on macOS, %APPDATA% on Windows, ~/.config on Linux.
+  const appDir = (...p) =>
+    platform === 'darwin'
+      ? j('Library', 'Application Support', ...p)
+      : platform === 'win32'
+        ? P.join(appData, ...p)
+        : P.join(xdg, ...p);
+  const claudeDir = e.CLAUDE_CONFIG_DIR ? abs(e.CLAUDE_CONFIG_DIR) : null;
+  const codexHome = e.CODEX_HOME ? abs(e.CODEX_HOME) : j('.codex');
+  // Windsurf became Devin Desktop (June 2026); its docs now name ~/.config/devin. A Windsurf install that predates
+  // the rename keeps ~/.codeium/windsurf, which is used only when the new folder does not exist.
+  const devin = platform === 'win32' ? P.join(appData, 'devin') : P.join(xdg, 'devin');
+  const windsurf = j('.codeium', 'windsurf');
+  const zed =
+    platform === 'win32' ? P.join(appData, 'Zed') : platform === 'darwin' ? j('.config', 'zed') : P.join(xdg, 'zed');
+  const stdio = (m) => ({ type: 'stdio', ...m });
   return {
     claude: {
       name: 'Claude Code',
       kind: 'claude',
-      file: claudeDir ? path.join(claudeDir, '.claude.json') : j('.claude.json'),
+      file: claudeDir ? P.join(claudeDir, '.claude.json') : j('.claude.json'),
       cli: 'claude',
       detect: [claudeDir || j('.claude'), j('.claude.json')],
     },
@@ -35,6 +55,52 @@ function clients(home, { env, platform = process.platform } = {}) {
       kind: 'json',
       file: j('.gemini', 'config', 'mcp_config.json'),
       detect: [j('.gemini', 'config'), j('.gemini', 'antigravity')],
+    },
+    cursor: { name: 'Cursor', kind: 'json', file: j('.cursor', 'mcp.json'), shape: stdio, detect: [j('.cursor')] },
+    vscode: {
+      name: 'VS Code',
+      kind: 'json',
+      key: 'servers',
+      file: appDir('Code', 'User', 'mcp.json'),
+      shape: stdio,
+      jsonc: true,
+      detect: [appDir('Code')],
+    },
+    'claude-desktop': {
+      name: 'Claude Desktop',
+      kind: 'json',
+      file: appDir('Claude', 'claude_desktop_config.json'),
+      detect: [appDir('Claude')],
+    },
+    codex: {
+      name: 'Codex CLI',
+      kind: 'codex',
+      file: P.join(codexHome, 'config.toml'),
+      cli: 'codex',
+      detect: [codexHome],
+    },
+    gemini: {
+      name: 'Gemini CLI',
+      kind: 'json',
+      file: j('.gemini', 'settings.json'),
+      jsonc: true,
+      cli: 'gemini',
+      detect: [j('.gemini', 'settings.json')],
+    },
+    windsurf: {
+      name: 'Windsurf / Devin Desktop',
+      kind: 'json',
+      file: exists(devin) || !exists(windsurf) ? P.join(devin, 'mcp_config.json') : P.join(windsurf, 'mcp_config.json'),
+      detect: [devin, windsurf],
+    },
+    // Zed's settings.json is JSONC; it is edited only when it happens to be plain JSON.
+    zed: {
+      name: 'Zed',
+      kind: 'json',
+      key: 'context_servers',
+      file: P.join(zed, 'settings.json'),
+      jsonc: true,
+      detect: [zed],
     },
   };
 }
@@ -119,12 +185,26 @@ function readJson(file) {
   return { data, bom };
 }
 
-function isRegistered(file, key = 'mcpServers') {
+// Whether our entry is in a client's config. Takes a client from clients() or, as server.js passes it, a file path
+// (matched against this machine's clients so VS Code's "servers" and Codex's TOML are read the right way).
+function isRegistered(target, key) {
+  const c =
+    target && typeof target === 'object'
+      ? target
+      : Object.values(clients()).find((x) => x.file === target) || { kind: 'json', file: target };
+  let text = '';
   try {
-    const s = readJson(file).data[key];
-    return !!(s && s[NAME]);
+    text = fs.readFileSync(c.file, 'utf8').replace(/^﻿/, '');
   } catch {
     return false;
+  }
+  if (c.kind === 'codex') return tomlFind(text, NAME).start >= 0;
+  try {
+    const s = readJson(c.file).data[key || c.key || 'mcpServers'];
+    return !!(s && s[NAME]);
+  } catch {
+    // JSONC (comments, trailing commas) cannot be parsed here; the entry's key is a fair sign.
+    return !!c.jsonc && new RegExp(`"${NAME}"\\s*:`).test(text);
   }
 }
 
@@ -195,6 +275,17 @@ function plan(servers, want, remove) {
 }
 const verb = (p, remove) => (remove ? 'removed' : p.cur !== undefined ? 'updated' : 'registered');
 
+// Windows: claude and codex are .cmd files, which run through cmd.exe: quote any argument with spaces or cmd
+// characters (& | < > ^ ( ) % !), so a path stays one argument instead of starting another command.
+function runCli(o, cmd, args) {
+  const win = o.platform === 'win32';
+  o.exec(
+    cmd,
+    win ? args.map((x) => (/[\s&|<>^()%!"]/.test(String(x)) ? `"${String(x).replace(/"/g, '')}"` : String(x))) : args,
+    { stdio: 'inherit', ...(win ? { shell: true } : {}) },
+  );
+}
+
 // Claude Code: through its CLI (`claude mcp add|remove --scope user`); the state is read from ~/.claude.json.
 function runClaude(c, want, o) {
   let servers = {};
@@ -219,18 +310,9 @@ function runClaude(c, want, o) {
   if (o.dryRun) return shown.forEach((s) => o.log(`[dry-run] ${s}`));
   if (!o.which('claude')) return manual();
   backup(c.file);
-  const win = o.platform === 'win32';
   for (const args of steps) {
     try {
-      // Windows: claude is claude.cmd, which runs through cmd.exe: quote any argument with spaces or cmd
-      // characters (& | < > ^ ( ) % !), so a path stays one argument instead of starting another command.
-      o.exec(
-        'claude',
-        win
-          ? args.map((x) => (/[\s&|<>^()%!"]/.test(String(x)) ? `"${String(x).replace(/"/g, '')}"` : String(x)))
-          : args,
-        { stdio: 'inherit', ...(win ? { shell: true } : {}) },
-      );
+      runCli(o, 'claude', args);
     } catch (err) {
       if (err.code !== 'ENOENT') throw err;
       return manual();
@@ -243,11 +325,18 @@ function runClaude(c, want, o) {
 // File clients with a JSON object of servers under one key.
 function runJson(c, want, o) {
   const key = c.key || 'mcpServers';
-  const { data, bom } = readJson(c.file);
+  const entry = c.shape ? c.shape(want) : want;
+  let parsed;
+  try {
+    parsed = readJson(c.file);
+  } catch (err) {
+    if (!(err.invalidJson && c.jsonc)) throw err;
+    return o.log(manualJson(c, key, entry, o));
+  }
+  const { data, bom } = parsed;
   const found = data[key] == null ? {} : data[key];
   if (typeof found !== 'object' || Array.isArray(found)) throw new Error(`${c.file}: "${key}" is not an object`);
   const servers = { ...found };
-  const entry = c.shape ? c.shape(want) : want;
   const p = plan(servers, entry, o.remove);
   if (!p.set && !p.del && !p.legacy.length)
     return o.log(`${c.name}: already ${o.remove ? 'absent' : 'registered'} (${c.file})`);
@@ -272,7 +361,259 @@ function runJson(c, want, o) {
   if (p.set || p.del) o.log(`${c.name}: ${verb(p, o.remove)} (${c.file})`);
 }
 
-const RUNNERS = { claude: runClaude, json: runJson };
+// A JSONC file (VS Code, Zed, Gemini CLI allow comments) is never rewritten, since that would drop the comments:
+// say exactly what to add or remove instead.
+function manualJson(c, key, entry, o) {
+  const old = OLD_NAMES.map((n) => `"${n}"`).join(', ');
+  if (o.remove)
+    return `${c.name}: ${c.file} has comments or trailing commas, so it was left alone. Remove the "${NAME}" entry (and ${old} if present) from "${key}" yourself.`;
+  const lines = [
+    `${c.name}: ${c.file} has comments or trailing commas, so it was left alone. Add this under "${key}" yourself (and remove ${old} if present):`,
+    `  "${NAME}": ${JSON.stringify(entry)}`,
+  ];
+  if (c.key === 'servers')
+    lines.push(`or run:\n  ${showCmd('code', ['--add-mcp', JSON.stringify({ name: NAME, ...entry })], o.platform)}`);
+  return lines.join('\n');
+}
+
+// --- Codex CLI: $CODEX_HOME/config.toml (default ~/.codex) ---------------------------------------------------------
+// Without a TOML library the file is never re-serialised: only the [mcp_servers.<name>] table (and its sub-tables)
+// is cut out, replaced or appended, and every other byte stays as it was.
+
+// "a."b".c" -> ['a', 'b', 'c']
+const tomlKey = (raw) =>
+  (raw.match(/"(?:[^"\\]|\\.)*"|'[^']*'|[^.]+/g) || []).map((p) => {
+    const s = p.trim();
+    return s.startsWith('"') ? JSON.parse(s) : s.startsWith("'") ? s.slice(1, -1) : s;
+  });
+
+// Each [table] or [[array]] header, skipping lines inside multi-line strings and arrays, so a "[" there is not one.
+function tomlTables(text) {
+  const out = [];
+  let pos = 0;
+  let multi = null;
+  let depth = 0;
+  for (const line of text.split(/(?<=\n)/)) {
+    const m = !multi && depth === 0 && line.match(/^[ \t]*(\[\[?)\s*([^[\]\r\n]+?)\s*\]\]?[ \t]*(#.*)?\r?\n?$/);
+    if (m) out.push({ key: tomlKey(m[2]), start: pos, body: pos + line.length });
+    else {
+      for (const q of line.match(/"""|'''/g) || []) multi = !multi ? q : multi === q ? null : multi;
+      if (!multi) {
+        const bare = line.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '').replace(/#.*/, '');
+        depth = Math.max(0, depth + (bare.match(/[[{]/g) || []).length - (bare.match(/[\]}]/g) || []).length);
+      }
+    }
+    pos += line.length;
+  }
+  return out;
+}
+
+// key = value lines: strings, bare values (numbers, booleans; kept as written), arrays and inline tables.
+function tomlBody(s) {
+  let i = 0;
+  const ws = () => {
+    while (i < s.length)
+      if (/[ \t\r\n]/.test(s[i])) i++;
+      else if (s[i] === '#') while (i < s.length && s[i] !== '\n') i++;
+      else break;
+  };
+  const str = () => {
+    if (s.startsWith('"""', i) || s.startsWith("'''", i)) throw new Error('multi-line string');
+    if (s[i] === '"') {
+      let j = i + 1;
+      while (j < s.length && s[j] !== '"' && s[j] !== '\n') j += s[j] === '\\' ? 2 : 1;
+      const v = JSON.parse(s.slice(i, j + 1)); // TOML basic strings use JSON's escapes
+      i = j + 1;
+      return v;
+    }
+    if (s[i] === "'") {
+      const j = s.indexOf("'", i + 1);
+      if (j < 0 || s.slice(i, j).includes('\n')) throw new Error('literal string');
+      const v = s.slice(i + 1, j);
+      i = j + 1;
+      return v;
+    }
+    return null;
+  };
+  const key = () => {
+    const parts = [];
+    do {
+      ws();
+      const q = str();
+      if (q !== null) parts.push(q);
+      else {
+        const m = /^[A-Za-z0-9_-]+/.exec(s.slice(i));
+        if (!m) throw new Error(`key at ${i}`);
+        parts.push(m[0]);
+        i += m[0].length;
+      }
+      ws();
+    } while (s[i] === '.' && ++i);
+    return parts;
+  };
+  const value = () => {
+    ws();
+    const q = str();
+    if (q !== null) return q;
+    if (s[i] === '[' || s[i] === '{') {
+      const arr = s[i++] === '[';
+      const out = arr ? [] : {};
+      for (;;) {
+        ws();
+        if (s[i] === (arr ? ']' : '}')) return (i++, out);
+        if (arr) out.push(value());
+        else {
+          const k = key();
+          if (s[i++] !== '=') throw new Error('inline table');
+          setPath(out, k, value());
+        }
+        ws();
+        if (s[i] === ',') i++;
+        else if (s[i] !== (arr ? ']' : '}')) throw new Error('array or inline table');
+      }
+    }
+    const m = /^[^\s,\]}#]+/.exec(s.slice(i));
+    if (!m) throw new Error(`value at ${i}`);
+    i += m[0].length;
+    return { raw: m[0] };
+  };
+  const out = {};
+  for (;;) {
+    ws();
+    if (i >= s.length) return out;
+    const k = key();
+    if (s[i++] !== '=') throw new Error(`"=" expected after ${k.join('.')}`);
+    setPath(out, k, value());
+  }
+}
+function setPath(obj, keys, v) {
+  let o = obj;
+  for (const k of keys.slice(0, -1)) o = o[k] && typeof o[k] === 'object' && !o[k].raw ? o[k] : (o[k] = {});
+  o[keys[keys.length - 1]] = v;
+}
+
+// Where [mcp_servers.<name>] and its sub-tables sit, and what they hold (null when it cannot be read).
+function tomlFind(text, name) {
+  const t = tomlTables(text);
+  const ours = (x) => x && x.key[0] === 'mcp_servers' && x.key[1] === name;
+  const first = t.findIndex(ours);
+  if (first < 0) return { start: -1 };
+  let last = first;
+  while (ours(t[last + 1])) last++;
+  const end = last + 1 < t.length ? t[last + 1].start : text.length;
+  let value = {};
+  try {
+    for (let k = first; k <= last; k++) {
+      const body = tomlBody(text.slice(t[k].body, k + 1 < t.length ? t[k + 1].start : text.length));
+      if (t[k].key.length === 2) Object.assign(value, body);
+      else setPath(value, t[k].key.slice(2), body);
+    }
+  } catch {
+    value = null;
+  }
+  const plain = (v) => (v && v.raw !== undefined ? v.raw : v);
+  if (value && value.env) value.env = Object.fromEntries(Object.entries(value.env).map(([k, v]) => [k, plain(v)]));
+  return { start: t[first].start, end, value, scattered: t.slice(last + 1).some(ours) };
+}
+
+const tq = (s) => JSON.stringify(String(s)); // a JSON string is a valid TOML basic string
+const tk = (k) => (/^[A-Za-z0-9_-]+$/.test(k) ? k : tq(k));
+const tv = (v) =>
+  v && v.raw !== undefined
+    ? v.raw
+    : Array.isArray(v)
+      ? `[${v.map(tv).join(', ')}]`
+      : v && typeof v === 'object'
+        ? `{ ${Object.entries(v)
+            .map(([k, x]) => `${tk(k)} = ${tv(x)}`)
+            .join(', ')} }`
+        : tq(v);
+// Our table; settings the user added to it (enabled, timeouts, ...) are kept.
+function tomlBlock(name, e, cur) {
+  const lines = [`[mcp_servers.${tk(name)}]`, `command = ${tq(e.command)}`, `args = ${tv(e.args)}`];
+  if (e.env) lines.push(`env = ${tv(e.env)}`);
+  for (const [k, v] of Object.entries(cur || {}))
+    if (!['command', 'args', 'env'].includes(k)) lines.push(`${tk(k)} = ${tv(v)}`);
+  return `${lines.join('\n')}\n`;
+}
+function tomlCut(text, f, insert = '') {
+  const before = text.slice(0, f.start);
+  const after = text.slice(f.end);
+  if (insert) return before + insert + (after ? `\n${after}` : '');
+  return after ? before + after : before.replace(/\s+$/, '') + (before.trim() ? '\n' : '');
+}
+
+function runCodex(c, want, o) {
+  let text = '';
+  try {
+    text = fs.readFileSync(c.file, 'utf8');
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+  const bom = text.charCodeAt(0) === 0xfeff;
+  if (bom) text = text.slice(1);
+  const block = tomlBlock(NAME, want);
+  const manual = (why) =>
+    o.log(
+      `${c.name}: ${c.file} ${why}, so it was left alone. ${o.remove ? `Remove the [mcp_servers.${NAME}] table yourself.` : `Add this yourself:\n${block}`}`,
+    );
+  // mcp_servers written as dotted keys or an inline table, or our table split in two: not safe to cut out.
+  if (/^[ \t]*mcp_servers[ \t]*[.=]/m.test(text)) return manual('defines mcp_servers with dotted keys or inline');
+  const cur = tomlFind(text, NAME);
+  if (cur.scattered) return manual(`has the [mcp_servers.${NAME}] table in more than one place`);
+  const legacy = OLD_NAMES.filter((n) => {
+    const f = tomlFind(text, n);
+    return f.start >= 0 && !f.scattered && isOurs(f.value);
+  });
+  const has = cur.start >= 0;
+  const set = !o.remove && !(has && sameEntry(cur.value, want));
+  const del = o.remove && has;
+  if (!set && !del && !legacy.length)
+    return o.log(`${c.name}: already ${o.remove ? 'absent' : 'registered'} (${c.file})`);
+  const fresh = set && !has && !legacy.length;
+  const cliArgs = [
+    'mcp',
+    'add',
+    NAME,
+    ...Object.entries(want.env || {}).flatMap(([k, v]) => ['--env', `${k}=${v}`]),
+    '--',
+    want.command,
+    ...want.args,
+  ];
+  if (o.dryRun) {
+    if (fresh && o.which('codex')) return o.log(`[dry-run] ${showCmd('codex', cliArgs, o.platform)}`);
+    const what = [
+      ...legacy.map((n) => `remove [mcp_servers.${n}]`),
+      ...(del ? [`remove [mcp_servers.${NAME}]`] : []),
+      ...(set ? [`set:\n${tomlBlock(NAME, want, has && cur.value)}`] : []),
+    ];
+    return o.log(`[dry-run] ${c.file}: ${what.join('; ')}`);
+  }
+  // A new entry goes through `codex mcp add` when the CLI is installed; replacing or removing one is a table edit.
+  if (fresh && o.which('codex')) {
+    backup(c.file);
+    try {
+      runCli(o, 'codex', cliArgs);
+      return o.log(`${c.name}: registered (codex mcp add)`);
+    } catch (err) {
+      o.log(`${c.name}: codex mcp add failed (${err.message.split('\n')[0]}); editing ${c.file} instead`);
+    }
+  }
+  let next = text;
+  for (const n of legacy) next = tomlCut(next, tomlFind(next, n));
+  const now = tomlFind(next, NAME);
+  if (del) next = tomlCut(next, now);
+  if (set)
+    next =
+      now.start >= 0
+        ? tomlCut(next, now, tomlBlock(NAME, want, now.value))
+        : `${next.replace(/\s+$/, '')}${next.trim() ? '\n\n' : ''}${block}`;
+  writeText(c.file, (bom ? '﻿' : '') + next);
+  if (legacy.length) o.log(`${c.name}: removed the old "${legacy.join('", "')}" entry (${c.file})`);
+  if (set || del) o.log(`${c.name}: ${o.remove ? 'removed' : has ? 'updated' : 'registered'} (${c.file})`);
+}
+
+const RUNNERS = { claude: runClaude, json: runJson, codex: runCodex };
 
 function detected(c, which = (cmd) => findOnPath(cmd)) {
   return (c.detect || []).some(exists) || (!!c.cli && !!which(c.cli));
@@ -318,7 +659,18 @@ function run(
   if (failed.length) throw new Error(failed.join('\n'));
 }
 
-module.exports = { run, clients, isRegistered, detected, findOnPath, quoteArg, isOurs, NAME, OLD_NAMES };
+module.exports = {
+  run,
+  clients,
+  isRegistered,
+  detected,
+  findOnPath,
+  quoteArg,
+  isOurs,
+  toml: { find: tomlFind, tables: tomlTables, body: tomlBody, block: tomlBlock },
+  NAME,
+  OLD_NAMES,
+};
 
 if (require.main === module) {
   const args = process.argv.slice(2);
@@ -335,7 +687,7 @@ if (require.main === module) {
         '  all       every client found on this machine\n' +
         '  --data    the data folder the client should use (default: ZAAFPULSE_DATA or the usual folder)',
     );
-    process.exit(target ? 0 : 2);
+    process.exit(args.includes('--help') ? 0 : 2);
   }
   try {
     run(target, { remove: args.includes('--remove'), dryRun: args.includes('--dry-run'), data });

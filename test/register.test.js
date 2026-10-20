@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { run, clients, isRegistered, findOnPath, quoteArg, isOurs, NAME } = require('../scripts/register-mcp');
+const { run, clients, isRegistered, findOnPath, quoteArg, isOurs, toml, NAME } = require('../scripts/register-mcp');
 
 // Every test runs against a temp HOME with an empty environment, so no real client config is ever read or written.
 const tmpHome = () => fs.mkdtempSync(path.join(os.tmpdir(), 'acc-home-'));
@@ -315,6 +315,199 @@ test('all: registers only the clients found here and says which were skipped', (
   assert.ok(fs.existsSync(clients(home).kiro.file));
   assert.ok(!fs.existsSync(clients(home).antigravity.file));
   assert.match(logs.at(-1), /Skipped \(not found on this machine\): .*Claude Code.*Antigravity/);
+});
+
+test('config paths per OS follow the vendors docs', () => {
+  const mac = clients('/Users/a', { env: {}, platform: 'darwin' });
+  assert.equal(mac.cursor.file, '/Users/a/.cursor/mcp.json');
+  assert.equal(mac.vscode.file, '/Users/a/Library/Application Support/Code/User/mcp.json');
+  assert.equal(mac['claude-desktop'].file, '/Users/a/Library/Application Support/Claude/claude_desktop_config.json');
+  assert.equal(mac.codex.file, '/Users/a/.codex/config.toml');
+  assert.equal(mac.gemini.file, '/Users/a/.gemini/settings.json');
+  assert.equal(mac.windsurf.file, '/Users/a/.config/devin/mcp_config.json');
+  assert.equal(mac.zed.file, '/Users/a/.config/zed/settings.json');
+  const linux = clients('/home/a', { env: { XDG_CONFIG_HOME: '/x', CODEX_HOME: '/c' }, platform: 'linux' });
+  assert.equal(linux.vscode.file, '/x/Code/User/mcp.json');
+  assert.equal(linux['claude-desktop'].file, '/x/Claude/claude_desktop_config.json');
+  assert.equal(linux.zed.file, '/x/zed/settings.json');
+  assert.equal(linux.windsurf.file, '/x/devin/mcp_config.json');
+  assert.equal(linux.codex.file, '/c/config.toml');
+  const win = clients('C:\\Users\\a', { env: { APPDATA: 'C:\\Users\\a\\AppData\\Roaming' }, platform: 'win32' });
+  assert.equal(win.vscode.file, 'C:\\Users\\a\\AppData\\Roaming\\Code\\User\\mcp.json');
+  assert.equal(win['claude-desktop'].file, 'C:\\Users\\a\\AppData\\Roaming\\Claude\\claude_desktop_config.json');
+  assert.equal(win.windsurf.file, 'C:\\Users\\a\\AppData\\Roaming\\devin\\mcp_config.json');
+  assert.equal(win.zed.file, 'C:\\Users\\a\\AppData\\Roaming\\Zed\\settings.json');
+  assert.equal(win.cursor.file, 'C:\\Users\\a\\.cursor\\mcp.json');
+});
+
+test('windsurf: a pre-rename install keeps ~/.codeium/windsurf until the Devin folder exists', () => {
+  const home = tmpHome();
+  fs.mkdirSync(path.join(home, '.codeium', 'windsurf'), { recursive: true });
+  assert.equal(clients(home).windsurf.file, path.join(home, '.codeium', 'windsurf', 'mcp_config.json'));
+  fs.mkdirSync(path.join(home, '.config', 'devin'), { recursive: true });
+  assert.equal(clients(home).windsurf.file, path.join(home, '.config', 'devin', 'mcp_config.json'));
+});
+
+test('cursor, claude desktop, gemini, windsurf: an mcpServers entry; cursor adds type stdio', () => {
+  const home = tmpHome();
+  for (const id of ['cursor', 'claude-desktop', 'gemini', 'windsurf']) run(id, { home, log: quiet });
+  const c = clients(home);
+  assert.deepEqual(readJ(c.cursor.file).mcpServers[NAME], { type: 'stdio', command: process.execPath, args: [MCP_JS] });
+  for (const id of ['claude-desktop', 'gemini', 'windsurf'])
+    assert.deepEqual(readJ(c[id].file).mcpServers[NAME], { command: process.execPath, args: [MCP_JS] }, id);
+  for (const id of ['cursor', 'claude-desktop', 'gemini', 'windsurf']) assert.ok(isRegistered(c[id]), id);
+});
+
+test('vscode: a top-level "servers" key with type stdio; a JSONC file is left alone with instructions', () => {
+  const home = tmpHome();
+  const c = clients(home).vscode;
+  put(c.file, '{ "servers": { "other": { "type": "http", "url": "http://x" } }, "inputs": [] }');
+  run('vscode', { home, log: quiet, data: path.join(home, 'd') });
+  const j = readJ(c.file);
+  assert.deepEqual(j.servers[NAME], {
+    type: 'stdio',
+    command: process.execPath,
+    args: [MCP_JS],
+    env: { ZAAFPULSE_DATA: path.join(home, 'd') },
+  });
+  assert.ok(j.servers.other && Array.isArray(j.inputs));
+  assert.ok(isRegistered(c));
+  const jsonc = '{\n  // my servers\n  "servers": {},\n}\n';
+  put(c.file, jsonc);
+  const logs = [];
+  run('vscode', { home, log: (m) => logs.push(m) });
+  assert.equal(fs.readFileSync(c.file, 'utf8'), jsonc);
+  assert.match(logs[0], /comments or trailing commas, so it was left alone\. Add this under "servers"/);
+  assert.match(logs[0], /code --add-mcp '\{"name":"zaafpulse","type":"stdio"/);
+  assert.equal(isRegistered(c), false);
+});
+
+test('zed: context_servers in plain JSON settings; JSONC settings get instructions only', () => {
+  const home = tmpHome();
+  const c = clients(home).zed;
+  put(c.file, '{ "theme": "One Dark" }');
+  run('zed', { home, log: quiet });
+  assert.deepEqual(readJ(c.file), {
+    theme: 'One Dark',
+    context_servers: { [NAME]: { command: process.execPath, args: [MCP_JS] } },
+  });
+  const jsonc = '// Zed settings\n{\n  "theme": "One Dark",\n}\n';
+  put(c.file, jsonc);
+  const logs = [];
+  run('zed', { home, log: (m) => logs.push(m) });
+  assert.equal(fs.readFileSync(c.file, 'utf8'), jsonc);
+  assert.match(logs[0], /Add this under "context_servers"/);
+  run('zed', { home, remove: true, log: (m) => logs.push(m) });
+  assert.match(logs[1], /Remove the "zaafpulse" entry/);
+});
+
+const CODEX_BEFORE = `# my settings
+model = "gpt-5"
+
+[mcp_servers.other]
+command = "npx"
+args = [
+  "-y",
+  "other-mcp",
+]
+
+[profiles.fast]
+model = "x"
+`;
+
+test('codex: without the CLI, appends our table and leaves every other byte alone', () => {
+  const home = tmpHome();
+  const c = clients(home).codex;
+  put(c.file, CODEX_BEFORE);
+  const data = path.join(home, 'my "data"');
+  run('codex', { home, log: quiet, which: noCli, data });
+  const text = fs.readFileSync(c.file, 'utf8');
+  assert.ok(text.startsWith(CODEX_BEFORE.trimEnd()));
+  assert.ok(
+    text.endsWith(
+      `\n\n[mcp_servers.zaafpulse]\ncommand = ${JSON.stringify(process.execPath)}\nargs = [${JSON.stringify(MCP_JS)}]\nenv = { ZAAFPULSE_DATA = ${JSON.stringify(data)} }\n`,
+    ),
+  );
+  const f = toml.find(text, NAME);
+  assert.deepEqual(f.value, { command: process.execPath, args: [MCP_JS], env: { ZAAFPULSE_DATA: data } });
+  assert.ok(isRegistered(c));
+  const logs = [];
+  run('codex', { home, log: (m) => logs.push(m), which: noCli, data });
+  assert.match(logs[0], /already registered/);
+  // Removing restores the file exactly.
+  run('codex', { home, log: quiet, which: noCli, remove: true });
+  assert.equal(fs.readFileSync(c.file, 'utf8'), CODEX_BEFORE);
+});
+
+test('codex: a fresh entry uses `codex mcp add` when the CLI is installed', () => {
+  const home = tmpHome();
+  const calls = [];
+  run('codex', {
+    home,
+    log: quiet,
+    data: path.join(home, 'd'),
+    which: () => '/bin/codex',
+    exec: (cmd, args) => calls.push([cmd, ...args]),
+  });
+  assert.deepEqual(calls[0], [
+    'codex',
+    'mcp',
+    'add',
+    NAME,
+    '--env',
+    `ZAAFPULSE_DATA=${path.join(home, 'd')}`,
+    '--',
+    process.execPath,
+    MCP_JS,
+  ]);
+});
+
+test('codex: a stale table is replaced in place, keeping keys the user added; the CLI format is understood', () => {
+  const home = tmpHome();
+  const c = clients(home).codex;
+  // How `codex mcp add` writes it: env as a sub-table.
+  const cliFormat = `[mcp_servers.zaafpulse]\ncommand = ${JSON.stringify(process.execPath)}\nargs = [${JSON.stringify(MCP_JS)}]\n\n[mcp_servers.zaafpulse.env]\nZAAFPULSE_DATA = "/d"\n`;
+  put(c.file, `${CODEX_BEFORE}\n${cliFormat}`);
+  const logs = [];
+  run('codex', { home, log: (m) => logs.push(m), which: noCli, env: { ZAAFPULSE_DATA: '/d' } });
+  assert.match(logs[0], /already registered/);
+  const stale = `[mcp_servers.zaafpulse]\ncommand = "/old/node"\nargs = ['/old/mcp.js'] # old\nenabled = false\ntool_timeout_sec = 30\n\n[mcp_servers.zaafpulse.env]\nX = "1"\n\n`;
+  put(c.file, CODEX_BEFORE.replace('[profiles.fast]', `${stale}[profiles.fast]`));
+  run('codex', { home, log: quiet, which: () => '/bin/codex', exec: () => assert.fail('the CLI only adds') });
+  const text = fs.readFileSync(c.file, 'utf8');
+  assert.equal(
+    text,
+    CODEX_BEFORE.replace(
+      '[profiles.fast]',
+      `[mcp_servers.zaafpulse]\ncommand = ${JSON.stringify(process.execPath)}\nargs = [${JSON.stringify(MCP_JS)}]\nenabled = false\ntool_timeout_sec = 30\n\n[profiles.fast]`,
+    ),
+  );
+  assert.equal(backups(c.file).length, 1);
+});
+
+test('codex: migrates an old ai-command-center table and refuses layouts it cannot cut safely', () => {
+  const home = tmpHome();
+  const c = clients(home).codex;
+  put(c.file, `${CODEX_BEFORE}\n[mcp_servers.ai-command-center]\ncommand = "node"\nargs = ["/x/mcp.js"]\n`);
+  run('codex', { home, log: quiet, which: noCli });
+  const text = fs.readFileSync(c.file, 'utf8');
+  assert.ok(!text.includes('[mcp_servers.ai-command-center]'));
+  assert.ok(text.startsWith(CODEX_BEFORE.trimEnd()) && toml.find(text, NAME).start > 0);
+  for (const odd of ['mcp_servers.zaafpulse.command = "x"\n', 'mcp_servers = { zaafpulse = { command = "x" } }\n']) {
+    put(c.file, odd);
+    const logs = [];
+    run('codex', { home, log: (m) => logs.push(m), which: noCli });
+    assert.match(logs[0], /left alone\. Add this yourself:\n\[mcp_servers\.zaafpulse\]/);
+    assert.equal(fs.readFileSync(c.file, 'utf8'), odd);
+  }
+});
+
+test('toml: headers inside multi-line strings and arrays are not tables', () => {
+  const text = `a = """\n[mcp_servers.zaafpulse]\n"""\nb = [\n  ["x"]\n]\n[mcp_servers."zaafpulse"]\ncommand = 'C:\\node.exe'\nargs = []\n`;
+  const t = toml.tables(text);
+  assert.equal(t.length, 1);
+  assert.deepEqual(t[0].key, ['mcp_servers', 'zaafpulse']);
+  assert.deepEqual(toml.find(text, NAME).value, { command: 'C:\\node.exe', args: [] });
 });
 
 test('unknown client', () => {

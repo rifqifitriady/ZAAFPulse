@@ -57,7 +57,7 @@ function viewIntegrations() {
   const calls = (d.calls || []).filter((c) => integ.filter === 'all' || c.integration === integ.filter);
   const ids = [...new Set((d.calls || []).map((c) => c.integration))];
   return `<div class="hero"><div><div class="eyebrow">INTEGRATIONS</div><h1>MCP connections</h1>
-      <p>${okCount} of ${list.length} connected. AI clients reach these through <code>ai-command-center</code>; edit them in config.json.</p></div>
+      <p>${okCount} of ${list.length} connected. AI clients reach these through the <code>zaafpulse</code> MCP server; edit them in config.json.</p></div>
     <div class="hero-actions"><span class="pill">${icon('refresh', 14)}Checked ${ago(integ.at)}</span></div></div>
     ${d.error ? `<div class="card empty">Could not load integrations: ${esc(d.error)}</div>` : ''}
     <div class="grid integrations">${list.map(integCard).join('')}</div>
@@ -66,7 +66,7 @@ function viewIntegrations() {
       ${(d.clients || [])
         .map(
           (c) => `<tr><td><b>${esc(c.name)}</b></td>
-        <td><span class="status ${c.registered ? 'running' : 'off'}" style="width:auto"><i></i>${c.registered ? 'Registered' : 'Not registered'}</span></td>
+        <td><span class="status ${c.registered ? 'running' : 'off'}" style="width:auto"><i></i>${c.registered ? 'Registered' : c.detected === false ? 'Not installed' : 'Not registered'}</span></td>
         <td class="muted">${esc(c.file)}</td><td><code>${esc(c.command)}</code></td></tr>`,
         )
         .join('')}
@@ -87,7 +87,7 @@ function viewIntegrations() {
         )
         .join('')}
     </tbody></table></div>`
-        : '<div class="empty">No tool calls yet. Register a client, then ask it to use an ai-command-center tool.</div>'
+        : '<div class="empty">No tool calls yet. Register a client, then ask it to use a zaafpulse tool.</div>'
     }</div>`;
 }
 
