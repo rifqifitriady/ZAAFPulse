@@ -555,7 +555,7 @@ A new key is shown once and masked (`zp_Q7m_k•••••••••••�
 ZAAFPulse can send traces of what the Agent Gateway does to any backend that accepts OTLP over HTTP. It writes OTLP itself, with no dependencies: binary protobuf by default, JSON when you set `"protocol": "http/json"`. gRPC is not supported.
 
 - **What is sent:** a SERVER span per gateway request (continuing the caller's W3C `traceparent`), a CLIENT span per model call (fallback attempts included), spans for collaboration runs, agent turns, the planner and judge, and every integration tool call. Attributes follow the OpenTelemetry GenAI semantic conventions (`gen_ai.operation.name`, `gen_ai.request.model`, `gen_ai.usage.input_tokens` …), which are still marked *Development* upstream, plus `zaafpulse.cost.usd`.
-- **Off by default.** Nothing is sent and no connection is made until `config.json` has `"otel": { "enabled": true, … }`. The standard `OTEL_EXPORTER_OTLP_*` variables fill in values but never turn export on by themselves.
+- **Off by default.** Nothing is sent and no connection is made until `config.json` has `"otel": { "enabled": true, … }` or `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) is set. `"enabled": false` or `OTEL_SDK_DISABLED=true` keeps it off even when such a variable is set for other tools.
 - **No content by default.** Prompts, answers and tool arguments are sent only with `"captureContent": true`, and then capped. A header that looks secret (`Authorization`, API keys, tokens) must be a reference to the secret store or an environment variable; plain text there turns export off.
 - **Ready-made configs** for Dynatrace, Arize Phoenix, Arize AX, Langfuse and a local OpenTelemetry Collector.
 
@@ -653,7 +653,7 @@ By default the server listens on `127.0.0.1` only and rejects requests whose `Ho
 | Integrations you configure (Dynatrace, Arize, n8n, OmniRoute, HTTP and MCP services) | When an AI client calls a tool, or the Integrations page checks health (at most once a minute per integration, or when you press Test) | The tool call, to the URL you configured |
 | Model providers you configure | When an app, agent, workflow or the playground calls a model, when their model lists load, and to refresh OAuth2 or service-account tokens | The request you or your agents sent |
 | Second-brain sources, remote A2A agents, URLs you give the RAG service | When you connect, sync or use them | Requests to that source's own API or address |
-| Your OTLP endpoint | Only when `"otel": { "enabled": true }` is set ([OpenTelemetry](#opentelemetry-export)) | Spans; no prompt text unless `captureContent` is on |
+| Your OTLP endpoint | Only when `"otel": { "enabled": true }` or an `OTEL_EXPORTER_OTLP_*ENDPOINT` variable is set ([OpenTelemetry](#opentelemetry-export)) | Spans; no prompt text unless `captureContent` is on |
 | GitHub and nodejs.org | Only while `install.sh` or `install.ps1` runs | The release (or `main` when you ask), and the official Node.js LTS when your system has no Node 18+ |
 
 Nothing else: no telemetry, no update checks, no accounts. Demo mode fetches nothing. (The maintainer script `scripts/build-single.js` downloads official Node.js binaries to build releases; the running app never does.) Integration and provider secrets stay in the OS secret store or environment variables, never in `config.json`.
