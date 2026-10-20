@@ -1,0 +1,7 @@
+{"timestamp":"2026-10-20T11:00:00.000Z","type":"session_meta","payload":{"id":"c1","cwd":"/w/q","originator":"codex_cli"}}
+{"timestamp":"2026-10-20T11:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"add pagination"}}
+{"timestamp":"2026-10-20T11:00:02.000Z","type":"turn_context","payload":{"model":"gpt-5.3-codex","cwd":"/w/q"}}
+{"timestamp":"2026-10-20T11:00:05.000Z","type":"response_item","payload":{"type":"function_call","name":"shell","call_id":"k1","arguments":"{\"command\":[\"bash\",\"-lc\",\"ls\"]}"}}
+{"timestamp":"2026-10-20T11:00:06.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"k1","output":"src\n"}}
+{"timestamp":"2026-10-20T11:00:07.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":300,"cached_input_tokens":0,"output_tokens":30}}}}
+{"timestamp":"2026-10-20T11:01:00.000Z","type":"event_msg","payload":{"type":"user_message","message":"also sort"}}
