@@ -1,0 +1,4 @@
+{"type":"user","sessionId":"RES","uuid":"u-o1","timestamp":"2026-10-15T10:00:00.000Z","cwd":"/work/app","message":{"role":"user","content":"Write the release notes"}}
+{"type":"assistant","sessionId":"RES","timestamp":"2026-10-15T10:00:10.000Z","requestId":"req_O1","cwd":"/work/app","message":{"id":"msg_O1","role":"assistant","model":"claude-sonnet-5","content":[{"type":"text","text":"Done."}],"usage":{"input_tokens":1000,"output_tokens":1000,"cache_read_input_tokens":0}}}
+{"type":"user","sessionId":"RES","uuid":"u-r1","timestamp":"2026-10-16T10:00:00.000Z","cwd":"/work/app","message":{"role":"user","content":"Now add a changelog link"}}
+{"type":"assistant","sessionId":"RES","timestamp":"2026-10-16T10:00:10.000Z","requestId":"req_R1","cwd":"/work/app","message":{"id":"msg_R1","role":"assistant","model":"claude-sonnet-5","content":[{"type":"text","text":"Done."}],"usage":{"input_tokens":1000,"output_tokens":1000,"cache_read_input_tokens":0}}}
