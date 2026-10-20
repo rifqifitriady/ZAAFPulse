@@ -217,9 +217,31 @@ test('light and gateway titles come from the row', async () => {
   assert.equal(await t.title(r.key), 'debate run · done · 0 steps');
 });
 
-test('with content off, file-source titles are not read', async () => {
-  const t = await make({ contentOff: true });
-  assert.equal(await t.title(t.sessions({})[0].key), null);
+test('with content off, no transcript or user title is shown for any source; the gateway keeps its own', async () => {
+  const g = { runs: () => [{ id: 'r1', pattern: 'debate', state: 'done', steps: [], createdAt: Date.now() - 1000, updatedAt: Date.now() }], run: () => null, requests: () => [] };
+  const build = async (contentOff) =>
+    createTrace({
+      indexer: await fakeIndexer([await codexEntry()]),
+      gateway: g,
+      light: [fakeLight('kiro', 1), fakeLight('gemini', 1), fakeLight('antigravity', 1)],
+      roots: [FIX],
+      contentOff,
+      listTtlMs: 0,
+    });
+  const on = await build(false);
+  const off = await build(true);
+  for (const id of ['claude', 'codex', 'kiro', 'gemini', 'antigravity']) {
+    assert.ok(await on.title(on.sessions({ source: id })[0].key), `${id} has a title when content is on`);
+    const row = off.sessions({ source: id })[0];
+    assert.equal(row.title, null, `${id} row`);
+    assert.equal(await off.title(row.key), null, `${id} title()`);
+  }
+  assert.equal(off.sessions({ q: 'session 0' }).length, 0, 'q cannot reach a hidden title');
+  const gwRow = off.sessions({ source: 'gateway' })[0];
+  assert.equal(gwRow.title, 'debate run · done · 0 steps');
+  assert.equal(await off.title(gwRow.key), 'debate run · done · 0 steps');
+  // Demo titles are text too.
+  assert.ok(createTrace({ demo: true, contentOff: true }).sessions({}).every((r) => r.title === null));
 });
 
 // ---- sessions() filters ----
@@ -293,9 +315,16 @@ test('a throwing gateway and a throwing claude are separate failures', async () 
   assert.equal(t.sessions({}).length, 1);
 });
 
-test('without a gateway the gateway source is omitted; light defaults to none in tests via light: []', async () => {
+test('all six sources are always listed; the ones not set up say so', async () => {
   const t = createTrace({ indexer: await fakeIndexer(), light: [], roots: [FIX] });
-  assert.deepEqual(t.sources().map((s) => s.id), ['claude', 'codex']);
+  const src = t.sources();
+  assert.deepEqual(src.map((s) => s.id), ['claude', 'codex', 'gateway', 'kiro', 'gemini', 'antigravity']);
+  for (const id of ['gateway', 'kiro', 'gemini', 'antigravity']) {
+    assert.deepEqual(src.find((s) => s.id === id), { id, ok: false, reason: 'not configured', count: 0 });
+  }
+  assert.equal(src[0].ok, true);
+  // No indexer: claude and codex are not configured either.
+  assert.ok(createTrace({ light: [] }).sources().every((s) => s.reason === 'not configured'));
 });
 
 test('a failing skeleton in one source does not break another', async () => {
@@ -502,39 +531,76 @@ test('a small file never starts a worker', async () => {
 
 // ---- live ----
 
-test('live: unchanged size reports changed false, growth rebuilds the last turn', async () => {
+test('live: an unchanged file reports changed false, growth rebuilds the last turn; the cursor is opaque', async () => {
   const { root, file } = tmpClaude([U('s9', '00', 'first'), A('s9', '01', 'm1', [{ type: 'text', text: 'one' }])]);
   const e = await tmpEntry(file);
   const t = createTrace({ indexer: { entries: () => [e] }, light: [], roots: [root], listTtlMs: 0 });
   const key = t.sessions({})[0].key;
   const before = await t.session(key);
-  assert.deepEqual(await t.live(key, e.size), { changed: false, size: e.size });
-  assert.deepEqual(await t.live(key, e.size + 1000), { changed: false, size: e.size });
+  // No cursor yet: from the beginning, so the first poll is a change.
+  const first = await t.live(key);
+  assert.equal(first.changed, true);
+  const idle = await t.live(key, first.cursor);
+  assert.equal(idle.changed, false);
+  assert.ok(!('size' in idle) && !('skeleton' in idle));
+  assert.equal(typeof idle.cursor, 'string');
+  // The cursor does not show the size, in plain text or as base64.
+  assert.ok(!idle.cursor.includes(String(e.size)));
+  assert.ok(!Buffer.from(idle.cursor, 'base64url').toString('latin1').includes(String(e.size)));
   // The log grows inside the last turn (the index has not been refreshed).
   fs.appendFileSync(file, JSON.stringify(A('s9', '05', 'm2', [{ type: 'text', text: 'two' }])) + '\n');
-  const size = fs.statSync(file).size;
-  const live = await t.live(key, e.size);
+  const live = await t.live(key, idle.cursor);
   assert.equal(live.changed, true);
-  assert.equal(live.size, size);
-  const chats = live.skeleton.spans.filter((s) => s.kind === 'chat');
-  assert.equal(chats.length, 2);
+  assert.ok(!('size' in live));
+  assert.equal(live.skeleton.spans.filter((s) => s.kind === 'chat').length, 2);
   assert.notEqual(live.skeleton, before);
   const answer = live.skeleton.spans.find((s) => s.kind === 'answer');
   assert.equal((await t.content(answer.text, {})).text, 'two');
   for (const s of strings(live.skeleton)) assert.ok(!/[\\/]/.test(s), s);
+  assert.equal((await t.live(key, live.cursor)).changed, false);
   // The cached skeleton is untouched: live bypasses the cache.
   assert.equal(await t.session(key), before);
-  await assert.rejects(t.live(key, -1), (er) => er.status === 400);
-  await assert.rejects(t.live(key, 'x'), (er) => er.status === 400);
-  fs.unlinkSync(file);
-  await assert.rejects(t.live(key, 0), (er) => er.status === 404);
+});
+
+test('a bad, tampered or foreign live cursor counts as from the beginning', async () => {
+  const one = tmpClaude([U('s9', '00', 'first'), A('s9', '01', 'm1', [{ type: 'text', text: 'one' }])]);
+  const two = tmpClaude([U('s8', '00', 'other')], 's8');
+  const e = await tmpEntry(one.file);
+  const o = await tmpEntry(two.file);
+  const t = createTrace({ indexer: { entries: () => [e, o] }, light: [], roots: [one.root, two.root], listTtlMs: 0 });
+  const keyOf = (sid) => t.sessions({}).find((r) => Buffer.from(r.key.split('.')[0], 'base64url').toString() === `claude:${sid}`).key;
+  const [k9, k8] = [keyOf('s9'), keyOf('s8')];
+  const good = (await t.live(k9)).cursor;
+  assert.equal((await t.live(k9, good)).changed, false);
+  const flipped = good.slice(0, -2) + (good.endsWith('AA') ? 'BB' : 'AA');
+  for (const bad of [flipped, 'x', '', 'a'.repeat(300), 42, {}, null]) assert.equal((await t.live(k9, bad)).changed, true, String(bad).slice(0, 12));
+  assert.equal((await t.live(k8, good)).changed, true, 'a cursor of another session does not work');
+  assert.equal((await t.live(k9, e.size)).changed, true, 'a plain size is not a cursor');
+});
+
+test('each live size gets its own cache slot, and old ones are retired by the LRU', async () => {
+  const { root, file } = tmpClaude([U('s9', '00', 'first'), A('s9', '01', 'm1', [{ type: 'text', text: 'one' }])]);
+  const e = await tmpEntry(file);
+  const t = createTrace({ indexer: { entries: () => [e] }, light: [], roots: [root], cacheMax: 2, listTtlMs: 0 });
+  const key = t.sessions({})[0].key;
+  const a = await t.live(key);
+  const idA = a.skeleton.spans.find((s) => s.kind === 'turn').text;
+  fs.appendFileSync(file, JSON.stringify(A('s9', '05', 'm2', [{ type: 'text', text: 'two' }])) + '\n');
+  const b = await t.live(key, a.cursor);
+  assert.equal(t.stats().cached, 2);
+  assert.ok((await t.content(idA, {})).text, 'the earlier slot is still there');
+  fs.appendFileSync(file, JSON.stringify(A('s9', '06', 'm3', [{ type: 'text', text: 'three' }])) + '\n');
+  const c = await t.live(key, b.cursor);
+  assert.equal(c.changed, true);
+  assert.equal(t.stats().cached, 2);
+  await assert.rejects(t.content(b.skeleton.spans.find((s) => s.kind === 'turn').text, {}), /unknown content/);
 });
 
 test('live for other sources and demo is not changed', async () => {
   const t = await make({ light: [fakeLight('kiro', 1)] });
-  assert.deepEqual(await t.live(t.sessions({ source: 'kiro' })[0].key, 0), { changed: false });
+  assert.deepEqual(await t.live(t.sessions({ source: 'kiro' })[0].key), { changed: false });
   const d = createTrace({ demo: true });
-  assert.deepEqual(await d.live(d.sessions({})[0].key, 0), { changed: false });
+  assert.deepEqual(await d.live(d.sessions({})[0].key), { changed: false });
 });
 
 // ---- demo ----
@@ -583,4 +649,145 @@ test('demo: the claude session has a subagent, a failed Bash call and a loop; co
   const id = (await off.session(off.sessions({ source: 'claude' })[0].key, {})).spans.find((s) => s.text).text;
   await assert.rejects(off.content(id, {}), (e) => e.status === 403);
   await assert.rejects(t.session(Buffer.from('claude:demo').toString('base64url') + '.abc'), /unknown session/);
+});
+
+// ---- errors, stale keys, freezing, ids ----
+
+test('a session file that vanishes gives a 404 with no path, and the listing is rescanned', async () => {
+  const { root, file } = tmpClaude([U('s9', '00', 'hello'), A('s9', '01', 'm1', [{ type: 'text', text: 'hi' }])]);
+  const e = await tmpEntry(file);
+  let listed = 0;
+  const t = createTrace({ indexer: { entries: () => (listed++, [e]) }, light: [], roots: [root], listTtlMs: 60000 });
+  const key = t.sessions({})[0].key;
+  fs.unlinkSync(file);
+  await assert.rejects(t.session(key), (er) => {
+    assert.equal(er.status, 404);
+    assert.equal(er.message, 'session file changed, rescanning');
+    assert.ok(!er.message.includes(root) && !/[\\/]/.test(er.message));
+    return true;
+  });
+  const before = listed;
+  t.sessions({});
+  assert.ok(listed > before, 'the next listing is rebuilt');
+  await assert.rejects(t.live(key), (er) => er.status === 404 && !/[\\/]/.test(er.message));
+});
+
+test('an error without a status is a 500 that names no path and is logged once, scrubbed', async () => {
+  const logs = [];
+  const bad = fakeLight('kiro', 1, { skeleton: async () => { throw new Error("EACCES: permission denied, open '/Users/someone/.kiro/x.json'"); } });
+  const t = createTrace({ indexer: { entries: () => [] }, light: [bad], roots: [], log: (m) => logs.push(m), listTtlMs: 0 });
+  const key = t.sessions({})[0].key;
+  for (let i = 0; i < 3; i++) await assert.rejects(t.session(key), (er) => er.status === 500 && er.message === 'trace read failed');
+  assert.equal(logs.length, 1);
+  assert.ok(!logs[0].includes('/Users') && !logs[0].includes('someone'), logs[0]);
+});
+
+test('errors that carry a status keep it, with the message scrubbed', async () => {
+  const bad = fakeLight('kiro', 1, { skeleton: async () => { throw Object.assign(new Error("gone: '/Users/someone/x'"), { status: 410 }); } });
+  const t = createTrace({ indexer: { entries: () => [] }, light: [bad], roots: [] });
+  await assert.rejects(t.session(t.sessions({})[0].key), (er) => er.status === 410 && !er.message.includes('/Users'));
+});
+
+test('a content read of a vanished file does not leak the path', async () => {
+  const { root, file } = tmpClaude([U('s9', '00', 'hello')]);
+  const e = await tmpEntry(file);
+  const t = createTrace({ indexer: { entries: () => [e] }, light: [], roots: [root] });
+  const sk = await t.session(t.sessions({})[0].key, { turn: 0 });
+  fs.unlinkSync(file);
+  await assert.rejects(t.content(sk.spans.find((s) => s.kind === 'turn').text, {}), (er) => er.status === 404 && !er.message.includes(root));
+});
+
+test('a stale valid key does not rescan on every request', async () => {
+  const full = await fakeIndexer();
+  const key = (await make({ indexer: full })).sessions({})[0].key;
+  let calls = 0;
+  const t = createTrace({ indexer: { entries: () => (calls++, []) }, gateway: gw, light: [], roots: [FIX] });
+  for (let i = 0; i < 100; i++) await assert.rejects(t.session(key), (er) => er.status === 404 && /unknown session/.test(er.message));
+  assert.ok(calls <= 2, `${calls} listings for 100 requests`);
+  // Titles and live go through the same lookup.
+  for (let i = 0; i < 50; i++) await assert.rejects(t.title(key), (er) => er.status === 404);
+  assert.ok(calls <= 2, `${calls} listings after 150 requests`);
+});
+
+test('a key that appears after the last listing is found with one rebuild', async () => {
+  const entries = [];
+  const t = createTrace({ indexer: { entries: () => entries }, gateway: gw, light: [], roots: [FIX] });
+  assert.equal(t.sessions({}).length, 0);
+  const full = await fakeIndexer();
+  entries.push(...full.entries());
+  const key = (await make({ indexer: full })).sessions({})[0].key;
+  assert.ok((await t.session(key, { turn: 0 })).spans.length);
+});
+
+test('the sealed skeleton is frozen all the way down', async () => {
+  const t = await make();
+  const sk = await t.session(t.sessions({})[0].key, { turn: 0 });
+  assert.ok(Object.isFrozen(sk) && Object.isFrozen(sk.spans) && Object.isFrozen(sk.spans[1]) && Object.isFrozen(sk.session) && Object.isFrozen(sk.turns[0]));
+  assert.throws(() => {
+    'use strict';
+    sk.spans[0].name = 'changed';
+  }, TypeError);
+  assert.throws(() => sk.spans.push({}), TypeError);
+  const again = await t.session(t.sessions({})[0].key, { turn: 0 });
+  assert.notEqual(again.spans[0].name, 'changed');
+  const tool = sk.spans.find((s) => s.tool);
+  if (tool) assert.ok(Object.isFrozen(tool.tool));
+});
+
+test('turns carry no byte offsets', async () => {
+  const t = await make();
+  const sk = await t.session(t.sessions({})[0].key, { turn: 0 });
+  assert.ok(sk.turns.length >= 2);
+  for (const turn of sk.turns) assert.deepEqual(Object.keys(turn).sort(), ['index', 'ts']);
+});
+
+test('span ids are keyed: not the plain hash of the file, stable across rebuilds, and still a tree', async () => {
+  const { spanId, validate } = require('../lib/trace/model');
+  const ix = await fakeIndexer();
+  const file = ix.entries()[0].file;
+  const t = createTrace({ indexer: ix, gateway: gw, light: [], roots: [FIX], listTtlMs: 0 });
+  const key = t.sessions({})[0].key;
+  const sk = await t.session(key, { turn: 0 });
+  assert.deepEqual(validate(sk.spans), []);
+  const plain = new Set([spanId(file, 's1', 'session'), spanId(file, 's1', 'turn', 0)]);
+  for (const s of sk.spans) {
+    assert.ok(!plain.has(s.id) && !plain.has(s.parent));
+    assert.match(s.id, /^[0-9a-f]{16}$/);
+  }
+  // A rebuild (another registry on the same data, a worker build) keeps the ids.
+  const other = createTrace({ indexer: ix, gateway: gw, light: [], roots: [FIX], workerMinBytes: 0, listTtlMs: 0 });
+  const sk2 = await other.session(other.sessions({})[0].key, { turn: 0 });
+  assert.deepEqual(sk2.spans.map((s) => [s.id, s.parent]), sk.spans.map((s) => [s.id, s.parent]));
+});
+
+test('a light adapter reason is scrubbed too', async () => {
+  const l = fakeLight('kiro', 0, { ok: false, reason: "cannot read '/Users/someone/.kiro'" });
+  const t = createTrace({ indexer: { entries: () => [] }, light: [l], roots: [] });
+  const r = t.sources().find((s) => s.id === 'kiro').reason;
+  assert.ok(!r.includes('/Users') && !r.includes('someone'), r);
+});
+
+test('a slower build of an older listing does not replace a newer cached skeleton', async () => {
+  const state = { end: 1000, wait: 120, tag: 'old' };
+  const l = {
+    id: 'kiro',
+    available: () => ({ ok: true, reason: null }),
+    sessions: () => [{ id: 'k1', source: 'kiro', title: 't', project: 'p', branch: null, start: 1, end: state.end, turns: 1, tools: 0, errors: 0, cost: null, flags: {} }],
+    skeleton: async () => {
+      const { wait, tag } = state;
+      await new Promise((r) => setTimeout(r, wait));
+      return { session: { id: 'k1', project: 'p' }, turns: [], spans: [{ id: tag, parent: null, kind: 'session', text: null }] };
+    },
+  };
+  const t = createTrace({ indexer: { entries: () => [] }, light: [l], roots: [], listTtlMs: 0 });
+  const key = t.sessions({})[0].key;
+  const slow = t.session(key); // built from the first listing: stamp 1000
+  await new Promise((r) => setTimeout(r, 10));
+  Object.assign(state, { end: 2000, wait: 0, tag: 'new' }); // the session changed; a newer listing
+  t.sessions({});
+  const fresh = await t.session(key);
+  const late = await slow;
+  assert.equal(late.spans[0].id, fresh.spans[0].id, 'the late build answers with the newer skeleton');
+  assert.equal(await t.session(key), fresh, 'and the newer skeleton is still the cached one');
+  assert.equal(t.stats().cached, 1);
 });
