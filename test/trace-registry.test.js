@@ -1,0 +1,586 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
+const claudeParser = require('../lib/claude');
+const codexParser = require('../lib/codex');
+const { createTrace } = require('../lib/trace');
+
+const FIX = path.join(__dirname, 'fixtures', 'trace');
+const dir = path.join(FIX, 'claude', 'proj');
+const entryOf = async (file, source, parser) => ({ file, source, size: fs.statSync(file).size, mtimeMs: fs.statSync(file).mtimeMs, result: await parser.parseFile(file) });
+async function fakeIndexer(extra = []) {
+  const files = [path.join(dir, 's1.jsonl'), path.join(dir, 's1', 'subagents', 'agent-ag1.jsonl')];
+  const entries = [];
+  for (const file of files) entries.push(await entryOf(file, 'claude', claudeParser));
+  entries.push(...extra);
+  return { entries: () => entries };
+}
+const codexEntry = () => entryOf(path.join(FIX, 'codex', 'rollout-c1.jsonl'), 'codex', codexParser);
+const gw = { runs: () => [], run: () => null, requests: () => [] };
+const make = async (o = {}) => createTrace({ indexer: await fakeIndexer(), gateway: gw, light: [], roots: [FIX], listTtlMs: 0, ...o });
+
+// A secret built at run time, never written out whole (push protection).
+const secret = () => 'sk-' + 'ant-api03-' + Array.from({ length: 48 }, (_, i) => 'abcdefghijklmnopqrstuvwxyz0123456789'[(i * 7) % 36]).join('');
+
+// A throwaway Claude log under a fresh root, for the cases the shared fixtures do not cover.
+function tmpClaude(lines, name = 's9') {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-reg-'));
+  const proj = path.join(root, 'proj');
+  fs.mkdirSync(proj);
+  const file = path.join(proj, `${name}.jsonl`);
+  fs.writeFileSync(file, lines.map((o) => JSON.stringify(o) + '\n').join(''));
+  return { root, file };
+}
+const U = (sid, ts, content) => ({ type: 'user', sessionId: sid, uuid: `u${ts}`, timestamp: `2026-10-20T10:00:${ts}.000Z`, cwd: '/w/p', message: { role: 'user', content } });
+const A = (sid, ts, id, content) => ({ type: 'assistant', sessionId: sid, uuid: `a${ts}`, timestamp: `2026-10-20T10:00:${ts}.000Z`, requestId: `r${ts}`, message: { id, role: 'assistant', model: 'claude-opus-5-5', usage: { input_tokens: 10, output_tokens: 5 }, content } });
+const tmpEntry = async (file) => entryOf(file, 'claude', claudeParser);
+
+// Every string in a value, for the "no path reaches the client" checks.
+function strings(v, out = []) {
+  if (typeof v === 'string') out.push(v);
+  else if (v && typeof v === 'object') for (const x of Object.values(v)) strings(x, out);
+  return out;
+}
+
+// A light-source stand-in with a few rows and a skeleton that can be slow.
+function fakeLight(id, n, { skeleton, ok = true, reason = null, throws = false } = {}) {
+  const now = Date.now();
+  return {
+    id,
+    available: () => ({ ok, reason }),
+    sessions() {
+      if (throws) throw new Error('listing failed');
+      return Array.from({ length: n }, (_, i) => ({ id: `${id}-${i}`, source: id, title: `${id} session ${i}`, project: 'proj', branch: null, start: now - (i + 2) * 1000, end: now - i * 1000, turns: 1, tools: 0, errors: i % 2, cost: null, flags: { errors: i % 2 === 1, loop: false, injection: false } }));
+    },
+    skeleton: skeleton || (async (_e, sid) => ({ session: { id: sid, source: id, project: 'proj', branch: null, start: 1, end: 2 }, turns: [{ index: 0, start: 0, ts: 1 }], spans: [{ id: 'a', parent: null, kind: 'session', text: null }] })),
+  };
+}
+
+test('sessions get opaque keys; a forged key is refused', async () => {
+  const t = createTrace({ indexer: await fakeIndexer(), gateway: gw, light: [], roots: [path.join(__dirname, 'fixtures', 'trace')] });
+  const [row] = t.sessions({});
+  assert.ok(row.key && !row.key.includes('/'));
+  await assert.rejects(t.session(Buffer.from('claude:s1').toString('base64url')), /unknown session/);
+});
+
+test('skeleton text refs are opaque content ids, and content reads back', async () => {
+  const t = createTrace({ indexer: await fakeIndexer(), gateway: gw, light: [], roots: [path.join(__dirname, 'fixtures', 'trace')] });
+  const [row] = t.sessions({});
+  const sk = await t.session(row.key, { turn: 0 });
+  const turn = sk.spans.find((s) => s.kind === 'turn');
+  assert.equal(typeof turn.text, 'string');
+  assert.ok(!JSON.stringify(sk).includes(dir), 'no file paths reach the client');
+  const c = await t.content(turn.text, {});
+  assert.equal(c.text, 'fix the login redirect');
+  assert.equal(await t.title(row.key), 'fix the login redirect');
+});
+
+test('content can be switched off', async () => {
+  const t = createTrace({ indexer: await fakeIndexer(), gateway: gw, light: [], roots: [path.join(__dirname, 'fixtures', 'trace')], contentOff: true });
+  const [row] = t.sessions({});
+  const sk = await t.session(row.key, { turn: 0 });
+  await assert.rejects(t.content(sk.spans[1].text, {}), /content viewing is off/);
+});
+
+test('a failing adapter is isolated', async () => {
+  const t = createTrace({
+    indexer: {
+      entries: () => {
+        throw new Error('boom');
+      },
+    },
+    gateway: gw,
+    light: [],
+    roots: [],
+  });
+  const src = t.sources();
+  assert.equal(src.find((s) => s.id === 'claude').ok, false);
+  assert.ok(Array.isArray(t.sessions({})));
+});
+
+test('demo mode serves synthetic sessions without files', async () => {
+  const t = createTrace({ demo: true });
+  const rows = t.sessions({});
+  assert.ok(rows.length >= 3);
+  const sk = await t.session(rows[0].key, {});
+  assert.ok(sk.spans.length > 3);
+});
+
+// ---- rows and keys ----
+
+test('client rows carry only the allowed fields and no path or size', async () => {
+  const t = await make({ indexer: await fakeIndexer([await codexEntry()]) });
+  const rows = t.sessions({});
+  assert.deepEqual(rows.map((r) => r.source).sort(), ['claude', 'codex']);
+  for (const r of rows) {
+    assert.deepEqual(Object.keys(r).sort(), ['branch', 'cost', 'end', 'errors', 'flags', 'key', 'project', 'source', 'start', 'title', 'tools', 'turns']);
+    assert.ok(!('file' in r) && !('size' in r) && !('id' in r));
+  }
+  // The project is a folder name, not the cwd the log recorded.
+  assert.equal(rows.find((r) => r.source === 'claude').project, 'p');
+  assert.equal(rows.find((r) => r.source === 'codex').project, 'q');
+  for (const s of strings(rows)) assert.ok(!/[\\/]/.test(s), `path-like value in a row: ${s}`);
+  assert.ok(!JSON.stringify(rows).includes(FIX));
+});
+
+test('a key with a forged or foreign tag is refused, a missing key is a 400', async () => {
+  const t = await make();
+  const [row] = t.sessions({});
+  const [body, tag] = row.key.split('.');
+  const flip = tag[0] === 'a' ? 'b' : 'a';
+  for (const bad of [`${body}.${flip}${tag.slice(1)}`, `${body}.`, body, `${body}.${tag}${tag}`, `${Buffer.from('claude:other').toString('base64url')}.${tag}`, '.', '\u0000', 'x'.repeat(5000)]) {
+    await assert.rejects(t.session(bad), (e) => e.status === 404 && /unknown session/.test(e.message), bad.slice(0, 20));
+  }
+  await assert.rejects(t.session(undefined), (e) => e.status === 400);
+  await assert.rejects(t.session({}), (e) => e.status === 400);
+  await assert.rejects(t.live(undefined, 0), (e) => e.status === 400);
+  await assert.rejects(t.title(undefined), (e) => e.status === 400);
+  await assert.rejects(t.title('nope.nope'), (e) => e.status === 404);
+  // The secret is per process, so a key stays valid across registries built on the same data.
+  assert.ok(await (await make()).session(row.key));
+});
+
+test('a bad turn is a 400', async () => {
+  const t = await make();
+  const [row] = t.sessions({});
+  for (const turn of [-1, 1.5, 'x']) await assert.rejects(t.session(row.key, { turn }), (e) => e.status === 400);
+});
+
+test('the skeleton carries no path: project is a folder name and every ref is an id', async () => {
+  const t = await make({ indexer: await fakeIndexer([await codexEntry()]) });
+  for (const row of t.sessions({})) {
+    const sk = await t.session(row.key, { turn: 0 });
+    for (const s of strings(sk)) assert.ok(!/[\\/]/.test(s), `path-like value in a skeleton: ${s}`);
+    assert.equal(sk.session.project, row.source === 'claude' ? 'p' : 'q');
+    for (const sp of sk.spans) for (const f of ['text', 'result']) if (sp[f] != null) assert.match(sp[f], /^ci_[0-9a-f]{16}$/);
+  }
+});
+
+test('result refs of tool and agent spans are content ids too', async () => {
+  const t = await make();
+  const [row] = t.sessions({});
+  const sk = await t.session(row.key, { turn: 0 });
+  const agent = sk.spans.find((s) => s.kind === 'agent');
+  assert.match(agent.result, /^ci_/);
+  assert.equal((await t.content(agent.result, {})).text, 'found src/auth.js');
+});
+
+test('codex sessions work end to end: title, skeleton and content', async () => {
+  const t = await make({ indexer: await fakeIndexer([await codexEntry()]) });
+  const row = t.sessions({ source: 'codex' })[0];
+  assert.equal(await t.title(row.key), 'add pagination');
+  const sk = await t.session(row.key, { turn: 0 });
+  const tool = sk.spans.find((s) => s.kind === 'tool');
+  assert.equal((await t.content(tool.result, {})).text.trim(), 'src');
+  assert.equal((await t.content(sk.spans.find((s) => s.kind === 'turn').text, {})).text, 'add pagination');
+});
+
+// ---- titles ----
+
+test('a title is one line, masked and at most 80 characters, and it is cached by key and mtime', async () => {
+  const k = secret();
+  const long = `first line with ${k}\n\nthen  more   words ` + 'x'.repeat(200);
+  const { root, file } = tmpClaude([U('s9', '00', long), A('s9', '01', 'm1', [{ type: 'text', text: 'ok' }])]);
+  const e = await tmpEntry(file);
+  const t2 = createTrace({ indexer: { entries: () => [e] }, light: [], roots: [root], listTtlMs: 0 });
+  const [row] = t2.sessions({});
+  assert.equal(row.title, null, 'unknown until asked');
+  const title = await t2.title(row.key);
+  assert.ok(title.length <= 80);
+  assert.ok(!title.includes(k) && !/\n/.test(title));
+  assert.match(title, /^first line with ‹Anthropic API key hidden›/);
+  assert.equal(t2.sessions({})[0].title, title, 'known titles show in the rows');
+  // Rewriting the log changes mtime: the stale title is not served.
+  fs.writeFileSync(file, JSON.stringify(U('s9', '00', 'a new prompt')) + '\n');
+  const e2 = { ...(await tmpEntry(file)), mtimeMs: e.mtimeMs + 5000 };
+  const t3 = createTrace({ indexer: { entries: () => [e2] }, light: [], roots: [root], listTtlMs: 0 });
+  assert.equal(await t3.title(t3.sessions({})[0].key), 'a new prompt');
+});
+
+test('a title read that fails is null, not an error', async () => {
+  const { root, file } = tmpClaude([U('s9', '00', 'hello')]);
+  const e = await tmpEntry(file);
+  fs.unlinkSync(file);
+  const t = createTrace({ indexer: { entries: () => [e] }, light: [], roots: [root], listTtlMs: 0 });
+  assert.equal(await t.title(t.sessions({})[0].key), null);
+});
+
+test('light and gateway titles come from the row', async () => {
+  const g = { runs: () => [{ id: 'r1', pattern: 'debate', state: 'done', steps: [], createdAt: Date.now() - 1000, updatedAt: Date.now() }], run: () => null, requests: () => [] };
+  const t = createTrace({ indexer: { entries: () => [] }, gateway: g, light: [fakeLight('kiro', 2)], roots: [] });
+  const k = t.sessions({ source: 'kiro' })[0];
+  assert.equal(k.title, 'kiro session 0');
+  assert.equal(await t.title(k.key), 'kiro session 0');
+  const r = t.sessions({ source: 'gateway' })[0];
+  assert.equal(await t.title(r.key), 'debate run · done · 0 steps');
+});
+
+test('with content off, file-source titles are not read', async () => {
+  const t = await make({ contentOff: true });
+  assert.equal(await t.title(t.sessions({})[0].key), null);
+});
+
+// ---- sessions() filters ----
+
+test('sessions: range, source, q, errors flag, newest first, cap of 500', async () => {
+  const now = Date.now();
+  const day = 86400e3;
+  const light = {
+    id: 'kiro',
+    available: () => ({ ok: true, reason: null }),
+    sessions: () => [
+      { id: 'old', source: 'kiro', title: 'Alpha job', project: 'billing', branch: 'main', start: now - 10 * day, end: now - 9 * day, turns: 1, tools: 0, errors: 0, cost: null, flags: { errors: false, loop: false, injection: false } },
+      { id: 'mid', source: 'kiro', title: 'Beta job', project: 'tokoku-api', branch: 'feat-x', start: now - 3 * day, end: now - 2 * day, turns: 1, tools: 0, errors: 2, cost: null, flags: { errors: true, loop: false, injection: false } },
+      { id: 'new', source: 'kiro', title: 'Gamma job', project: 'web', branch: 'dev', start: now - day, end: now - 1000, turns: 1, tools: 0, errors: 0, cost: null, flags: { errors: false, loop: false, injection: false } },
+    ],
+    skeleton: async () => ({}),
+  };
+  const t = createTrace({ indexer: { entries: () => [] }, light: [light], roots: [] });
+  const titles = (o) => t.sessions(o).map((r) => r.title);
+  assert.deepEqual(titles({}), ['Gamma job', 'Beta job', 'Alpha job']);
+  assert.deepEqual(titles({ range: 5 }), ['Gamma job', 'Beta job']);
+  assert.deepEqual(titles({ range: 1 }), ['Gamma job']);
+  assert.deepEqual(titles({ source: 'kiro' }).length, 3);
+  assert.deepEqual(titles({ source: 'codex' }), []);
+  assert.deepEqual(titles({ q: 'BETA' }), ['Beta job']);
+  assert.deepEqual(titles({ q: 'tokoku' }), ['Beta job']);
+  assert.deepEqual(titles({ q: 'feat-x' }), ['Beta job']);
+  assert.deepEqual(titles({ q: 'nothing' }), []);
+  assert.deepEqual(titles({ flags: 'errors' }), ['Beta job']);
+  assert.equal(createTrace({ indexer: { entries: () => [] }, light: [fakeLight('kiro', 700)], roots: [] }).sessions({}).length, 500);
+});
+
+test('q does not read content: an unknown claude title does not match', async () => {
+  const t = await make();
+  assert.equal(t.sessions({ q: 'login redirect' }).length, 0);
+  await t.title(t.sessions({})[0].key);
+  assert.equal(t.sessions({ q: 'login redirect' }).length, 1);
+});
+
+// ---- sources and isolation ----
+
+test('sources lists every configured source with ok, reason and count', async () => {
+  const t = await make({ light: [fakeLight('kiro', 2), fakeLight('gemini', 0, { ok: false, reason: 'not installed' }), fakeLight('antigravity', 1, { throws: true })] });
+  const src = Object.fromEntries(t.sources().map((s) => [s.id, s]));
+  assert.deepEqual(Object.keys(src), ['claude', 'codex', 'gateway', 'kiro', 'gemini', 'antigravity']);
+  assert.deepEqual(src.claude, { id: 'claude', ok: true, reason: null, count: 1 });
+  assert.equal(src.codex.count, 0);
+  assert.equal(src.gateway.ok, true);
+  assert.deepEqual(src.kiro, { id: 'kiro', ok: true, reason: null, count: 2 });
+  assert.deepEqual(src.gemini, { id: 'gemini', ok: false, reason: 'not installed', count: 0 });
+  assert.equal(src.antigravity.ok, false);
+  assert.match(src.antigravity.reason, /listing failed/);
+  // The sources that work still list their sessions.
+  assert.equal(t.sessions({}).filter((r) => r.source === 'antigravity').length, 0);
+  assert.equal(t.sessions({}).filter((r) => r.source === 'kiro').length, 2);
+});
+
+test('a reason never carries a file path', async () => {
+  const bad = { ...fakeLight('kiro', 1), sessions: () => { throw new Error("ENOENT: no such file or directory, open '/Users/someone/.kiro/sessions/x.json'"); } };
+  const t = createTrace({ indexer: { entries: () => [] }, light: [bad], roots: [] });
+  const r = t.sources().find((s) => s.id === 'kiro').reason;
+  assert.ok(!r.includes('/Users') && !r.includes('someone'), r);
+});
+
+test('a throwing gateway and a throwing claude are separate failures', async () => {
+  const g = { runs: () => { throw new Error('gw down'); }, run: () => null, requests: () => [] };
+  const t = createTrace({ indexer: await fakeIndexer(), gateway: g, light: [], roots: [FIX] });
+  const src = Object.fromEntries(t.sources().map((s) => [s.id, s]));
+  assert.equal(src.gateway.ok, false);
+  assert.equal(src.claude.ok, true);
+  assert.equal(t.sessions({}).length, 1);
+});
+
+test('without a gateway the gateway source is omitted; light defaults to none in tests via light: []', async () => {
+  const t = createTrace({ indexer: await fakeIndexer(), light: [], roots: [FIX] });
+  assert.deepEqual(t.sources().map((s) => s.id), ['claude', 'codex']);
+});
+
+test('a failing skeleton in one source does not break another', async () => {
+  const bad = fakeLight('kiro', 1, { skeleton: async () => { throw Object.assign(new Error('kiro broke'), { status: 500 }); } });
+  const t = await make({ light: [bad] });
+  const k = t.sessions({ source: 'kiro' })[0];
+  await assert.rejects(t.session(k.key), /kiro broke/);
+  const c = t.sessions({ source: 'claude' })[0];
+  assert.ok((await t.session(c.key, { turn: 0 })).spans.length);
+});
+
+// ---- content ----
+
+test('content and reveal: masked text pages back and reveal returns the value', async () => {
+  const k = secret();
+  const { root, file } = tmpClaude([
+    U('s9', '00', 'run it'),
+    A('s9', '01', 'm1', [{ type: 'tool_use', id: 'tu1', name: 'Bash', input: { command: 'cat .env' } }]),
+    U('s9', '02', [{ type: 'tool_result', tool_use_id: 'tu1', content: `KEY=${k}\nrest` }]),
+  ]);
+  const e = await tmpEntry(file);
+  const t = createTrace({ indexer: { entries: () => [e] }, light: [], roots: [root] });
+  const sk = await t.session(t.sessions({})[0].key, { turn: 0 });
+  const tool = sk.spans.find((s) => s.kind === 'tool');
+  const c = await t.content(tool.result, {});
+  assert.ok(!c.text.includes(k));
+  assert.equal(c.masked.length, 1);
+  assert.deepEqual(await t.reveal(tool.result, 0, {}), { value: k });
+  await assert.rejects(t.reveal(tool.result, 5, {}), (er) => er.status === 404);
+  await assert.rejects(t.reveal(tool.result, undefined, {}), (er) => er.status === 400);
+});
+
+test('an unknown content id is a 404, a missing one a 400', async () => {
+  const t = await make();
+  await assert.rejects(t.content('ci_0123456789abcdef', {}), (e) => e.status === 404 && /unknown content/.test(e.message));
+  await assert.rejects(t.content(undefined, {}), (e) => e.status === 400);
+  await assert.rejects(t.content('', {}), (e) => e.status === 400);
+  await assert.rejects(t.reveal('ci_0123456789abcdef', 0, {}), (e) => e.status === 404);
+});
+
+test('contentOff: content and reveal answer 403 with status', async () => {
+  const t = await make({ contentOff: true });
+  await assert.rejects(t.content('ci_x', {}), (e) => e.status === 403 && /content viewing is off/.test(e.message));
+  await assert.rejects(t.reveal('ci_x', 0, {}), (e) => e.status === 403 && /content viewing is off/.test(e.message));
+});
+
+test('content offset pages a long text', async () => {
+  const { root, file } = tmpClaude([U('s9', '00', 'z'.repeat(70000))]);
+  const e = await tmpEntry(file);
+  const t = createTrace({ indexer: { entries: () => [e] }, light: [], roots: [root] });
+  const sk = await t.session(t.sessions({})[0].key, { turn: 0 });
+  const id = sk.spans.find((s) => s.kind === 'turn').text;
+  const first = await t.content(id, {});
+  assert.ok(first.next > 0);
+  const second = await t.content(id, { offset: first.next });
+  assert.equal(second.offset, first.next);
+  assert.equal(first.text.length + second.text.length, 70000);
+});
+
+// ---- LRU ----
+
+test('the cache keeps cacheMax skeletons and drops the content ids of the evicted one', async () => {
+  const ix = await fakeIndexer();
+  const t = createTrace({ indexer: ix, gateway: gw, light: [], roots: [FIX], cacheMax: 2, listTtlMs: 0 });
+  const [row] = t.sessions({});
+  const a = await t.session(row.key, { turn: 0 });
+  const b = await t.session(row.key, { turn: 1 });
+  const idA = a.spans.find((s) => s.kind === 'turn').text;
+  await t.content(idA, {}); // touches A: B is now the oldest
+  const c = await t.session(row.key, { turn: 2 });
+  assert.equal(t.stats().cached, 2);
+  await assert.rejects(t.content(b.spans.find((s) => s.kind === 'turn').text, {}), /unknown content/);
+  assert.ok((await t.content(idA, {})).text);
+  assert.ok((await t.content(c.spans.find((s) => s.kind === 'turn').text, {})).text);
+});
+
+test('the cache also evicts by size', async () => {
+  const ix = await fakeIndexer();
+  const t = createTrace({ indexer: ix, gateway: gw, light: [], roots: [FIX], cacheBytes: 10, listTtlMs: 0 });
+  const [row] = t.sessions({});
+  await t.session(row.key, { turn: 0 });
+  const b = await t.session(row.key, { turn: 1 });
+  assert.equal(t.stats().cached, 1, 'only the newest stays');
+  assert.ok((await t.content(b.spans.find((s) => s.kind === 'turn').text, {})).text);
+});
+
+test('an unchanged skeleton is served from the cache; a changed file rebuilds it', async () => {
+  const e = (await fakeIndexer()).entries()[0];
+  const entries = [e];
+  const t = createTrace({ indexer: { entries: () => entries }, gateway: gw, light: [], roots: [FIX], listTtlMs: 0 });
+  const key = t.sessions({})[0].key;
+  const a = await t.session(key, { turn: 0 });
+  assert.equal(await t.session(key, { turn: 0 }), a);
+  entries[0] = { ...e, mtimeMs: e.mtimeMs + 1 };
+  assert.notEqual(await t.session(key, { turn: 0 }), a);
+});
+
+// ---- read limit ----
+
+test('at most maxReads skeleton builds run at once; the rest wait in order', async () => {
+  let active = 0;
+  let peak = 0;
+  const started = [];
+  const slow = fakeLight('kiro', 6, {
+    skeleton: async (_e, sid) => {
+      started.push(sid);
+      active++;
+      peak = Math.max(peak, active);
+      await new Promise((r) => setTimeout(r, 25));
+      active--;
+      return { session: { id: sid }, turns: [], spans: [] };
+    },
+  });
+  const t = createTrace({ indexer: { entries: () => [] }, light: [slow], roots: [], maxReads: 2 });
+  const rows = t.sessions({});
+  const order = rows.map((r) => r.key);
+  const p = order.map((k) => t.session(k));
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(t.stats().active, 2);
+  assert.equal(t.stats().queued, 4);
+  await Promise.all(p);
+  assert.equal(peak, 2);
+  assert.equal(started.length, 6);
+  assert.deepEqual(started, rows.map((r) => Buffer.from(r.key.split('.')[0], 'base64url').toString().slice('kiro:'.length)), 'first in, first out');
+  assert.equal(t.stats().active, 0);
+});
+
+test('content reads share the same limit and a failed build frees its slot', async () => {
+  const boom = fakeLight('kiro', 3, { skeleton: async () => { throw new Error('nope'); } });
+  const t = createTrace({ indexer: { entries: () => [] }, light: [boom], roots: [], maxReads: 1 });
+  const rows = t.sessions({});
+  const res = await Promise.allSettled(rows.map((r) => t.session(r.key)));
+  assert.deepEqual(res.map((r) => r.status), ['rejected', 'rejected', 'rejected']);
+  assert.equal(t.stats().active, 0);
+  assert.equal(t.stats().queued, 0);
+});
+
+test('two requests for the same skeleton build it once', async () => {
+  let calls = 0;
+  const l = fakeLight('kiro', 1, { skeleton: async (_e, sid) => { calls++; await new Promise((r) => setTimeout(r, 10)); return { session: { id: sid }, turns: [], spans: [] }; } });
+  const t = createTrace({ indexer: { entries: () => [] }, light: [l], roots: [] });
+  const k = t.sessions({})[0].key;
+  const [a, b] = await Promise.all([t.session(k), t.session(k)]);
+  assert.equal(calls, 1);
+  assert.equal(a, b);
+});
+
+// ---- worker offload ----
+
+const scrub = (sk) => JSON.parse(JSON.stringify(sk, (k, v) => (k === 'text' || k === 'result') && typeof v === 'string' ? 'ref' : v));
+
+test('a big file is built in a worker and matches the in-thread skeleton', async () => {
+  const inThread = await make({ workerMinBytes: 1e12 });
+  const worker = await make({ workerMinBytes: 0 });
+  for (const t of [inThread, worker]) {
+    const sk = await t.session(t.sessions({})[0].key, { turn: 0 });
+    t.sk = sk;
+  }
+  assert.equal(worker.stats().workers, 1);
+  assert.equal(inThread.stats().workers, 0);
+  assert.deepEqual(scrub(worker.sk), scrub(inThread.sk));
+  assert.ok(worker.sk.spans.some((s) => s.kind === 'agent'), 'the subagent file reached the worker');
+  assert.equal((await worker.content(worker.sk.spans.find((s) => s.kind === 'turn').text, {})).text, 'fix the login redirect');
+});
+
+test('a codex session is built in a worker too', async () => {
+  const codexE = await codexEntry();
+  const ix = { entries: () => [codexE] };
+  const a = createTrace({ indexer: ix, light: [], roots: [FIX], workerMinBytes: 0 });
+  const b = createTrace({ indexer: ix, light: [], roots: [FIX], workerMinBytes: 1e12 });
+  const ska = await a.session(a.sessions({})[0].key, { turn: 0 });
+  const skb = await b.session(b.sessions({})[0].key, { turn: 0 });
+  assert.equal(a.stats().workers, 1);
+  assert.deepEqual(scrub(ska), scrub(skb));
+});
+
+test('a worker that exits, throws or hangs falls back to the main thread', async () => {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-wk-'));
+  const script = (name, body) => {
+    const f = path.join(scratch, name);
+    fs.writeFileSync(f, body);
+    return f;
+  };
+  const cases = {
+    exits: script('exit.js', 'process.exit(3);'),
+    throws: script('throw.js', 'throw new Error("worker broke");'),
+    hangs: script('hang.js', 'setInterval(() => {}, 1000);'),
+    fails: script('fail.js', 'require("worker_threads").parentPort.postMessage({ ok: false, message: "no" });'),
+  };
+  for (const [name, workerFile] of Object.entries(cases)) {
+    const t = await make({ workerMinBytes: 0, workerFile, workerTimeoutMs: 300 });
+    const sk = await t.session(t.sessions({})[0].key, { turn: 0 });
+    assert.ok(sk.spans.length > 3, name);
+    assert.equal(t.stats().fallbacks, 1, name);
+    assert.equal((await t.content(sk.spans.find((s) => s.kind === 'turn').text, {})).text, 'fix the login redirect', name);
+  }
+});
+
+test('a small file never starts a worker', async () => {
+  const t = await make();
+  await t.session(t.sessions({})[0].key, { turn: 0 });
+  assert.equal(t.stats().workers, 0);
+});
+
+// ---- live ----
+
+test('live: unchanged size reports changed false, growth rebuilds the last turn', async () => {
+  const { root, file } = tmpClaude([U('s9', '00', 'first'), A('s9', '01', 'm1', [{ type: 'text', text: 'one' }])]);
+  const e = await tmpEntry(file);
+  const t = createTrace({ indexer: { entries: () => [e] }, light: [], roots: [root], listTtlMs: 0 });
+  const key = t.sessions({})[0].key;
+  const before = await t.session(key);
+  assert.deepEqual(await t.live(key, e.size), { changed: false, size: e.size });
+  assert.deepEqual(await t.live(key, e.size + 1000), { changed: false, size: e.size });
+  // The log grows inside the last turn (the index has not been refreshed).
+  fs.appendFileSync(file, JSON.stringify(A('s9', '05', 'm2', [{ type: 'text', text: 'two' }])) + '\n');
+  const size = fs.statSync(file).size;
+  const live = await t.live(key, e.size);
+  assert.equal(live.changed, true);
+  assert.equal(live.size, size);
+  const chats = live.skeleton.spans.filter((s) => s.kind === 'chat');
+  assert.equal(chats.length, 2);
+  assert.notEqual(live.skeleton, before);
+  const answer = live.skeleton.spans.find((s) => s.kind === 'answer');
+  assert.equal((await t.content(answer.text, {})).text, 'two');
+  for (const s of strings(live.skeleton)) assert.ok(!/[\\/]/.test(s), s);
+  // The cached skeleton is untouched: live bypasses the cache.
+  assert.equal(await t.session(key), before);
+  await assert.rejects(t.live(key, -1), (er) => er.status === 400);
+  await assert.rejects(t.live(key, 'x'), (er) => er.status === 400);
+  fs.unlinkSync(file);
+  await assert.rejects(t.live(key, 0), (er) => er.status === 404);
+});
+
+test('live for other sources and demo is not changed', async () => {
+  const t = await make({ light: [fakeLight('kiro', 1)] });
+  assert.deepEqual(await t.live(t.sessions({ source: 'kiro' })[0].key, 0), { changed: false });
+  const d = createTrace({ demo: true });
+  assert.deepEqual(await d.live(d.sessions({})[0].key, 0), { changed: false });
+});
+
+// ---- demo ----
+
+test('demo: three synthetic sources, keys, content ids and masked content', async () => {
+  const t = createTrace({ demo: true, roots: ['/does/not/exist'], indexer: { entries: () => { throw new Error('must not be called'); } }, gateway: { runs: () => { throw new Error('no'); } } });
+  const rows = t.sessions({});
+  assert.deepEqual(rows.map((r) => r.source).sort(), ['claude', 'codex', 'kiro']);
+  assert.ok(rows.every((r) => r.title && r.key));
+  const titles = rows.map((r) => r.title);
+  assert.ok(titles.includes('fix auth redirect') && titles.includes('tokoku-api pagination') && titles.includes('spec: billing'));
+  assert.deepEqual(t.sources().filter((s) => s.ok).map((s) => s.id).sort(), ['claude', 'codex', 'kiro']);
+  let secretSeen = 0;
+  for (const row of rows) {
+    const sk = await t.session(row.key, {});
+    assert.ok(sk.spans.length > 3);
+    for (const s of strings(sk)) assert.ok(!/^\/(Users|home)/.test(s), s);
+    for (const sp of sk.spans)
+      for (const f of ['text', 'result'])
+        if (sp[f]) {
+          assert.match(sp[f], /^ci_[0-9a-f]{16}$/);
+          const c = await t.content(sp[f], {});
+          assert.ok(c.text.length > 0);
+          assert.ok(!/sk-ant-api03/.test(c.text), 'a demo secret comes back masked');
+          if (c.masked.length) {
+            secretSeen++;
+            const i = sp[f];
+            assert.match((await t.reveal(i, 0, {})).value, /^sk-ant-api03-/);
+          }
+        }
+  }
+  assert.ok(secretSeen >= 1, 'one demo output carries a masked secret');
+});
+
+test('demo: the claude session has a subagent, a failed Bash call and a loop; content off still applies', async () => {
+  const t = createTrace({ demo: true });
+  const row = t.sessions({ source: 'claude' })[0];
+  assert.equal(row.flags.loop, true);
+  assert.ok(row.errors >= 1);
+  const sk = await t.session(row.key, {});
+  assert.ok(sk.spans.some((s) => s.kind === 'agent'));
+  assert.ok(sk.spans.some((s) => s.kind === 'tool' && s.tool.name === 'Bash' && s.status === 'error'));
+  const codex = await t.session(t.sessions({ source: 'codex' })[0].key, {});
+  assert.ok(codex.spans.some((s) => s.kind === 'tool'));
+  const off = createTrace({ demo: true, contentOff: true });
+  const id = (await off.session(off.sessions({ source: 'claude' })[0].key, {})).spans.find((s) => s.text).text;
+  await assert.rejects(off.content(id, {}), (e) => e.status === 403);
+  await assert.rejects(t.session(Buffer.from('claude:demo').toString('base64url') + '.abc'), /unknown session/);
+});

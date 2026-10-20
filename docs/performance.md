@@ -93,3 +93,43 @@ that means re-reading it every minute: 0.4–0.9 s for a 24 MB session here, gro
 Reading only the appended bytes would need a change to `lib/claude.js` and `lib/codex.js`: a parser
 that can stop after the last complete line and continue from that byte offset with its in-memory
 state. It is planned as a separate change.
+
+## Trace explorer: showing one session of a huge log
+
+The trace explorer never reads a whole log to show a session. The index keeps the byte offset of every
+turn, so a skeleton reads only the last turn (or the one asked for), and the text of one span is read
+later, on its own, by byte range. The registry (`lib/trace/index.js`) adds these limits:
+
+- **Cache:** at most 20 built skeletons and about 200 MB of them (the length of their JSON), least
+  recently used out first. A session's content ids go with its cache slot.
+- **Worker:** a Claude or Codex file over 50 MB is built in `lib/trace/worker.js` (a worker thread), so
+  the server keeps answering. The worker gets only the session's own record, its subagent files and its
+  usage rows. A worker that cannot start, fails, exits or runs over 30 s is replaced by a build in the
+  main thread.
+- **Read limit:** at most 4 skeleton builds or content reads run at once; the rest wait in order.
+- **Isolation:** a source that throws is shown as unavailable with its reason, and the others still work.
+
+### How it was measured
+
+`test/trace-perf.test.js` writes a synthetic Claude Code session to the temp folder (never your logs):
+20,000 lines in 200 turns, each turn a prompt, 49 tool calls with a 31 KB result each and a reply,
+about 310 MB in all. It indexes the file, then times the last-turn skeleton and one content page. It
+asserts the skeleton under 3 s and the page under 100 ms, prints the numbers, and removes the file. It
+takes a few seconds, but writes 300 MB, so it only runs on request:
+
+```
+ZAAFPULSE_PERF=1 node --test test/trace-perf.test.js
+```
+
+| Step (310 MB session) | Time |
+|---|---|
+| Last-turn skeleton, in a worker | 21 ms |
+| Last-turn skeleton, in the main thread | 5 ms |
+| One 31 KB content page | 1.1 ms |
+| First index of the file (for reference) | 3.3 s |
+
+Machine: Apple M4 (10 cores), macOS 26.6, Node 24.16.0. The worker costs a few milliseconds of start-up
+and copying, and buys a main thread that stays free while a slow turn is read; that matters for a turn
+with thousands of tool calls, not for the 100 calls here. Thresholds are the limits the explorer
+promises (P1, P2), not what this machine reaches: on a slow disk or a busy machine expect more, and the
+test is the way to check.
