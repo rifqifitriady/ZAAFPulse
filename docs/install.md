@@ -189,6 +189,12 @@ ZAAFPulse listens on `127.0.0.1` unless told otherwise. Any other address, or a 
   - They never fall back to the development branch unless you ask (`--version main`).
   - The checksum comes from the same GitHub release, so it protects against damaged or altered downloads, not against a compromised GitHub account.
   - From 1.0.3 every release file also has a build-provenance attestation (Sigstore), signed as made by this repository's release workflow from a specific commit. Check one with `gh attestation verify zaafpulse-1.0.3-linux-x64 --repo rifqifitriady/ZAAFPulse`. A file uploaded by hand, even with a stolen token, has no valid attestation.
+- **Verify a download yourself:**
+  - Checksum: `shasum -a 256 -c SHA256SUMS.txt --ignore-missing` on macOS, `sha256sum -c SHA256SUMS.txt --ignore-missing` on Linux, or `(Get-FileHash zaafpulse-<v>-win-x64.exe).Hash` on Windows, compared with its line in `SHA256SUMS.txt`.
+  - Origin: `gh attestation verify <file> --repo rifqifitriady/ZAAFPulse` shows the workflow and commit that built it.
+  - Releases published after immutable releases are switched on also pass `gh release verify v<v> --repo rifqifitriady/ZAAFPulse` and `gh release verify-asset v<v> <file> --repo rifqifitriady/ZAAFPulse`. The files and tag of such a release cannot be changed after publication.
+  - Version tags are never moved. A fix ships as a new version.
+- **Single-file executables check themselves** (releases after 1.0.3). Each binary carries the SHA-256 of every app file inside it. On every start it checks the unpacked copy in the cache folder against those hashes. A file that was changed, removed or added is restored from the binary before anything runs, and the binary stops with an error when that is not possible.
 
 ### HTTPS
 
