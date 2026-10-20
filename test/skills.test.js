@@ -141,3 +141,31 @@ test('skills: CLAUDE_CONFIG_DIR and ~/.agents/skills; whole folders are copied, 
   // Without "env", a given home never reads this machine's CLAUDE_CONFIG_DIR.
   assert.equal(createSkills({ dir: src, home }).roots().claude, '~/.claude/skills');
 });
+
+test('skills: the dashboard install and remove pass the chosen location through', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'acc-skills-target-'));
+  const gateway = createGateway({
+    dataDir: home,
+    toolsHome: home,
+    getConfig: () => ({ gateway: { providers: [], defaults: {} } }),
+    writeGatewayConfig: () => {},
+    secrets: secretsFor(),
+    resolveSecret: () => undefined,
+    getPricing: () => ({}),
+    getIntegrations: () => ({ listTools: async () => [], callTool: async () => ({ result: { content: [] } }) }),
+  });
+  const has = (where) => fs.existsSync(path.join(home, where, 'skills', 'zaafpulse', 'SKILL.md'));
+  await gateway.admin('skills', 'POST', { action: 'install', target: 'agents' });
+  assert.deepEqual([has('.claude'), has('.agents')], [false, true]);
+  await gateway.admin('skills', 'POST', { action: 'install' }); // no target: Claude Code, as before
+  assert.deepEqual([has('.claude'), has('.agents')], [true, true]);
+  await gateway.admin('skills', 'POST', { action: 'uninstall', target: 'claude' });
+  assert.deepEqual([has('.claude'), has('.agents')], [false, true]);
+  assert.match((await gateway.admin('skills', 'POST', { action: 'install', target: 'nowhere' })).errors[0], /target/);
+  await gateway.admin('skills', 'POST', { action: 'uninstall' }); // no target: removes both
+  assert.deepEqual([has('.claude'), has('.agents')], [false, false]);
+  assert.deepEqual((await gateway.admin('', 'GET')).skillRoots, {
+    claude: '~/.claude/skills',
+    agents: '~/.agents/skills',
+  });
+});
