@@ -943,6 +943,9 @@ const DRILLS = {
     const k = d.kpis;
     const budget = d.config.monthlyBudgetUSD;
     const parts = TOKEN_TYPES.map((t) => ({ ...t, value: k.costParts[t.id] }));
+    // Server tools (web search) are billed per call, not per token.
+    if (k.costParts.tools)
+      parts.push({ id: 'tools', name: 'Server tools', color: 'var(--accent)', value: k.costParts.tools });
     const biggest = [...parts].sort((a, b) => b.value - a.value)[0];
     const byCost = (rows) =>
       rows

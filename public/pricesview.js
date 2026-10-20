@@ -92,12 +92,15 @@ function priceCard(key, d, usage, totalCost) {
   const u = usage[key];
   const share = u && totalCost ? u.cost / totalCost : 0;
   const editing = pv2.editing === key;
+  const snap = d.snapshot || {};
   const label =
     src === 'live'
       ? `<span class="pc-src live">Live pricing · OpenRouter</span>`
       : src === 'manual'
         ? `<span class="pc-src manual">${pinned ? 'Your price · pinned' : 'Your price'}</span>`
-        : `<span class="pc-src builtin">Built-in price</span>`;
+        : src === 'snapshot'
+          ? `<span class="pc-src builtin">Offline list · ${esc(snap.source || 'OpenRouter')}${snap.fetchedAt ? `, ${esc(snap.fetchedAt)}` : ''}</span>`
+          : `<span class="pc-src builtin">${p.estimate ? 'Built-in estimate' : 'Built-in price'}</span>`;
   const tags =
     cat && cat.tags.length
       ? `<div class="pc-kv"><span>Tags</span><b>${esc(cat.tags.slice(0, 2).join(', '))}${cat.tags.length > 2 ? ` <i>+${cat.tags.length - 2}</i>` : ''}</b></div>`
@@ -170,6 +173,7 @@ function paintPrices() {
       : [...list].sort((a, b) => (pv2.sort === 'desc' ? priceFor(b) - priceFor(a) : priceFor(a) - priceFor(b)));
   const shownCatalog = sorted(catalog.filter(match));
   const unpriced = (state.data ? state.data.unpriced : []) || [];
+  const estimated = (state.data && state.data.estimated) || [];
   el.innerHTML = `<div class="panel-head pc-toolbar"><h3>Model prices</h3><span class="meta">USD per 1M tokens · your own prices are kept in config.json</span>
       <div class="pc-sync">
         <span class="pill live-pill">${d.sync.enabled ? `<i class="live-dot"></i>${st.fetchedAt ? `Live · updated ${ago(st.fetchedAt)} · ${st.models} models` : 'Live · not fetched yet'}` : 'Auto-update off'}${st.error ? ` · <span class="pc-err">last try failed: ${esc(st.error)}</span>` : ''}</span>
@@ -191,7 +195,7 @@ function paintPrices() {
           return `<button class="pc-vendor" type="button" data-pvendor="${v}" aria-pressed="${pv2.vendor === v}" ${v !== 'all' && !n ? 'disabled' : ''} style="--v:${v === 'all' ? 'var(--h-cyan)' : VENDOR[v][1]}">${v === 'all' ? '' : `<i>${VENDOR[v][2]}</i>`}${v === 'all' ? 'All vendors' : VENDOR[v][0]}<b>${n}</b></button>`;
         })
         .join('')}</div></div>
-    <p class="kpi-sub pc-note">Prices come from OpenRouter's public model list, which carries each provider's list price; it is fetched every 12 hours with one request that sends no data from this machine. A model you edit is pinned to your price. ${unpriced.length ? `<b>Still unpriced:</b> ${unpriced.map(esc).join(', ')}.` : 'Every model you used has a price.'}</p>
+    <p class="kpi-sub pc-note">Prices come from OpenRouter's public model list, which carries each provider's list price; it is fetched every 12 hours with one request that sends no data from this machine. A model you edit is pinned to your price. ${unpriced.length ? `<b>Still unpriced:</b> ${unpriced.map(esc).join(', ')}.` : 'Every model you used has a price.'}${estimated.length ? ` <b>Estimated:</b> ${estimated.map(esc).join(', ')} (the logs name no model, so a stand-in price is used).` : ''}</p>
     ${
       pv2.editing === '__new'
         ? `<div class="pc-grid"><article class="pcard editing" style="--v:#8f98cc"><div class="pc-head"><span class="pc-logo">#</span><div class="pc-title"><b>New model prefix</b><small>Prices any model whose name starts with it</small></div></div>
