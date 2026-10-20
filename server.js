@@ -216,6 +216,9 @@ const gateway = createGateway({
   getIntegrations: () => getIntegrations(),
   version: require('./package.json').version,
   baseUrl: BASE_URL,
+  // Agent card and /skills advertise the address a client used, with the scheme it really has.
+  publicUrl: process.env.ZAAFPULSE_PUBLIC_URL || '',
+  trustProxy: process.env.ZAAFPULSE_TRUST_PROXY === '1',
 });
 
 // Second brain sources: Obsidian by default, plus Logseq, Notion, Tana, Roam, mem.ai, Reflect, Heybrain,

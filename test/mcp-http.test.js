@@ -157,3 +157,41 @@ test('mcp http: 401 names the bearer scheme; CORS lets browser MCP clients send 
     t.close();
   }
 });
+
+test('advertised URLs: agent card and /skills use the real scheme, never a hard-coded http', async () => {
+  const get = (base, p, headers = {}) =>
+    new Promise((resolve) =>
+      http.get(`${base}${p}`, { headers }, (res) => {
+        let d = '';
+        res.on('data', (c) => (d += c));
+        res.on('end', () => resolve(d));
+      }),
+    );
+  const plain = await setup();
+  const proxied = await setup({ trustProxy: true });
+  const fixed = await setup({ publicUrl: 'https://ai.example.com/' });
+  try {
+    const card = async (t, headers) => JSON.parse(await get(t.base, '/.well-known/agent-card.json', headers)).url;
+    assert.equal(await card(plain, { host: 'localhost:4777' }), 'http://localhost:4777/a2a');
+    assert.equal(
+      await card(plain, { host: 'localhost:4777', 'x-forwarded-proto': 'https' }),
+      'http://localhost:4777/a2a',
+      'an untrusted x-forwarded-proto is ignored',
+    );
+    assert.equal(
+      await card(proxied, { host: 'ai.example.com', 'x-forwarded-proto': 'https' }),
+      'https://ai.example.com/a2a',
+    );
+    assert.equal(await card(fixed, { host: '127.0.0.1:4777' }), 'https://ai.example.com/a2a');
+    assert.equal(await card(plain, { host: 'evil"<x>' }), 'http://127.0.0.1/a2a', 'a strange Host is not echoed');
+    assert.match(await get(fixed.base, '/skills'), /https:\/\/ai\.example\.com\/skills\/zaafpulse\/SKILL\.md/);
+    assert.match(
+      await get(proxied.base, '/skills', { host: 'ai.example.com', 'x-forwarded-proto': 'https' }),
+      /https:\/\/ai\.example\.com\/skills\//,
+    );
+  } finally {
+    plain.close();
+    proxied.close();
+    fixed.close();
+  }
+});
