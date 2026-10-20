@@ -1,0 +1,61 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+const claudeParser = require('../lib/claude');
+const adapter = require('../lib/trace/claude');
+const { validate, totals } = require('../lib/trace/model');
+
+const dir = path.join(__dirname, 'fixtures', 'trace', 'claude', 'proj');
+async function entriesFor(files) {
+  const out = [];
+  for (const file of files) out.push({ file, source: 'claude', size: fs.statSync(file).size, result: await claudeParser.parseFile(file) });
+  return out;
+}
+
+test('sessions: one row per session, subagent files folded in', async () => {
+  const entries = await entriesFor([path.join(dir, 's1.jsonl'), path.join(dir, 's1', 'subagents', 'agent-ag1.jsonl')]);
+  const rows = adapter.sessions(entries);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].id, 's1');
+  assert.equal(rows[0].turns, 2);
+  assert.ok(rows[0].cost > 0);
+});
+
+test('skeleton of turn 0: turn → chat → Agent tool → subagent chat, then answer', async () => {
+  const entries = await entriesFor([path.join(dir, 's1.jsonl'), path.join(dir, 's1', 'subagents', 'agent-ag1.jsonl')]);
+  const main = entries[0];
+  const sk = await adapter.skeleton(main, 's1', { turn: 0, entries });
+  assert.deepEqual(validate(sk.spans), []);
+  // Time order. The Agent tool_use becomes one `agent` span (not a tool span plus an agent span).
+  assert.deepEqual(
+    sk.spans.map((s) => s.kind),
+    ['session', 'turn', 'chat', 'agent', 'chat', 'chat', 'answer'],
+  );
+  const agent = sk.spans.find((s) => s.kind === 'agent');
+  assert.equal(agent.name, 'invoke_agent Explore');
+  const subChat = sk.spans.find((s) => s.parent === agent.id && s.kind === 'chat');
+  assert.equal(subChat.model, 'claude-haiku-5-5');
+  assert.equal(sk.turns.length, 2);
+  // Spans carry references only: a ref is {s, e, k}, and no span holds the prompt text itself.
+  for (const s of sk.spans) {
+    for (const ref of [s.text, s.result]) assert.ok(ref == null || (typeof ref.s === 'number' && typeof ref.e === 'number' && typeof ref.k === 'string'), `span ${s.kind} carries a ref only`);
+    assert.equal(JSON.stringify(s).includes('fix the login redirect'), false);
+  }
+  const t = totals(sk.spans);
+  assert.equal(t.input, 100 + 50 + 150);
+});
+
+test('span ids are stable across rebuilds', async () => {
+  const entries = await entriesFor([path.join(dir, 's1.jsonl')]);
+  const a = await adapter.skeleton(entries[0], 's1', { turn: 1, entries });
+  const b = await adapter.skeleton(entries[0], 's1', { turn: 1, entries });
+  assert.deepEqual(a.spans.map((s) => s.id), b.spans.map((s) => s.id));
+});
+
+test('the skeleton reads only the chosen turn (byte range)', async () => {
+  const entries = await entriesFor([path.join(dir, 's1.jsonl')]);
+  const sk = await adapter.skeleton(entries[0], 's1', { turn: 1, entries });
+  assert.equal(sk.spans.filter((s) => s.kind === 'chat').length, 1);
+  assert.ok(sk.spans.every((s) => !s.text || s.text.s >= entries[0].result.sessions.s1.turns[1][0]));
+});
