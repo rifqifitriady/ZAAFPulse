@@ -383,3 +383,29 @@ test('gateway: a kept key does not follow a switch to OAuth2 or a base URL set o
     await evil.close();
   }
 });
+
+test('gateway: an OAuth2 client secret is not re-sent when the token endpoint redirects', async () => {
+  const other = await fakeServer({ 'POST /steal': { body: { access_token: 'stolen' } } });
+  const token = await fakeServer({ 'POST /token': { status: 307, headers: { location: `${other.url}/steal` } } });
+  const { createProviders } = require('../lib/gateway/providers');
+  const p = {
+    id: 'az',
+    preset: 'azure-openai',
+    baseUrl: token.url,
+    enabled: true,
+    apiKey: { keychain: 'acc.gw-az' },
+    auth: { type: 'oauth2', tokenUrl: `${token.url}/token`, clientId: 'app', grant: 'client_credentials' },
+  };
+  const providers = createProviders({
+    getConfig: () => ({ gateway: { providers: [p] } }),
+    secrets: { resolve: () => 'CLIENT-SECRET-123', mask: (s) => s },
+  });
+  try {
+    await assert.rejects(providers.accessToken(p), /redirect/);
+    assert.equal(token.requests.length, 1);
+    assert.deepEqual(other.requests, [], 'the redirect target never saw the client secret');
+  } finally {
+    await other.close();
+    await token.close();
+  }
+});
