@@ -1,6 +1,13 @@
 {
   "userName": "",
   "monthlyBudgetUSD": 0,
+  "otel": {
+    "enabled": false,
+    "endpoint": "https://abc12345.live.dynatrace.com/api/v2/otlp",
+    "headers": { "Authorization": { "keychain": "acc.otel" } },
+    "serviceName": "zaafpulse",
+    "captureContent": false
+  },
   "integrations": {
     "dynatrace-saas": {
       "type": "dynatrace",
