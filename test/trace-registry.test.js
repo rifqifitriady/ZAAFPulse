@@ -5,7 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const claudeParser = require('../lib/claude');
 const codexParser = require('../lib/codex');
-const { createTrace } = require('../lib/trace');
+const { createTrace, contentDefaultOff } = require('../lib/trace');
 
 const FIX = path.join(__dirname, 'fixtures', 'trace');
 const dir = path.join(FIX, 'claude', 'proj');
@@ -886,4 +886,12 @@ test('an error status outside 400-599 is a 500', async () => {
   const ok = fakeLight('kiro', 1, { skeleton: async () => { throw Object.assign(new Error('teapot'), { status: 418 }); } });
   const t = createTrace({ indexer: { entries: () => [] }, light: [ok], roots: [] });
   await assert.rejects(t.session(t.sessions({})[0].key), (er) => er.status === 418);
+});
+
+test('content is off by default in server mode only, and the setting wins either way', () => {
+  assert.equal(contentDefaultOff({ ZAAFPULSE_CONTENT: 'off' }, false), true, 'off is off');
+  assert.equal(contentDefaultOff({ ZAAFPULSE_CONTENT: 'off' }, true), true);
+  assert.equal(contentDefaultOff({}, true), true, 'server mode without a value');
+  assert.equal(contentDefaultOff({ ZAAFPULSE_CONTENT: 'on' }, true), false, 'server mode, asked for');
+  assert.equal(contentDefaultOff({}, false), false, 'loopback without a value');
 });
