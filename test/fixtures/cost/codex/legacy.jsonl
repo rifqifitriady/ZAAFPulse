@@ -1,0 +1,3 @@
+{"timestamp":"2026-10-16T13:00:00.000Z","type":"session_meta","payload":{"id":"L1","forked_from_id":"L1"}}
+{"timestamp":"2026-10-16T13:00:00.100Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":100,"total_tokens":1100},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":100,"total_tokens":1100}}}}
+{"timestamp":"2026-10-16T13:00:00.200Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":2000,"cached_input_tokens":0,"output_tokens":200,"total_tokens":2200},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":0,"output_tokens":100,"total_tokens":1100}}}}
