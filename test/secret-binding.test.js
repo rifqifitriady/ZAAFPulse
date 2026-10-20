@@ -409,3 +409,27 @@ test('gateway: an OAuth2 client secret is not re-sent when the token endpoint re
     await token.close();
   }
 });
+
+test('integrations: the default URLs in the check are the ones the connectors really call', async (t) => {
+  const { DEFAULT_CONNECTORS } = require('../lib/integrations');
+  const { origins } = require('../lib/secret-binding');
+  const called = [];
+  t.mock.method(globalThis, 'fetch', async (u) => (called.push(String(u)), new Response('{"data":[]}')));
+  const entries = [
+    { type: 'arize', flavor: 'ax', apiKey: { keychain: 'acc.a' } },
+    { type: 'arize', apiKey: { keychain: 'acc.a' } },
+    { type: 'router', flavor: '9router', apiKey: { keychain: 'acc.r' } },
+    { type: 'router', apiKey: { keychain: 'acc.r' } },
+    { type: 'openrouter', apiKey: { keychain: 'acc.o' } },
+  ];
+  for (const [i, entry] of entries.entries()) {
+    called.length = 0;
+    const c = DEFAULT_CONNECTORS[entry.type].create(`bind-defaults-${process.pid}-${i}`, entry, {
+      secrets: fixed('k-123456'),
+    });
+    await c.health();
+    assert.ok(called.length, `${entry.type} made a request`);
+    const expected = origins(entryAddresses(entry).urls);
+    for (const u of called) assert.ok(expected.has(new URL(u).origin), `${entry.type}: ${u} not in ${[...expected]}`);
+  }
+});
