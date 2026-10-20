@@ -119,7 +119,7 @@ npm run mcp:register -- claude --remove
 | Claude Desktop | `claude-desktop` | `~/Library/Application Support/Claude/claude_desktop_config.json` | `~/.config/Claude/claude_desktop_config.json` | `%APPDATA%\Claude\claude_desktop_config.json` | `mcpServers` |
 | Codex CLI | `codex` | `~/.codex/config.toml` (or `$CODEX_HOME`) | same | same | `codex mcp add` for a new entry when the CLI is installed; otherwise only the `[mcp_servers.zaafpulse]` table is added, replaced or removed |
 | Gemini CLI | `gemini` | `~/.gemini/settings.json` | same | same | `mcpServers` |
-| Windsurf / Devin Desktop | `windsurf` | `~/.config/devin/mcp_config.json` | same (`$XDG_CONFIG_HOME/devin`) | `%APPDATA%\devin\mcp_config.json` | `mcpServers`. A Windsurf install from before the June 2026 rename keeps `~/.codeium/windsurf/mcp_config.json`, used while the `devin` folder does not exist |
+| Windsurf / Devin Desktop | `windsurf` | `~/.config/devin/mcp_config.json` | same (`$XDG_CONFIG_HOME/devin`) | `%APPDATA%\devin\mcp_config.json` | `mcpServers`. A Windsurf install from before the June 2026 rename keeps `~/.codeium/windsurf/mcp_config.json`; when that folder exists, `windsurf` (and `all`) update it too, as the `windsurf-legacy` client |
 | Zed | `zed` | `~/.config/zed/settings.json` | `$XDG_CONFIG_HOME/zed/settings.json` | `%APPDATA%\Zed\settings.json` | `context_servers` |
 
 On Linux, `~/.config` stands for `$XDG_CONFIG_HOME` when it is set.
