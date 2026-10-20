@@ -1086,6 +1086,15 @@ function gwSkillsPanel() {
   const list = d.skills || [];
   const inst = list.filter((x) => x.claude === 'installed').length;
   const old = list.filter((x) => x.claude === 'outdated').length;
+  const mine = (st) => st === 'installed' || st === 'outdated';
+  const ours = list.some((x) => mine(x.claude) || mine(x.agents));
+  const roots = d.skillRoots || { claude: '~/.claude/skills', agents: '~/.agents/skills' };
+  const where = gw.skillTarget || 'claude';
+  const places = [
+    ['claude', `Claude Code (${roots.claude})`],
+    ['agents', `Other agents (${roots.agents})`],
+    ['all', 'Both'],
+  ];
   const pill = (st) => {
     const [c, l] = {
       installed: ['#5cf0a8', 'installed'],
@@ -1097,11 +1106,11 @@ function gwSkillsPanel() {
   };
   return `<section class="holo panel"><div class="panel-head"><h3>Agent skills</h3><span class="meta">${list.length} skills · Claude Code: ${inst} installed${old ? `, ${old} outdated` : ''} · served from this version at ${esc(d.baseUrl)}/skills</span></div>
     <p class="kpi-sub">Skills teach an AI agent to use ZAAFPulse: chat on any provider, the 17 agents, collaboration, workflows with approval gates, RAG, the second brain, MCP and A2A. Install them into Claude Code, or paste the line below to any AI. They are read from this gateway, so they always match what is running.</p>
-    <div class="table-wrap"><table class="holo-table"><thead><tr><th>Skill</th><th>What it teaches</th><th>Claude Code</th><th></th></tr></thead><tbody>
-      ${list.map((x) => `<tr><td><b class="mono">${esc(x.name)}</b></td><td class="muted wrap">${esc(((d) => (d.length > 140 ? `${d.slice(0, 140).replace(/\s+\S*$/, '')}…` : `${d}.`))(x.description.split('. ')[0]))}</td><td>${pill(x.claude)}</td><td><a class="btn ghost" href="${esc(x.path)}" target="_blank" rel="noopener">View</a></td></tr>`).join('')}</tbody></table></div>
-    <div class="gw-row"><button class="btn" type="button" data-gwskills="install">${inst ? 'Update in Claude Code' : 'Install into Claude Code'}</button>${inst || old ? '<button class="btn ghost danger" type="button" data-gwskills="uninstall">Remove from Claude Code</button>' : ''}<button class="btn ghost" type="button" data-gwskills="key">New key for skills</button></div>
+    <div class="table-wrap"><table class="holo-table"><thead><tr><th>Skill</th><th>What it teaches</th><th>Claude Code</th><th>Other agents</th><th></th></tr></thead><tbody>
+      ${list.map((x) => `<tr><td><b class="mono">${esc(x.name)}</b></td><td class="muted wrap">${esc(((d) => (d.length > 140 ? `${d.slice(0, 140).replace(/\s+\S*$/, '')}…` : `${d}.`))(x.description.split('. ')[0]))}</td><td>${pill(x.claude)}</td><td>${pill(x.agents)}</td><td><a class="btn ghost" href="${esc(x.path)}" target="_blank" rel="noopener">View</a></td></tr>`).join('')}</tbody></table></div>
+    <div class="gw-row"><label>Location<select class="input" data-gwskilltarget>${places.map(([v, l]) => `<option value="${v}" ${v === where ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label><button class="btn" type="button" data-gwskills="install">Install or update</button>${ours ? '<button class="btn ghost danger" type="button" data-gwskills="uninstall">Remove</button>' : ''}<button class="btn ghost" type="button" data-gwskills="key">New key for skills</button></div>
     ${codeBlock(`Read this skill and use it: ${d.baseUrl}/skills/zaafpulse/SKILL.md`, 'gw-skill-line')}
-    <p class="kpi-sub">The skills read <code>ZAAFPULSE_URL</code> and <code>ZAAFPULSE_KEY</code> from the environment; "New key for skills" makes a key with all four scopes and shows the two exports once. Install writes <code>~/.claude/skills/zaafpulse*</code> and never overwrites a skill of your own with the same name.</p></section>`;
+    <p class="kpi-sub">The skills read <code>ZAAFPULSE_URL</code> and <code>ZAAFPULSE_KEY</code> from the environment; "New key for skills" makes a key with all four scopes and shows the two exports once. Install writes <code>${esc(roots.claude)}/zaafpulse*</code> for Claude Code, <code>${esc(roots.agents)}/zaafpulse*</code> for other agents that read the shared Agent Skills folder, or both, and never overwrites a skill of your own with the same name.</p></section>`;
 }
 
 /* ---------- Model router: quota, token saver, model map ---------- */
@@ -2106,9 +2115,13 @@ document.addEventListener('click', (e) => {
   const sk = t('[data-gwskills]');
   if (sk) {
     const act = sk.dataset.gwskills;
-    if (act === 'uninstall' && !confirm('Remove the ZAAFPulse skills from ~/.claude/skills?')) return;
+    const sel = document.querySelector('[data-gwskilltarget]');
+    const where = (gw.skillTarget = sel ? sel.value : 'claude');
+    const roots = gw.data.skillRoots || { claude: '~/.claude/skills', agents: '~/.agents/skills' };
+    const place = where === 'all' ? `${roots.claude} and ${roots.agents}` : roots[where];
+    if (act === 'uninstall' && !confirm(`Remove the ZAAFPulse skills from ${place}?`)) return;
     gwAct(async () => {
-      const r = await gwPost('skills', { action: act });
+      const r = await gwPost('skills', act === 'key' ? { action: act } : { action: act, target: where });
       if (r.errors) {
         alert(r.errors[0]);
         return;

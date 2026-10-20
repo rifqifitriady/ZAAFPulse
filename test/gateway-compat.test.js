@@ -391,6 +391,7 @@ test('translated requests: max_completion_tokens to OpenAI, max_tokens elsewhere
     assert.ok(!('max_tokens' in sent.body));
     assert.equal(sent.body.reasoning_effort, 'low');
     assert.equal(a.headers.get('x-zp-dropped'), 'tool web_search');
+    assert.match(a.headers.get('access-control-expose-headers'), /\bx-zp-dropped\b/); // readable by browser clients
     const b = await t.call('/v1/messages', { ...msg, model: 'up/m1' }, { 'x-api-key': t.key });
     sent = t.up.requests.at(-1);
     assert.equal(sent.body.max_tokens, 3000);

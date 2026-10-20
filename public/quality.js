@@ -189,9 +189,8 @@ function drawQualityChart(el) {
 const QUALITY_DRILLS = {
   accuracy() {
     const q = state.data.quality;
-    const excluded =
-      (q.categories.find((c) => c.id === 'environment')?.count || 0) +
-      (q.categories.find((c) => c.id === 'rejection')?.count || 0);
+    // Every category that is not the model's fault (lib/quality.js MODEL_FAULT), so the tiles add up.
+    const excluded = q.categories.filter((c) => !c.modelFault).reduce((a, c) => a + c.count, 0);
     return {
       eyebrow: `QUALITY · ${rangeText().toUpperCase()}`,
       title: 'Accuracy',
@@ -200,7 +199,7 @@ const QUALITY_DRILLS = {
           ['Accuracy', counter(q.accuracy ?? 0, 'pct'), pts(q.accuracy, q.prevAccuracy) || 'tool calls that worked'],
           ['Tool calls', counter(q.results, 'n'), 'with a recorded result'],
           ['Model-caused failures', counter(q.modelFailures, 'int'), 'non-existent targets, tool misuse'],
-          ['Not counted', counter(excluded, 'int'), 'network, timeouts, your rejections'],
+          ['Not counted', counter(excluded, 'int'), 'failed commands, network, rejections, other'],
         ]) +
         dsec(
           1,

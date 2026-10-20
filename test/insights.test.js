@@ -63,3 +63,33 @@ test('maskEmail keeps only a hint of the address', () => {
   assert.equal(maskEmail('rifqi@example.com'), 'ri***@example.com');
   assert.equal(maskEmail('noauth'), 'noauth');
 });
+
+test('a response copied into a resumed session counts once, and server tools are part of its cost', () => {
+  const copy = (sid) => [...row(10, 1000, 100, 0, 0, sid), 'msg_1:req_1', { ws: 2 }];
+  const pricing = { 'claude-opus-5-5': { ...PRICING['claude-opus-5-5'], webSearch: 0.01 } };
+  const r = insights(
+    [
+      { events: [copy('s1')], sessions: { s1: { tool: 'claude', project: '/x/app', first: now - 3600000 } } },
+      { events: [copy('s2')], sessions: { s2: { tool: 'claude', project: '/x/app', first: now - 60000 } } },
+    ],
+    { rangeDays: 1, pricing, now },
+  );
+  const p = r.providers.list[0];
+  assert.equal(p.requests, 1);
+  assert.equal(p.sessions, 1);
+  assert.equal(r.utilization.byTool.claude.calls, 1);
+  assert.ok(Math.abs(p.cost - ((1000 * 4 + 100 * 20) / 1e6 + 2 * 0.01)) < 1e-12);
+});
+
+test('models are matched like the usage summary: vendor paths normalize, a longer version is not a match', () => {
+  const ev = (model) => [now - 600000, 'claude', 's1', model, 0, 10, 9000, 0, 0, 0];
+  const run = (model) =>
+    insights([{ events: [ev(model)], sessions: { s1: { tool: 'claude', project: '/x/app' } } }], {
+      rangeDays: 1,
+      pricing: { 'claude-opus-5': PRICING['claude-opus-5-5'] },
+      now,
+    });
+  assert.ok(run('anthropic/claude-opus-5').cache.totals.saved > 0);
+  assert.equal(run('claude-opus-50').cache.totals.saved, 0);
+  assert.equal(run('claude-opus-50').providers.models[0].priced, false);
+});

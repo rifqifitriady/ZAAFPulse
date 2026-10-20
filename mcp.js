@@ -10,6 +10,7 @@ const { createIntegrations } = require('./lib/integrations');
 const { createSecrets } = require('./lib/secrets');
 const { createAudit } = require('./lib/audit');
 const { createLocal } = require('./lib/local');
+const otel = require('./lib/otel');
 const { version } = require('./package.json');
 
 process.umask(0o077); // caches and audit logs are private to this OS account
@@ -29,6 +30,8 @@ try {
 }
 
 const secrets = createSecrets();
+// Tool-call spans, as in server.js: off unless config.json has "otel": { "enabled": true }. Its log goes to stderr.
+otel.init({ getConfig: () => config, secrets, version, log });
 const local = createLocal({ cacheDir: CACHE_DIR, config });
 const integrations = createIntegrations({
   config,
@@ -48,4 +51,6 @@ createServer({
   log,
 })
   .serve()
+  .then(() => otel.shutdown(2000)) // send the spans still queued before the client closes us
   .then(() => process.exit(0));
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => otel.shutdown(2000).finally(() => process.exit(0)));

@@ -171,3 +171,23 @@ test('price-sync: precedence is defaults < snapshot < your prices < live, and sn
   assert.equal(e.source['gpt-5.5'], 'live');
   assert.equal(e.pricing['gpt-5.5'].input, 5);
 });
+
+test('gateway usage prices models with the same matching: boundaries, vendor paths, Bedrock ids', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const { createUsage } = require('../lib/gateway/usage');
+  const pricing = { 'claude-opus-5': { input: 5, output: 25, cacheRead: 0.5 }, 'gpt-5': { input: 1, output: 10 } };
+  const usage = createUsage({
+    file: path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'zp-usage-')), 'usage.jsonl'),
+    getPricing: () => pricing,
+  });
+  const u = { input: 1000, output: 100, cached: 400 };
+  const opus = (600 * 5 + 400 * 0.5 + 100 * 25) / 1e6;
+  assert.equal(usage.hasPrice('claude-opus-50'), false);
+  assert.equal(usage.cost('anthropic-direct/claude-opus-50', u), 0);
+  assert.equal(usage.hasPrice('gpt-5.6'), false); // a new version, not gpt-5
+  assert.ok(Math.abs(usage.cost('openrouter/anthropic/claude-opus-5', u) - opus) < 1e-12);
+  assert.ok(Math.abs(usage.cost('bedrock/us.anthropic.claude-opus-5-v1:0', u) - opus) < 1e-12);
+  assert.ok(Math.abs(usage.cost('openai/gpt-5-mini', u) - (600 * 1 + 400 * 1 + 100 * 10) / 1e6) < 1e-12);
+  assert.equal(usage.hasPrice('openrouter/openai/gpt-5:free'), true);
+});
