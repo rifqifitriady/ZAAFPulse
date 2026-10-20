@@ -337,7 +337,14 @@ test('antigravity: below Node 22.12 nothing opens the database (earlier 22.x ign
   const db = path.join(dir, 'conversation_summaries.db');
   fs.writeFileSync(db, 'not a database');
   let opened = 0;
-  const stub = { DatabaseSync: class { constructor() { opened++; } } };
+  const stub = {
+    DatabaseSync: class {
+      constructor(file, opts) {
+        opened++;
+        if (opts && opts.readOnly) throw new Error('unable to open database file'); // what a Node that honours readOnly does
+      }
+    },
+  };
   try {
     for (const v of ['22.5.0', '22.9.1', '22.11.0', '20.18.0', '18.20.4']) {
       const a = createAntigravity({ files: [db], version: v, sqlite: stub });
@@ -346,6 +353,40 @@ test('antigravity: below Node 22.12 nothing opens the database (earlier 22.x ign
     }
     assert.equal(opened, 0);
     for (const v of ['22.12.0', '22.20.1', '23.0.0', '24.16.0']) assert.equal(createAntigravity({ files: [db], version: v, sqlite: stub }).available().ok, true, v);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('antigravity: a Node that ignores readOnly makes the source unavailable, once, leaving no probe folder', () => {
+  const dir = tmp('ag');
+  const db = path.join(dir, 'conversation_summaries.db');
+  fs.writeFileSync(db, 'x');
+  const probes = () => fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('zp-agprobe-'));
+  const had = probes().length;
+  let opened = 0;
+  const lenient = {
+    DatabaseSync: class {
+      constructor(file) {
+        opened++;
+        fs.writeFileSync(file, ''); // ignores readOnly: creates the file like a read-write open
+      }
+      close() {}
+      prepare() {
+        throw new Error('must not be queried');
+      }
+    },
+  };
+  try {
+    const a = createAntigravity({ files: [db], sqlite: lenient });
+    assert.deepEqual(a.available(), { ok: false, reason: 'read-only SQLite not supported by this Node' });
+    assert.deepEqual(a.sessions(), []);
+    assert.equal(opened, 1, 'the probe ran once and the database was never opened');
+    assert.equal(probes().length, had);
+    // a stand-in that throws but still leaves a file behind is no better
+    const messy = { DatabaseSync: class { constructor(file) { fs.writeFileSync(file, ''); throw new Error('boom'); } } };
+    assert.equal(createAntigravity({ files: [db], sqlite: messy }).available().ok, false);
+    assert.equal(probes().length, had);
   } finally {
     cleanup(dir);
   }
@@ -491,6 +532,19 @@ test('commandName: skips env assignments and wrappers, keeps only the program', 
   assert.equal(commandName('"C:\\tools\\node.exe" x'), 'node.exe');
   assert.equal(commandName(SECRET), null, 'a program name that is itself a key is not shown');
   assert.equal(commandName(''), null);
+  // a quoted value with spaces is skipped whole
+  assert.equal(commandName("PASSWORD='my secret pass' ./run"), 'run');
+  assert.equal(commandName("PASSWORD='a b c' ./run"), 'run');
+  assert.equal(commandName('API_KEY="abc def" node'), 'node');
+  assert.equal(commandName('X="a b" node app.js'), 'node');
+  assert.equal(commandName('A="x y" B=2 node'), 'node');
+  assert.equal(commandName("Y='unterminated a b"), null);
+  // only NAME= is an assignment: a path with = in it is a program
+  assert.equal(commandName('/data/dir=x/tool run'), 'tool');
+  // wrapper options that take a value
+  assert.equal(commandName('sudo -u bob git push'), 'git');
+  assert.equal(commandName('sudo -g staff -p prompt: make'), 'make');
+  assert.equal(commandName('env -u FOO -C /tmp make'), 'make');
   assert.equal(commandName(null), null);
 });
 
