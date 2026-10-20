@@ -249,3 +249,17 @@ test('an unreadable line is an unknown span and a missing timestamp never become
   assert.equal(bad.status, 'unknown');
   for (const s of sk.spans) for (const k of ['start', 'end']) assert.ok(s[k] === null || Number.isFinite(s[k]), `${s.kind}.${k}`);
 });
+
+test('a shell call is named by its program, never by an env assignment that holds a key', async () => {
+  const secret = ['sk', 'ant', 'Ab3dE7gH1jK5mN9pQ2sT4vX6zC8'].join('-'); // built here so no key sits in the repo
+  const { file } = tmpLog([
+    L('00.000', 'session_meta', { id: 'cmd1' }),
+    L('01.000', 'event_msg', { type: 'task_started' }),
+    L('02.000', 'response_item', { type: 'function_call', name: 'shell', call_id: 'a', arguments: JSON.stringify({ command: ['bash', '-lc', `API_KEY=${secret} node deploy.js`] }) }),
+    L('03.000', 'response_item', { type: 'function_call', name: 'shell', call_id: 'b', arguments: JSON.stringify({ cmd: 'sudo env FOO=1 /usr/bin/git push' }) }),
+  ]);
+  const e = await entryOf(file);
+  const sk = await adapter.skeleton(e, 'cmd1', { turn: 0, entries: [e] });
+  assert.deepEqual(sk.spans.filter((s) => s.kind === 'tool').map((s) => s.tool.target), ['node', 'git']);
+  assert.equal(JSON.stringify(sk).includes('Ab3dE7gH1jK5'), false);
+});
