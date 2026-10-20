@@ -759,7 +759,7 @@ Apart from the sign-in routes in the first row, every `/api` route needs a signe
 | `GET /api/vault` | notes, links and unresolved links of the Obsidian vault |
 | `GET /api/brain` · `GET /api/brain/graph?source=…` · `POST /api/brain/sources` | second-brain sources and their graphs; save, test and delete a source |
 | `GET /api/gateway` · `POST /api/gateway/<route>` | the dashboard side of the agentic workspace: keys, providers, routes, agents, workflows, runs, knowledge, tools, skills, settings |
-| `POST /api/mcp/register` | register the MCP server in, or remove it from, one client (`{ "client": "claude\|kiro\|antigravity\|cursor\|vscode\|claude-desktop\|codex\|gemini\|windsurf\|zed\|all", "remove": false }`) |
+| `POST /api/mcp/register` | register the MCP server in, or remove it from, one client (`{ "client": "claude\|kiro\|antigravity\|cursor\|vscode\|claude-desktop\|codex\|gemini\|windsurf\|windsurf-legacy\|zed\|all", "remove": false }`) |
 | `GET /api/config` · `POST /api/config` | name, monthly budget, prices, vault path |
 | `GET /api/openrouter?section=models\|providers\|rankings\|account` | OpenRouter data, cached (models 12 h, providers 24 h, rankings 6 h) |
 | `GET /api/openrouter/endpoints?ids=…` | providers serving up to 40 models, with uptime and per-provider prices |
