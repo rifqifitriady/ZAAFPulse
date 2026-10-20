@@ -491,3 +491,137 @@ test('a root that is created after the reader was made is honoured', async () =>
   fs.writeFileSync(file, '{"x":1}\n');
   assert.equal((await c.read({ f: file, s: 0, e: 7, k: 'raw' })).text, '{"x":1}');
 });
+
+// --- Codex lines (refs carry src: 'codex') ---
+
+function codexLog(objs) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-content-'));
+  const file = path.join(root, 'rollout.jsonl');
+  const lines = objs.map((o) => JSON.stringify(o) + '\n');
+  fs.writeFileSync(file, lines.join(''));
+  const off = offsets(lines);
+  const all = { f: file, s: 0, e: off[off.length - 1][1], src: 'codex' };
+  return { root, file, off, all, c: createContent({ roots: [root] }) };
+}
+const resp = (payload) => ({ timestamp: '2026-10-20T10:00:00.000Z', type: 'response_item', payload });
+const evt = (payload) => ({ timestamp: '2026-10-20T10:00:00.000Z', type: 'event_msg', payload });
+const msg = (role, text) => resp({ type: 'message', role, content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text }] });
+
+test('codex prompt (older form): a user_message event is the prompt', async () => {
+  const { all, c } = codexLog([evt({ type: 'task_started' }), evt({ type: 'user_message', message: 'add <b>pagination</b>' }), msg('user', 'not this one')]);
+  assert.equal((await c.read({ ...all, k: 'prompt' })).text, 'add <b>pagination</b>');
+});
+
+test('codex prompt (newer form): only typed user messages, never injected context', async () => {
+  const injected = ['<environment_context>\n</environment_context>', '<task-notification>x</task-notification>', '[Request interrupted by user]', '[external unsupported block]', '## Referenced files\nsrc/a.js', '  <recommended_plugins>x'];
+  const { all, c } = codexLog([
+    evt({ type: 'task_started' }),
+    msg('developer', 'system rules'),
+    ...injected.map((t) => msg('user', t)),
+    msg('user', 'first typed'),
+    msg('assistant', 'reply text'),
+    msg('user', 'second typed'),
+  ]);
+  const r = await c.read({ ...all, k: 'prompt' });
+  assert.equal(r.text, 'first typed\n\nsecond typed');
+});
+
+test('codex prompt: several input_text parts are joined, and a message with none of its own text is skipped', async () => {
+  const { all, c } = codexLog([resp({ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'part one' }, { type: 'input_image', image_url: 'x' }, { type: 'input_text', text: 'part two' }] }), resp({ type: 'message', role: 'user', content: [] })]);
+  assert.equal((await c.read({ ...all, k: 'prompt' })).text, 'part one\npart two');
+});
+
+test('codex prompt: with only injected messages, the last user message is used', async () => {
+  const { all, c } = codexLog([msg('user', '<environment_context>a</environment_context>'), msg('user', '<command-name>/clear</command-name>')]);
+  assert.equal((await c.read({ ...all, k: 'prompt' })).text, '<command-name>/clear</command-name>');
+});
+
+test('codex prompt: a turn with no user message reads as empty text', async () => {
+  const { all, c } = codexLog([evt({ type: 'task_started' }), msg('assistant', 'hi')]);
+  assert.equal((await c.read({ ...all, k: 'prompt' })).text, '');
+});
+
+test('codex reply (older form): agent_message', async () => {
+  const { all, c } = codexLog([evt({ type: 'agent_message', message: 'done, see <i>this</i>' })]);
+  assert.equal((await c.read({ ...all, k: 'reply' })).text, 'done, see <i>this</i>');
+});
+
+test('codex reply (newer form): assistant output_text only, not user or developer messages', async () => {
+  const { all, c } = codexLog([msg('user', 'q'), msg('developer', 'rules'), msg('assistant', 'first'), msg('assistant', 'second')]);
+  assert.equal((await c.read({ ...all, k: 'reply' })).text, 'first\n\nsecond');
+});
+
+test('codex reply: the same reply logged in both forms is counted once', async () => {
+  const { all, c } = codexLog([evt({ type: 'agent_message', message: 'same reply' }), msg('assistant', 'same reply'), msg('assistant', 'another'), evt({ type: 'agent_message', message: 'another' })]);
+  assert.equal((await c.read({ ...all, k: 'reply' })).text, 'same reply\n\nanother');
+});
+
+test('codex reply is masked for secrets like any other field', async () => {
+  const secret = makeSecret();
+  const { all, c } = codexLog([msg('assistant', `key ${secret} done`)]);
+  const r = await c.read({ ...all, k: 'reply' });
+  assert.ok(!r.text.includes(secret));
+  assert.equal(r.masked.length, 1);
+  assert.equal((await c.reveal({ ...all, k: 'reply' }, 0)).value, secret);
+});
+
+test('codex tool input: the call arguments (function_call) or input (custom_tool_call), by call id', async () => {
+  const args = '{"command":["bash","-lc","ls"]}';
+  const { all, c } = codexLog([
+    resp({ type: 'function_call', name: 'shell', call_id: 'k1', arguments: args }),
+    resp({ type: 'function_call', name: 'shell', call_id: 'k2', arguments: '{"cmd":"pwd"}' }),
+    resp({ type: 'custom_tool_call', name: 'apply_patch', call_id: 'k3', input: '*** Begin Patch' }),
+    resp({ type: 'web_search_call', action: { type: 'search', query: 'q' } }),
+  ]);
+  assert.equal((await c.read({ ...all, k: 'tool_input', i: 'k1' })).text, args);
+  assert.equal((await c.read({ ...all, k: 'tool_input', i: 'k2' })).text, '{"cmd":"pwd"}');
+  assert.equal((await c.read({ ...all, k: 'tool_input', i: 'k3' })).text, '*** Begin Patch');
+  assert.deepEqual(JSON.parse((await c.read({ ...all, k: 'tool_input', i: null })).text), { type: 'search', query: 'q' });
+  assert.equal((await c.read({ ...all, k: 'tool_input', i: 'nope' })).text, '');
+});
+
+test('codex tool output: a string, parts or an object, by call id', async () => {
+  const { all, c } = codexLog([
+    resp({ type: 'function_call_output', call_id: 'k1', output: 'src\n' }),
+    resp({ type: 'function_call_output', call_id: 'k2', output: [{ type: 'output_text', text: 'a' }, { type: 'output_text', text: 'b' }] }),
+    resp({ type: 'custom_tool_call_output', call_id: 'k3', output: { content: 'x', success: true } }),
+  ]);
+  assert.equal((await c.read({ ...all, k: 'tool_output', i: 'k1' })).text, 'src\n');
+  assert.equal((await c.read({ ...all, k: 'tool_output', i: 'k2' })).text, 'a\nb');
+  assert.deepEqual(JSON.parse((await c.read({ ...all, k: 'tool_output', i: 'k3' })).text), { content: 'x', success: true });
+});
+
+test('codex tool output is paged and a saved-output marker is not followed (that is Claude only)', async () => {
+  const marker = 'Error: result (1 B) exceeds maximum allowed tokens. Output has been saved to /etc/hosts.';
+  const { all, c } = codexLog([resp({ type: 'function_call_output', call_id: 'k1', output: marker }), resp({ type: 'function_call_output', call_id: 'k2', output: 'y'.repeat(70000) })]);
+  const r = await c.read({ ...all, k: 'tool_output', i: 'k1' });
+  assert.equal(r.text, marker);
+  assert.equal(r.saved, undefined);
+  const big = await c.read({ ...all, k: 'tool_output', i: 'k2' });
+  assert.equal(big.text.length, 64 * 1024);
+  assert.equal(big.total, 70000);
+});
+
+test('codex refs keep every check: roots, byte range, kinds, 16 MB', async () => {
+  const { all, file, c } = codexLog([msg('assistant', 'x')]);
+  await assert.rejects(c.read({ ...all, e: all.e + 1, k: 'reply' }), { status: 400 });
+  await assert.rejects(c.read({ ...all, k: 'nope' }), { status: 400 });
+  await assert.rejects(createContent({ roots: [outsideDir()] }).read({ ...all, f: file, k: 'reply' }), { status: 403 });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-content-'));
+  const big = path.join(root, 'big.jsonl');
+  fs.writeFileSync(big, '');
+  fs.truncateSync(big, 17 * 1024 * 1024);
+  const cb = createContent({ roots: [root] });
+  for (const k of ['prompt', 'reply', 'tool_input', 'tool_output'])
+    await assert.rejects(cb.read({ f: big, s: 0, e: 17 * 1024 * 1024, k, i: 'x', src: 'codex' }), { status: 413 }, k);
+  await assert.rejects(cb.read({ f: big, s: 0, e: 1024, k: 'prompt', src: 'codex' }), { status: 413 }, 'one 17 MB line');
+});
+
+test('a ref without src is still read as a Claude line', async () => {
+  const { root, file, off } = fixture();
+  const c = createContent({ roots: [root] });
+  assert.equal((await c.read({ f: file, s: off[0][0], e: off[0][1], k: 'prompt' })).text, 'hello <script>alert(1)</script>');
+  // A Codex-shaped line is not understood without src.
+  const cx = codexLog([evt({ type: 'agent_message', message: 'hi' })]);
+  assert.equal((await cx.c.read({ f: cx.file, s: cx.all.s, e: cx.all.e, k: 'reply' })).text, '');
+});
