@@ -3,7 +3,7 @@
 //   zaafpulse [start] [--host 0.0.0.0] [--port 4777] [--data DIR] [--demo] [--open]
 //   zaafpulse set-password            admin password for server mode (asked twice, or --stdin)
 //   zaafpulse service install|uninstall|status|restart [--system] [--host H] [--port P]
-//   zaafpulse status | open | doctor | mcp | register-mcp <claude|kiro|antigravity|all> [--remove] | version
+//   zaafpulse status | open | doctor | mcp | register-mcp <client|all> [--remove] | version
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
@@ -34,6 +34,9 @@ const port = () => Number(process.env.ZAAFPULSE_PORT || process.env.PORT) || 477
 const systemMode = () =>
   !!flag('system') || (platform.OS === 'linux' && typeof process.getuid === 'function' && process.getuid() === 0);
 const localUrl = () => `http://127.0.0.1:${port()}`;
+
+// The AI clients register-mcp knows, from the script itself so this list never goes stale.
+const mcpClients = () => Object.keys(require('../scripts/register-mcp').clients());
 
 function die(msg, code = 1) {
   console.error(msg);
@@ -236,7 +239,7 @@ const commands = {
   },
   'register-mcp'() {
     const target = positional[1];
-    if (!target) die('usage: zaafpulse register-mcp <claude|kiro|antigravity|all> [--remove]', 2);
+    if (!target) die(`usage: zaafpulse register-mcp <${mcpClients().join('|')}|all> [--remove]`, 2);
     try {
       require('../scripts/register-mcp').run(target, { remove: !!flag('remove') });
     } catch (err) {
@@ -256,7 +259,8 @@ const commands = {
   zaafpulse service install         run in the background and at startup (--system: as a server service)
   zaafpulse service uninstall|status|restart
   zaafpulse status | open | doctor
-  zaafpulse register-mcp <claude|kiro|antigravity|all> [--remove]
+  zaafpulse register-mcp <client|all> [--remove]
+                                    clients: ${mcpClients().join(', ')}
   zaafpulse mcp                     the stdio MCP server (what AI clients start)
   zaafpulse version`);
   },
