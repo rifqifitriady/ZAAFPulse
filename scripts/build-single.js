@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // Builds single-file ZAAFPulse executables with Node's SEA (single executable application) support.
+//   npm ci                                               once: installs postject, the injector (lockfile-pinned)
 //   node scripts/build-single.js                         this machine's OS and CPU
 //   node scripts/build-single.js linux-x64 win-x64 ...   any of: darwin-arm64 darwin-x64 linux-x64 linux-arm64 win-x64 win-arm64
 // Each target starts from the official Node.js binary for that platform (same version as the one running
@@ -49,6 +50,16 @@ function payload() {
   return zlib.gzipSync(JSON.stringify({ files }), { level: 9 });
 }
 
+// postject from node_modules (installed by `npm ci`, so the lockfile's integrity hash was checked), run
+// with this Node; never fetched at build time.
+function postjectCli() {
+  try {
+    return require.resolve('postject/dist/cli.js', { paths: [ROOT] });
+  } catch {
+    throw new Error('postject is not installed: run `npm ci` first (it is a pinned devDependency)');
+  }
+}
+
 async function download(url, file) {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
@@ -81,6 +92,7 @@ async function nodeBinary(target, work) {
 }
 
 (async () => {
+  const postject = postjectCli();
   fs.mkdirSync(DIST, { recursive: true });
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-sea-'));
   fs.writeFileSync(path.join(work, 'app.json.gz'), payload());
@@ -106,20 +118,15 @@ async function nodeBinary(target, work) {
     fs.copyFileSync(src, out);
     fs.chmodSync(out, 0o755);
     if (target.startsWith('darwin')) sh('codesign', ['--remove-signature', out]);
-    sh(
-      'npx',
-      [
-        '--yes',
-        'postject@1.0.0-alpha.6',
-        out,
-        'NODE_SEA_BLOB',
-        path.join(work, 'sea.blob'),
-        '--sentinel-fuse',
-        FUSE,
-        ...(target.startsWith('darwin') ? ['--macho-segment-name', 'NODE_SEA'] : []),
-      ],
-      { shell: process.platform === 'win32' },
-    );
+    sh(process.execPath, [
+      postject,
+      out,
+      'NODE_SEA_BLOB',
+      path.join(work, 'sea.blob'),
+      '--sentinel-fuse',
+      FUSE,
+      ...(target.startsWith('darwin') ? ['--macho-segment-name', 'NODE_SEA'] : []),
+    ]);
     if (target.startsWith('darwin')) sh('codesign', ['--sign', '-', out]);
     sums.push(`${crypto.createHash('sha256').update(fs.readFileSync(out)).digest('hex')}  ${path.basename(out)}`);
     console.log(`built ${path.relative(ROOT, out)} (${(fs.statSync(out).size / 1e6).toFixed(0)} MB)`);
