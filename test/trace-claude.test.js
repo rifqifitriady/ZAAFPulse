@@ -132,3 +132,23 @@ test('a bad timestamp or a non-object line does not leak NaN or throw', async ()
     fs.unlinkSync(f);
   }
 });
+
+test('a Bash call is named by its program, never by an env assignment that holds a key', async () => {
+  const secret = ['sk', 'ant', 'Ab3dE7gH1jK5mN9pQ2sT4vX6zC8'].join('-'); // built here so no key sits in the repo
+  const f = path.join(os.tmpdir(), `trace-cmd-${process.pid}.jsonl`);
+  const use = (id, command) => ({ type: 'tool_use', id, name: 'Bash', input: { command } });
+  const lines = [
+    { type: 'user', sessionId: 'cmd1', timestamp: '2026-10-20T10:00:00.000Z', message: { role: 'user', content: 'deploy' } },
+    { type: 'assistant', sessionId: 'cmd1', timestamp: '2026-10-20T10:00:02.000Z', requestId: 'r1', message: { id: 'm1', role: 'assistant', model: 'claude-opus-5-5', usage: { input_tokens: 1, output_tokens: 1 }, content: [use('t1', `API_KEY=${secret} node deploy.js`), use('t2', 'sudo env FOO=1 /usr/bin/git push')] } },
+  ];
+  fs.writeFileSync(f, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  try {
+    const entries = await entriesFor([f]);
+    const sk = await adapter.skeleton(entries[0], 'cmd1', { turn: 0, entries });
+    const targets = sk.spans.filter((s) => s.kind === 'tool').map((s) => s.tool.target);
+    assert.deepEqual(targets, ['node', 'git']);
+    assert.equal(JSON.stringify(sk).includes('Ab3dE7gH1jK5'), false);
+  } finally {
+    fs.unlinkSync(f);
+  }
+});
