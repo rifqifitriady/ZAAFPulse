@@ -57,7 +57,8 @@ test('mcp.js lists acc and configured tools and reports status', async () => {
     config,
   );
   const byId = Object.fromEntries(replies.map((r) => [r.id, r]));
-  assert.equal(byId[1].result.serverInfo.name, 'ai-command-center');
+  assert.equal(byId[1].result.serverInfo.name, 'zaafpulse');
+  assert.equal(byId[1].result.serverInfo.title, 'ZAAFPulse');
   const names = byId[2].result.tools.map((t) => t.name);
   for (const n of ['acc_usage_summary', 'acc_quality', 'acc_live_apps', 'acc_integrations_status', 'extra_ping'])
     assert.ok(names.includes(n), n);
