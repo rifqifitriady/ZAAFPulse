@@ -231,4 +231,4 @@ otelcol-contrib --config otelcol.yaml
 - `HTTP 415` from Dynatrace or Phoenix: the protocol is `http/json`; remove it to use protobuf.
 - `HTTP 401` / `403`: the token or its scope is wrong. Dynatrace needs `openTelemetryTrace.ingest`.
 - Spans dropped: the endpoint is slower than the traffic; raise `batch.maxQueueSize` or lower the traffic.
-- The `mcp.js` stdio MCP server (used by Claude Code, Kiro and Antigravity over stdio) runs in its own process and does not export spans; tool calls through the gateway's `/mcp` endpoint do.
+- The `mcp.js` stdio MCP server (what Claude Code, Cursor, Codex and the other clients start) runs in its own process. It exports its own `execute_tool` spans with the same `otel` settings, but reads `config.json` only when the client starts it: restart the client (or its MCP server) after changing `otel`. Its `otel:` log lines go to the client's MCP log (stderr).
