@@ -385,7 +385,7 @@ The first start indexes your logs: about 30 seconds for 2 GB with worker threads
 - Every release after 1.0.0 has `SHA256SUMS.txt`. The installers check the release's source package against it and stop when they cannot.
 - From 1.0.3, every release file also has a build-provenance attestation: `gh attestation verify zaafpulse-<v>-linux-x64 --repo rifqifitriady/ZAAFPulse` shows the workflow and commit that built it.
 - Single-file binaries after 1.0.3 carry the SHA-256 of every app file. On every start they check the unpacked copy in the cache folder, restore any file that was changed, removed or added, and stop when they cannot.
-- Version tags are never moved; a fix ships as a new version. A tag ruleset that blocks moving or deleting `v*` tags, and immutable releases, are prepared to be switched on before the next release ([docs/release-hardening.md](docs/release-hardening.md)). Releases published after that also pass `gh release verify`.
+- Version tags are never moved; a fix ships as a new version. A tag ruleset blocks moving or deleting `v*` tags, and releases are immutable once published ([docs/release-hardening.md](docs/release-hardening.md)). Both have been on since 20 October 2026, so releases after 1.0.3 also pass `gh release verify`; v1.0.0 to v1.0.3 were published before and are not immutable.
 - The binaries are **not yet notarized or code-signed**. macOS quarantines a browser download (run `xattr -d com.apple.quarantine zaafpulse-*` once, or download with `curl`), and Windows SmartScreen asks once (*More info → Run anyway*).
 
 ### Signing in
