@@ -400,16 +400,26 @@ test('native Anthropic provider: /v1/messages passes through; chat completions a
     assert.equal(chat.json.usage.prompt_tokens, 12);
     assert.equal(t.up.requests.at(-1).body.system, 'sys');
     assert.equal(t.up.requests.at(-1).body.max_tokens, 8192);
-    const st = await t.call('/v1/chat/completions', {
-      model: 'native/claude-sonnet-x',
-      stream: true,
-      messages: [{ role: 'user', content: 'hi' }],
-    });
-    const chunks = st.text
-      .split('\n\n')
-      .filter((l) => l.startsWith('data: {'))
-      .map((l) => JSON.parse(l.slice(6)));
-    assert.equal(chunks.map((c) => c.choices[0]?.delta?.content || '').join(''), 'Hi');
+    const streamed = async (extra = {}) => {
+      const st = await t.call('/v1/chat/completions', {
+        model: 'native/claude-sonnet-x',
+        stream: true,
+        messages: [{ role: 'user', content: 'hi' }],
+        ...extra,
+      });
+      return st.text
+        .split('\n\n')
+        .filter((l) => l.startsWith('data: {'))
+        .map((l) => JSON.parse(l.slice(6)));
+    };
+    // The usage-only final chunk comes only when the client asks for it, as OpenAI streams it.
+    const plain = await streamed();
+    assert.equal(plain.map((c) => c.choices[0]?.delta?.content || '').join(''), 'Hi');
+    assert.ok(plain.every((c) => c.choices.length && !('usage' in c)));
+    assert.ok(plain.every((c) => c.model === 'native/claude-sonnet-x'));
+    assert.equal(t.gateway.usage.recent(1)[0].output, 4); // still billed
+    const chunks = await streamed({ stream_options: { include_usage: true } });
+    assert.deepEqual(chunks.at(-1).choices, []);
     assert.equal(chunks.at(-1).usage.completion_tokens, 4);
   } finally {
     await t.close();
