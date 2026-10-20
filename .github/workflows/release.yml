@@ -1,61 +1,72 @@
 # Builds the single-file executables and attaches them to a GitHub release.
 # Runs when a version tag (v1.2.3) is pushed, or by hand (Actions → Release → Run workflow), which only
 # uploads the files as a build artifact.
+# Hardening: read-only token except in the release job; actions pinned by commit SHA (the comment names
+# the release); Node pinned to the exact version the binaries embed; postject installed with `npm ci`
+# from package-lock.json; no stored git credentials. Never move a published tag (CONTRIBUTING.md).
 name: Release
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
 permissions:
-  contents: write
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
   test:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false   # report every OS, not just the first failure
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - run: node --test test/platform.test.js test/secrets.test.js test/register.test.js test/processes.test.js
-      - run: node bin/zaafpulse.js doctor
+    uses: ./.github/workflows/ci.yml
   build:
     needs: test
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     strategy:
       matrix:
         include:
-          - runner: ubuntu-latest   # Linux and Windows binaries (postject works across formats)
+          - runner: ubuntu-latest # Linux and Windows binaries (postject works across formats)
             targets: linux-x64 linux-arm64 win-x64 win-arm64
-          - runner: macos-latest    # macOS binaries need codesign
+          - runner: macos-latest # macOS binaries need codesign
             targets: darwin-arm64 darwin-x64
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: 24
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.21.0 # embedded in every binary; update ci.yml together
+          package-manager-cache: false # no cache in a release build
+      - name: Tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          V="$(node -p "require('./package.json').version")"
+          [ "v$V" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME but package.json says $V"; exit 1; }
+      # postject (devDependency) exactly as locked, integrity-checked; no install scripts run.
+      - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: node scripts/build-single.js ${{ matrix.targets }}
       - run: mv dist/SHA256SUMS.txt dist/SHA256SUMS-${{ runner.os }}.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: zaafpulse-${{ runner.os }}
           path: dist/*
+          if-no-files-found: error
   release:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # Build provenance (Sigstore): each file is signed as made by this workflow from this commit.
     permissions:
       contents: write
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: zaafpulse-*
           path: dist
           merge-multiple: true
       # The app files the installers use, checksummed with the binaries (install.sh / install.ps1 verify it).
@@ -67,9 +78,13 @@ jobs:
           cat dist/SHA256SUMS-*.txt > dist/SHA256SUMS.txt && rm dist/SHA256SUMS-*.txt
           (cd dist && sha256sum "zaafpulse-$V-source.tar.gz" >> SHA256SUMS.txt)
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/*
+      # gh uploads the files to a draft and publishes it afterwards, so with immutable releases on, the
+      # release is complete before it locks. --verify-tag: never create a tag here.
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "ZAAFPulse $GITHUB_REF_NAME" --generate-notes
+        run: >-
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag
+          --title "ZAAFPulse $GITHUB_REF_NAME" --generate-notes
