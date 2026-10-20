@@ -195,3 +195,18 @@ test('advertised URLs: agent card and /skills use the real scheme, never a hard-
     fixed.close();
   }
 });
+
+test('agent/auto with no model configured is a 400 with the reason, not a 500', async () => {
+  const t = await setup();
+  try {
+    const key = t.gateway.keys.create({ name: 'a', scopes: ['agents', 'llm'] }).secret;
+    const r = await t.call('/v1/chat/completions', {
+      key,
+      body: { model: 'agent/auto', messages: [{ role: 'user', content: 'hello' }] },
+    });
+    assert.equal(r.status, 400);
+    assert.match(r.json.error.message, /no model/);
+  } finally {
+    t.close();
+  }
+});
