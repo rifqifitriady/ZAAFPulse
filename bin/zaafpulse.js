@@ -94,7 +94,8 @@ const commands = {
       process.env.DEMO = '1';
       process.env.ZAAFPULSE_PORT ||= '4778';
     }
-    if (flag('open')) setTimeout(() => platform.openUrl(`http://localhost:${port()}`), 1500);
+    // The same as `zaafpulse open` once the server answers, so local sign-in lands signed in.
+    if (flag('open')) setTimeout(() => commands.open(), 1500);
     require('../server.js');
   },
   mcp() {
@@ -153,8 +154,9 @@ const commands = {
     process.exitCode = up ? 0 : 3;
   },
   async open() {
-    // Local sign-in mode: a one-time code in the private data folder proves we are the owner.
-    let url = `http://localhost:${port()}`;
+    // Local sign-in mode: a one-time code in the private data folder proves we are the owner. The code goes
+    // into a private file that forwards the browser, and only that file's path is put on a command line.
+    const url = `http://localhost:${port()}`;
     const mode = await new Promise((resolve) => {
       http
         .get(`${localUrl()}/api/session`, { timeout: 2000, headers: { host: '127.0.0.1' } }, (res) => {
@@ -172,11 +174,21 @@ const commands = {
             ),
           );
         })
+        .on('timeout', function () {
+          this.destroy(); // a port that never answers is not our server
+        })
         .on('error', () => resolve(null));
     });
-    if (mode === 'local') url += `/auth/local?code=${require('../lib/auth').localLoginCode(platform.dataDir())}`;
-    const ok = await platform.openUrl(url);
-    if (!ok) console.log(`Open ${localUrl()} in a browser (no desktop found).`);
+    const ok =
+      mode === 'local'
+        ? await openFile(require('../lib/auth').localLoginPage(platform.dataDir(), url))
+        : await platform.openUrl(url);
+    if (!ok)
+      console.log(
+        mode === 'local'
+          ? `No desktop found. Open ${url} in a browser on this machine, then run \`zaafpulse open\` from a desktop session.`
+          : `Open ${url} in a browser (no desktop found).`,
+      );
   },
   async doctor() {
     const { defaultStore } = require('../lib/secret-store');
@@ -249,6 +261,30 @@ const commands = {
   zaafpulse version`);
   },
 };
+
+// Opens a local file with the default browser. On Windows through explorer.exe, so the path never passes
+// through cmd.exe and its quoting.
+function openFile(file) {
+  const { spawn } = require('child_process');
+  const [cmd, args] =
+    platform.OS === 'macos'
+      ? ['open', [file]]
+      : platform.OS === 'windows'
+        ? ['explorer.exe', [file]]
+        : ['xdg-open', [file]];
+  return new Promise((resolve) => {
+    try {
+      const p = spawn(cmd, args, { stdio: 'ignore', detached: true, windowsHide: true });
+      p.on('error', () => resolve(false));
+      p.on('spawn', () => {
+        p.unref();
+        resolve(true);
+      });
+    } catch {
+      resolve(false);
+    }
+  });
+}
 
 async function waitUp(ms = 15000) {
   const t = Date.now();

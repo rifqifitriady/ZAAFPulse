@@ -34,7 +34,7 @@ const { createAudit } = require('./lib/audit');
 const { createLocal } = require('./lib/local');
 const register = require('./scripts/register-mcp');
 const platform = require('./lib/platform');
-const { createAuth, isLoopback } = require('./lib/auth');
+const { createAuth, isLoopback, originAllowed } = require('./lib/auth');
 
 const PORT = Number(process.env.ZAAFPULSE_PORT || process.env.PORT) || 4777;
 const HOST = process.env.ZAAFPULSE_HOST || process.env.HOST || '127.0.0.1';
@@ -89,7 +89,18 @@ const demo = DEMO ? require('./lib/demo') : null;
 
 const { fullName, computerName } = platform;
 const HOSTNAME = DEMO ? demo.config.host : computerName();
-const auth = createAuth({ dataDir: DIR, host: HOST, headers: () => SECURITY_HEADERS });
+let auth;
+try {
+  auth = createAuth({ dataDir: DIR, host: HOST, demo: DEMO, headers: () => SECURITY_HEADERS });
+} catch (err) {
+  console.error(err.message);
+  process.exit(78);
+}
+// Browser pages from other sites the dashboard and gateway answer (comma list, or "*"); same-site always.
+const ALLOWED_ORIGINS = (process.env.ZAAFPULSE_ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((o) => o.trim().toLowerCase().replace(/\/+$/, ''))
+  .filter(Boolean);
 if (auth.required && !auth.configured() && !DEMO) {
   console.error(
     `ZAAFPulse listens on ${HOST}, so the dashboard needs a password first.\nRun \`zaafpulse set-password\` (or set ZAAFPULSE_ADMIN_PASSWORD), then start again.`,
@@ -356,6 +367,17 @@ const handler = async (req, res) => {
   // Names other than loopback are accepted only when sign-in is on (server mode or behind a proxy).
   if (!isLoopback(host) && !(auth.mode === 'password' && (!ALLOWED_HOSTS.length || ALLOWED_HOSTS.includes(host))))
     return send(res, 403, { error: 'forbidden' });
+  // In every mode, a browser page from another site is refused (DNS rebinding, and MCP's Origin rule).
+  if (
+    !originAllowed(req, {
+      mode: auth.mode,
+      trustProxy: process.env.ZAAFPULSE_TRUST_PROXY === '1',
+      publicUrl: process.env.ZAAFPULSE_PUBLIC_URL,
+      allowedHosts: ALLOWED_HOSTS,
+      allowedOrigins: ALLOWED_ORIGINS,
+    })
+  )
+    return send(res, 403, { error: 'requests from this origin are not allowed (see ZAAFPULSE_ALLOWED_ORIGINS)' });
   // Without sign-in, a browser request must also come from a local page: an Origin or Referer naming
   // another host (a browser reaching us through a proxy that hides its own headers), or a cross-site
   // fetch, is refused. A non-browser client behind such a proxy cannot be told apart from a local one;
@@ -753,6 +775,7 @@ server.listen(PORT, HOST, () => {
   console.log(
     `ZAAFPulse${DEMO ? ' (demo data)' : ''} → ${TLS ? 'https' : 'http'}://${SERVER_MODE ? HOST : 'localhost'}:${PORT}${SERVER_MODE ? `  (server mode: sign-in required; apps use ${BASE_URL})` : ''}`,
   );
+  if (auth.mode === 'local') console.log('Sign-in: only this OS account; open the dashboard with `zaafpulse open`');
   console.log(`Data: ${DIR}`);
   const t = Date.now();
   indexer.refresh().then(() => console.log(`Indexed logs in ${((Date.now() - t) / 1000).toFixed(1)}s`));
