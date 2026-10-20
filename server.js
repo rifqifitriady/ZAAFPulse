@@ -291,6 +291,7 @@ function clientRows() {
     name: c.name,
     file: c.file.replace(os.homedir(), '~'),
     registered: DEMO ? id !== 'kiro' : register.isRegistered(c.file),
+    detected: DEMO || register.detected(c), // false: the app is not on this machine ("Not installed")
     command: `npm run mcp:register -- ${id}`,
   }));
 }

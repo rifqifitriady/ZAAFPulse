@@ -3,7 +3,17 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { run, clients, isRegistered, findOnPath, quoteArg, isOurs, toml, NAME } = require('../scripts/register-mcp');
+const {
+  run,
+  clients,
+  isRegistered,
+  detected,
+  findOnPath,
+  quoteArg,
+  isOurs,
+  toml,
+  NAME,
+} = require('../scripts/register-mcp');
 
 // Every test runs against a temp HOME with an empty environment, so no real client config is ever read or written.
 const tmpHome = () => fs.mkdtempSync(path.join(os.tmpdir(), 'acc-home-'));
@@ -19,6 +29,19 @@ const MCP_JS = path.join(__dirname, '..', 'mcp.js');
 
 test('the server is registered as zaafpulse', () => {
   assert.equal(NAME, 'zaafpulse');
+});
+
+test('detected: a client counts as installed by its folder or its CLI on PATH', () => {
+  const home = tmpHome();
+  const all = clients(home, { env: {} });
+  assert.equal(detected(all.kiro, noCli), false);
+  assert.equal(detected(all.codex, noCli), false);
+  assert.equal(
+    detected(all.codex, (cmd) => (cmd === 'codex' ? '/usr/local/bin/codex' : null)),
+    true,
+  );
+  fs.mkdirSync(path.join(home, '.kiro'));
+  assert.equal(detected(all.kiro, noCli), true);
 });
 
 test('kiro: creates the settings file with our entry and no backup', () => {
