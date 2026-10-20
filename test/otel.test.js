@@ -701,17 +701,22 @@ test('otel: integration tool calls get execute_tool spans with argument names, v
   }
 });
 
-test('otel: disabled (the default) makes no network calls, even with OTEL_* variables set', async () => {
+test('otel: off makes no network calls: the default, enabled: false over an OTLP variable, OTEL_SDK_DISABLED', async () => {
   const c = await collector();
   let sent = 0;
   const transport = async () => {
     sent++;
     return { status: 200 };
   };
-  for (const cfg of [undefined, { enabled: false, endpoint: c.url }]) {
+  const cases = [
+    [undefined, { OTEL_SERVICE_NAME: 'x', OTEL_EXPORTER_OTLP_PROTOCOL: 'http/json' }],
+    [{ enabled: false, endpoint: c.url }, { OTEL_EXPORTER_OTLP_ENDPOINT: c.url }],
+    [undefined, { OTEL_EXPORTER_OTLP_ENDPOINT: c.url, OTEL_SDK_DISABLED: 'true' }],
+  ];
+  for (const [cfg, env] of cases) {
     const o = otel.createOtel({
       getConfig: () => ({ otel: cfg }),
-      env: { OTEL_EXPORTER_OTLP_ENDPOINT: c.url },
+      env,
       refreshMs: 0,
       transport,
       log: () => {},
@@ -742,6 +747,30 @@ test('otel: disabled (the default) makes no network calls, even with OTEL_* vari
   assert.equal(sent, 0);
   assert.equal(c.requests.length, 0);
   await c.close();
+});
+
+test('otel: an OTLP endpoint variable alone turns export on when config.json has no otel section', async () => {
+  const s = (cfg, env) => otel.buildSettings(cfg, env, secretsFor(), '1');
+  assert.equal(s(undefined, { OTEL_EXPORTER_OTLP_ENDPOINT: 'http://col:4318' }).url, 'http://col:4318/v1/traces');
+  assert.equal(s({}, { OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: 'http://col:9/t' }).enabled, true);
+  assert.equal(s({ enabled: false }, { OTEL_EXPORTER_OTLP_ENDPOINT: 'http://col:4318' }).enabled, false);
+  assert.equal(s(undefined, {}).enabled, false);
+  const c = await collector();
+  const o = otel.createOtel({
+    getConfig: () => ({}),
+    env: { OTEL_EXPORTER_OTLP_ENDPOINT: c.url, OTEL_EXPORTER_OTLP_PROTOCOL: 'http/json' },
+    refreshMs: 0,
+    log: () => {},
+  });
+  try {
+    o.startSpan('from-env').end();
+    assert.equal(await o.flush(2000), true);
+    assert.equal(c.requests.length, 1);
+    assert.equal(JSON.parse(c.requests[0].body).resourceSpans[0].scopeSpans[0].spans[0].name, 'from-env');
+  } finally {
+    await o.shutdown(500);
+    await c.close();
+  }
 });
 
 test('otel: shutdown sends what is still queued', async () => {
