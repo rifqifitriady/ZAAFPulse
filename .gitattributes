@@ -1,0 +1,2 @@
+# Skill files are parsed for YAML frontmatter; keep them LF on every checkout, Windows included.
+*.md text eol=lf

@@ -1,6 +1,6 @@
 ---
 name: zaafpulse-a2a
-description: Talk to ZAAFPulse as an Agent2Agent (A2A) agent using JSON-RPC 2.0 and SSE. Method names follow v1.0 (SendMessage, GetTask, ListTasks, CancelTask, SendStreamingMessage, SubscribeToTask); v0.3 names are also accepted. Skills are the collaboration patterns, agent:<id> and workflow:<id>. Use it when another agent or an A2A client should delegate a task to the user's ZAAFPulse agents.
+description: Talk to ZAAFPulse as an Agent2Agent (A2A) agent using JSON-RPC 2.0 and SSE. Method names follow v1.0 (SendMessage, GetTask, ListTasks, CancelTask, SendStreamingMessage, SubscribeToTask); v0.3 names are also accepted. Skills are the collaboration patterns, agent:{id} and workflow:{id}. Use it when another agent or an A2A client should delegate a task to the user's ZAAFPulse agents.
 ---
 
 # ZAAFPulse: A2A
