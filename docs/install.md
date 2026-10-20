@@ -272,7 +272,7 @@ zaafpulse [start] [--host H] [--port P] [--data DIR] [--demo] [--open]
 zaafpulse set-password
 zaafpulse service install|uninstall|status|restart [--system]
 zaafpulse status | doctor | open | version | help
-zaafpulse register-mcp <claude|kiro|antigravity|all> [--remove]
+zaafpulse register-mcp <claude|kiro|antigravity|cursor|vscode|claude-desktop|codex|gemini|windsurf|zed|all> [--remove]
 zaafpulse mcp
 ```
 
