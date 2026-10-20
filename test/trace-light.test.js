@@ -9,10 +9,16 @@ try {
 } catch {
   /* Node < 22.5 */
 }
+const crypto = require('crypto');
 const { createKiro } = require('../lib/trace/kiro');
 const { createGemini } = require('../lib/trace/gemini');
 const { createAntigravity } = require('../lib/trace/antigravity');
-const { validate, totals } = require('../lib/trace/model');
+const { validate, totals, commandName } = require('../lib/trace/model');
+const L = require('../lib/trace/light');
+
+// Read-only opens need Node 22.12; earlier Node would open the database read-write.
+const [major, minor] = process.versions.node.split('.').map(Number);
+const sqliteOk = !!sqlite && (major > 22 || (major === 22 && minor >= 12));
 
 const F = path.join(__dirname, 'fixtures', 'trace');
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), `zp-${p}-`));
@@ -114,7 +120,11 @@ test('kiro: the title is masked, one line and at most 80 characters', () => {
 
 test('kiro: listings are cached for 30 s and capped at 500, newest first', () => {
   const root = tmp('kiro');
-  for (let i = 0; i < 502; i++) kiroSession(root, `sess_${i}`, { lastModifiedAt: new Date(Date.UTC(2026, 0, 1) + i * 1000).toISOString() }, []);
+  for (let i = 0; i < 502; i++) {
+    kiroSession(root, `sess_${i}`, { lastModifiedAt: new Date(Date.UTC(2026, 0, 1) + i * 1000).toISOString() }, []);
+    const at = new Date(Date.UTC(2026, 0, 1) + i * 1000);
+    fs.utimesSync(path.join(root, 'ws1', `sess_${i}`, 'messages.jsonl'), at, at);
+  }
   try {
     const k = createKiro({ root });
     const rows = k.sessions();
@@ -220,7 +230,7 @@ function makeDb(db, rows = ROWS) {
   return w;
 }
 
-test('antigravity: conversation level, read-only', { skip: !sqlite }, async () => {
+test('antigravity: conversation level, read-only', { skip: !sqliteOk }, async () => {
   const dir = tmp('ag');
   const db = path.join(dir, 'conversation_summaries.db');
   makeDb(db).close();
@@ -250,7 +260,7 @@ test('antigravity: conversation level, read-only', { skip: !sqlite }, async () =
   }
 });
 
-test('antigravity: opens a WAL database while its writer is still running, without touching it', { skip: !sqlite }, () => {
+test('antigravity: opens a WAL database while its writer is still running, without touching its file', { skip: !sqliteOk }, () => {
   const dir = tmp('ag');
   const db = path.join(dir, 'conversation_summaries.db');
   const w = makeDb(db);
@@ -267,7 +277,7 @@ test('antigravity: opens a WAL database while its writer is still running, witho
   }
 });
 
-test('antigravity: a locked database is read from a copy that is deleted afterwards', { skip: !sqlite }, () => {
+test('antigravity: a locked database is read from a copy that is deleted afterwards', { skip: !sqliteOk }, () => {
   const dir = tmp('ag');
   const db = path.join(dir, 'conversation_summaries.db');
   const w = makeDb(db);
@@ -275,8 +285,10 @@ test('antigravity: a locked database is read from a copy that is deleted afterwa
   const had = copies().length;
   try {
     w.exec('BEGIN EXCLUSIVE');
-    const rows = createAntigravity({ files: [db] }).sessions();
+    let copied = 0;
+    const rows = createAntigravity({ files: [db], onCopy: () => copied++ }).sessions();
     assert.equal(rows.length, 1);
+    assert.equal(copied, 1, 'the copy branch ran');
     assert.equal(copies().length, had, 'no copy left behind');
   } finally {
     w.close();
@@ -284,7 +296,7 @@ test('antigravity: a locked database is read from a copy that is deleted afterwa
   }
 });
 
-test('antigravity: masked title, killed means error, an orphan child is its own session', { skip: !sqlite }, async () => {
+test('antigravity: masked title, killed means error, an orphan child is its own session', { skip: !sqliteOk }, async () => {
   const dir = tmp('ag');
   const db = path.join(dir, 'conversation_summaries.db');
   makeDb(db, [
@@ -317,7 +329,131 @@ test('antigravity: masked title, killed means error, an orphan child is its own 
 test('antigravity: reports why it is unavailable', () => {
   const missing = createAntigravity({ files: [path.join(os.tmpdir(), 'zp-no-such.db')] }).available();
   assert.equal(missing.ok, false);
-  assert.equal(missing.reason, sqlite ? 'not installed' : 'needs Node 22.5 or newer');
+  assert.equal(missing.reason, sqliteOk ? 'not installed' : 'needs Node 22.12 or newer');
+});
+
+test('antigravity: below Node 22.12 nothing opens the database (earlier 22.x ignores readOnly)', () => {
+  const dir = tmp('ag');
+  const db = path.join(dir, 'conversation_summaries.db');
+  fs.writeFileSync(db, 'not a database');
+  let opened = 0;
+  const stub = { DatabaseSync: class { constructor() { opened++; } } };
+  try {
+    for (const v of ['22.5.0', '22.9.1', '22.11.0', '20.18.0', '18.20.4']) {
+      const a = createAntigravity({ files: [db], version: v, sqlite: stub });
+      assert.deepEqual(a.available(), { ok: false, reason: 'needs Node 22.12 or newer' }, v);
+      assert.deepEqual(a.sessions(), []);
+    }
+    assert.equal(opened, 0);
+    for (const v of ['22.12.0', '22.20.1', '23.0.0', '24.16.0']) assert.equal(createAntigravity({ files: [db], version: v, sqlite: stub }).available().ok, true, v);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+const sha = (f) => (fs.existsSync(f) ? crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex') : null);
+
+test('antigravity: a WAL database whose writer has gone is read without changing the db or the -wal', { skip: !sqliteOk }, () => {
+  const live = tmp('ag');
+  const dir = tmp('ag');
+  const w = makeDb(path.join(live, 'conversation_summaries.db'));
+  try {
+    w.exec('PRAGMA journal_mode=WAL');
+    w.exec('PRAGMA wal_autocheckpoint=0');
+    w.exec("UPDATE conversation_summaries SET title = 'in the wal' WHERE conversation_id = 'p'");
+    // What a crashed or killed app leaves behind: the main file and a -wal that was never checkpointed.
+    const db = path.join(dir, 'conversation_summaries.db');
+    fs.copyFileSync(path.join(live, 'conversation_summaries.db'), db);
+    fs.copyFileSync(path.join(live, 'conversation_summaries.db-wal'), `${db}-wal`);
+    assert.ok(fs.statSync(`${db}-wal`).size > 0);
+    const before = { db: sha(db), wal: sha(`${db}-wal`), dbSize: fs.statSync(db).size, walSize: fs.statSync(`${db}-wal`).size };
+    const rows = createAntigravity({ files: [db] }).sessions();
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].title, 'in the wal', 'the -wal is read');
+    assert.equal(sha(db), before.db);
+    assert.equal(sha(`${db}-wal`), before.wal);
+    assert.equal(fs.statSync(db).size, before.dbSize);
+    assert.equal(fs.statSync(`${db}-wal`).size, before.walSize);
+  } finally {
+    w.close();
+    cleanup(live, dir);
+  }
+});
+
+test('antigravity: SQLITE_CANTOPEN on the read-only open falls back to a copy', { skip: !sqliteOk }, () => {
+  const dir = tmp('ag');
+  const db = path.join(dir, 'conversation_summaries.db');
+  makeDb(db).close();
+  const real = sqlite.DatabaseSync;
+  const stub = {
+    DatabaseSync: class extends real {
+      constructor(file, opts) {
+        if (opts && opts.readOnly) throw Object.assign(new Error('unable to open database file'), { code: 'ERR_SQLITE_ERROR', errcode: 14 });
+        super(file, opts);
+      }
+    },
+  };
+  const copied = [];
+  try {
+    const rows = createAntigravity({ files: [db], sqlite: stub, onCopy: (f) => copied.push(f) }).sessions();
+    assert.equal(rows.length, 1);
+    assert.deepEqual(copied, [db]);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('antigravity: a root beyond the 500 cap can still be opened; self-parents and cycles keep their conversations', { skip: !sqliteOk }, async () => {
+  const dir = tmp('ag');
+  const db = path.join(dir, 'conversation_summaries.db');
+  const rows = [];
+  for (let i = 0; i < 502; i++) rows.push([`r${i}`, `root ${i}`, 1, 'main', '', 0, 0, new Date(Date.UTC(2026, 5, 1) + i * 60000).toISOString(), new Date(Date.UTC(2026, 5, 1) + i * 60000).toISOString()]);
+  rows.push(['self', 'self parent', 1, 'main', 'self', 1, 0, '2026-01-01T01:00:00Z', '2026-01-01T00:00:00Z']);
+  rows.push(['x', 'cycle x', 1, 'a', 'y', 1, 0, '2026-01-02T02:00:00Z', '2026-01-02T01:00:00Z']);
+  rows.push(['y', 'cycle y', 1, 'b', 'z', 1, 0, '2026-01-02T03:00:00Z', '2026-01-02T01:30:00Z']);
+  rows.push(['z', 'cycle z', 1, 'c', 'x', 1, 0, '2026-01-02T04:00:00Z', '2026-01-02T01:45:00Z']);
+  const w = makeDb(db, []);
+  w.exec('BEGIN');
+  const ins = w.prepare("INSERT INTO conversation_summaries (conversation_id, title, step_count, agent_name, parent_conversation_id, nesting_depth, killed, last_modified_time, last_user_input_time, workspace_uris) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]')");
+  for (const r of rows) ins.run(...r);
+  w.exec('COMMIT');
+  w.close();
+  try {
+    const a = createAntigravity({ files: [db], minRefresh: 0 });
+    const list = a.sessions();
+    assert.equal(list.length, 500);
+    assert.ok(!list.some((r) => r.id === 'r0'), 'r0 is the oldest, past the cap');
+    const sk = await a.skeleton(null, 'r0', {});
+    assert.equal(sk.session.id, 'r0');
+    assert.deepEqual(validate(sk.spans), []);
+    await assert.rejects(a.skeleton(null, 'nope', {}), (e) => e.status === 404 && e.message === 'unknown session');
+    const self = await a.skeleton(null, 'self', {});
+    assert.equal(self.spans.length, 1, 'a self-parent is a plain root');
+    // x is the oldest of the ring x -> y -> z -> x: it is the root, the others hang below it.
+    const ring = await a.skeleton(null, 'x', {});
+    assert.deepEqual(validate(ring.spans), []);
+    assert.deepEqual(ring.spans.map((s) => s.name), ['invoke_agent a', 'invoke_agent c', 'invoke_agent b']);
+    await assert.rejects(a.skeleton(null, 'y', {}), (e) => e.status === 404);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('antigravity: agent names are masked and capped', { skip: !sqliteOk }, async () => {
+  const dir = tmp('ag');
+  const db = path.join(dir, 'conversation_summaries.db');
+  makeDb(db, [
+    ['p', 't', 1, 'main', '', 0, 0, '2026-10-19T10:00:00Z', '2026-10-19T09:00:00Z'],
+    ['c', 't', 1, `${SECRET} ${'n'.repeat(200)}`, 'p', 1, 0, '2026-10-19T09:30:00Z', '2026-10-19T09:10:00Z'],
+  ]).close();
+  try {
+    const sk = await createAntigravity({ files: [db] }).skeleton(null, 'p', {});
+    const kid = sk.spans[1];
+    assert.ok(!JSON.stringify(sk).includes('Ab3dE7gH1jK5'));
+    assert.ok(kid.tool.name.length <= 80 && kid.name.length <= 80 + 'invoke_agent '.length);
+  } finally {
+    cleanup(dir);
+  }
 });
 
 /* ---------- Defaults ---------- */
@@ -342,5 +478,134 @@ test('the default instances touch no disk when required', () => {
     for (const m of loaded) assert.equal(typeof m.available, 'function');
   } finally {
     for (const n of names) fs[n] = orig[n];
+  }
+});
+
+/* ---------- Command names, bounded listings, odd input ---------- */
+
+test('commandName: skips env assignments and wrappers, keeps only the program', () => {
+  assert.equal(commandName(`API_KEY=${SECRET} node deploy.js`), 'node');
+  assert.equal(commandName('sudo env FOO=1 /usr/bin/git push'), 'git');
+  assert.equal(commandName('nohup time -p ./run.sh --flag'), 'run.sh');
+  assert.equal(commandName('FOO=1 BAR=2'), null);
+  assert.equal(commandName('"C:\\tools\\node.exe" x'), 'node.exe');
+  assert.equal(commandName(SECRET), null, 'a program name that is itself a key is not shown');
+  assert.equal(commandName(''), null);
+  assert.equal(commandName(null), null);
+});
+
+test('kiro and gemini name a command tool by its program', async () => {
+  const root = tmp('kiro');
+  const L1 = (t, p) => ({ id: t, timestamp: `2026-10-19T09:00:0${t}Z`, payload: p });
+  kiroSession(root, 'sess_c', {}, [
+    L1(1, { type: 'tool_call', toolCallId: 'a', toolName: 'executeBash', args: { command: `API_KEY=${SECRET} node deploy.js` }, status: 'completed', executionId: 'e1' }),
+    L1(2, { type: 'tool_call', toolCallId: 'b', toolName: 'executeBash', args: { command: 'sudo env FOO=1 /usr/bin/git push' }, status: 'completed', executionId: 'e1' }),
+  ]);
+  const gem = tmp('gem');
+  fs.mkdirSync(path.join(gem, 'h', 'chats'), { recursive: true });
+  const call = (id, command) => ({ id, name: 'run_shell_command', args: { command }, status: 'success' });
+  fs.writeFileSync(
+    path.join(gem, 'h', 'chats', 'session-c.json'),
+    JSON.stringify({ sessionId: 'c', messages: [{ type: 'user', content: 'go', timestamp: '2026-10-19T09:00:00Z' }, { type: 'gemini', content: '', timestamp: '2026-10-19T09:00:05Z', toolCalls: [call('1', `API_KEY=${SECRET} node deploy.js`), call('2', 'sudo env FOO=1 /usr/bin/git push')] }] }),
+  );
+  try {
+    for (const sk of [await createKiro({ root }).skeleton(null, 'sess_c', {}), await createGemini({ root: gem }).skeleton(null, 'c', {})]) {
+      assert.deepEqual(sk.spans.filter((s) => s.kind === 'tool').map((s) => s.tool.target), ['node', 'git']);
+      assert.equal(JSON.stringify(sk).includes('Ab3dE7gH1jK5'), false);
+    }
+  } finally {
+    cleanup(root, gem);
+  }
+});
+
+test('a forced refresh runs at most once per interval', () => {
+  let builds = 0;
+  const get = L.cache(() => ++builds, { ttl: 60000, minRefresh: 5000 });
+  get();
+  for (let i = 0; i < 20; i++) get(true);
+  assert.equal(builds, 1, 'twenty unknown ids, one scan');
+  const free = L.cache(() => ++builds, { ttl: 60000, minRefresh: 0 });
+  free();
+  free(true);
+  assert.equal(builds, 3);
+});
+
+test('kiro: unknown ids do not rescan the folder every time', async () => {
+  const root = tmp('kiro');
+  kiroSession(root, 'sess_a', {}, []);
+  const k = createKiro({ root });
+  try {
+    k.sessions();
+    kiroSession(root, 'sess_b', {}, []);
+    for (let i = 0; i < 3; i++) await assert.rejects(k.skeleton(null, 'sess_b', {}), (e) => e.status === 404);
+    const k2 = createKiro({ root, minRefresh: 0 });
+    k2.sessions();
+    kiroSession(root, 'sess_c', {}, []);
+    assert.equal((await k2.skeleton(null, 'sess_c', {})).session.id, 'sess_c');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('kiro: only the newest 500 sessions are parsed, and a messages file over 50 MB is skipped', () => {
+  const root = tmp('kiro');
+  for (let i = 0; i < 503; i++) {
+    kiroSession(root, `sess_${i}`, {}, []);
+    const at = new Date(Date.UTC(2026, 0, 1) + i * 1000);
+    fs.utimesSync(path.join(root, 'ws1', `sess_${i}`, 'messages.jsonl'), at, at);
+  }
+  const big = path.join(root, 'ws1', 'sess_big', 'messages.jsonl');
+  kiroSession(root, 'sess_big', {}, []);
+  fs.truncateSync(big, L.MAX_FILE + 1);
+  const opened = [];
+  const orig = fs.openSync;
+  fs.openSync = function (f, ...a) {
+    if (String(f).endsWith('messages.jsonl')) opened.push(String(f));
+    return orig.call(this, f, ...a);
+  };
+  try {
+    const rows = createKiro({ root }).sessions();
+    assert.equal(rows.length, 500);
+    assert.equal(opened.length, 500, 'older sessions are statted, not read');
+    assert.ok(!opened.includes(big) && !rows.some((r) => r.id === 'sess_big'));
+  } finally {
+    fs.openSync = orig;
+    cleanup(root);
+  }
+});
+
+test('turn option: NaN, strings, null and a missing options argument all mean the last turn', async () => {
+  const k = createKiro({ root: path.join(F, 'kiro') });
+  const g = createGemini({ root: path.join(F, 'gemini') });
+  for (const [a, id] of [[k, 'sess_k1'], [g, 'g-sess-1']]) {
+    for (const opts of [undefined, null, {}, { turn: NaN }, { turn: 'x' }, { turn: 1.5 }, { turn: null }, { turn: 99 }]) {
+      const sk = await a.skeleton(null, id, opts);
+      assert.equal(sk.spans.find((s) => s.kind === 'turn').name, 'turn 2', JSON.stringify(opts));
+    }
+    assert.equal((await a.skeleton(null, id, { turn: -3 })).spans.find((s) => s.kind === 'turn').name, 'turn 1');
+  }
+});
+
+test('gemini: first non-empty prompt titles the session, huge text is bounded, odd names and tokens are tamed', async () => {
+  const gem = tmp('gem');
+  fs.mkdirSync(path.join(gem, 'h', 'chats'), { recursive: true });
+  const msgs = [
+    { type: 'user', content: '   ', timestamp: '2026-10-19T09:00:00Z' },
+    { type: 'user', content: [{ text: '' }], timestamp: '2026-10-19T09:00:01Z' },
+    { type: 'user', content: `${'x'.repeat(2000000)} ${SECRET}`, timestamp: '2026-10-19T09:00:02Z' },
+    { type: 'gemini', content: '', model: `${SECRET}-${'m'.repeat(200)}`, tokens: { input: 'lots', output: null, cached: -5, total: {} }, timestamp: '2026-10-19T09:00:05Z', toolCalls: [{ name: 'n'.repeat(300), status: 'success' }] },
+  ];
+  fs.writeFileSync(path.join(gem, 'h', 'chats', 'session-t.json'), JSON.stringify({ sessionId: 't', messages: msgs }));
+  try {
+    const g = createGemini({ root: gem });
+    const [r] = g.sessions();
+    assert.ok(r.title.startsWith('xxx') && r.title.length === 80);
+    const sk = await g.skeleton(null, 't', { turn: 2 });
+    const chat = sk.spans.find((s) => s.kind === 'chat');
+    assert.deepEqual(chat.usage, { input: 0, output: 0, cacheRead: 0 });
+    assert.ok(chat.model.length <= 80 && !chat.model.includes('Ab3dE7gH1jK5'));
+    assert.ok(sk.spans.find((s) => s.kind === 'tool').tool.name.length <= 80);
+  } finally {
+    cleanup(gem);
   }
 });
