@@ -59,7 +59,8 @@ test('auth: parallel password guesses are counted before they are checked (no lo
 });
 
 test('auth: a proxy or public URL turns sign-in on; forwarded addresses cannot dodge the lockout', () => {
-  assert.equal(pickMode({ host: '127.0.0.1', env: {}, platform: 'darwin' }), 'none');
+  assert.equal(pickMode({ host: '127.0.0.1', env: {}, platform: 'darwin' }), 'local', 'local is the default');
+  assert.equal(pickMode({ host: '127.0.0.1', env: { ZAAFPULSE_AUTH: 'none' }, platform: 'darwin' }), 'none');
   assert.equal(pickMode({ host: '127.0.0.1', env: { ZAAFPULSE_TRUST_PROXY: '1' }, platform: 'darwin' }), 'password');
   assert.equal(
     pickMode({ host: '127.0.0.1', env: { ZAAFPULSE_PUBLIC_URL: 'https://ai.example.com' }, platform: 'darwin' }),
@@ -71,7 +72,7 @@ test('auth: a proxy or public URL turns sign-in on; forwarded addresses cannot d
     'local',
     'Linux with other users',
   );
-  assert.equal(pickMode({ host: '127.0.0.1', env: {}, platform: 'linux', users: () => 0 }), 'none');
+  assert.equal(pickMode({ host: '127.0.0.1', env: {}, platform: 'linux', users: () => 0 }), 'local');
   // Behind a trusted proxy the right-most X-Forwarded-For entry counts; what the client prepends does not.
   const req = (xff, ip = '127.0.0.1') => ({ headers: { 'x-forwarded-for': xff }, socket: { remoteAddress: ip } });
   assert.equal(clientKey(req('1.1.1.1, 203.0.113.9'), true), '203.0.113.9');
