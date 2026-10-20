@@ -132,29 +132,55 @@ There are three sign-in modes. ZAAFPulse picks one by itself:
 
 | Mode | When | How you get in |
 |---|---|---|
-| **none** | 127.0.0.1 on a single-user machine (the default on a laptop) | Open http://localhost:4777 |
-| **local** | Linux with other login users, or `ZAAFPULSE_AUTH=local` | `zaafpulse open`. It writes a one-time code into your private data folder, and the browser swaps it for a 30-day cookie. Other accounts and their programs cannot get in. |
+| **local** | 127.0.0.1, on every OS (the default) | `zaafpulse open`, or `zaafpulse start --open`. Other accounts on the machine and their programs cannot get in. |
 | **password** | Any address but 127.0.0.1, a reverse proxy (`ZAAFPULSE_TRUST_PROXY`, `ZAAFPULSE_PUBLIC_URL` or `ZAAFPULSE_ALLOWED_HOSTS`), or `ZAAFPULSE_AUTH=1` | The admin password |
+| **none** | Only with `ZAAFPULSE_AUTH=none` on 127.0.0.1, and demo mode (`--demo`) on a single-user machine | Open http://localhost:4777 |
 
-On a shared machine, or for extra safety on your own, set `ZAAFPULSE_AUTH=local`.
+Without sign-in, any program and any other OS account on the machine could use the dashboard as you: create gateway keys, read your history and use your stored provider keys. That is why `local` is the default even on a laptop.
 
-While sign-in is off, ZAAFPulse refuses requests that carry proxy headers (`X-Forwarded-*`, `Forwarded`, `X-Real-IP`, `Via`). It also refuses browser requests whose `Origin` or `Referer` names another host, and cross-site requests.
+### Getting in with local sign-in
+
+- **After `zaafpulse start`:** run `zaafpulse open` in another terminal, or start with `zaafpulse start --open`. The browser opens signed in.
+- **Background service:** after `zaafpulse service install`, or after a reboot, run `zaafpulse open` once.
+- **macOS autostart** (`scripts/install-autostart.sh`): at login and on wake, the opener focuses the dashboard tab in Chrome. A new tab, or a tab that shows the sign-in page, is signed in by itself.
+- **Windows:** run `zaafpulse open` (for example from a new terminal). The Start menu shortcut opens the dashboard and works while the browser's sign-in is still valid.
+- **Docker and servers** listen on another address, so they always use the admin password.
+- **Demo mode** (`npm run demo`, `zaafpulse start --demo`) needs no sign-in on a single-user machine, because its data is synthetic and it never reads your logs, keys or settings. On Linux with other login users it uses local sign-in too.
+
+How it works:
+
+- `zaafpulse open` writes a one-time code (valid for 2 minutes) into your private data folder, inside a small HTML file only your account can read. It opens that file, which forwards the browser to the dashboard.
+- Only the file's path goes on the command line, never the code. Other users on Linux can read every process's command line (`/proc/<pid>/cmdline`), so they never see the code.
+- The server swaps the code for an HttpOnly, SameSite=Strict cookie that lasts 30 days and survives restarts. Each code works once. The file is deleted when it is used.
+- **Sign out** revokes every local-sign-in cookie at once (all browsers). Run `zaafpulse open` to sign in again.
+- The sign-in cookie carries a version. After upgrading from 1.0.x, sign in once with `zaafpulse open`.
+
+### Requests from other sites
+
+- In every mode, a browser request whose `Origin` names another site is refused with 403. This covers the dashboard, `/v1`, `/mcp` and `/a2a`.
+- The site's own pages are always allowed: the Host the request was sent to, a trusted proxy's `X-Forwarded-Host`, `ZAAFPULSE_PUBLIC_URL` and `ZAAFPULSE_ALLOWED_HOSTS`.
+- On 127.0.0.1, pages on any local port are allowed too, for example a web app on http://localhost:3000.
+- A browser app on another site that calls the gateway with an API key needs its origin in `ZAAFPULSE_ALLOWED_ORIGINS=https://app.example.com`. A value of `*` allows every origin, which leaves only the API key to protect the gateway.
+
+While sign-in is off (`none`), ZAAFPulse also refuses requests that carry proxy headers (`X-Forwarded-*`, `Forwarded`, `X-Real-IP`, `Via`), browser requests whose `Referer` names another host, and cross-site requests.
 
 This catches the usual proxy mistakes and any browser that reaches the dashboard through a proxy. It cannot catch a non-browser client behind a proxy that strips all those headers and rewrites the Host to `localhost`: such a client looks exactly like a program on this machine.
 
-**Any reverse proxy in front of ZAAFPulse needs sign-in.** Set `ZAAFPULSE_TRUST_PROXY=1` and an admin password, or use `ZAAFPULSE_AUTH=local`.
+**Any reverse proxy in front of ZAAFPulse needs sign-in.** Set `ZAAFPULSE_TRUST_PROXY=1` and an admin password, or keep local sign-in.
 
 ## Server mode
 
 ZAAFPulse listens on `127.0.0.1` unless told otherwise. Any other address, or a reverse proxy in front of it, turns on password sign-in:
 
-- **Admin password:** the dashboard and its `/api` need one. Set it with `zaafpulse set-password` (stored as a scrypt hash) or with `ZAAFPULSE_ADMIN_PASSWORD` (or `ZAAFPULSE_ADMIN_PASSWORD_FILE`). ZAAFPulse does not start without one.
+- **Admin password:** the dashboard and its `/api` need one, of at least 10 characters. Set it with `zaafpulse set-password` (stored as a scrypt hash) or with `ZAAFPULSE_ADMIN_PASSWORD` (or `ZAAFPULSE_ADMIN_PASSWORD_FILE`). ZAAFPulse does not start without one, or with a shorter one.
 - **Sessions:** a session is an HttpOnly, SameSite=Strict cookie, which is also `Secure` over HTTPS. It lasts 12 hours and is renewed while it is used, up to 7 days.
 - **Wrong passwords:**
   - One sign-in is checked at a time per address. Every attempt counts before it is checked, so parallel guessing does not help.
-  - Five failures lock that address for five minutes.
-  - Fifty failures from all addresses together lock sign-in for everyone for five minutes.
-  - Behind a proxy, the address is the right-most `X-Forwarded-For` entry, and IPv6 addresses count per /64.
+  - After five failures an address waits 30 seconds. Each further failure doubles the wait, up to one hour. A day without failures clears the count.
+  - IPv6 addresses count per /64, and each /56 shares a budget of 20 failures, so one network cannot rotate through its addresses.
+  - When 50 failures come from all addresses within 15 minutes, every address gets one free try instead of five. This slows a distributed attack down. It never refuses a fresh address its first try, so you can still sign in with the right password while someone else is guessing.
+  - A browser that signed in before gets a signed "known browser" cookie (180 days). It has its own count, so guesses from its address (a shared office or carrier connection) or from everywhere at once do not lock it out.
+  - Behind a proxy, the address is the right-most `X-Forwarded-For` entry.
 - **Apps:** `/v1`, `/mcp` and `/a2a` need ZAAFPulse API keys, as they always have.
 - **Host names:** with sign-in on, any host name is accepted. To restrict it, set `ZAAFPULSE_ALLOWED_HOSTS=ai.example.com,10.0.0.5`.
 - **Browser protection:** every dashboard response carries a strict Content-Security-Policy, `X-Frame-Options: DENY` and `Referrer-Policy: no-referrer`.
@@ -258,7 +284,8 @@ zaafpulse mcp
 | `ZAAFPULSE_PORT` | `4777` | Port (`PORT` also works) |
 | `ZAAFPULSE_DATA` | see the tables above | Folder for `config.json`, `.data/` and `.cache/` |
 | `ZAAFPULSE_ADMIN_PASSWORD` (`_FILE`) | | Admin password for server mode |
-| `ZAAFPULSE_AUTH` | automatic | `1` (password), `local` (only this OS account, with `zaafpulse open`) or `none` |
+| `ZAAFPULSE_AUTH` | automatic | `1` (password), `local` (only this OS account, with `zaafpulse open`; the default on 127.0.0.1) or `none` (no sign-in) |
+| `ZAAFPULSE_ALLOWED_ORIGINS` | | Comma-separated origins of browser apps on other sites that may call ZAAFPulse (`*` for any) |
 | `ZAAFPULSE_ALLOW_PRIVATE_URLS` | | `1` lets RAG URL ingestion fetch private and intranet addresses |
 | `ZAAFPULSE_TLS_CERT`, `ZAAFPULSE_TLS_KEY` | | PEM files for built-in HTTPS |
 | `ZAAFPULSE_PUBLIC_URL` | | The address apps should use, shown in snippets |

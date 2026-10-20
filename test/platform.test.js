@@ -75,15 +75,17 @@ async function authServer(auth) {
   return { base: `http://127.0.0.1:${server.address().port}`, close: () => server.close() };
 }
 
-test('auth: localhost needs no sign-in; server mode needs the password and rate-limits guesses', async () => {
-  // On a single-user machine localhost needs no sign-in; with other login users (Linux) it is local-only.
+test('auth: localhost is local-only by default; server mode needs the password and rate-limits guesses', async () => {
+  // Localhost is limited to this OS account on every OS, single-user or not; no sign-in only when asked for.
+  for (const platform of ['linux', 'darwin', 'win32'])
+    assert.equal(
+      createAuth({ dataDir: tmp('zp-a-'), host: '127.0.0.1', env: {}, platform, users: () => 0 }).mode,
+      'local',
+      platform,
+    );
   assert.equal(
-    createAuth({ dataDir: tmp('zp-a-'), host: '127.0.0.1', env: {}, platform: 'linux', users: () => 0 }).required,
+    createAuth({ dataDir: tmp('zp-a-'), host: '127.0.0.1', env: { ZAAFPULSE_AUTH: 'none' } }).required,
     false,
-  );
-  assert.equal(
-    createAuth({ dataDir: tmp('zp-a-'), host: '127.0.0.1', env: {}, platform: 'linux', users: () => 1 }).mode,
-    'local',
   );
   const dir = tmp('zp-auth-');
   assert.throws(() => setPassword(dir, 'short'), /at least 10/);

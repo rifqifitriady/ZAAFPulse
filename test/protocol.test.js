@@ -33,7 +33,7 @@ test('initialize echoes a supported protocol version', async () => {
 
 test('initialize offers the newest version for an unknown one', async () => {
   const r = await ask(server(), init('1999-01-01'));
-  assert.equal(r.result.protocolVersion, '2025-06-18');
+  assert.equal(r.result.protocolVersion, '2025-11-25');
 });
 
 test('tools/list and tools/call', async () => {
@@ -83,4 +83,40 @@ test('serve answers every line before it resolves', async () => {
   input.end();
   await done;
   assert.deepEqual(JSON.parse(text.trim()), { jsonrpc: '2.0', id: 7, result: {} });
+});
+
+test('a JSON-RPC response is dropped, never answered', async () => {
+  const s = server();
+  assert.equal(await s.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 7, result: {} })), null);
+  assert.equal(
+    await s.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 8, error: { code: -32601, message: 'x' } })),
+    null,
+  );
+  // An id with neither a method nor a result is still an invalid request.
+  assert.equal((await ask(s, { jsonrpc: '2.0', id: 9 })).error.code, -32600);
+});
+
+test('params: null means no params; arguments must be an object', async () => {
+  const s = server();
+  assert.ok((await ask(s, { jsonrpc: '2.0', id: 1, method: 'tools/list', params: null })).result.tools);
+  assert.ok((await ask(s, { jsonrpc: '2.0', id: 2, method: 'ping', params: null })).result);
+  const nullArgs = await ask(s, {
+    jsonrpc: '2.0',
+    id: 3,
+    method: 'tools/call',
+    params: { name: 'acc_x', arguments: null },
+  });
+  assert.equal(nullArgs.result.content[0].text, '{}');
+  const bad = await ask(s, { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'acc_x', arguments: 'x' } });
+  assert.equal(bad.error.code, -32602);
+  assert.equal((await ask(s, { jsonrpc: '2.0', id: 5, method: 'tools/list', params: 'x' })).error.code, -32602);
+  assert.equal(
+    (await ask(s, { jsonrpc: '2.0', id: 6, method: 'initialize', params: null })).result.protocolVersion,
+    '2025-11-25',
+  );
+});
+
+test('initialize accepts 2025-11-25 and every older supported version', async () => {
+  for (const v of ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'])
+    assert.equal((await ask(server(), init(v))).result.protocolVersion, v);
 });

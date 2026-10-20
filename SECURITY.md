@@ -36,7 +36,7 @@ Please do not report findings from automated scanners without checking that they
 
 ## What is in scope
 
-- Bypassing dashboard sign-in in server mode, session fixation or theft, getting around the sign-in lockout.
+- Bypassing dashboard sign-in (local or password mode), session fixation or theft, getting around the sign-in throttling, or locking the owner out with it.
 - Calling the gateway (`/v1`, `/mcp`, `/a2a`) without a valid API key, or beyond a key's scopes, models, agents, budget or rate limit.
 - Secrets leaking in plain text, for example:
   - into `config.json`, logs, error messages, the dashboard, service files or process lists;
@@ -57,8 +57,9 @@ Please do not report findings from automated scanners without checking that they
 
 ZAAFPulse was reviewed against this threat model in October 2026. The findings were fixed in 1.0.1, and an adversarial re-test of those fixes led to 1.0.2. The built-in safeguards are described in [docs/install.md](docs/install.md#built-in-safeguards):
 
-- dashboard sign-in modes: none, local or password;
-- lockout that holds against parallel guessing;
+- dashboard sign-in modes: local (the default), password, or none when asked for;
+- sign-in throttling that holds against parallel and distributed guessing without locking the owner out;
+- browser requests from other sites refused in every mode;
 - Content-Security-Policy and anti-framing headers;
 - secrets bound to their address;
 - an SSRF guard for URL ingestion;
@@ -71,7 +72,7 @@ ZAAFPulse was reviewed against this threat model in October 2026. The findings w
 
 ## Keeping your installation safe
 
-- **On a shared machine, set `ZAAFPULSE_AUTH=local`** so only your OS account can open the dashboard (it is automatic on Linux with other login users).
+- **Keep local sign-in** (the default on 127.0.0.1). It lets only your OS account open the dashboard: open it with `zaafpulse open`. `ZAAFPULSE_AUTH=none` turns sign-in off, and then any program or other account on the machine can act as you.
 - **Stay on 127.0.0.1** unless you need server mode. For server mode, use a strong admin password (`zaafpulse set-password`) and HTTPS (built-in TLS or a reverse proxy).
 - **Give each app its own API key** with the narrowest scopes, allowed models and agents, and a monthly budget. Revoke keys you no longer use (Endpoint → API keys).
 - **Never paste keys into `config.json`, issues or chats.** If a key leaks, revoke it at once and create a new one.
