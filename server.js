@@ -26,7 +26,7 @@ const {
   keychainStore,
 } = require('./lib/integration-config');
 const { createGateway } = require('./lib/gateway');
-const { createTrace } = require('./lib/trace');
+const { createTrace, contentDefaultOff } = require('./lib/trace');
 const { createPriceSync } = require('./lib/price-sync');
 const { createOpenRouter } = require('./lib/openrouter');
 const { createIntegrations } = require('./lib/integrations');
@@ -238,8 +238,8 @@ const gateway = createGateway({
 
 // Trace explorer: every log source behind opaque keys and ids. Content (prompts, replies, tool output) is off
 // when asked for, and by default in server mode, where other people may sign in. Demo reads no real files.
-const contentOff =
-  process.env.ZAAFPULSE_CONTENT === 'off' || (SERVER_MODE && process.env.ZAAFPULSE_CONTENT !== 'on');
+// Text is read only from the agent log folders; the data folder (keys, config) is never a root.
+const contentOff = contentDefaultOff(process.env, SERVER_MODE);
 const trace = createTrace({
   demo: DEMO,
   contentOff,
@@ -248,7 +248,7 @@ const trace = createTrace({
     : {
         indexer,
         gateway,
-        roots: [require('./lib/claude').ROOT, require('./lib/codex').ROOT, path.join(DIR, '.data')],
+        roots: [require('./lib/claude').ROOT, require('./lib/codex').ROOT],
       }),
 });
 
@@ -536,6 +536,9 @@ const handler = async (req, res) => {
       if (!['sources', 'sessions', 'session', 'title', 'content', 'reveal', 'live'].includes(route))
         return send(res, 404, { error: 'unknown route' });
       if (req.method !== (post ? 'POST' : 'GET')) return send(res, 405, { error: 'method not allowed' });
+      // Nothing a client sends for a filter or a cursor is longer than this.
+      if (['cursor', 'q', 'flags'].some((k) => (q.get(k) || '').length > 512))
+        return send(res, 400, { error: 'query value too long' });
       try {
         if (route === 'sources') return send(res, 200, trace.sources());
         if (route === 'sessions') {

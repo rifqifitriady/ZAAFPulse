@@ -19,8 +19,8 @@ const JSON_HEADERS = { 'content-type': 'application/json' };
 const freePort = () =>
   new Promise((resolve) => {
     const s = net.createServer();
-    // The range this project's server tests may use, so a stray server never lands on a real port.
-    const port = 4800 + Math.floor(Math.random() * 20);
+    // A wide range above the other server tests' (4800-4999), so parallel files rarely meet.
+    const port = 5100 + Math.floor(Math.random() * 800);
     s.once('error', () => resolve(freePort()));
     s.listen(port, '127.0.0.1', () => s.close(() => resolve(port)));
   });
@@ -45,17 +45,26 @@ async function startServer(env, { data = tmp('zp-trace-api-') } = {}) {
     let exited = false;
     child.on('exit', () => (exited = true));
     const base = `http://127.0.0.1:${port}`;
+    // Waits for the process to be gone before its folder is removed.
+    const stop = async () => {
+      if (!exited) {
+        const gone = new Promise((r) => child.once('exit', r));
+        child.kill();
+        await gone;
+      }
+      fs.rmSync(data, { recursive: true, force: true });
+    };
     for (let i = 0; i < 80 && !exited; i++) {
       try {
         await fetch(`${base}/api/session`, { signal: AbortSignal.timeout(2000) });
         // Still ours: a server that lost the port race exits at once.
         await new Promise((r) => setTimeout(r, 200));
-        if (!exited) return { port, data, base, child, stop: () => child.kill() };
+        if (!exited) return { port, data, base, child, stop };
       } catch {
         await new Promise((r) => setTimeout(r, 150));
       }
     }
-    child.kill();
+    await stop();
   }
   throw new Error('could not start server.js on a free port');
 }
@@ -146,12 +155,18 @@ test('trace api: demo sessions, a session with spans, titles, filters and conten
     // Live: demo sessions never grow.
     assert.deepEqual((await c.call(`/api/trace/live?key=${claude.key}`)).json, { changed: false });
 
+    // A long filter or cursor is refused, not passed on.
+    const long = 'x'.repeat(513);
+    for (const p of [`sessions?q=${long}`, `sessions?flags=${long}`, `live?key=${claude.key}&cursor=${long}`])
+      assert.equal((await c.call(`/api/trace/${p}`)).status, 400, p.slice(0, 20));
+    assert.equal((await c.call(`/api/trace/sessions?q=${'x'.repeat(512)}`)).status, 200);
+
     // Wrong method and unknown route.
     assert.equal((await c.call('/api/trace/sessions', { method: 'POST', body: {}, extra: JSON_HEADERS })).status, 405);
     assert.equal((await c.call('/api/trace/nope')).status, 404);
     noPaths(c.bodies);
   } finally {
-    s.stop();
+    await s.stop();
   }
 });
 
@@ -168,7 +183,7 @@ test('trace api: a forged or missing key is refused', async () => {
     }
     noPaths(c.bodies);
   } finally {
-    s.stop();
+    await s.stop();
   }
 });
 
@@ -209,7 +224,7 @@ test('trace api: reveal needs JSON, and returns the one masked value that was as
     // Only the revealed value may hold a path-free secret; scan the rest of what was received.
     noPaths(c.bodies);
   } finally {
-    s.stop();
+    await s.stop();
   }
 });
 
@@ -235,7 +250,7 @@ test('trace api: with ZAAFPULSE_CONTENT=off content is refused and titles are hi
     assert.equal((await c.call('/api/trace/sessions?q=auth%20redirect')).json.sessions.length, 0);
     noPaths(c.bodies);
   } finally {
-    s.stop();
+    await s.stop();
   }
 });
 
@@ -333,6 +348,6 @@ test('trace api: sign-in gate, gateway keys refused, and the live cursor round-t
     noPaths(anon.bodies);
     noPaths(bearer.bodies);
   } finally {
-    s.stop();
+    await s.stop();
   }
 });

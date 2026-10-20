@@ -711,3 +711,16 @@ test('a gateway run ref does not touch the file checks, and file refs still need
   await assert.rejects(c.read({ f: '/etc/hosts', s: 0, e: 1, k: 'raw' }), (e) => e.status === 403 || e.status === 404);
   assert.equal((await c.read({ g: 'run', id: 'r1', step: 3, f: '/etc/hosts' })).text, 'plain step');
 });
+
+test('a file in the data folder (keys, config) is refused: only the agent log folders are roots', async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-roots-'));
+  const logs = path.join(base, 'logs');
+  const data = path.join(base, '.data');
+  fs.mkdirSync(logs);
+  fs.mkdirSync(data);
+  const file = path.join(data, 'keys.json');
+  fs.writeFileSync(file, '{"keys":[]}\n');
+  const c = createContent({ roots: [logs] });
+  await assert.rejects(c.read({ f: file, s: 0, e: 12, k: 'prompt' }), { status: 403 });
+  await assert.rejects(c.reveal({ f: file, s: 0, e: 12, k: 'prompt' }, 0), { status: 403 });
+});
