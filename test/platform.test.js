@@ -202,7 +202,11 @@ test('platform: home expansion, data folder rules and the MCP command', () => {
   assert.equal(platform.expandHome('~\\x'), `${os.homedir()}\\x`);
   const d = tmp('zp-data-');
   assert.equal(platform.dataDir({ ZAAFPULSE_DATA: d }), d);
-  assert.equal(platform.dataDir({}), platform.APP_DIR, 'a git checkout keeps its data next to the code');
+  // A git checkout (or a folder that already has config.json or .data) keeps its data next to the code;
+  // anything else, such as an unpacked release tarball, uses the OS's data folder.
+  const inApp = ['.git', 'config.json', '.data'].some((f) => fs.existsSync(path.join(platform.APP_DIR, f)));
+  const system = platform.OS === 'linux' && process.getuid && process.getuid() === 0;
+  assert.equal(platform.dataDir({}), inApp ? platform.APP_DIR : platform.defaultDataDir({ system }));
   assert.deepEqual(platform.mcpCommand(), { command: process.execPath, args: [path.join(platform.APP_DIR, 'mcp.js')] });
   assert.ok(platform.obsidianConfigFiles().length >= 1);
 });
