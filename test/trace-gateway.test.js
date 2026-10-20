@@ -138,3 +138,86 @@ test('requests without a session id group per key per hour', () => {
   assert.ok(rows.every((r) => /^req:k[12]:\d{4}-\d\d-\d\dT\d\d:00:00\.000Z$/.test(r.id)));
   assert.equal(rows.find((r) => r.title.startsWith('2 requests')).turns, 1);
 });
+
+// --- step text goes to the final chat round of the agent call that made the step ---
+const chatAttrs = (agent) => ({ 'zp.agent': agent, 'gen_ai.request.model': 'm' });
+const agentSpan = (id, agent, start, end, status = 'ok') => ({ id, parent: 'x0', name: `invoke_agent ${agent}`, start, end, status, attrs: { 'gen_ai.agent.id': agent } });
+const chatSpan = (id, parent, agent, start, end) => ({ id, parent, name: 'chat m', start, end, status: 'ok', attrs: chatAttrs(agent) });
+const withTrace = (steps, spans) => ({ ...run, id: 'rt', answer: undefined, steps, trace: [run.trace[0], ...spans] });
+const stepsOf = async (r) => {
+  const sk = await createGatewayAdapter({ ...g, run: () => r }).skeleton(null, 'run:rt', {});
+  return Object.fromEntries(sk.spans.filter((s) => s.kind === 'chat').map((s, i) => [i, s.text ? s.text.step : undefined]));
+};
+
+test('two tool rounds in one agent call: only the last chat round shows the step text', async () => {
+  const spans = [agentSpan('a1', 'a', 10, 500), chatSpan('c1', 'a1', 'a', 20, 100), chatSpan('c2', 'a1', 'a', 200, 400)];
+  const steps = [{ agent: 'a', model: 'm', text: 'done' }];
+  // old run (no step.span): structural match
+  assert.deepEqual(await stepsOf(withTrace(steps, spans)), { 0: undefined, 1: 0 });
+  // new run: exact link
+  assert.deepEqual(await stepsOf(withTrace([{ ...steps[0], span: 'a1' }], spans)), { 0: undefined, 1: 0 });
+});
+
+test('a failed step before a successful one does not take its slot', async () => {
+  const spans = [
+    agentSpan('a1', 'a', 10, 50, 'error'),
+    chatSpan('c1', 'a1', 'a', 20, 40),
+    agentSpan('a2', 'a', 60, 200),
+    chatSpan('c2', 'a2', 'a', 70, 150),
+  ];
+  const steps = [
+    { agent: 'a', model: 'm', text: '', status: 'failed', error: 'boom' },
+    { agent: 'a', model: 'm', text: 'second try worked', status: 'done' },
+  ];
+  assert.deepEqual(await stepsOf(withTrace(steps, spans)), { 0: undefined, 1: 1 });
+});
+
+test('step.span links exactly, even when parallel steps finish in the other order', async () => {
+  const spans = [
+    agentSpan('a1', 'a', 10, 900),
+    chatSpan('c1', 'a1', 'a', 20, 880),
+    agentSpan('a2', 'a', 15, 100),
+    chatSpan('c2', 'a2', 'a', 25, 90),
+  ];
+  // a2 finished first, so its step was recorded first
+  const steps = [
+    { agent: 'a', model: 'm', text: 'fast', span: 'a2' },
+    { agent: 'a', model: 'm', text: 'slow', span: 'a1' },
+  ];
+  assert.deepEqual(await stepsOf(withTrace(steps, spans)), { 0: 1, 1: 0 });
+});
+
+test('a consulted agent inside another agent call does not take a slot', async () => {
+  const spans = [
+    agentSpan('a1', 'a', 10, 500),
+    { id: 'k1', parent: 'a1', name: 'invoke_agent b', start: 30, end: 80, status: 'ok', attrs: { 'gen_ai.agent.id': 'b' } },
+    chatSpan('ck', 'k1', 'b', 35, 70),
+    chatSpan('c1', 'a1', 'a', 100, 400),
+    agentSpan('b2', 'b', 510, 600),
+    chatSpan('c3', 'b2', 'b', 520, 590),
+  ];
+  const steps = [
+    { agent: 'a', model: 'm', text: 'A' },
+    { agent: 'b', model: 'm', text: 'B' },
+  ];
+  assert.deepEqual(await stepsOf(withTrace(steps, spans)), { 0: undefined, 1: 0, 2: 1 });
+});
+
+test('a run own model calls are not request sessions, a standalone agent call is', () => {
+  const rows = createGatewayAdapter({
+    ...g,
+    runs: () => [],
+    requests: () => [
+      { ts: 1000, keyId: 'k1', model: 'm', kind: 'agent', status: 200, runId: 'r1', sessionId: 'ctx-1' },
+      { ts: 1100, keyId: 'k1', model: 'm', kind: 'agent', status: 200, cost: 0.5 },
+    ],
+  }).sessions();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].cost, 0.5);
+});
+
+test('long session ids and model names are clipped to 80 characters', () => {
+  const rows = createGatewayAdapter({ ...g, runs: () => [], requests: () => [{ ts: 1, keyId: 'k', model: 'x'.repeat(300), sessionId: 's'.repeat(300), status: 200 }] }).sessions();
+  assert.equal(rows[0].id, 'req:' + 's'.repeat(80));
+  assert.equal(rows[0].title, '1 request · ' + 'x'.repeat(80));
+});
