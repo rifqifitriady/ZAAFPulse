@@ -2,12 +2,13 @@
 /* Quality & safety views. Every number here is a signal detected in local logs, and each
    drawer lists the matched items so the reader can judge them. */
 
-// Model-caused failure categories, in the validated adjacent order (aqua, violet, magenta, yellow).
+// Failure categories in the charts, in the validated adjacent order (aqua, violet, magenta, yellow).
+// Only non-existent targets and tool misuse count against accuracy (lib/quality.js MODEL_FAULT).
 const FAIL_CATS = [
-  { id: 'other', name: 'Other tool error', color: 'var(--tt-input)' },
-  { id: 'process', name: 'Skipped a step', color: 'var(--tt-output)' },
-  { id: 'hallucination', name: 'Hallucination signal', color: 'var(--tt-cread)' },
-  { id: 'execution', name: 'Command or test failed', color: 'var(--tt-cwrite)' },
+  { id: 'other', name: 'Other tool error (not counted)', color: 'var(--tt-input)' },
+  { id: 'process', name: 'Misused a tool', color: 'var(--tt-output)' },
+  { id: 'hallucination', name: 'Non-existent target', color: 'var(--tt-cread)' },
+  { id: 'execution', name: 'Command or test failed (not counted)', color: 'var(--tt-cwrite)' },
 ];
 // Fixed neon colors for the 3D failures chart (the deck is dark in both themes).
 const FAIL_NEON = { other: '#3ee6b0', process: '#8b7bff', hallucination: '#ff5ca8', execution: '#ffb547' };
@@ -15,7 +16,10 @@ const KIND_HELP = {
   'Path that does not exist': 'The model read or wrote a file path that is not on disk.',
   'Edit text not in the file': 'The model tried to replace text that the file does not contain.',
   'Invalid tool arguments': 'The model called a tool with parameters that do not exist or are malformed.',
-  'URL that does not exist': 'The model fetched a URL that returned 404 or does not resolve.',
+  'URL that does not exist': 'The model fetched a URL that returned 404 or whose host does not resolve.',
+  'Package that does not exist': 'The model installed a package the registry does not have (npm 404, pip, cargo, apt).',
+  'Command or option that does not exist':
+    'The model ran a command, subcommand, flag or npm script that does not exist ("command not found", "unknown option").',
 };
 // Change in percentage points. lowerIsBetter flips the color, not the arrow.
 const pts = (cur, prev, lowerIsBetter = false) => {
@@ -54,10 +58,10 @@ function qualityKpis() {
       value: q.accuracy ?? 0,
       fmt: 'pct',
       after: pts(q.accuracy, q.prevAccuracy),
-      sub: `${whole.format(q.modelFailures)} model-caused failures in ${fmtN(q.results)} tool calls`,
+      sub: `${whole.format(q.modelFailures)} failures caused by the model in ${fmtN(q.results)} tool calls`,
     })}
     ${kpiCard({
-      title: 'Hallucination signals',
+      title: 'Non-existent targets',
       chip: 'violet',
       ic: 'ghost',
       drill: 'hallucination',
@@ -128,7 +132,7 @@ function viewQuality() {
     `<div class="notice info">${icon('alert')}<div><b>These are signals detected in your local logs</b>, not a graded evaluation. Every card opens the exact items that were matched, so you can judge them yourself.</div></div>
     ${qualityKpis()}
     <section class="holo stage failures-stage">
-      <canvas id="quality-scene" aria-label="3D chart of model-caused failures per day, stacked by category, with daily accuracy and tool calls on the back walls"></canvas>
+      <canvas id="quality-scene" aria-label="3D chart of failed tool calls per day, stacked by cause, with daily accuracy and tool calls on the back walls"></canvas>
       <div class="stage-tl"><div class="holo-kicker">MODEL-CAUSED FAILURES PER DAY</div>
         <div class="stage-key">One tower per day, stacked by cause · back walls: accuracy and tool calls per day · hover a tower · drag to rotate</div></div>
       <div class="stage-legend">${FAIL_CATS.map((c) => `<span><i style="background:${FAIL_NEON[c.id]}"></i>${c.name}</span>`).join('')}</div>
@@ -195,13 +199,13 @@ const QUALITY_DRILLS = {
         tiles([
           ['Accuracy', counter(q.accuracy ?? 0, 'pct'), pts(q.accuracy, q.prevAccuracy) || 'tool calls that worked'],
           ['Tool calls', counter(q.results, 'n'), 'with a recorded result'],
-          ['Model-caused failures', counter(q.modelFailures, 'int'), 'counted against accuracy'],
+          ['Model-caused failures', counter(q.modelFailures, 'int'), 'non-existent targets, tool misuse'],
           ['Not counted', counter(excluded, 'int'), 'network, timeouts, your rejections'],
         ]) +
         dsec(
           1,
           'How it is measured',
-          `<p class="drawer-note" style="margin:0">Accuracy is the share of tool calls that succeeded. A call counts as a failure when the model caused it: a hallucinated path or argument, an edit that did not match, a command or test that failed. Network errors, timeouts and calls you rejected are left out. It measures how reliably the AI acts, not whether its written answers are true.</p>`,
+          `<p class="drawer-note" style="margin:0">Accuracy is the share of tool calls that did not fail because of the model. Counted against it: acting on something that does not exist (a file, edit text, tool argument, URL, package or command) and misusing a tool (editing without reading, an edit that matched more than once). Not counted: failed commands and tests, because tests are often run to watch them fail and build errors usually sit in the code being worked on; checks that found nothing (<code>ls dist</code>); unclassified tool errors; network problems and timeouts; and calls you rejected. It measures how reliably the AI acts, not whether its written answers are true.</p>`,
         ) +
         dsec(
           2,
@@ -252,7 +256,7 @@ const QUALITY_DRILLS = {
     const kinds = q.kinds.filter((k) => KIND_HELP[k.label]);
     return {
       eyebrow: `QUALITY · ${rangeText().toUpperCase()}`,
-      title: 'Hallucination signals',
+      title: 'Acted on a non-existent target',
       body:
         tiles([
           [
@@ -266,11 +270,11 @@ const QUALITY_DRILLS = {
         ]) +
         dsec(
           1,
-          'What counts as a hallucination signal',
+          'What counts',
           `<ul class="defs">${Object.entries(KIND_HELP)
             .map(([k, v]) => `<li><b>${k}</b><span>${v}</span></li>`)
             .join('')}</ul>
-          <p class="drawer-note">Each is a case where the model acted on something that was not true about your files, tools or the web, and the tool told it so. Made-up facts in written answers leave no trace in the logs and are not counted.</p>`,
+          <p class="drawer-note">Each is a case where the model acted on something that does not exist in your files, tools, the web or a package registry, and the tool said so: the trace a hallucination leaves in the logs. Checks that were expected to find nothing (<code>ls dist</code>, <code>cat .env.local</code>, <code>which docker</code>) are not counted. Made-up facts in written answers leave no trace in the logs and are not counted here; see Faithfulness.</p>`,
         ) +
         dsec(
           2,
@@ -280,7 +284,7 @@ const QUALITY_DRILLS = {
             label: (k) => esc(k.label),
             color: () => 'var(--tt-cread)',
             fmt: (v) => whole.format(v),
-            empty: 'No hallucination signals in this range.',
+            empty: 'No calls on non-existent targets in this range.',
           }),
         ) +
         dsec(3, 'Every signal', eventList(q.events.hallucination)),
@@ -305,7 +309,7 @@ const QUALITY_DRILLS = {
         dsec(
           1,
           'What is checked',
-          `<p class="drawer-note" style="margin:0">Every tool result is scanned for text that tries to steer the model: instructions to ignore previous instructions, persona hijacks ("you are now…"), requests to send keys or credentials, instructions to hide something from you, fake system tags, and commands to run without asking. Matches from web pages, searches and MCP tools are the ones that matter. Matches in your own files are usually security documentation or test data.</p>`,
+          `<p class="drawer-note" style="margin:0">Every tool result is scanned, in English, Indonesian and a few other languages, for text that tries to steer the model: instructions to ignore or forget earlier instructions (also spelled out or with hidden characters), persona changes ("you are no longer…"), requests to send or reveal keys, credentials or .env files, instructions to hide something from you, fake system tags or authority ("new task from the user", "pre-approved"), and commands to run without asking. Every pattern that matched is listed, joined with +. Text that only quotes these phrases, such as security docs, detector code and test samples, is left out. Matches from web pages, searches and MCP tools are the ones that matter.</p>`,
         ) +
         dsec(
           2,
@@ -431,7 +435,7 @@ const QUALITY_DRILLS = {
         dsec(
           1,
           'How corrections are found',
-          `<p class="drawer-note" style="margin:0">A prompt counts as a correction when it asks the model to fix or redo its own work, in English or Indonesian ("kamu salah…", "masih belum…", "perbaiki…", "that's not what I asked"). Prompts where you correct your own input ("saya salah mengisi…") are not counted. This is a heuristic: read the list below to judge it.</p>`,
+          `<p class="drawer-note" style="margin:0">A prompt counts as a correction when it tells the model that its own previous work was wrong, unwanted or must be undone, in English or Indonesian ("that's not what I asked", "undo that", "masih error", "bukan begitu maksudku"). A new task that mentions a bug ("fix the failing test", "perbaiki bug login") is not a correction, nor is a session's first prompt, nor a prompt where you correct your own input ("saya salah ketik"). This is a heuristic: read the list below to judge it.</p>`,
         ) +
         dsec(2, 'Correction prompts', eventList(q.events.correction, 'No correction prompts in this range.')) +
         dsec(
