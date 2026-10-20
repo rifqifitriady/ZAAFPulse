@@ -35,7 +35,7 @@ function clients(home, { env, platform = process.platform } = {}) {
   const claudeDir = e.CLAUDE_CONFIG_DIR ? abs(e.CLAUDE_CONFIG_DIR) : null;
   const codexHome = e.CODEX_HOME ? abs(e.CODEX_HOME) : j('.codex');
   // Windsurf became Devin Desktop (June 2026); its docs now name ~/.config/devin. A Windsurf install that predates
-  // the rename keeps ~/.codeium/windsurf, which is used only when the new folder does not exist.
+  // the rename keeps ~/.codeium/windsurf, so that file is kept up to date too whenever its folder exists.
   const devin = platform === 'win32' ? P.join(appData, 'devin') : P.join(xdg, 'devin');
   const windsurf = j('.codeium', 'windsurf');
   const zed =
@@ -90,8 +90,14 @@ function clients(home, { env, platform = process.platform } = {}) {
     windsurf: {
       name: 'Windsurf / Devin Desktop',
       kind: 'json',
-      file: exists(devin) || !exists(windsurf) ? P.join(devin, 'mcp_config.json') : P.join(windsurf, 'mcp_config.json'),
-      detect: [devin, windsurf],
+      file: P.join(devin, 'mcp_config.json'),
+      detect: [devin],
+    },
+    'windsurf-legacy': {
+      name: 'Windsurf (before the Devin rename)',
+      kind: 'json',
+      file: P.join(windsurf, 'mcp_config.json'),
+      detect: [windsurf],
     },
     // Zed's settings.json is JSONC; it is edited only when it happens to be plain JSON.
     zed: {
@@ -227,7 +233,11 @@ const stamp = () => new Date().toISOString().replace(/\D/g, '').slice(0, 17);
 // only the newest KEEP_BACKUPS of them kept.
 function backup(file) {
   if (!exists(file)) return null;
-  const b = `${file}.bak-${stamp()}`;
+  // Two writes in the same millisecond would share a name and the second would overwrite the first backup;
+  // step the stamp instead, which keeps the names sorting by age.
+  let s = stamp();
+  while (exists(`${file}.bak-${s}`)) s = (BigInt(s) + 1n).toString();
+  const b = `${file}.bak-${s}`;
   fs.copyFileSync(file, b);
   try {
     fs.chmodSync(b, fs.statSync(file).mode & 0o7777);
@@ -637,7 +647,12 @@ function run(
   const e = env || (home == null ? process.env : {});
   const all = clients(home, { env: e, platform });
   const o = { remove, dryRun, platform, exec, log, which: which || ((cmd) => findOnPath(cmd, e, platform)) };
-  const ids = target === 'all' ? Object.keys(all) : [target];
+  const ids =
+    target === 'all'
+      ? Object.keys(all)
+      : target === 'windsurf' && detected(all['windsurf-legacy'], o.which)
+        ? ['windsurf', 'windsurf-legacy']
+        : [target];
   const want = mcpCommand({ env: e, data });
   const skipped = [];
   const failed = [];

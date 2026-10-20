@@ -363,13 +363,23 @@ test('config paths per OS follow the vendors docs', () => {
   assert.equal(win.cursor.file, 'C:\\Users\\a\\.cursor\\mcp.json');
 });
 
-test('windsurf: a pre-rename install keeps ~/.codeium/windsurf until the Devin folder exists', () => {
+test('windsurf: the Devin file is always written, and a pre-rename ~/.codeium/windsurf file too when it exists', () => {
   const home = tmpHome();
   const devin = clients(home).windsurf.file; // ~/.config/devin, or %APPDATA%\devin on Windows
-  fs.mkdirSync(path.join(home, '.codeium', 'windsurf'), { recursive: true });
-  assert.equal(clients(home).windsurf.file, path.join(home, '.codeium', 'windsurf', 'mcp_config.json'));
-  fs.mkdirSync(path.dirname(devin), { recursive: true });
+  const legacy = path.join(home, '.codeium', 'windsurf', 'mcp_config.json');
   assert.equal(clients(home).windsurf.file, devin);
+  assert.equal(clients(home)['windsurf-legacy'].file, legacy);
+  // No pre-rename install: only the Devin file.
+  run('windsurf', { home, log: quiet });
+  assert.ok(fs.existsSync(devin));
+  assert.ok(!fs.existsSync(legacy));
+  // A pre-rename install: "windsurf" updates both files, and --remove clears both.
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  run('windsurf', { home, log: quiet });
+  assert.ok(JSON.parse(fs.readFileSync(legacy, 'utf8')).mcpServers[NAME]);
+  run('windsurf', { home, log: quiet, remove: true });
+  assert.ok(!JSON.parse(fs.readFileSync(devin, 'utf8')).mcpServers[NAME]);
+  assert.ok(!JSON.parse(fs.readFileSync(legacy, 'utf8')).mcpServers[NAME]);
 });
 
 test('cursor, claude desktop, gemini, windsurf: an mcpServers entry; cursor adds type stdio', () => {
