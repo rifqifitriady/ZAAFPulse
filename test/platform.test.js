@@ -203,6 +203,17 @@ test('platform: home expansion, data folder rules and the MCP command', () => {
   const d = tmp('zp-data-');
   assert.equal(platform.dataDir({ ZAAFPULSE_DATA: d }), d);
   assert.equal(platform.dataDir({}), platform.APP_DIR, 'a git checkout keeps its data next to the code');
-  assert.deepEqual(platform.mcpCommand(), { command: process.execPath, args: [path.join(platform.APP_DIR, 'mcp.js')] });
+  const plain = { command: process.execPath, args: [path.join(platform.APP_DIR, 'mcp.js')] };
+  assert.deepEqual(platform.mcpCommand({ env: {} }), plain);
+  // A chosen data folder or config file travels with the command; the folder mcp.js finds by itself does not.
+  assert.deepEqual(platform.mcpCommand({ env: { ZAAFPULSE_DATA: platform.APP_DIR } }), plain);
+  assert.deepEqual(platform.mcpCommand({ env: { ZAAFPULSE_DATA: d, ACC_CONFIG: 'rel/config.json' } }).env, {
+    ZAAFPULSE_DATA: d,
+    ACC_CONFIG: path.resolve('rel/config.json'),
+  });
+  assert.equal(
+    platform.mcpCommand({ env: { ZAAFPULSE_DATA: d }, data: '~/zp' }).env.ZAAFPULSE_DATA,
+    path.join(os.homedir(), 'zp'),
+  );
   assert.ok(platform.obsidianConfigFiles().length >= 1);
 });
