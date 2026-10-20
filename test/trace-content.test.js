@@ -276,3 +276,69 @@ test('the marker is only honoured for tool_output', async () => {
   const raw = await c.read({ f: f.transcript, s: off[1][0], e: off[1][1], k: 'raw' });
   assert.ok(!raw.text.includes('file body'));
 });
+
+// Newer wording: "<persisted-output>\nOutput too large (..). Full output saved to: <path>\n\nPreview ..." (no final period).
+function markerB(p) {
+  return `<persisted-output>\nOutput too large (34.6KB). Full output saved to: ${p}\n\nPreview (first 2KB):\n{"a":1}\n...\n</persisted-output>`;
+}
+
+function toolLines(text) {
+  return [
+    { type: 'assistant', message: { id: 'm1', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }] } },
+    { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: text }] }, toolUseResult: text },
+  ].map((o) => JSON.stringify(o) + '\n');
+}
+
+// <root>/proj/<sid>.jsonl (main) and <root>/proj/<sid>/subagents/agent-x.jsonl (subagent)
+function layout() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-content-'));
+  const proj = path.join(root, 'proj');
+  const sid = 'sess-main';
+  fs.mkdirSync(path.join(proj, sid, 'tool-results'), { recursive: true });
+  fs.mkdirSync(path.join(proj, sid, 'subagents'), { recursive: true });
+  fs.mkdirSync(path.join(proj, 'sess-other', 'tool-results'), { recursive: true });
+  const put = (file, text) => {
+    const l = toolLines(text);
+    fs.writeFileSync(file, l.join(''));
+    const off = offsets(l);
+    return { f: file, s: off[1][0], e: off[1][1], k: 'tool_output', i: 't1' };
+  };
+  return {
+    root,
+    main: path.join(proj, sid + '.jsonl'),
+    sub: path.join(proj, sid, 'subagents', 'agent-x.jsonl'),
+    own: path.join(proj, sid, 'tool-results', 'own.txt'),
+    other: path.join(proj, 'sess-other', 'tool-results', 'other.txt'),
+    put,
+  };
+}
+
+test('the newer "Full output saved to:" marker is followed from a main transcript', async () => {
+  const L = layout();
+  fs.writeFileSync(L.own, 'main body');
+  const c = createContent({ roots: [L.root] });
+  assert.equal((await c.read(L.put(L.main, markerB(L.own)))).text, 'main body');
+  // CRLF line endings after the path do not become part of it
+  assert.equal((await c.read(L.put(L.main, markerB(L.own).replace('\n', '\r\n')))).text, 'main body');
+});
+
+test('a subagent transcript reads saved outputs from the parent session tool-results (both wordings)', async () => {
+  const L = layout();
+  fs.writeFileSync(L.own, 'parent body');
+  const c = createContent({ roots: [L.root] });
+  assert.equal((await c.read(L.put(L.sub, markerB(L.own)))).text, 'parent body');
+  const older = `Error: result (1 characters across 1 lines) exceeds maximum allowed tokens. Output has been saved to ${L.own}.\nUse offset.`;
+  assert.equal((await c.read(L.put(L.sub, older))).text, 'parent body');
+});
+
+test('a subagent marker pointing at another session or its own subagents folder is refused with 403', async () => {
+  const L = layout();
+  fs.writeFileSync(L.other, 'other body');
+  fs.writeFileSync(path.join(path.dirname(L.sub), 'agent-y.txt'), 'sub body');
+  const c = createContent({ roots: [L.root] });
+  await assert.rejects(c.read(L.put(L.sub, markerB(L.other))), { status: 403 });
+  await assert.rejects(c.read(L.put(L.main, markerB(L.other))), { status: 403 });
+  await assert.rejects(c.read(L.put(L.sub, markerB(path.join(path.dirname(L.sub), 'agent-y.txt')))), { status: 403 });
+  // the folder itself and the transcript folder above it are not files to serve either
+  await assert.rejects(c.read(L.put(L.sub, markerB(path.dirname(L.own)))), { status: 403 });
+});
