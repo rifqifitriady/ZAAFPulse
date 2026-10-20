@@ -43,6 +43,9 @@ test('skills: every SKILL.md has matching frontmatter and only documents endpoin
       const fm = frontmatter(text);
       assert.equal(fm.name, n);
       assert.ok(fm.description.length > 80 && fm.description.length < 1024, n);
+      // claude.ai rejects skill uploads whose frontmatter holds XML-like tags.
+      assert.ok(!/[<>]/.test(fm.description), `${n}: no < or > in the description`);
+      assert.match(n, /^[a-z0-9]+(-[a-z0-9]+)*$/, 'Agent Skills name rules');
       assert.match(text, /ZAAFPULSE_URL/);
       assert.ok(!/zp_[A-Za-z0-9_-]{20,}/.test(text), `${n} contains what looks like a real key`);
       // Each documented path is answered by the gateway itself (any status but its "no route" 404 counts).
@@ -101,4 +104,40 @@ test('skills: install into Claude Code marks our folders, never overwrites a use
   assert.equal(s.uninstall().removed.length, 8);
   assert.ok(fs.existsSync(path.join(home, '.claude/skills/zaafpulse-rag/SKILL.md')));
   assert.ok(!fs.existsSync(path.join(home, '.claude/skills/zaafpulse')));
+});
+
+test('skills: frontmatter is read from CRLF files too', () => {
+  assert.deepEqual(frontmatter('---\r\nname: a\r\ndescription: b c\r\n---\r\nbody'), { name: 'a', description: 'b c' });
+  assert.deepEqual(frontmatter('\ufeff---\nname: a\n---\n'), { name: 'a' });
+});
+
+test('skills: CLAUDE_CONFIG_DIR and ~/.agents/skills; whole folders are copied, and an update replaces them', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'acc-skills-home-'));
+  const src = fs.mkdtempSync(path.join(os.tmpdir(), 'acc-skills-src-'));
+  fs.mkdirSync(path.join(src, 'zaafpulse', 'references'), { recursive: true });
+  fs.writeFileSync(path.join(src, 'zaafpulse', 'SKILL.md'), '---\nname: zaafpulse\ndescription: d\n---\n');
+  fs.writeFileSync(path.join(src, 'zaafpulse', 'references', 'api.md'), 'ref');
+  const work = path.join(home, 'claude-work');
+  const s = createSkills({ dir: src, home, env: { CLAUDE_CONFIG_DIR: work } });
+  assert.deepEqual(s.roots(), { claude: '~/claude-work/skills', agents: '~/.agents/skills' });
+  assert.deepEqual(s.install(), { installed: ['zaafpulse'], skipped: [], path: '~/claude-work/skills' });
+  assert.equal(fs.readFileSync(path.join(work, 'skills', 'zaafpulse', 'references', 'api.md'), 'utf8'), 'ref');
+  assert.ok(!fs.existsSync(path.join(home, '.claude')), 'the default folder is not used');
+  assert.equal(s.list()[0].claude, 'installed');
+  assert.equal(s.list()[0].agents, 'not installed');
+  const r = s.install('agents');
+  assert.equal(r.path, '~/.agents/skills');
+  assert.ok(fs.existsSync(path.join(home, '.agents', 'skills', 'zaafpulse', 'references', 'api.md')));
+  // A changed reference file makes it outdated; installing again replaces the folder and drops stale files.
+  fs.writeFileSync(path.join(src, 'zaafpulse', 'references', 'api.md'), 'ref v2');
+  fs.writeFileSync(path.join(home, '.agents', 'skills', 'zaafpulse', 'old.md'), 'stale');
+  assert.equal(s.list()[0].agents, 'outdated');
+  assert.equal(s.install('all').installed.length, 2);
+  assert.equal(s.list()[0].agents, 'installed');
+  assert.ok(!fs.existsSync(path.join(home, '.agents', 'skills', 'zaafpulse', 'old.md')));
+  assert.throws(() => s.install('nowhere'), /unknown skills location/);
+  assert.equal(s.uninstall().removed.length, 2);
+  assert.ok(!fs.existsSync(path.join(home, '.agents', 'skills', 'zaafpulse')));
+  // Without "env", a given home never reads this machine's CLAUDE_CONFIG_DIR.
+  assert.equal(createSkills({ dir: src, home }).roots().claude, '~/.claude/skills');
 });
