@@ -108,7 +108,7 @@ test('skills: install into Claude Code marks our folders, never overwrites a use
 
 test('skills: frontmatter is read from CRLF files too', () => {
   assert.deepEqual(frontmatter('---\r\nname: a\r\ndescription: b c\r\n---\r\nbody'), { name: 'a', description: 'b c' });
-  assert.deepEqual(frontmatter('﻿---\nname: a\n---\n'), { name: 'a' });
+  assert.deepEqual(frontmatter('\ufeff---\nname: a\n---\n'), { name: 'a' });
 });
 
 test('skills: CLAUDE_CONFIG_DIR and ~/.agents/skills; whole folders are copied, and an update replaces them', () => {
