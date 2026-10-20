@@ -212,6 +212,8 @@ test('otel: spans go out in batches of maxExportBatchSize, the rest after the sc
     assert.ok(c.requests[2].at - t0 >= 350, 'the remainder waited for the schedule delay');
     const sizes = c.requests.map((q) => JSON.parse(q.body).resourceSpans[0].scopeSpans[0].spans.length);
     assert.deepEqual(sizes, [3, 3, 1]);
+    // The collector sees the request before the exporter has read the reply and counted it.
+    for (const end = Date.now() + 1000; o.status().stats.exported < 7 && Date.now() < end;) await sleep(5);
     assert.equal(o.status().stats.exported, 7);
   } finally {
     await o.shutdown(500);
