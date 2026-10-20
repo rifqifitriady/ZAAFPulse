@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "dataModelVersion": 2,
+  "id": "sess_k2",
+  "title": "Add dark mode",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/work/demo-app"
+  ],
+  "rootPaths": [
+    "/work/demo-app"
+  ],
+  "createdAt": "2026-10-18T08:00:00.000Z",
+  "lastModifiedAt": "2026-10-18T08:30:00.000Z",
+  "autopilot": false,
+  "_meta": {}
+}
