@@ -773,7 +773,10 @@ test('code tools: snippets for every tool, file-based tools written with a backu
   assert.equal(cc.env.FOO, '1');
   assert.equal(cc.env.ANTHROPIC_BASE_URL, B);
   assert.equal(cc.env.ANTHROPIC_AUTH_TOKEN, 'zp_SECRETsecretSECRETsecret1234');
-  assert.equal(fs.statSync(path.join(home, '.claude/settings.json')).mode & 0o777, 0o600);
+  // Windows has no POSIX file modes; elsewhere the settings file holds a key, so only the owner may read it.
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(path.join(home, '.claude/settings.json')).mode & 0o777, 0o600);
+  }
   assert.equal(tools.list(B).find((x) => x.id === 'claude-code').state, 'connected');
   tools.apply('codex', B, 'zp_SECRETsecretSECRETsecret1234', 'up/m1');
   const toml = fs.readFileSync(path.join(home, '.codex/config.toml'), 'utf8');

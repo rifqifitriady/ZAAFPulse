@@ -365,7 +365,7 @@ test('config paths per OS follow the vendors docs', () => {
 
 test('windsurf: the Devin file is always written, and a pre-rename ~/.codeium/windsurf file too when it exists', () => {
   const home = tmpHome();
-  const devin = path.join(home, '.config', 'devin', 'mcp_config.json');
+  const devin = clients(home).windsurf.file; // ~/.config/devin, or %APPDATA%\devin on Windows
   const legacy = path.join(home, '.codeium', 'windsurf', 'mcp_config.json');
   assert.equal(clients(home).windsurf.file, devin);
   assert.equal(clients(home)['windsurf-legacy'].file, legacy);
@@ -412,7 +412,8 @@ test('vscode: a top-level "servers" key with type stdio; a JSONC file is left al
   run('vscode', { home, log: (m) => logs.push(m) });
   assert.equal(fs.readFileSync(c.file, 'utf8'), jsonc);
   assert.match(logs[0], /comments or trailing commas, so it was left alone\. Add this under "servers"/);
-  assert.match(logs[0], /code --add-mcp '\{"name":"zaafpulse","type":"stdio"/);
+  // Quoted for the shell in use: single quotes on macOS and Linux, cmd.exe double quotes on Windows.
+  assert.match(logs[0], /code --add-mcp (?:'\{"name":"zaafpulse","type":"stdio"|"\{\\"name\\":\\"zaafpulse\\",\\"type\\":\\"stdio\\")/);
   assert.equal(isRegistered(c), false);
 });
 
@@ -499,11 +500,12 @@ test('codex: a fresh entry uses `codex mcp add` when the CLI is installed', () =
 test('codex: a stale table is replaced in place, keeping keys the user added; the CLI format is understood', () => {
   const home = tmpHome();
   const c = clients(home).codex;
-  // How `codex mcp add` writes it: env as a sub-table.
-  const cliFormat = `[mcp_servers.zaafpulse]\ncommand = ${JSON.stringify(process.execPath)}\nargs = [${JSON.stringify(MCP_JS)}]\n\n[mcp_servers.zaafpulse.env]\nZAAFPULSE_DATA = "/d"\n`;
+  // How `codex mcp add` writes it: env as a sub-table. An absolute folder for this OS ("/d" is D:\d on Windows).
+  const d = path.join(home, 'd');
+  const cliFormat = `[mcp_servers.zaafpulse]\ncommand = ${JSON.stringify(process.execPath)}\nargs = [${JSON.stringify(MCP_JS)}]\n\n[mcp_servers.zaafpulse.env]\nZAAFPULSE_DATA = ${JSON.stringify(d)}\n`;
   put(c.file, `${CODEX_BEFORE}\n${cliFormat}`);
   const logs = [];
-  run('codex', { home, log: (m) => logs.push(m), which: noCli, env: { ZAAFPULSE_DATA: '/d' } });
+  run('codex', { home, log: (m) => logs.push(m), which: noCli, env: { ZAAFPULSE_DATA: d } });
   assert.match(logs[0], /already registered/);
   const stale = `[mcp_servers.zaafpulse]\ncommand = "/old/node"\nargs = ['/old/mcp.js'] # old\nenabled = false\ntool_timeout_sec = 30\n\n[mcp_servers.zaafpulse.env]\nX = "1"\n\n`;
   put(c.file, CODEX_BEFORE.replace('[profiles.fast]', `${stale}[profiles.fast]`));
