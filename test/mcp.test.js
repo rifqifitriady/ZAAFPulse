@@ -67,3 +67,38 @@ test('mcp.js lists acc and configured tools and reports status', async () => {
   const audit = fs.readFileSync(path.join(dir, 'cache', 'mcp-audit.jsonl'), 'utf8');
   assert.match(audit, /"tool":"acc_integrations_status"/);
 });
+
+test('mcp.js exports tool-call spans when otel is on, keeps stdout to protocol, and is silent when off', async () => {
+  const { fakeServer } = require('./helpers');
+  const collector = await fakeServer({ 'POST /v1/traces': { body: {} } });
+  const call = [
+    {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '0' } },
+    },
+    { jsonrpc: '2.0', method: 'notifications/initialized' },
+    { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'acc_integrations_status', arguments: {} } },
+  ];
+  const otel = (enabled) => ({
+    otel: { enabled, tracesEndpoint: `${collector.url}/v1/traces`, protocol: 'http/json' },
+  });
+  try {
+    const off = await runMcp(call, otel(false));
+    assert.equal(off.replies.length, 2);
+    assert.equal(collector.requests.length, 0, 'no export unless otel.enabled is true');
+    // The span is queued and sent when stdin closes, before the process exits.
+    const on = await runMcp(call, otel(true));
+    assert.deepEqual(
+      on.replies.map((r) => r.id),
+      [1, 2],
+      'stdout carries only the JSON-RPC replies',
+    );
+    assert.equal(collector.requests.length, 1);
+    const spans = collector.requests[0].body.resourceSpans[0].scopeSpans.flatMap((s) => s.spans);
+    assert.ok(spans.some((s) => s.name === 'execute_tool acc_integrations_status'));
+  } finally {
+    await collector.close();
+  }
+});
