@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "dataModelVersion": 2,
+  "id": "sess_k1",
+  "title": "Fix the login redirect",
+  "agentMode": "vibe",
+  "workspacePaths": [
+    "/work/demo-app"
+  ],
+  "rootPaths": [
+    "/work/demo-app"
+  ],
+  "createdAt": "2026-10-19T09:00:00.000Z",
+  "lastModifiedAt": "2026-10-19T09:05:00.000Z",
+  "autopilot": false,
+  "_meta": {}
+}

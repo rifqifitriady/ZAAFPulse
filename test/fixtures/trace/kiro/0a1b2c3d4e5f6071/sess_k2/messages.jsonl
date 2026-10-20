@@ -1,0 +1,5 @@
+{"id":"u1","timestamp":"2026-10-18T08:00:00.000Z","payload":{"type":"user_message","executionId":"ex1"}}
+{"id":"m1","timestamp":"2026-10-18T08:00:02.000Z","payload":{"type":"tool_call","toolCallId":"tc1","toolName":"readFile","args":{"path":"src/theme.js"},"status":"completed","kind":"other","executionId":"ex1","actionType":"tool"}}
+{"id":"m2","timestamp":"2026-10-18T08:00:03.000Z","payload":{"type":"tool_result","toolCallId":"tc1","content":"x","success":true,"durationMs":400,"executionId":"ex1"}}
+{"id":"u2","timestamp":"2026-10-18T08:20:00.000Z","payload":{"type":"user_message","executionId":"ex1"}}
+{"id":"m3","timestamp":"2026-10-18T08:20:02.000Z","payload":{"type":"tool_call","toolCallId":"tc2","toolName":"grepSearch","args":{"query":"dark"},"status":"pending","kind":"other","executionId":"ex1","actionType":"tool"}}
