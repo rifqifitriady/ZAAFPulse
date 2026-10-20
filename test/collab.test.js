@@ -687,3 +687,41 @@ test('remote A2A agents and collab/<pattern> models through chat completions', a
     await t.close();
   }
 });
+
+test('a failed run keeps the upstream HTTP code: 404 for an unknown model, not 502', async () => {
+  const t = await setup(() => ({ status: 404, body: { error: { message: 'model m not found' } } }));
+  try {
+    const { run } = await t.collab.run({ pattern: 'agent', agent: 'sre-observability', task: 'Is it up?' });
+    assert.equal(run.state, 'failed');
+    assert.equal(run.steps[0].status, 'failed');
+    assert.equal(run.steps[0].httpStatus, 404);
+    assert.equal(run.errorStatus, 404);
+    const c = await t.call('/v1/chat/completions', t.key(), {
+      model: 'collab/parallel',
+      messages: [{ role: 'user', content: 'Is it up?' }],
+      zp: { agents: ['sre-observability'] },
+    });
+    assert.equal(c.status, 404);
+    assert.equal(c.json.error.type, 'invalid_request_error');
+    assert.match(c.json.error.message, /model m not found/);
+  } finally {
+    await t.close();
+  }
+});
+
+test('a failed run whose upstream broke still reports 502 upstream_error', async () => {
+  const t = await setup(() => ({ status: 500, body: { error: { message: 'boom' } } }));
+  try {
+    const c = await t.call('/v1/chat/completions', t.key(), {
+      model: 'collab/parallel',
+      messages: [{ role: 'user', content: 'Is it up?' }],
+      zp: { agents: ['sre-observability'] },
+    });
+    assert.equal(c.status, 502);
+    assert.equal(c.json.error.type, 'upstream_error');
+    const run = t.collab.list({ limit: 1 })[0];
+    assert.equal(run.steps[0].httpStatus, 500);
+  } finally {
+    await t.close();
+  }
+});
