@@ -194,7 +194,7 @@ function isRegistered(target, key) {
       : Object.values(clients()).find((x) => x.file === target) || { kind: 'json', file: target };
   let text = '';
   try {
-    text = fs.readFileSync(c.file, 'utf8').replace(/^﻿/, '');
+    text = fs.readFileSync(c.file, 'utf8').replace(/^\ufeff/, '');
   } catch {
     return false;
   }
@@ -261,7 +261,8 @@ function writeText(file, text) {
   if (mode !== undefined) fs.chmodSync(tmp, mode); // the mode passed to writeFileSync is reduced by the umask
   fs.renameSync(tmp, real);
 }
-const writeJson = (file, data, bom = false) => writeText(file, `${bom ? '﻿' : ''}${JSON.stringify(data, null, 2)}\n`);
+const writeJson = (file, data, bom = false) =>
+  writeText(file, `${bom ? '\ufeff' : ''}${JSON.stringify(data, null, 2)}\n`);
 
 // What to change in one servers object: our entry set or removed, and old-named entries of ours removed.
 function plan(servers, want, remove) {
@@ -608,7 +609,7 @@ function runCodex(c, want, o) {
       now.start >= 0
         ? tomlCut(next, now, tomlBlock(NAME, want, now.value))
         : `${next.replace(/\s+$/, '')}${next.trim() ? '\n\n' : ''}${block}`;
-  writeText(c.file, (bom ? '﻿' : '') + next);
+  writeText(c.file, (bom ? '\ufeff' : '') + next);
   if (legacy.length) o.log(`${c.name}: removed the old "${legacy.join('", "')}" entry (${c.file})`);
   if (set || del) o.log(`${c.name}: ${o.remove ? 'removed' : has ? 'updated' : 'registered'} (${c.file})`);
 }
