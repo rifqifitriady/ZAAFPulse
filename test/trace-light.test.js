@@ -358,6 +358,29 @@ test('antigravity: below Node 22.12 nothing opens the database (earlier 22.x ign
   }
 });
 
+test('antigravity: a probe that cannot run makes the source unavailable and never throws', () => {
+  const dir = tmp('ag');
+  const db = path.join(dir, 'conversation_summaries.db');
+  fs.writeFileSync(db, 'x');
+  const orig = fs.mkdtempSync;
+  let calls = 0;
+  const stub = { DatabaseSync: class {} };
+  try {
+    const a = createAntigravity({ files: [db], sqlite: stub });
+    fs.mkdtempSync = () => {
+      calls++;
+      throw new Error('EACCES');
+    };
+    assert.deepEqual(a.available(), { ok: false, reason: 'read-only check failed' });
+    assert.deepEqual(a.sessions(), []);
+    assert.deepEqual(a.available(), { ok: false, reason: 'read-only check failed' });
+    assert.equal(calls, 1, 'the failure is cached');
+  } finally {
+    fs.mkdtempSync = orig;
+    cleanup(dir);
+  }
+});
+
 test('antigravity: a Node that ignores readOnly makes the source unavailable, once, leaving no probe folder', () => {
   const dir = tmp('ag');
   const db = path.join(dir, 'conversation_summaries.db');
@@ -545,6 +568,26 @@ test('commandName: skips env assignments and wrappers, keeps only the program', 
   assert.equal(commandName('sudo -u bob git push'), 'git');
   assert.equal(commandName('sudo -g staff -p prompt: make'), 'make');
   assert.equal(commandName('env -u FOO -C /tmp make'), 'make');
+  assert.equal(commandName('time -f %e make'), 'make');
+  assert.equal(commandName('nohup make'), 'make');
+});
+
+test('commandName fails closed: quoted or parenthesised assignments, unparsable text, unsafe names', () => {
+  assert.equal(commandName('env "K=v" cmd'), 'cmd');
+  assert.equal(commandName("env 'K=v w' cmd"), 'cmd');
+  assert.equal(commandName('(K=v cmd)'), 'cmd');
+  assert.equal(commandName('env "TOKEN=abc123xyz" node app.js'), 'node');
+  assert.equal(commandName("sudo env 'KEY=val' make"), 'make');
+  assert.equal(commandName('(API_KEY=hunter2pw node x)'), 'node');
+  assert.equal(commandName('X=a\\ b node'), null, 'a backslash before the program');
+  assert.equal(commandName('X=$(cat f) node'), null);
+  assert.equal(commandName('X=`cat f` node'), null);
+  assert.equal(commandName('sudo -u $(id -un) git'), null);
+  assert.equal(commandName('%e'), null);
+  assert.equal(commandName('$PROG run'), null);
+  assert.equal(commandName('a=b'), null);
+  assert.equal(commandName('tool' + 'x'.repeat(70)), null, 'longer than a plausible program name');
+  assert.equal(commandName('sudo -u'), null);
   assert.equal(commandName(null), null);
 });
 
