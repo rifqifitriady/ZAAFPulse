@@ -6,9 +6,9 @@ These skills teach an AI agent (Claude Code, Cursor, ChatGPT, a custom SDK) to u
 
 Choose one of these:
 
-- **Install into Claude Code:** Dashboard → Agent Skills → **Install into Claude Code**. This copies the skills to `~/.claude/skills/zaafpulse*`, and **Remove** deletes them again.
+- **Install into Claude Code:** Dashboard → Agent Skills → **Install into Claude Code**. This copies each skill folder to `~/.claude/skills/zaafpulse*` (or `$CLAUDE_CONFIG_DIR/skills` when you set that variable), and **Remove** deletes them again. Skills can also go to `~/.agents/skills`, the folder that other Agent Skills clients share.
 - **Paste to any AI:** `Read this skill and use it: http://127.0.0.1:4777/skills/zaafpulse/SKILL.md`.
-- **Copy by hand:** copy the folders below into the agent's skills directory.
+- **Copy by hand:** copy the folders below into the agent's skills directory (`~/.agents/skills` for clients that follow the cross-client convention).
 
 The gateway serves these files itself, so they always match the running version. They are not fetched from a public branch that could change underneath you.
 
