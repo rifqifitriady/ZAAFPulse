@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Explorer · split view v2</title>
+<style>
+  :root {
+    --h-bg: #070a1f; --h-panel: rgba(18, 22, 64, 0.72); --h-panel-2: rgba(24, 28, 78, 0.55); --h-edge: rgba(120, 140, 255, 0.18); --h-edge-hi: rgba(160, 150, 255, 0.5);
+    --h-text: #dfe6ff; --h-text-2: #b9c1ec; --h-muted: #8f98cc; --h-cyan: #4de8ff; --h-pink: #ff4fd8; --amber: #ffb547; --red: #ff5a6e; --green: #43f0a3; --violet: #a98bff;
+    --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px; --r: 12px;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { color: var(--h-text); font: 13px/1.45 "Inter", system-ui, -apple-system, sans-serif; background: radial-gradient(120% 70% at 50% 0%, #1a1650 0%, #0b0d2c 45%, var(--h-bg) 100%) fixed; }
+  .app { display: grid; grid-template-columns: minmax(560px, var(--split, 52%)) 6px 1fr; height: 100vh; }
+
+  /* ---------- top bar (spans the left side) ---------- */
+  .left { display: grid; grid-template-rows: 64px minmax(0, 1fr) auto; min-width: 0; height: 100vh; overflow: hidden; }
+  .topbar { display: flex; align-items: center; gap: var(--s3); padding: 0 var(--s5); border-bottom: 1px solid var(--h-edge); }
+  .crumb { min-width: 0; }
+  .eyebrow { color: var(--h-cyan); font-size: 10.5px; letter-spacing: .16em; text-transform: uppercase; font-weight: 700; }
+  .crumb h1 { font-size: 16px; margin: 2px 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .seg { margin-left: auto; display: inline-flex; border: 1px solid var(--h-edge); border-radius: 10px; overflow: hidden; }
+  .seg span { padding: 6px 10px; color: var(--h-muted); font-size: 12px; cursor: pointer; }
+  .seg span.on { background: rgba(77, 232, 255, .12); color: var(--h-text); }
+  .icon-btn { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid var(--h-edge); border-radius: 10px; color: var(--h-muted); cursor: pointer; }
+
+  /* ---------- body: sessions | tree ---------- */
+  .body { display: grid; grid-template-columns: 264px 1fr; min-height: 0; }
+  .body.collapsed { grid-template-columns: 64px 1fr; }
+  .sessions { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--h-edge); background: rgba(8, 10, 34, .35); }
+  .sessions .head { padding: var(--s4) var(--s4) var(--s3); display: grid; gap: var(--s3); }
+  .search { display: flex; align-items: center; gap: var(--s2); height: 36px; padding: 0 var(--s3); border: 1px solid var(--h-edge); border-radius: 10px; background: rgba(255,255,255,.03); color: var(--h-muted); }
+  .chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; mask-image: linear-gradient(90deg, #000 85%, transparent); }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip { flex: none; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border: 1px solid var(--h-edge); border-radius: 999px; font-size: 11.5px; color: var(--h-text-2); cursor: pointer; }
+  .chip.on { border-color: var(--h-edge-hi); background: rgba(160, 150, 255, .12); color: var(--h-text); }
+  .chip i { width: 8px; height: 8px; border-radius: 2px; background: var(--c); }
+  .list { overflow: auto; padding: 0 var(--s2) var(--s4); }
+  .group { padding: var(--s3) var(--s3) var(--s1); color: var(--h-muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .12em; font-weight: 700; }
+  .sess { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: var(--s3); align-items: center; padding: 10px var(--s3); margin: 2px 0; border-radius: 10px; cursor: pointer; border: 1px solid transparent; }
+  .sess:hover { background: rgba(255,255,255,.04); }
+  .sess.on { background: rgba(77, 232, 255, .08); border-color: rgba(77, 232, 255, .35); }
+  .src { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; font-size: 10.5px; font-weight: 800; color: #fff; background: var(--c); box-shadow: 0 6px 16px -8px var(--c); }
+  .sess .t { min-width: 0; }
+  .sess .top1 { display: flex; align-items: baseline; gap: var(--s2); }
+  .sess .top1 .when { margin-left: auto; flex: none; }
+  .sess .t1 { min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sess .t2 { color: var(--h-muted); font-size: 11.5px; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sess .when { color: var(--h-muted); font-size: 11px; text-align: right; }
+  .flag { display: inline-block; margin-top: 4px; font-size: 10.5px; padding: 0 6px; border-radius: 999px; border: 1px solid currentColor; }
+  .collapsed .head, .collapsed .group, .collapsed .sess .t, .collapsed .sess .when { display: none; }
+  .collapsed .sess { grid-template-columns: 32px; justify-content: center; padding: 8px 0; }
+
+  .tree { display: flex; flex-direction: column; min-height: 0; }
+  .tree .head { display: flex; align-items: center; gap: var(--s3); padding: var(--s4) var(--s5) var(--s2); }
+  .tree .head b { font-size: 13px; }
+  .tree .head .muted { margin-left: auto; }
+  .cols { display: grid; grid-template-columns: minmax(0, 1fr) 120px 64px; gap: var(--s3); padding: 6px var(--s5); color: var(--h-muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .1em; font-weight: 700; border-bottom: 1px solid var(--h-edge); }
+  .rows { overflow: auto; padding: var(--s1) var(--s3) var(--s4); }
+  .row { display: grid; grid-template-columns: minmax(0, 1fr) 120px 64px; gap: var(--s3); align-items: center; min-height: 34px; padding: 0 var(--s2); border-radius: 8px; cursor: pointer; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  .row:hover { background: rgba(255,255,255,.04); }
+  .row.on { background: rgba(77, 232, 255, .1); box-shadow: inset 2px 0 0 var(--h-cyan); }
+  .name { display: flex; align-items: center; gap: var(--s2); min-width: 0; padding-left: calc(var(--lvl, 0) * 18px); position: relative; }
+  .name::before { content: ""; position: absolute; left: calc(var(--lvl, 0) * 18px - 11px); top: -10px; bottom: -10px; border-left: 1px dashed rgba(143, 152, 204, .25); display: var(--guide, none); }
+  .name .d { width: 8px; height: 8px; border-radius: 50%; background: var(--c); box-shadow: 0 0 8px var(--c); flex: none; }
+  .name .lbl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .track { height: 8px; border-radius: 4px; background: rgba(255,255,255,.05); position: relative; }
+  .track span { position: absolute; top: 0; bottom: 0; border-radius: 4px; background: var(--c); opacity: .8; }
+  .dur { color: var(--h-muted); text-align: right; }
+  .ev { font-family: Inter, sans-serif; font-size: 10.5px; padding: 0 6px; border-radius: 999px; border: 1px solid currentColor; flex: none; }
+  .ok { color: var(--green); } .bad { color: var(--red); } .warn { color: var(--amber); } .muted { color: var(--h-muted); font-size: 12px; }
+
+  /* ---------- detail ---------- */
+  .detail { border-top: 1px solid var(--h-edge); background: rgba(10, 12, 40, .6); padding: var(--s3) var(--s5) var(--s4); display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: var(--s3); height: clamp(230px, 32vh, 300px); }
+  .dhead { display: flex; align-items: center; gap: var(--s3); min-width: 0; }
+  .dhead .muted { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .dhead h3 { margin: 0; font-size: 14px; }
+  .tabs { display: flex; gap: var(--s1); margin-left: auto; flex: none; }
+  .tabs span { padding: 5px 10px; border-radius: 8px; color: var(--h-muted); font-size: 12px; cursor: pointer; }
+  .tabs span.on { background: rgba(255,255,255,.06); color: var(--h-text); }
+  .txt { min-height: 0; font-family: ui-monospace, Menlo, monospace; font-size: 12px; line-height: 1.55; background: rgba(0,0,0,.28); border: 1px solid var(--h-edge); border-radius: 10px; padding: var(--s3) var(--s4); color: #c9d2ff; white-space: pre-wrap; overflow: auto; }
+  .mask { background: rgba(160,150,255,.22); border-radius: 4px; padding: 0 4px; }
+  .acts { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border: 1px solid var(--h-edge-hi); background: rgba(255,255,255,.03); color: var(--h-text); border-radius: 10px; font-size: 12px; cursor: pointer; }
+  .btn.ghost { border-color: var(--h-edge); }
+  .btn.warn { border-color: rgba(255, 181, 71, .55); color: var(--amber); }
+  .spacer { flex: 1; }
+
+  /* ---------- splitter ---------- */
+  .split { cursor: col-resize; position: relative; }
+  .split::before { content: ""; position: absolute; inset: 0 2px; background: var(--h-edge); }
+  .split::after { content: ""; position: absolute; top: 50%; left: 50%; width: 4px; height: 36px; transform: translate(-50%, -50%); border-radius: 2px; background: var(--h-edge-hi); }
+
+  /* ---------- right: map ---------- */
+  .right { overflow: auto; padding: 0 var(--s6) var(--s6); min-width: 0; }
+  .rhead { position: sticky; top: 0; z-index: 4; height: 64px; display: flex; align-items: center; gap: var(--s3); background: linear-gradient(#0d0f33 70%, transparent); }
+  .rhead h2 { margin: 2px 0 0; font-size: 18px; background: linear-gradient(90deg,#fff,#b9b2ff 55%,var(--h-pink)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .stepper { margin-left: auto; display: inline-flex; align-items: center; gap: var(--s2); }
+  .stepper .icon-btn { width: 30px; height: 30px; }
+  .legend { display: flex; gap: var(--s3); flex-wrap: wrap; margin: var(--s2) 0 var(--s5); color: var(--h-muted); font-size: 11.5px; }
+  .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--c); margin-right: 6px; box-shadow: 0 0 6px var(--c); }
+  .map { position: relative; display: grid; grid-template-columns: 1fr minmax(240px, 300px) 1fr; column-gap: var(--s4); }
+  .node { grid-column: 2; position: relative; z-index: 2; display: flex; gap: var(--s3); align-items: center; background: var(--h-panel); border: 1px solid var(--h-edge); border-radius: 14px; padding: var(--s3) var(--s4); cursor: pointer; transition: border-color .2s, box-shadow .2s, transform .2s; }
+  .node:hover { transform: translateY(-1px); border-color: var(--h-edge-hi); }
+  .node.on { border-color: var(--c); box-shadow: 0 0 0 1px var(--c), 0 0 28px -6px var(--c); }
+  .ring { flex: none; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 10.5px; border: 1.5px solid var(--c); color: var(--c); background: radial-gradient(circle, color-mix(in srgb, var(--c) 22%, transparent), transparent 70%); animation: pulse 2.8s ease-out infinite; }
+  .node b { display: block; font-size: 13px; } .node .m { color: var(--h-muted); font-size: 11.5px; font-family: ui-monospace, Menlo, monospace; }
+  .gap { grid-column: 2; height: 40px; }
+  .note { z-index: 2; align-self: center; color: var(--h-muted); font-size: 11.5px; line-height: 1.35; }
+  .note.l { grid-column: 1; text-align: right; } .note.r { grid-column: 3; }
+  .note .n { color: var(--c); font-weight: 800; display: block; }
+  svg.wires { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; pointer-events: none; overflow: visible; }
+  .wire { fill: none; stroke-width: 2.2; stroke-linecap: round; }
+  .flow { stroke-dasharray: 6 10; animation: flow 1.6s linear infinite; }
+  @keyframes flow { to { stroke-dashoffset: -32; } }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c) 50%, transparent); } 70% { box-shadow: 0 0 0 10px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+  @media (prefers-reduced-motion: reduce) { .flow, .ring { animation: none !important; } .packet { display: none; } }
+  @media (max-width: 1100px) { .app { grid-template-columns: 1fr; height: auto; } .split { display: none; } .body { grid-template-columns: 220px 1fr; } }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <section class="left">
+    <header class="topbar">
+      <div class="icon-btn" id="collapse" title="Collapse sessions">⟨</div>
+      <div class="crumb"><div class="eyebrow">Trace &amp; Session Explorer</div><h1>ZAAFPulse · fix auth</h1></div>
+      <div class="seg"><span>24 h</span><span class="on">7 d</span><span>30 d</span></div>
+    </header>
+
+    <div class="body" id="body">
+      <aside class="sessions">
+        <div class="head">
+          <div class="search">⌕ <span>Search sessions, projects…</span></div>
+          <div class="chips">
+            <span class="chip on" style="--c:#8f98cc"><i></i>All 42</span>
+            <span class="chip" style="--c:#d97757"><i></i>Claude 28</span>
+            <span class="chip" style="--c:#10a37f"><i></i>Codex 9</span>
+            <span class="chip" style="--c:#7b61ff"><i></i>Kiro 2</span>
+            <span class="chip" style="--c:#4285f4"><i></i>Antigravity 1</span>
+            <span class="chip" style="--c:#555b7a"><i></i>Gateway 2</span>
+            <span class="chip" style="--c:var(--red)"><i></i>With errors</span>
+          </div>
+        </div>
+        <div class="list">
+          <div class="group">Today</div>
+          <div class="sess on"><span class="src" style="--c:#d97757">CC</span><div class="t"><div class="top1"><div class="t1">fix auth redirect</div><span class="when">14:20</span></div><div class="t2">ZAAFPulse · $4.12 · 42 min</div><span class="flag bad">2 errors</span></div></div>
+          <div class="sess"><span class="src" style="--c:#10a37f">CX</span><div class="t"><div class="top1"><div class="t1">tokoku-api pagination</div><span class="when">11:05</span></div><div class="t2">tokoku · $0.88 · 18 min</div></div></div>
+          <div class="sess"><span class="src" style="--c:#555b7a">GW</span><div class="t"><div class="top1"><div class="t1">agent/auto · vote</div><span class="when">09:42</span></div><div class="t2">gateway · $0.21 · judged</div></div></div>
+          <div class="group">Yesterday</div>
+          <div class="sess"><span class="src" style="--c:#7b61ff">KR</span><div class="t"><div class="top1"><div class="t1">spec: billing</div><span class="when">17:30</span></div><div class="t2">12 tools · no cost data</div></div></div>
+          <div class="sess"><span class="src" style="--c:#4285f4">AG</span><div class="t"><div class="top1"><div class="t1">landing page</div><span class="when">15:12</span></div><div class="t2">34 steps · 2 sub-agents</div></div></div>
+          <div class="sess"><span class="src" style="--c:#d97757">CC</span><div class="t"><div class="top1"><div class="t1">refactor gateway keys</div><span class="when">10:48</span></div><div class="t2">ZAAFPulse · $2.40 · 1 h 5 m</div><span class="flag warn">loop detected</span></div></div>
+        </div>
+      </aside>
+
+      <main class="tree">
+        <div class="head"><b>Turn 3 of 14</b><span class="ev ok">relevance .82</span><span class="muted">212 spans · $4.12 · cache hit 71%</span></div>
+        <div class="cols"><span>Span</span><span>Timeline</span><span style="text-align:right">Time</span></div>
+        <div class="rows">
+          <div class="row" data-k="0" style="--c: var(--h-cyan)"><span class="name"><span class="d"></span><span class="lbl">▾ invoke_agent · claude-code</span></span><span class="track"><span style="left:0;width:100%"></span></span><span class="dur">42 m</span></div>
+          <div class="row" data-k="1" style="--c: var(--violet)"><span class="name" style="--lvl:1;--guide:block"><span class="d"></span><span class="lbl">▾ turn 3 · "fix the login redirect…"</span></span><span class="track"><span style="left:18%;width:30%"></span></span><span class="dur">2 m 10 s</span></div>
+          <div class="row" data-k="2" style="--c: var(--h-cyan)"><span class="name" style="--lvl:2;--guide:block"><span class="d"></span><span class="lbl">chat · opus-5.5</span></span><span class="track"><span style="left:18%;width:4%"></span></span><span class="dur">4.1 s</span></div>
+          <div class="row" data-k="3" style="--c: var(--amber)"><span class="name" style="--lvl:2;--guide:block"><span class="d"></span><span class="lbl">execute_tool · Read</span></span><span class="track"><span style="left:22%;width:1%"></span></span><span class="dur">40 ms</span></div>
+          <div class="row on" data-k="4" style="--c: var(--red)"><span class="name" style="--lvl:2;--guide:block"><span class="d"></span><span class="lbl">execute_tool · Bash</span><span class="ev bad">exit 1</span></span><span class="track"><span style="left:23%;width:3%"></span></span><span class="dur">3.2 s</span></div>
+          <div class="row" data-k="5" style="--c: var(--h-pink)"><span class="name" style="--lvl:2;--guide:block"><span class="d"></span><span class="lbl">▸ Explore</span><span class="ev" style="color:var(--h-pink)">subagent</span></span><span class="track"><span style="left:27%;width:14%"></span></span><span class="dur">48 s</span></div>
+          <div class="row" data-k="6" style="--c: var(--green)"><span class="name" style="--lvl:2;--guide:block"><span class="d"></span><span class="lbl">answer</span><span class="ev ok">faithful</span><span class="ev bad">incomplete</span></span><span class="track"><span style="left:45%;width:3%"></span></span><span class="dur">—</span></div>
+          <div class="row" style="--c: var(--violet); opacity:.6"><span class="name" style="--lvl:1;--guide:block"><span class="d"></span><span class="lbl">▸ turn 4</span><span class="ev bad">2 errors</span></span><span class="track"><span style="left:50%;width:18%"></span></span><span class="dur">3 m</span></div>
+          <div class="row" style="--c: var(--violet); opacity:.6"><span class="name" style="--lvl:1;--guide:block"><span class="d"></span><span class="lbl">▸ turn 5</span></span><span class="track"><span style="left:70%;width:12%"></span></span><span class="dur">1 m 40 s</span></div>
+        </div>
+      </main>
+    </div>
+
+    <section class="detail">
+      <div class="dhead">
+        <h3>execute_tool · Bash</h3><span class="ev bad">exit 1</span><span class="muted" title="signal: command failed (not counted against accuracy)">3.2 s · command failed · not counted vs accuracy</span>
+        <div class="tabs"><span class="on">Output</span><span>Input</span><span>Evals 2</span><span>Notes</span></div>
+      </div>
+      <div class="txt">$ npm test
+FAIL  test/auth.test.js
+  ✕ redirects to /login after sign-out (31 ms)
+    expected "/login" but got "/"
+env: API_KEY=<span class="mask">sk-ant-••••••</span>   masked · show</div>
+      <div class="acts">
+        <span class="btn">👍 Good</span><span class="btn">👎 Bad</span><span class="btn ghost">✎ Add note</span>
+        <span class="spacer"></span>
+        <span class="btn ghost">⤓ Add to dataset</span><span class="btn ghost">↻ Replay turn</span><span class="btn warn">⏸ Pause agent</span>
+      </div>
+    </section>
+  </section>
+
+  <div class="split" id="split" title="Drag to resize"></div>
+
+  <section class="right">
+    <div class="rhead">
+      <div><div class="eyebrow">Session map</div><h2>Turn 3 · From Prompt to Answer</h2></div>
+      <div class="stepper"><span class="icon-btn">◀</span><span class="muted">3 / 14</span><span class="icon-btn">▶</span></div>
+    </div>
+    <div class="legend"><span style="--c:var(--violet)"><i></i>Turn</span><span style="--c:var(--h-cyan)"><i></i>Model call</span><span style="--c:var(--amber)"><i></i>Tool</span><span style="--c:var(--h-pink)"><i></i>Subagent</span><span style="--c:var(--red)"><i></i>Error</span><span style="--c:var(--green)"><i></i>Judged</span></div>
+    <div class="map" id="map">
+      <svg class="wires" id="wires" aria-hidden="true"></svg>
+      <div class="note l" style="--c: var(--h-cyan)"><span class="n">01 · Session</span>claude-code, ZAAFPulse</div>
+      <div class="node" data-k="0" style="--c: var(--h-cyan)"><span class="ring">CC</span><div><b>Session</b><span class="m">42 min · 14 turns</span></div></div>
+      <div class="gap"></div>
+      <div class="node" data-k="1" style="--c: var(--violet)"><span class="ring">T3</span><div><b>Turn 3 · prompt</b><span class="m">"fix the login redirect…"</span></div></div>
+      <div class="note r" style="--c: var(--violet)"><span class="n">02 · Turn</span>relevance .82</div>
+      <div class="gap"></div>
+      <div class="note l" style="--c: var(--h-cyan)"><span class="n">03 · Model call</span>2.1k → 480 tok · $0.04</div>
+      <div class="node" data-k="2" style="--c: var(--h-cyan)"><span class="ring">LLM</span><div><b>chat · opus-5.5</b><span class="m">TTFT 0.9 s</span></div></div>
+      <div class="gap"></div>
+      <div class="node" data-k="3" style="--c: var(--amber)"><span class="ring">⚙</span><div><b>Tool · Read</b><span class="m">src/auth.js · 40 ms</span></div></div>
+      <div class="note r" style="--c: var(--amber)"><span class="n">04 · Tool</span>resolved</div>
+      <div class="gap"></div>
+      <div class="note l" style="--c: var(--red)"><span class="n">05 · Failure</span>command failed</div>
+      <div class="node on" data-k="4" style="--c: var(--red)"><span class="ring">✗</span><div><b>Tool · Bash</b><span class="m">npm test · exit 1</span></div></div>
+      <div class="gap"></div>
+      <div class="node" data-k="5" style="--c: var(--h-pink)"><span class="ring">SUB</span><div><b>Subagent · Explore</b><span class="m">9 tools · $0.31</span></div></div>
+      <div class="note r" style="--c: var(--h-pink)"><span class="n">06 · Subagent</span>own nested tree</div>
+      <div class="gap"></div>
+      <div class="note l" style="--c: var(--green)"><span class="n">07 · Judged</span>local model</div>
+      <div class="node" data-k="6" style="--c: var(--green)"><span class="ring">✓</span><div><b>Answer</b><span class="m">faithful · incomplete</span></div></div>
+    </div>
+  </section>
+</div>
+
+<script>
+  function select(k) { document.querySelectorAll('[data-k]').forEach((el) => el.classList.toggle('on', el.dataset.k === k)); }
+  document.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-k]'); if (el) select(el.dataset.k);
+    if (e.target.closest('#collapse')) { const b = document.getElementById('body'); b.classList.toggle('collapsed'); e.target.closest('#collapse').textContent = b.classList.contains('collapsed') ? '⟩' : '⟨'; setTimeout(draw, 50); }
+  });
+  // Drag the splitter to give either side more room.
+  const app = document.getElementById('app');
+  document.getElementById('split').addEventListener('pointerdown', (e) => {
+    const move = (ev) => { const pct = Math.min(70, Math.max(38, (ev.clientX / innerWidth) * 100)); app.style.setProperty('--split', pct + '%'); draw(); };
+    const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); };
+    addEventListener('pointermove', move); addEventListener('pointerup', up);
+  });
+  const COLORS = ['#a98bff', '#4de8ff', '#ffb547', '#ff5a6e', '#ff4fd8', '#43f0a3'];
+  function draw() {
+    const map = document.getElementById('map'); const svg = document.getElementById('wires');
+    const nodes = [...map.querySelectorAll('.node')]; const box = map.getBoundingClientRect();
+    const p = (el, s) => { const r = el.getBoundingClientRect(); return [r.left + r.width / 2 - box.left, (s === 't' ? r.top : r.bottom) - box.top]; };
+    let html = '<defs><filter id="g"><feGaussianBlur stdDeviation="2.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>';
+    let chain = '';
+    for (let i = 0; i < nodes.length - 1; i++) {
+      const [x1, y1] = p(nodes[i], 'b'); const [x2, y2] = p(nodes[i + 1], 't');
+      const off = (i % 2 ? -1 : 1) * Math.min(120, box.width / 6); const mid = (y1 + y2) / 2;
+      const d = `M${x1},${y1} C${x1},${mid} ${x1 + off},${mid} ${x1 + off / 2},${mid} S${x2},${mid} ${x2},${y2}`;
+      chain += (i ? ' ' : '') + d;
+      html += `<path class="wire" d="${d}" stroke="${COLORS[i]}" stroke-opacity=".25"/><path class="wire flow" d="${d}" stroke="${COLORS[i]}" filter="url(#g)" style="animation-delay:${-i * .2}s"/>`;
+    }
+    html += `<path id="chain" d="${chain}" fill="none"/><circle class="packet" r="4.5" fill="#fff" filter="url(#g)"><animateMotion dur="6s" repeatCount="indefinite"><mpath href="#chain"/></animateMotion></circle>`;
+    svg.innerHTML = html;
+  }
+  addEventListener('load', draw); addEventListener('resize', () => { clearTimeout(window.__t); window.__t = setTimeout(draw, 120); });
+</script>
+</body>
+</html>
