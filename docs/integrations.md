@@ -100,19 +100,43 @@ Use `"type": "mcp"` to re-expose a Streamable HTTP MCP server. Set `url`, option
 
 ## Registering clients
 
+The stdio server is registered as `zaafpulse`, the same name the HTTP endpoint `/mcp` uses, so a client never lists the same tools under two names. Use one of the two per client: the stdio server on the machine that runs ZAAFPulse, or the HTTP endpoint from elsewhere (snippets per client are in the `zaafpulse-mcp` skill).
+
 ```bash
-npm run mcp:register -- all              # Claude Code, Kiro and Antigravity
-npm run mcp:register -- kiro --dry-run   # show what would change
+npm run mcp:register -- all                   # every client found on this machine; the others are listed as skipped
+npm run mcp:register -- codex --dry-run       # show what would change, without writing
+npm run mcp:register -- cursor --data ~/zp    # the client's server uses this data folder
 npm run mcp:register -- claude --remove
 ```
 
-| Client | Where |
-|---|---|
-| Claude Code | `claude mcp add --scope user` (the command is printed if the `claude` CLI is missing) |
-| Kiro | `~/.kiro/settings/mcp.json` |
-| Antigravity | `~/.gemini/config/mcp_config.json` |
+| Client | id | macOS | Linux | Windows | How |
+|---|---|---|---|---|---|
+| Claude Code | `claude` | `~/.claude.json` | same | same | `claude mcp add --scope user` (and `mcp remove`). With `CLAUDE_CONFIG_DIR`, its `.claude.json` is read there. The commands are printed when the `claude` CLI is not on PATH |
+| Kiro | `kiro` | `~/.kiro/settings/mcp.json` | same | same | `mcpServers` |
+| Antigravity | `antigravity` | `~/.gemini/config/mcp_config.json` | same | same | `mcpServers` |
+| Cursor | `cursor` | `~/.cursor/mcp.json` | same | same | `mcpServers`, `"type": "stdio"` |
+| VS Code | `vscode` | `~/Library/Application Support/Code/User/mcp.json` | `~/.config/Code/User/mcp.json` | `%APPDATA%\Code\User\mcp.json` | top-level `servers`, `"type": "stdio"` |
+| Claude Desktop | `claude-desktop` | `~/Library/Application Support/Claude/claude_desktop_config.json` | `~/.config/Claude/claude_desktop_config.json` | `%APPDATA%\Claude\claude_desktop_config.json` | `mcpServers` |
+| Codex CLI | `codex` | `~/.codex/config.toml` (or `$CODEX_HOME`) | same | same | `codex mcp add` for a new entry when the CLI is installed; otherwise only the `[mcp_servers.zaafpulse]` table is added, replaced or removed |
+| Gemini CLI | `gemini` | `~/.gemini/settings.json` | same | same | `mcpServers` |
+| Windsurf / Devin Desktop | `windsurf` | `~/.config/devin/mcp_config.json` | same (`$XDG_CONFIG_HOME/devin`) | `%APPDATA%\devin\mcp_config.json` | `mcpServers`. A Windsurf install from before the June 2026 rename keeps `~/.codeium/windsurf/mcp_config.json`, used while the `devin` folder does not exist |
+| Zed | `zed` | `~/.config/zed/settings.json` | `$XDG_CONFIG_HOME/zed/settings.json` | `%APPDATA%\Zed\settings.json` | `context_servers` |
 
-Before a file is changed, it is copied to `<file>.bak-<timestamp>`. Only the `ai-command-center` entry is touched, and a file that is not valid JSON is left alone. Restart the client afterwards.
+On Linux, `~/.config` stands for `$XDG_CONFIG_HOME` when it is set.
+
+What registration does:
+
+- **Only our entry is touched.** Other servers, and settings you added to ours (`disabled`, `autoApprove`, Codex `enabled` or timeouts), are kept.
+- **Stale entries are replaced.** The entry is compared by command, arguments and environment. After moving the install or updating Node it is rewritten; Claude Code gets `mcp remove` then `mcp add`.
+- **The old name is migrated.** An `ai-command-center` entry that starts ZAAFPulse (`mcp.js`, or the `zaafpulse` binary with `mcp`) is removed; one that starts something else is left alone. `--remove` removes both names.
+- **The data folder goes with it.** A client starts the server without your shell's environment. When `--data`, `ZAAFPULSE_DATA`, `ACC_CONFIG` or `ACC_CACHE_DIR` points somewhere other than the folder `mcp.js` finds on its own, the entry gets an `env` with the absolute path.
+- **Files are written carefully.** Before a change the file is copied to `<file>.bak-<timestamp>` (the newest 3 are kept). A symlinked config is written through to its target, the file's permissions are kept, a UTF-8 BOM is kept, and an empty or `null` file counts as empty. A file that is not valid JSON is left alone with an error.
+- **Files with comments are not rewritten.** VS Code, Zed and Gemini CLI accept comments in their settings. When the file has comments or trailing commas, it is left as it is and the exact entry to add is printed (for VS Code also as a `code --add-mcp` command). Codex's TOML is never re-serialised: when `mcp_servers` is written as dotted keys or an inline table, the table to add is printed instead.
+- **`all` only touches installed clients**, judged by the client's config folder or its CLI on PATH, so it never creates folders for apps you do not have.
+
+Restart the client afterwards.
+
+Sources checked in October 2026: [Cursor](https://cursor.com/docs/context/mcp), [VS Code MCP configuration](https://code.visualstudio.com/docs/agents/reference/mcp-configuration) and [VS Code settings paths](https://code.visualstudio.com/docs/configure/settings), [Claude Desktop](https://modelcontextprotocol.io/quickstart/user), [Claude Code MCP](https://code.claude.com/docs/en/mcp) and [`CLAUDE_CONFIG_DIR`](https://code.claude.com/docs/en/env-vars), [Codex MCP](https://developers.openai.com/codex/mcp) and [config reference](https://developers.openai.com/codex/config-reference), [Gemini CLI](https://geminicli.com/docs/tools/mcp-server), [Antigravity](https://antigravity.google/docs/mcp), [Devin Desktop (Windsurf)](https://docs.devin.ai/desktop/cascade/mcp) and its [FAQ](https://docs.devin.ai/desktop/devin-desktop-faq), [Zed](https://zed.dev/docs/ai/mcp). The Claude Desktop path on Linux and the Zed path on Windows are not given in those pages.
 
 ## Troubleshooting
 
