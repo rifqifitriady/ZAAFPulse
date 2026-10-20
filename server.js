@@ -35,6 +35,7 @@ const { createLocal } = require('./lib/local');
 const register = require('./scripts/register-mcp');
 const platform = require('./lib/platform');
 const { createAuth, isLoopback, originAllowed } = require('./lib/auth');
+const otel = require('./lib/otel');
 
 const PORT = Number(process.env.ZAAFPULSE_PORT || process.env.PORT) || 4777;
 const HOST = process.env.ZAAFPULSE_HOST || process.env.HOST || '127.0.0.1';
@@ -205,6 +206,8 @@ function rawConfig() {
   }
   return rawCache.value;
 }
+// OpenTelemetry trace export: off unless config.json has "otel": { "enabled": true } (see docs/otel.md).
+otel.init({ getConfig: rawConfig, secrets: createSecrets(), version: require('./package.json').version });
 const gatewaySecret = secretResolver({ store: DEMO ? () => {} : keychainStore });
 const gateway = createGateway({
   dataDir: DEMO ? demoDir : path.join(DIR, '.data'),
@@ -761,7 +764,8 @@ const handler = async (req, res) => {
     send(res, 500, { error: err.message });
   }
 };
-const server = TLS ? https.createServer(TLS, handler) : http.createServer(handler);
+const traced = otel.wrapHandler(handler); // continues an incoming traceparent on gateway requests
+const server = TLS ? https.createServer(TLS, traced) : http.createServer(traced);
 server.on('error', (err) => {
   console.error(
     err.code === 'EADDRINUSE'
@@ -803,6 +807,7 @@ for (const sig of ['SIGTERM', 'SIGINT'])
     try {
       gateway.flush();
     } finally {
-      process.exit(0);
+      // Queued spans get up to 2 seconds to reach the OTLP endpoint.
+      otel.shutdown(2000).finally(() => process.exit(0));
     }
   });
