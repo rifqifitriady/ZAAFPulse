@@ -311,7 +311,16 @@ ZAAFPulse reads Claude Code and Codex transcripts from these folders, in this or
 
 ### The background service does not see your shell variables
 
-launchd, systemd and the Windows startup entry start ZAAFPulse without your shell profile. A `CLAUDE_CONFIG_DIR` or `CODEX_HOME` you export in `~/.zshrc` or `~/.bashrc` works for `zaafpulse start` in that terminal, but the service never sees it, so the Overview stays empty. Set it for the service instead, then restart the service. Running `zaafpulse service install` again rewrites the service file, so add the variable again after that.
+launchd, systemd and the Windows startup entry start ZAAFPulse without your shell profile. A `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `XDG_CONFIG_HOME` you export in `~/.zshrc` or `~/.bashrc` works for `zaafpulse start` in that terminal, but the service never sees it on its own, so the Overview stays empty.
+
+`zaafpulse service install` copies these three variables, with the other settings it carries (port, data folder and so on), from the shell it runs in into the launchd plist, the systemd unit or the Windows launcher. So set them first, then install:
+
+```bash
+export CLAUDE_CONFIG_DIR=~/work-claude,~/personal-claude
+zaafpulse service install
+```
+
+Run `zaafpulse service install` again after you change them. It rewrites the service file, so the new values replace the old ones. To set them by hand instead, edit the service file and restart the service:
 
 - **macOS**: add the variable to the `EnvironmentVariables` dictionary of `~/Library/LaunchAgents/com.zaaf.aipulse.server.plist`, then `launchctl unload` and `launchctl load` that file (launchd reads the plist only when it is loaded):
   ```xml
@@ -332,7 +341,7 @@ launchd, systemd and the Windows startup entry start ZAAFPulse without your shel
   [Environment]::SetEnvironmentVariable('CLAUDE_CONFIG_DIR', 'C:\Users\you\work-claude', 'User')
   ```
 
-Run `zaafpulse doctor` from the same shell afterwards to check the folders; to see what the service itself sees, look at the Overview, which reads from the running server.
+Run `zaafpulse doctor` afterwards to check the folders from your shell; the Overview shows what the running service itself sees.
 
 ## What works where
 
