@@ -525,7 +525,7 @@ test('a model call that fails is retried later, and given up on after three trie
   g.st.failures = 99;
   for (let i = 0; i < 4; i++) await g.engine.drain();
   assert.equal(g.calls.length, 3);
-  assert.equal((await g.engine.status()).queue, 0);
+  assert.equal((await g.engine.status()).queue, 1); // kept: the provider is backed off, not the job dropped
   assert.equal(g.engine.stats().errors, 1);
   assert.equal(g.store.all().length, 0);
 
@@ -783,23 +783,50 @@ test('a call refused for good is tried once; ticks do not repeat it, a forced en
   assert.equal(r.store.all().length, 1);
 });
 
-test('a model that stays down is given up on, and a tick does not start it again', async () => {
+test('a provider that keeps failing is backed off with growing pauses, and recovery judges every turn', async () => {
   const r = rig();
   await r.arm();
-  r.st.entries.push(entry('s', turnsAfter(1), T0 + 5 * MIN));
+  r.st.entries.push(entry('s', turnsAfter(4), T0 + 8 * MIN));
   r.clock.t = T0 + 20 * MIN;
-  r.st.failures = 99;
-  r.st.failStatus = 0;
-  for (let i = 0; i < 6; i++) {
-    await r.engine.tick();
+  r.st.failures = 9999;
+  r.st.failStatus = 503;
+  await r.engine.tick();
+  await r.settle();
+  for (let i = 0; i < 3; i++) {
+    await r.engine.tick(); // the same minute: left alone
     await r.settle();
   }
-  assert.equal(r.calls.length, 3);
-  assert.equal(r.engine.stats().errors, 1);
-  r.st.failures = 0;
-  assert.deepEqual(await r.engine.enqueueSession('claude', 's'), { queued: 1 });
+  assert.equal(r.calls.length, 3); // three tries, then the provider is backed off
+  const s = await r.engine.status();
+  assert.equal(s.judge.ok, false);
+  assert.equal(s.judge.reason, 'Judge provider unavailable, retrying in 1 min');
+  assert.equal(s.queue, 4); // no job was lost
+
+  const gaps = [];
+  let last = r.calls.length;
+  for (let minute = 1; minute <= 40; minute++) {
+    r.clock.t += MIN;
+    await r.engine.tick();
+    await r.settle();
+    if (r.calls.length > last) {
+      gaps.push(minute);
+      last = r.calls.length;
+    }
+  }
+  // One probe after 1, then 2, 4, 8, 16 minutes, and 30 at most.
+  assert.deepEqual(
+    gaps.slice(1).map((m, i) => m - gaps[i]),
+    [2, 4, 8, 16],
+  );
+  assert.equal((await r.engine.status()).queue, 4);
+
+  r.st.failures = 0; // the provider is back
+  r.clock.t += 31 * MIN;
+  await r.engine.tick();
   await r.settle();
-  assert.equal(r.store.all().length, 1);
+  assert.equal(r.store.all().length, 4);
+  assert.equal((await r.engine.status()).judge.ok, true);
+  assert.equal((await r.engine.status()).queue, 0);
 });
 
 test('an external call that fails still counts against the daily cap', async () => {
@@ -874,7 +901,8 @@ test('the whole-session verdict waits for a quiet session and is refreshed when 
 test('enqueueSession leaves out the session verdict while the session is live', async () => {
   const r = rig({ settings: { evaluators: only('faithfulness', 'user_frustration') } });
   r.st.entries.push(entry('s', [T0 - 20 * MIN, T0 - 10 * MIN], T0 - 5 * MIN));
-  assert.deepEqual(await r.engine.enqueueSession('claude', 's'), { queued: 2 }); // two turns, no session job
+  // two turns, and the session verdict is held back because the session is still live
+  assert.deepEqual(await r.engine.enqueueSession('claude', 's'), { queued: 2, sessionDeferred: true });
   await r.settle();
   assert.deepEqual(r.store.all().map((x) => x.evaluator), ['faithfulness', 'faithfulness']);
   r.clock.t = T0 + 40 * MIN; // quiet now
@@ -1020,4 +1048,156 @@ test('numeric settings given as text are understood; nonsense falls back to the 
   await d.engine.tick();
   await d.settle();
   assert.equal(d.calls.length, 4);
+});
+
+// ---- second review ----
+const writeState = (r, state) => fs.writeFileSync(r.stateFile, JSON.stringify(state));
+
+test('a stored day far in the future is dropped on load, so judging is not held until that date', async () => {
+  const r = rig({ settings: { dailyCap: 2 } });
+  writeState(r, { since: T0 - 1, day: '2030-01-01', count: 2, cost: 0.5 });
+  const e = r.make();
+  const s = await e.status();
+  assert.equal(s.today.count, 0);
+  assert.equal(s.today.cost, 0);
+  assert.equal(s.since, T0 - 1);
+  for (const bad of ['yesterday', '2026-13-45', 20261021, null]) {
+    writeState(r, { since: null, day: bad, count: 2, cost: 0 });
+    assert.equal((await r.make().status()).today.count, 0, String(bad));
+  }
+  // Tomorrow is within a day of today: kept (a clock a few hours off), and so are today's counters.
+  writeState(r, { since: null, day: '2026-10-22', count: 2, cost: 0 });
+  assert.equal((await r.make().status()).today.count, 2);
+});
+
+test('a stored day far in the future is replaced at runtime, with one log line', async () => {
+  const r = rig({ settings: { dailyCap: 2 } });
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(3), T0 + 8 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.calls.length, 2);
+  assert.equal((await r.engine.status()).paused, 'daily cap');
+  // The clock had been wrong: it is now three days before the stored day.
+  r.clock.t = new Date(2026, 9, 18, 10, 0, 0).getTime();
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.calls.length, 3);
+  assert.equal((await r.engine.status()).today.count, 1);
+  assert.equal(r.logs.filter((l) => l.includes('clock moved back')).length, 1);
+});
+
+test('a small step back in the clock does not hand out a new budget', async () => {
+  const r = rig({ settings: { dailyCap: 2 } });
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(3), T0 + 8 * MIN));
+  r.clock.t = new Date(2026, 9, 21, 23, 59, 0).getTime();
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.calls.length, 2);
+  r.clock.t = new Date(2026, 9, 21, 23, 50, 0).getTime(); // 23:59 -> 23:50, the same date
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.calls.length, 2);
+  r.clock.t = new Date(2026, 9, 22, 0, 5, 0).getTime(); // past midnight, then back across it
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.calls.length, 3);
+  r.clock.t = new Date(2026, 9, 21, 23, 55, 0).getTime(); // one day behind the stored day: kept
+  assert.equal((await r.engine.status()).today.count, 1);
+  assert.equal(r.logs.filter((l) => l.includes('clock moved back')).length, 0);
+});
+
+test('a held external call shows "cost cap" as the reason until the next day', async () => {
+  const material = { prompt: 'SECRET-PROMPT-TEXT', answer: 'a', tools: [], available: [] };
+  const built = buildPrompt(R.get('faithfulness'), material);
+  const tokens = (built.system.length + built.user.length) / 4;
+  const r = extRig({ costCapUSD: 0.05 });
+  r.st.price = { input: (0.03 * 1e6) / tokens, output: 0 };
+  r.st.cost = 0.03;
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(2), T0 + 5 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.calls.length, 1);
+  assert.equal((await r.engine.status()).paused, 'cost cap');
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.calls.length, 1);
+  r.clock.t = new Date(2026, 9, 22, 1, 0, 0).getTime();
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.calls.length, 2);
+  assert.equal((await r.engine.status()).paused, null);
+});
+
+test('the estimate includes an answer allowance, and a failed external attempt is charged its estimate', async () => {
+  const r = extRig({ costCapUSD: 10 });
+  r.st.price = { input: 0, output: 1000 }; // 200 output tokens x 1000 USD per million = 0.2
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(1), T0 + 5 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  r.st.failures = 1;
+  r.st.failStatus = 503;
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.calls.length, 1);
+  const { cost } = (await r.engine.status()).today;
+  assert.ok(Math.abs(cost - 0.2) < 1e-9, `charged ${cost}`);
+
+  const q = extRig({ costCapUSD: 10 }); // a refusal (400) never reached the model: no charge
+  q.st.price = { input: 0, output: 1000 };
+  await q.arm();
+  q.st.entries.push(entry('s', turnsAfter(1), T0 + 5 * MIN));
+  q.clock.t = T0 + 20 * MIN;
+  q.st.failures = 1;
+  q.st.failStatus = 400;
+  await q.engine.tick();
+  await q.settle();
+  assert.equal((await q.engine.status()).today.cost, 0);
+});
+
+test('a result that could not be stored is offered again by the next tick', async () => {
+  const r = rig();
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(1), T0 + 5 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  const put = r.store.put;
+  r.store.put = () => {
+    throw new Error('disk full');
+  };
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.engine.stats().errors, 1);
+  assert.equal(r.store.all().length, 0);
+  r.store.put = put;
+  assert.equal((await r.engine.tick()).queued, 1);
+  await r.settle();
+  assert.equal(r.store.all().length, 1);
+});
+
+test('a refresh merged into a queued session job updates the turn count it will record', async () => {
+  const r = rig({ settings: { evaluators: only('user_frustration') } });
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(10), T0 + 12 * MIN));
+  r.clock.t = T0 + 50 * MIN;
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.store.all()[0].turns, 10);
+
+  r.st.settings.dailyCap = 0; // the queue cannot run, so the refresh waits
+  r.st.entries[0] = entry('s', turnsAfter(15), T0 + 60 * MIN);
+  r.clock.t = T0 + 100 * MIN;
+  assert.equal((await r.engine.tick()).queued, 1);
+  await r.settle();
+  r.st.entries[0] = entry('s', turnsAfter(20), T0 + 110 * MIN);
+  r.clock.t = T0 + 150 * MIN;
+  await r.engine.tick();
+  r.st.settings.dailyCap = 500;
+  r.engine.kick();
+  await r.settle();
+  assert.equal(r.calls.length, 2);
+  assert.equal(r.store.all()[0].turns, 20);
 });
