@@ -255,10 +255,44 @@ test('call: more than the output cap is refused', async () => {
   await assert.rejects(judge(s, { maxBytes: 50 }), (e) => /too much output/.test(e.message));
 });
 
-test('call: the child gets the owner environment, without the dashboard settings, and one Claude config folder', () => {
-  const env = { HOME: '/h', PATH: '/bin', CLAUDECODE: '1', ZAAFPULSE_AUTH: 'x', CLAUDE_CONFIG_DIR: '/a/one,/a/two' };
-  assert.deepEqual(childEnv(env), { HOME: '/h', PATH: '/bin', CLAUDE_CONFIG_DIR: '/a/one' });
-  assert.deepEqual(childEnv({ CLAUDE_CONFIG_DIR: '/a/only' }), { CLAUDE_CONFIG_DIR: '/a/only' });
+test('call: the child gets the owner environment, without the dashboard settings', () => {
+  const env = { HOME: '/h', PATH: '/bin', CLAUDECODE: '1', ZAAFPULSE_AUTH: 'x', ZAAFPULSE_CLAUDE_DIRS: '/a,/b' };
+  assert.deepEqual(childEnv(env), { HOME: '/h', PATH: '/bin' });
+});
+
+test('call: CLAUDE_CONFIG_DIR reaches the child only as one valid folder; anything else is dropped once, logged', () => {
+  const home = path.resolve(path.sep, 'h', 'me');
+  const one = path.resolve(path.sep, 'a', 'one');
+  const logs = [];
+  const opts = { home, log: (m) => logs.push(m) };
+  assert.deepEqual(childEnv({ CLAUDE_CONFIG_DIR: one }, opts), { CLAUDE_CONFIG_DIR: one });
+  // The same folder ZAAFPulse reads its logs from: ~ is the home folder.
+  assert.deepEqual(childEnv({ CLAUDE_CONFIG_DIR: '~/work' }, opts), { CLAUDE_CONFIG_DIR: path.join(home, 'work') });
+  assert.deepEqual(logs, []);
+  const two = `${one},${path.resolve(path.sep, 'a', 'two')}`;
+  for (const bad of [two, 'relative/dir', '~', path.parse(home).root]) {
+    assert.deepEqual(childEnv({ PATH: '/bin', CLAUDE_CONFIG_DIR: bad }, opts), { PATH: '/bin' }, bad);
+  }
+  assert.equal(logs.length, 4, 'one line per value');
+  assert.match(logs[0], /CLAUDE_CONFIG_DIR is not passed to Claude Code \(one folder only; use ZAAFPULSE_CLAUDE_DIRS/);
+  childEnv({ CLAUDE_CONFIG_DIR: two }, opts);
+  destinationOf({ CLAUDE_CONFIG_DIR: two }, opts);
+  assert.equal(logs.length, 4, 'not again for the same value');
+  // The judge itself runs with the dropped variable gone.
+  assert.deepEqual(childEnv({ CLAUDE_CONFIG_DIR: '' }, opts), {});
+});
+
+test('destination: the Claude config folder picks the login, so another folder is another destination', () => {
+  const home = path.resolve(path.sep, 'h', 'me');
+  const a = destinationOf({ CLAUDE_CONFIG_DIR: path.join(home, 'work') }, { home });
+  const b = destinationOf({ CLAUDE_CONFIG_DIR: path.join(home, 'personal') }, { home });
+  const none = destinationOf({}, { home });
+  assert.notEqual(a.token, b.token);
+  assert.notEqual(a.token, none.token);
+  assert.equal(destinationOf({ CLAUDE_CONFIG_DIR: '~/work' }, { home }).token, a.token, 'the folder the child gets');
+  // A value the child never gets (dropped) is the same destination as none.
+  assert.equal(destinationOf({ CLAUDE_CONFIG_DIR: 'rel' }, { home, log() {} }).token, none.token);
+  assert.doesNotMatch(JSON.stringify(a), /work/, 'the folder is hashed, never shown');
 });
 
 // ---- review fixes ----
@@ -538,4 +572,13 @@ test('destination: a switch of cloud account or region asks for a new preview, i
     assert.notEqual(one.token, two.token, `${v}: another value`);
     assert.doesNotMatch(JSON.stringify(one), /secret-acct/, `${v}: not in the label or the token`);
   }
+});
+
+test('docs: what can move the Claude Code call but is not in the fingerprint, and the folder that is', () => {
+  const evals = fs.readFileSync(path.join(__dirname, '..', 'docs', 'evals.md'), 'utf8');
+  for (const v of ['HTTPS_PROXY', 'NODE_EXTRA_CA_CERTS', 'ANTHROPIC_MODEL']) assert.match(evals, new RegExp(v), v);
+  assert.match(evals, /\*\*Not in the hash\.\*\*/);
+  assert.match(evals, /the Claude config folder the CLI gets \(`CLAUDE_CONFIG_DIR`/);
+  assert.doesNotMatch(evals, /Claude Code gets the first/);
+  assert.match(evals, /user-level\s+`~\/\.claude\/CLAUDE\.md`[\s\S]{0,120}has not been checked/);
 });

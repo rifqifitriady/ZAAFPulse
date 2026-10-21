@@ -293,7 +293,8 @@ zaafpulse mcp
 | `ZAAFPULSE_ALLOWED_HOSTS` | | Comma-separated host names to accept in server mode |
 | `ZAAFPULSE_SECRET_STORE` | per OS | `keychain`, `libsecret` or `file` |
 | `ZAAFPULSE_MASTER_KEY` (`_FILE`) | | Key for the encrypted secret file |
-| `CLAUDE_CONFIG_DIR` | | Claude Code's config folder(s), comma-separated; logs are read from each `<folder>/projects`. See [Where the logs are read from](#where-the-logs-are-read-from) |
+| `CLAUDE_CONFIG_DIR` | | Claude Code's config folder: one folder, exactly as Claude Code reads it; logs are read from `<folder>/projects`. See [Where the logs are read from](#where-the-logs-are-read-from) |
+| `ZAAFPULSE_CLAUDE_DIRS` | | Several Claude Code config folders for ZAAFPulse to read, comma-separated; logs are read from each `<folder>/projects`. Claude Code itself does not read it |
 | `XDG_CONFIG_HOME` | `~/.config` | Parent of Claude Code's `claude/projects` folder, as newer Claude Code versions use it |
 | `CODEX_HOME` | `~/.codex` | Codex's folder; logs are read from `<folder>/sessions` |
 | `ZAAFPULSE_CLAUDE_BIN` | found on its own | The `claude` binary for the Claude Code judge. See [docs/evals.md](evals.md#claude-code) |
@@ -305,21 +306,23 @@ ZAAFPulse reads Claude Code and Codex transcripts from these folders, in this or
 
 | Tool | Folders |
 |---|---|
-| Claude Code | each `CLAUDE_CONFIG_DIR` entry plus `/projects` (a comma-separated list; when it is set, only these are read), otherwise `$XDG_CONFIG_HOME/claude/projects` (`~/.config/claude/projects`), then `~/.claude/projects` |
+| Claude Code | each `ZAAFPULSE_CLAUDE_DIRS` entry plus `/projects` (a comma-separated list; when it is set, only these are read), otherwise `$CLAUDE_CONFIG_DIR/projects` (one folder; when it is set, only that one is read), otherwise `$XDG_CONFIG_HOME/claude/projects` (`~/.config/claude/projects`), then `~/.claude/projects` |
 | Codex | `$CODEX_HOME/sessions`, otherwise `~/.codex/sessions` |
 
-Only absolute folders are used. A relative value, or one that would put the logs folder directly in your home folder or at the top of a drive (`CLAUDE_CONFIG_DIR=~`, `CODEX_HOME=/`), is ignored and shown as "ignored" in `zaafpulse doctor` and on the Overview. Folders that are links to one another count once.
+`CLAUDE_CONFIG_DIR` is one folder, as Claude Code reads it (the same variable also picks Claude Code's login, and `zaafpulse register` reads its `.claude.json` there). A value with a comma in it is ignored with "one folder only; use ZAAFPULSE_CLAUDE_DIRS for several": put several folders in `ZAAFPULSE_CLAUDE_DIRS` instead.
 
-`zaafpulse doctor` prints the folders it resolved, whether each exists, how many `.jsonl` files it holds, how old the newest one is, and whether `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are set. When there are no logs at all, the Overview says so and lists the same folders. Claude Desktop, ChatGPT and other chat apps keep no readable logs; they appear as apps only.
+Only absolute folders are used (`~` counts as your home folder). A relative value, or one that would put the logs folder directly in your home folder or at the top of a drive (`CLAUDE_CONFIG_DIR=~`, `CODEX_HOME=/`, or a link that leads there), is ignored and shown as "ignored" in `zaafpulse doctor` and on the Overview. Folders that are links to one another count once.
+
+`zaafpulse doctor` prints the folders it resolved, whether each exists, how many `.jsonl` files it holds, how old the newest one is, and whether `ZAAFPULSE_CLAUDE_DIRS`, `CLAUDE_CONFIG_DIR`, `XDG_CONFIG_HOME` and `CODEX_HOME` are set. When there are no logs at all, the Overview says so and lists the same folders. Claude Desktop, ChatGPT and other chat apps keep no readable logs; they appear as apps only.
 
 ### The background service does not see your shell variables
 
-launchd, systemd and the Windows startup entry start ZAAFPulse without your shell profile. A `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `XDG_CONFIG_HOME` you export in `~/.zshrc` or `~/.bashrc` works for `zaafpulse start` in that terminal, but the service never sees it on its own, so the Overview stays empty.
+launchd, systemd and the Windows startup entry start ZAAFPulse without your shell profile. A `CLAUDE_CONFIG_DIR`, `ZAAFPULSE_CLAUDE_DIRS`, `CODEX_HOME` or `XDG_CONFIG_HOME` you export in `~/.zshrc` or `~/.bashrc` works for `zaafpulse start` in that terminal, but the service never sees it on its own, so the Overview stays empty.
 
-`zaafpulse service install` copies these three variables, with the other settings it carries (port, data folder and so on), from the shell it runs in into the launchd plist, the systemd unit or the Windows launcher. So set them first, then install:
+`zaafpulse service install` copies these variables, with the other settings it carries (port, data folder and so on), from the shell it runs in into the launchd plist, the systemd unit or the Windows launcher. So set them first, then install:
 
 ```bash
-export CLAUDE_CONFIG_DIR=~/work-claude,~/personal-claude
+export CLAUDE_CONFIG_DIR=~/work-claude
 zaafpulse service install
 ```
 
