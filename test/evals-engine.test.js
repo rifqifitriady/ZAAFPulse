@@ -7,6 +7,7 @@ const path = require('path');
 const { createEvalEngine } = require('../lib/evals/engine');
 const { createEvalStore, createFeedbackStore } = require('../lib/evals/store');
 const R = require('../lib/evals/registry');
+const { buildPrompt } = require('../lib/evals/judge');
 
 const dirs = [];
 after(() => {
@@ -28,7 +29,7 @@ const entry = (sid, times, mtimeMs, source = 'claude') => ({
   mtimeMs,
   result: { sessions: { [sid]: { turns: times.map((t) => [0, t]) } }, signals: { events: [] } },
 });
-const tick = () => new Promise((r) => setImmediate(r));
+const nextLoop = () => new Promise((r) => setImmediate(r)); // yield to the event loop
 
 function rig({ settings = {}, resolved = LOCAL, entries = [], demo, demoData } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'evals-engine-'));
@@ -53,6 +54,12 @@ function rig({ settings = {}, resolved = LOCAL, entries = [], demo, demoData } =
     runs: [],
     failures: 0,
     failStatus: 0,
+    priced: true,
+    price: { input: 0, output: 0 },
+    costs: null,
+    busy: 0,
+    settingsCalls: 0,
+    priceThrows: false,
   };
   const calls = [];
   const mats = [];
@@ -60,6 +67,11 @@ function rig({ settings = {}, resolved = LOCAL, entries = [], demo, demoData } =
   let maxInflight = 0;
   const models = {
     resolve: async () => st.resolved,
+    priced: (resolved) => resolved.kind !== 'external' || st.priced,
+    priceOf: (resolved) => {
+      if (st.priceThrows) throw new Error('price table broke');
+      return resolved.kind === 'external' && st.priced ? st.price : null;
+    },
     call: async (resolved, { system, user, schema }) => {
       calls.push({ resolved, system, user });
       if (st.failures > 0) {
@@ -68,16 +80,21 @@ function rig({ settings = {}, resolved = LOCAL, entries = [], demo, demoData } =
       }
       inflight++;
       maxInflight = Math.max(maxInflight, inflight);
-      await tick(); // yield, so an overlapping call would show
+      await nextLoop(); // yield, so an overlapping call would show
       inflight--;
       const label = schema.properties.label.enum[0];
       const text = st.text ? st.text() : JSON.stringify({ label, explanation: 'fine' });
-      return { text, usage: { input: 10, output: 5, cost: st.cost } };
+      const cost = st.costs ? st.costs.shift() : st.cost;
+      return { text, usage: { input: 10, output: 5, cost } };
     },
   };
   const trace = {
     material: async (source, sid, turn) => {
       mats.push(`${source}|${sid}|${turn}`);
+      if (st.busy > 0) {
+        st.busy--;
+        throw Object.assign(new Error('EBUSY: resource busy'), { code: 'EBUSY' });
+      }
       if (st.gone.has(`${sid}|${turn}`)) throw Object.assign(new Error('unknown session'), { status: 404 });
       if (st.none.has(`${sid}|${turn}`)) return null;
       return {
@@ -106,7 +123,10 @@ function rig({ settings = {}, resolved = LOCAL, entries = [], demo, demoData } =
       models,
       store,
       feedback,
-      settings: () => st.settings,
+      settings: () => {
+        st.settingsCalls++;
+        return st.settings;
+      },
       stateFile,
       now: () => clock.t,
       log: (m) => logs.push(m),
@@ -126,6 +146,10 @@ function rig({ settings = {}, resolved = LOCAL, entries = [], demo, demoData } =
     logs,
     stateFile,
     maxInflight: () => maxInflight,
+    // Let a runner that tick() or kick() started finish, without draining: the tests below never call drain().
+    async settle() {
+      for (let i = 0; i < 30; i++) await nextLoop();
+    },
     // The first tick with nothing to judge records "since"; then the clock moves on a little.
     async arm() {
       await engine.tick();
@@ -592,4 +616,408 @@ test('demo mode serves the supplied data and never calls a model', async () => {
   assert.equal(r.calls.length, 0);
   assert.equal(r.mats.length, 0);
   assert.equal(fs.existsSync(r.stateFile), false);
+});
+
+// ---- review fixes ----
+const turnsAfter = (n, from = T0 + 2 * MIN) => Array.from({ length: n }, (_, i) => from + i * MIN);
+const extRig = (over = {}) =>
+  rig({
+    resolved: EXT,
+    settings: { provider: 'openrouter', externalConfirmed: 'openrouter', costCapUSD: 0.05, ...over },
+  });
+
+test('an external model with no known price is refused, so a cost cap can never be bypassed', async () => {
+  const r = extRig();
+  r.st.priced = false;
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(2), T0 + 5 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.calls.length, 0);
+  assert.equal(r.mats.length, 0);
+  const s = await r.engine.status();
+  assert.equal(s.judge.ok, false);
+  assert.equal(s.judge.reason, 'No price known for gpt-x, so the cost cap cannot apply');
+  assert.equal(s.queue, 2);
+
+  r.st.priced = true; // the price table learned the model
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.calls.length, 2);
+});
+
+test('a negative cost cannot lower the total and an unknown one is counted by its estimate', async () => {
+  const r = extRig({ costCapUSD: 10 });
+  r.st.price = { input: 100, output: 0 }; // USD per million input tokens
+  r.st.costs = [-5];
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(1), T0 + 5 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.calls.length, 1);
+  assert.equal((await r.engine.status()).today.cost, 0);
+
+  const n = extRig({ costCapUSD: 10 });
+  n.st.price = { input: 100, output: 0 };
+  n.st.costs = [NaN, null];
+  await n.arm();
+  n.st.entries.push(entry('s', turnsAfter(2), T0 + 5 * MIN));
+  n.clock.t = T0 + 20 * MIN;
+  await n.engine.tick();
+  await n.settle();
+  const { cost } = (await n.engine.status()).today;
+  assert.ok(cost > 0 && cost < 1, `estimated cost counted, got ${cost}`);
+});
+
+test('an external call is estimated from its input and refused when it would pass the budget', async () => {
+  const material = { prompt: 'SECRET-PROMPT-TEXT', answer: 'a', tools: [], available: [] };
+  const built = buildPrompt(R.get('faithfulness'), material);
+  const tokens = (built.system.length + built.user.length) / 4;
+  const perCall = 0.03; // USD
+  const r = extRig({ costCapUSD: 0.05 });
+  r.st.price = { input: (perCall * 1e6) / tokens, output: 0 };
+  r.st.cost = perCall;
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(2), T0 + 5 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.calls.length, 1); // 0.03 spent, a second 0.03 would pass 0.05
+  assert.equal((await r.engine.status()).queue, 1);
+
+  const big = extRig({ costCapUSD: 0.05 });
+  big.st.price = { input: (1 * 1e6) / tokens, output: 0 }; // one call alone costs 1 USD
+  await big.arm();
+  big.st.entries.push(entry('s', turnsAfter(2), T0 + 5 * MIN));
+  big.clock.t = T0 + 20 * MIN;
+  await big.engine.tick();
+  await big.settle();
+  assert.equal(big.calls.length, 0);
+  assert.equal((await big.engine.status()).queue, 0); // dropped, not left to block the queue
+  assert.equal(big.engine.stats().errors, 2);
+});
+
+test('tick alone restarts a stopped queue: the daily cap on the next day', async () => {
+  const r = rig({ settings: { dailyCap: 3 } });
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(5), T0 + 8 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.calls.length, 3);
+  r.clock.t = new Date(2026, 9, 22, 1, 0, 0).getTime();
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.calls.length, 5);
+});
+
+test('tick alone restarts a stopped queue: a transient failure, the gate, and a model that appears', async () => {
+  const t = rig();
+  await t.arm();
+  t.st.entries.push(entry('s', turnsAfter(1), T0 + 5 * MIN));
+  t.clock.t = T0 + 20 * MIN;
+  t.st.failures = 1;
+  await t.engine.tick();
+  await t.settle();
+  assert.equal(t.calls.length, 1);
+  assert.equal(t.store.all().length, 0);
+  await t.engine.tick(); // the next minute
+  await t.settle();
+  assert.equal(t.calls.length, 2);
+  assert.equal(t.store.all().length, 1);
+
+  const g = extRig({ externalConfirmed: undefined });
+  await g.arm();
+  g.st.entries.push(entry('s', turnsAfter(2), T0 + 5 * MIN));
+  g.clock.t = T0 + 20 * MIN;
+  await g.engine.tick();
+  await g.settle();
+  assert.equal(g.calls.length, 0);
+  g.st.settings.externalConfirmed = 'openrouter';
+  await g.engine.tick();
+  await g.settle();
+  assert.equal(g.calls.length, 2);
+
+  const k = extRig({ externalConfirmed: undefined }); // a route can resume it at once through kick()
+  await k.arm();
+  k.st.entries.push(entry('s', turnsAfter(2), T0 + 5 * MIN));
+  k.clock.t = T0 + 20 * MIN;
+  await k.engine.tick();
+  await k.settle();
+  k.st.settings.externalConfirmed = 'openrouter';
+  k.engine.kick();
+  await k.settle();
+  assert.equal(k.calls.length, 2);
+
+  const w = rig({ resolved: WAITING });
+  w.st.entries.push(entry('s', [T0 - MIN, T0], T0));
+  w.clock.t = T0 + 20 * MIN;
+  assert.equal((await w.engine.enqueueSession('claude', 's')).queued, 2);
+  await w.engine.tick();
+  await w.settle();
+  assert.equal(w.calls.length, 0);
+  w.st.resolved = LOCAL;
+  await w.engine.tick();
+  await w.settle();
+  assert.equal(w.calls.length, 2);
+});
+
+test('a call refused for good is tried once; ticks do not repeat it, a forced enqueue does', async () => {
+  const r = rig();
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(1), T0 + 5 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  r.st.failures = 99;
+  r.st.failStatus = 400;
+  for (let i = 0; i < 4; i++) {
+    await r.engine.tick();
+    await r.settle();
+  }
+  assert.equal(r.calls.length, 1);
+  assert.equal(r.engine.stats().errors, 1);
+  r.st.failures = 0;
+  assert.deepEqual(await r.engine.enqueueSession('claude', 's'), { queued: 1 }); // the owner asked
+  await r.settle();
+  assert.equal(r.store.all().length, 1);
+});
+
+test('a model that stays down is given up on, and a tick does not start it again', async () => {
+  const r = rig();
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(1), T0 + 5 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  r.st.failures = 99;
+  r.st.failStatus = 0;
+  for (let i = 0; i < 6; i++) {
+    await r.engine.tick();
+    await r.settle();
+  }
+  assert.equal(r.calls.length, 3);
+  assert.equal(r.engine.stats().errors, 1);
+  r.st.failures = 0;
+  assert.deepEqual(await r.engine.enqueueSession('claude', 's'), { queued: 1 });
+  await r.settle();
+  assert.equal(r.store.all().length, 1);
+});
+
+test('an external call that fails still counts against the daily cap', async () => {
+  const r = extRig();
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(1), T0 + 5 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  r.st.failures = 1;
+  r.st.failStatus = 400;
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.calls.length, 1);
+  assert.equal((await r.engine.status()).today.count, 1);
+
+  const l = rig(); // a local failure sent nothing anywhere
+  await l.arm();
+  l.st.entries.push(entry('s', turnsAfter(1), T0 + 5 * MIN));
+  l.clock.t = T0 + 20 * MIN;
+  l.st.failures = 1;
+  l.st.failStatus = 400;
+  await l.engine.tick();
+  await l.settle();
+  assert.equal((await l.engine.status()).today.count, 0);
+});
+
+test('history is not judged because its file was touched after since', async () => {
+  const r = rig();
+  await r.arm();
+  r.clock.t = T0 + 20 * MIN;
+  r.st.entries.push(entry('old', [T0 - 3 * 3600e3, T0 - 2 * 3600e3], T0 + 2 * MIN)); // mtime after since
+  assert.equal((await r.engine.tick()).queued, 0);
+  // The same session resumed: only the turn that started after since is new.
+  r.st.entries.push(entry('res', [T0 - 3 * 3600e3, T0 - 2 * 3600e3, T0 + 5 * MIN], T0 + 6 * MIN));
+  assert.equal((await r.engine.tick()).queued, 1);
+  await r.settle();
+  assert.deepEqual(r.store.all().map((x) => `${x.target.session}|${x.target.turn}`), ['res|2']);
+});
+
+test('the whole-session verdict waits for a quiet session and is refreshed when it has grown enough', async () => {
+  const r = rig({ settings: { evaluators: only('user_frustration') } });
+  await r.arm();
+  const key = { source: 'claude', session: 's', turn: null, span: null };
+  const verdict = () => r.store.all().find((x) => x.evaluator === 'user_frustration');
+
+  r.st.entries.push(entry('s', turnsAfter(10), T0 + 12 * MIN));
+  r.clock.t = T0 + 30 * MIN; // quiet for 18 minutes: still live
+  assert.equal((await r.engine.tick()).queued, 0);
+  r.clock.t = T0 + 50 * MIN; // quiet for 38 minutes
+  assert.equal((await r.engine.tick()).queued, 1);
+  await r.settle();
+  assert.equal(verdict().turns, 10);
+  assert.equal(r.calls.length, 1);
+  assert.deepEqual(verdict().target, key);
+
+  r.st.entries[0] = entry('s', turnsAfter(14), T0 + 60 * MIN); // 14 < 10 + 5
+  r.clock.t = T0 + 100 * MIN;
+  assert.equal((await r.engine.tick()).queued, 0);
+  r.st.entries[0] = entry('s', turnsAfter(15), T0 + 61 * MIN); // 15 = 10 + max(5, 5)
+  assert.equal((await r.engine.tick()).queued, 1);
+  await r.settle();
+  assert.equal(r.calls.length, 2);
+  assert.equal(r.store.all().length, 1); // the newest replaced the old under one key
+  assert.equal(verdict().turns, 15);
+  r.clock.t = T0 + 200 * MIN;
+  assert.equal((await r.engine.tick()).queued, 0);
+
+  // Nothing is refreshed while the session is live, even when it has doubled.
+  r.st.entries[0] = entry('s', turnsAfter(40), r.clock.t - 5 * MIN);
+  assert.equal((await r.engine.tick()).queued, 0);
+});
+
+test('enqueueSession leaves out the session verdict while the session is live', async () => {
+  const r = rig({ settings: { evaluators: only('faithfulness', 'user_frustration') } });
+  r.st.entries.push(entry('s', [T0 - 20 * MIN, T0 - 10 * MIN], T0 - 5 * MIN));
+  assert.deepEqual(await r.engine.enqueueSession('claude', 's'), { queued: 2 }); // two turns, no session job
+  await r.settle();
+  assert.deepEqual(r.store.all().map((x) => x.evaluator), ['faithfulness', 'faithfulness']);
+  r.clock.t = T0 + 40 * MIN; // quiet now
+  assert.deepEqual(await r.engine.enqueueSession('claude', 's'), { queued: 1 });
+});
+
+test('a gateway row whose id is not a string is ignored', async () => {
+  const r = rig();
+  await r.arm();
+  r.st.runs = [{ key: 42, source: 'gateway', end: T0 + 2 * MIN, turns: 1 }];
+  r.clock.t = T0 + 20 * MIN;
+  assert.deepEqual(await r.engine.tick(), { queued: 0 });
+});
+
+test('a job that throws unexpectedly leaves the queue and can be queued again', async () => {
+  const r = extRig();
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(1), T0 + 5 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  r.st.priceThrows = true;
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.engine.stats().errors, 1);
+  assert.equal((await r.engine.status()).queue, 0);
+  r.st.priceThrows = false;
+  assert.deepEqual(await r.engine.enqueueSession('claude', 's'), { queued: 1 }); // not stuck as "pending"
+  await r.settle();
+  assert.equal(r.calls.length, 1);
+});
+
+test('a file that is busy is read again later; a vanished one is not', async () => {
+  const r = rig();
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(1), T0 + 5 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  r.st.busy = 1;
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.mats.length, 1);
+  assert.equal(r.store.all().length, 0);
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.mats.length, 2);
+  assert.equal(r.store.all().length, 1);
+
+  const g = rig();
+  await g.arm();
+  g.st.entries.push(entry('s', turnsAfter(1), T0 + 5 * MIN));
+  g.clock.t = T0 + 20 * MIN;
+  g.st.busy = 99;
+  for (let i = 0; i < 5; i++) {
+    await g.engine.tick();
+    await g.settle();
+  }
+  assert.equal(g.mats.length, 3); // three tries, then given up
+  assert.equal(g.engine.stats().errors, 1);
+});
+
+test('the day never moves back when the clock does', async () => {
+  const r = rig({ settings: { dailyCap: 2 } });
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(3), T0 + 8 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.calls.length, 2);
+  r.clock.t = new Date(2026, 9, 20, 10, 0, 0).getTime(); // yesterday
+  await r.engine.tick();
+  await r.settle();
+  const s = await r.engine.status();
+  assert.equal(s.today.count, 2);
+  assert.equal(s.paused, 'daily cap');
+  assert.equal(r.calls.length, 2);
+});
+
+test('an unchanged session is not looked at again, and one not touched since "since" is never looked at', async () => {
+  const reads = { n: 0 };
+  const counted = (times) =>
+    times.map((ts) => {
+      const a = [0, 0];
+      Object.defineProperty(a, 1, {
+        get() {
+          reads.n++;
+          return ts;
+        },
+      });
+      return a;
+    });
+  const r = rig();
+  await r.arm();
+  const e = entry('s', [], T0 + 5 * MIN);
+  e.result.sessions.s.turns = counted(turnsAfter(2));
+  const old = entry('old', [], T0 - 3600e3);
+  old.result.sessions.old.turns = counted([T0 - 7200e3]);
+  r.st.entries.push(e, old);
+  r.clock.t = T0 + 20 * MIN;
+  await r.engine.tick();
+  await r.settle();
+  assert.ok(reads.n > 0);
+  const first = reads.n;
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(reads.n, first, 'the second tick read nothing');
+  assert.equal(r.calls.length, 2);
+});
+
+test('settings are read once per tick', async () => {
+  const r = rig();
+  await r.arm();
+  r.st.settingsCalls = 0;
+  await r.engine.tick();
+  assert.equal(r.st.settingsCalls, 1);
+});
+
+test('evaluators named for a job that is already queued are merged into it', async () => {
+  const r = rig({ settings: { judge: false, evaluators: only('relevance', 'faithfulness') } });
+  r.st.entries.push(entry('s', [T0 - 20 * MIN], T0 - 10 * MIN));
+  assert.deepEqual(await r.engine.enqueueSession('claude', 's', ['relevance']), { queued: 1 });
+  assert.deepEqual(await r.engine.enqueueSession('claude', 's', ['faithfulness']), { queued: 1 });
+  assert.deepEqual(await r.engine.enqueueSession('claude', 's', ['faithfulness']), { queued: 0 });
+  assert.equal((await r.engine.status()).queue, 1);
+  r.st.settings.judge = true;
+  r.engine.kick();
+  await r.settle();
+  assert.equal(r.mats.length, 1);
+  assert.deepEqual(r.store.all().map((x) => x.evaluator).sort(), ['faithfulness', 'relevance']);
+});
+
+test('numeric settings given as text are understood; nonsense falls back to the defaults', async () => {
+  const r = rig({ settings: { dailyCap: '2', costCapUSD: 'lots' } });
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(4), T0 + 8 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.calls.length, 2);
+  assert.equal((await r.engine.status()).paused, 'daily cap');
+
+  const d = rig({ settings: { dailyCap: 'many' } }); // falls back to 500
+  await d.arm();
+  d.st.entries.push(entry('s', turnsAfter(4), T0 + 8 * MIN));
+  d.clock.t = T0 + 20 * MIN;
+  await d.engine.tick();
+  await d.settle();
+  assert.equal(d.calls.length, 4);
 });
