@@ -174,7 +174,8 @@ test('call: the Ollama body carries the schema, temperature 0 and no tools', asy
       ],
       stream: false,
       format: SCHEMA,
-      options: { temperature: 0 },
+      think: false,
+      options: { temperature: 0, num_ctx: 8192 },
     });
     assert.equal('tools' in body, false);
   } finally {
@@ -527,6 +528,34 @@ test('cloud: a cloud model named in the settings is refused, and call() refuses 
       return true;
     });
     assert.equal(t.o.requests.filter((r) => r.method === 'POST').length, 0);
+  } finally {
+    await t.close();
+  }
+});
+
+// Final review: Ollama's default context (2048 or 4096 tokens) is smaller than the judge's input budget, and it cuts
+// the start of the context, where the system prompt is, without saying so.
+test('call: Ollama gets a context window sized for the prompt, and no thinking', async () => {
+  const t = await rig({
+    ollama: {
+      'GET /api/tags': tags('qwen3:8b'),
+      'POST /api/chat': { body: { message: { content: '{"label":"ok"}' } } },
+    },
+  });
+  try {
+    const r = await t.m.resolve();
+    for (const [size, want] of [
+      [10, 8192], // the floor
+      [60000, Math.ceil(60003 / 3) + 1024], // sized for the prompt
+      [400000, 32768], // the ceiling
+    ]) {
+      await t.m.call(r, { system: 'SYS', user: 'u'.repeat(size), schema: SCHEMA });
+      const body = t.o.requests.at(-1).body;
+      assert.equal(body.options.num_ctx, want, `user of ${size}`);
+      assert.ok(body.options.num_ctx >= 8192);
+      assert.equal(body.think, false);
+      assert.equal(body.options.temperature, 0);
+    }
   } finally {
     await t.close();
   }
