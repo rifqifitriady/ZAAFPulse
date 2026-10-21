@@ -232,11 +232,16 @@ with your Claude account. No API key is needed, and nothing is set up in the gat
   odd value), the host of every `ANTHROPIC_*_BASE_URL`, and which of `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
   `ANTHROPIC_FOUNDRY_API_KEY` and `ANTHROPIC_FOUNDRY_AUTH_TOKEN` are set (never their values), the Foundry host
   (from `ANTHROPIC_FOUNDRY_RESOURCE` as `<resource>.services.ai.azure.com` when no base URL is set, also shown in the
-  destination), and the cloud account and region (`AWS_PROFILE`, `AWS_REGION`, `ANTHROPIC_VERTEX_PROJECT_ID`,
-  `CLOUD_ML_REGION`: hashed, never shown or stored as text). When any of these
+  destination), the cloud account and region (`AWS_PROFILE`, `AWS_REGION`, `ANTHROPIC_VERTEX_PROJECT_ID`,
+  `CLOUD_ML_REGION`) and the Claude config folder the CLI gets (`CLAUDE_CONFIG_DIR`, which holds the login and so picks
+  the account), all hashed, never shown or stored as text. When any of these
   changes (say you set `ANTHROPIC_BASE_URL` or an API key and restart), nothing is sent and the judge says "The
   Claude Code destination changed; preview again". The daily count and the cost cap apply, and a provider that keeps
   failing is backed off, as for a gateway provider.
+- **Not in the hash.** `HTTPS_PROXY` (and `HTTP_PROXY`, `NO_PROXY`), `NODE_EXTRA_CA_CERTS` and `ANTHROPIC_MODEL` are
+  passed to the CLI as they are and are not part of it. A proxy or an extra CA certificate can change the route the
+  text takes on its way out (a proxy that inspects TLS sees it); `ANTHROPIC_MODEL` can change the model, and so the
+  cost, when no model is set in Settings. Changing them asks for no new preview.
 - **What it costs.** It uses your Claude plan's usage limits, or API billing, whichever your Claude Code uses. The
   cost shown in Settings and counted against the cost cap is what Claude Code reports for each call
   (`total_cost_usd`): the **API-equivalent list price**. On a subscription you are not billed that amount per token,
@@ -252,7 +257,9 @@ with your Claude account. No API key is needed, and nothing is set up in the gat
   evaluator's JSON schema (`--json-schema`). It writes no session (`--no-session-persistence`), and in case one is
   ever written, a session whose folder is the judge's own (`zaafpulse-judge-…`) is never judged. It runs in a new
   empty temporary folder, which is removed after the call, so no project `CLAUDE.md` is picked up; a `CLAUDE.md` in a
-  folder above it was checked to have no effect. The turn text goes in on stdin, never on the command line, which
+  folder above it was checked to have no effect. Whether `--setting-sources ""` also keeps out your user-level
+  `~/.claude/CLAUDE.md` (or `$CLAUDE_CONFIG_DIR/CLAUDE.md`) has not been checked against a signed-in CLI; the judge's own
+  system prompt replaces Claude Code's either way. The turn text goes in on stdin, never on the command line, which
   other users of the machine can see in `ps`. `--bare` is not used: it would turn off the Claude account login.
 - **Time and size limits.** After 120 seconds the CLI and every process it started (its process group, on macOS and
   Linux) get SIGTERM, then SIGKILL 5 seconds later; whatever still holds its output, the call ends within 126
@@ -285,8 +292,10 @@ with your Claude account. No API key is needed, and nothing is set up in the gat
 - **Its environment.** The CLI gets your environment (it needs `HOME` and its login), without the `ZAAFPULSE_*`
   variables and without what a parent Claude Code session, the Agent SDK or VS Code sets for its own children
   (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SSE_PORT`, `CLAUDE_CODE_IDE_*`, `CLAUDE_CODE_SESSION_*`,
-  `CLAUDE_CODE_MESSAGING_*`, `CLAUDE_CODE_PLUGIN_DIRS`, `VSCODE_*` and the like). When `CLAUDE_CONFIG_DIR` lists
-  several folders for the logs, Claude Code gets the first.
+  `CLAUDE_CODE_MESSAGING_*`, `CLAUDE_CODE_PLUGIN_DIRS`, `VSCODE_*` and the like). `CLAUDE_CONFIG_DIR` is passed on
+  only when it is one valid folder, the same one ZAAFPulse reads the logs from (with `~` expanded); a value with a
+  comma, a relative one or one that is too broad is left out, so the CLI uses its default folder, and the server log
+  says so once. `ZAAFPULSE_CLAUDE_DIRS` is ZAAFPulse's own and never reaches the CLI.
 - **From the command line.** `zaafpulse eval` checks the confirmation against the environment of the terminal it runs
   in: a terminal whose `ANTHROPIC_*` variables differ from the dashboard's is a different destination, and is refused
   until it is previewed.

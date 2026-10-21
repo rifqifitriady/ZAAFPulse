@@ -223,7 +223,7 @@ const commands = {
     };
     const env = process.env;
     for (const [name, mod, depth, vars] of [
-      ['Claude Code', require('../lib/claude'), 4, ['CLAUDE_CONFIG_DIR', 'XDG_CONFIG_HOME']],
+      ['Claude Code', require('../lib/claude'), 4, ['ZAAFPULSE_CLAUDE_DIRS', 'CLAUDE_CONFIG_DIR', 'XDG_CONFIG_HOME']],
       ['Codex', require('../lib/codex'), 5, ['CODEX_HOME']],
     ]) {
       let total = 0;
@@ -254,7 +254,7 @@ const commands = {
       add(name, total ? found : 'no logs found', total > 0);
       rows.push(...lines);
       for (const v of vars)
-        rows.push(`    ${v.padEnd(18)} ${env[v] ? `set (${logs.tilde(env[v], home)})` : 'not set'}`);
+        rows.push(`    ${v.padEnd(22)} ${env[v] ? `set (${logs.tilde(env[v], home)})` : 'not set'}`);
     }
     const vaults = platform.registeredVaults();
     add(

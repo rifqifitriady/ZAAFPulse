@@ -424,8 +424,8 @@ The container runs as `node`, so those files must be readable by that user's uid
 
 If the Overview shows 0 sessions, 0 tokens and $0 even though your AI apps are running, ZAAFPulse has not found any logs. Run **`zaafpulse doctor`**: it lists every folder it reads, whether it exists, how many `.jsonl` files it holds and how recent the newest is. The Overview also says where it looked when it finds nothing.
 
-- Claude Code logs are read from `~/.claude/projects`, `~/.config/claude/projects` (or `$XDG_CONFIG_HOME/claude/projects`) and each folder in `CLAUDE_CONFIG_DIR` (comma-separated, each with a `projects/` folder inside). Codex logs are read from `~/.codex/sessions`, or `$CODEX_HOME/sessions`.
-- Using another folder? Set `CLAUDE_CONFIG_DIR` or `CODEX_HOME` **before starting ZAAFPulse**. The background service does not inherit your shell profile; `zaafpulse service install` copies these variables from the shell it runs in, so export them and run it again after any change. Details: see [docs/install.md](docs/install.md#the-background-service-does-not-see-your-shell-variables).
+- Claude Code logs are read from each folder in `ZAAFPULSE_CLAUDE_DIRS` (comma-separated, each with a `projects/` folder inside) when it is set; otherwise from `$CLAUDE_CONFIG_DIR/projects` (one folder, as Claude Code reads it) when that is set; otherwise from `~/.config/claude/projects` (or `$XDG_CONFIG_HOME/claude/projects`) and then `~/.claude/projects`. Codex logs are read from `~/.codex/sessions`, or `$CODEX_HOME/sessions`.
+- Using another folder? Set `CLAUDE_CONFIG_DIR` (or `ZAAFPULSE_CLAUDE_DIRS` for several) or `CODEX_HOME` **before starting ZAAFPulse**. The background service does not inherit your shell profile; `zaafpulse service install` copies these variables from the shell it runs in, so export them and run it again after any change. Details: see [docs/install.md](docs/install.md#the-background-service-does-not-see-your-shell-variables).
 - Claude Desktop, ChatGPT and other chat apps keep no readable logs; they show as apps only.
 
 ### Run it on login (macOS, from source)
