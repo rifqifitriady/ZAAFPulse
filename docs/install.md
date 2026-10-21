@@ -271,7 +271,7 @@ To choose a store explicitly, set `ZAAFPULSE_SECRET_STORE=keychain|libsecret|fil
 zaafpulse [start] [--host H] [--port P] [--data DIR] [--demo] [--open]
 zaafpulse set-password
 zaafpulse service install|uninstall|status|restart [--system]
-zaafpulse status | doctor | open | version | help
+zaafpulse status | doctor | open | version | help   # doctor: where the logs are read from, how many, how fresh
 zaafpulse register-mcp <claude|kiro|antigravity|cursor|vscode|claude-desktop|codex|gemini|windsurf|zed|all> [--remove]
 zaafpulse mcp
 ```
@@ -293,7 +293,46 @@ zaafpulse mcp
 | `ZAAFPULSE_ALLOWED_HOSTS` | | Comma-separated host names to accept in server mode |
 | `ZAAFPULSE_SECRET_STORE` | per OS | `keychain`, `libsecret` or `file` |
 | `ZAAFPULSE_MASTER_KEY` (`_FILE`) | | Key for the encrypted secret file |
+| `CLAUDE_CONFIG_DIR` | | Claude Code's config folder(s), comma-separated; logs are read from each `<folder>/projects`. See [Where the logs are read from](#where-the-logs-are-read-from) |
+| `XDG_CONFIG_HOME` | `~/.config` | Parent of Claude Code's `claude/projects` folder, as newer Claude Code versions use it |
+| `CODEX_HOME` | `~/.codex` | Codex's folder; logs are read from `<folder>/sessions` |
 | `DEMO` | | `1` for synthetic data |
+
+## Where the logs are read from
+
+ZAAFPulse reads Claude Code and Codex transcripts from these folders, in this order, and uses every one that exists:
+
+| Tool | Folders |
+|---|---|
+| Claude Code | each `CLAUDE_CONFIG_DIR` entry plus `/projects` (a comma-separated list; when it is set, only these are read), otherwise `$XDG_CONFIG_HOME/claude/projects` (`~/.config/claude/projects`), then `~/.claude/projects` |
+| Codex | `$CODEX_HOME/sessions`, otherwise `~/.codex/sessions` |
+
+`zaafpulse doctor` prints the folders it resolved, whether each exists, how many `.jsonl` files it holds, how old the newest one is, and whether `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are set. When there are no logs at all, the Overview says so and lists the same folders. Claude Desktop, ChatGPT and other chat apps keep no readable logs; they appear as apps only.
+
+### The background service does not see your shell variables
+
+launchd, systemd and the Windows startup entry start ZAAFPulse without your shell profile. A `CLAUDE_CONFIG_DIR` or `CODEX_HOME` you export in `~/.zshrc` or `~/.bashrc` works for `zaafpulse start` in that terminal, but the service never sees it, so the Overview stays empty. Set it for the service instead, then restart the service. Running `zaafpulse service install` again rewrites the service file, so add the variable again after that.
+
+- **macOS**: add the variable to the `EnvironmentVariables` dictionary of `~/Library/LaunchAgents/com.zaaf.aipulse.server.plist`, then `launchctl unload` and `launchctl load` that file (launchd reads the plist only when it is loaded):
+  ```xml
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>CLAUDE_CONFIG_DIR</key><string>/Users/you/work-claude</string>
+  </dict>
+  ```
+- **Linux (systemd)**: add `Environment=` lines to the unit, or run `systemctl --user edit zaafpulse` (`sudo systemctl edit zaafpulse` for a system service) and put them under `[Service]`, then `systemctl --user daemon-reload` and restart:
+  ```ini
+  [Service]
+  Environment=CLAUDE_CONFIG_DIR=/home/you/work-claude
+  Environment=CODEX_HOME=/home/you/.codex-work
+  ```
+  A system service runs as its own user with a protected home, so it cannot read your logs unless you also grant access; run ZAAFPulse as your user for that.
+- **Windows**: set a user environment variable, then sign out and in again (or restart the startup entry) so the launcher inherits it:
+  ```powershell
+  [Environment]::SetEnvironmentVariable('CLAUDE_CONFIG_DIR', 'C:\Users\you\work-claude', 'User')
+  ```
+
+Run `zaafpulse doctor` from the same shell afterwards to check the folders; to see what the service itself sees, look at the Overview, which reads from the running server.
 
 ## What works where
 

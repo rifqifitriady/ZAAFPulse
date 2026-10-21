@@ -674,6 +674,9 @@ nav a[data-route='settings'] [data-icon] {
   margin-top: 1px;
   flex: none;
 }
+.notice > svg {
+  flex: none; /* a long note must not squeeze its icon */
+}
 .notice b {
   color: var(--text);
 }

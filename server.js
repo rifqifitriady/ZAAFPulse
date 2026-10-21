@@ -37,6 +37,7 @@ const { createIntegrations } = require('./lib/integrations');
 const { createSecrets } = require('./lib/secrets');
 const { createAudit } = require('./lib/audit');
 const { createLocal } = require('./lib/local');
+const { describeRoots } = require('./lib/logroots');
 const register = require('./scripts/register-mcp');
 const platform = require('./lib/platform');
 const { createAuth, isLoopback, originAllowed } = require('./lib/auth');
@@ -161,6 +162,10 @@ const indexer = DEMO
       refresh: async () => {},
     }
   : new Indexer([require('./lib/claude'), require('./lib/codex')], path.join(DIR, '.cache', 'index.json'));
+// The folders the logs are read from (also the only ones the trace explorer may read text from), as the owner's
+// dashboard shows them: ~ paths, whether each exists, and how many files the indexer holds from it.
+const LOG_ROOTS = { claude: require('./lib/claude').ROOTS, codex: require('./lib/codex').ROOTS };
+const logRoots = () => describeRoots(LOG_ROOTS, indexer.files, os.homedir());
 const memo = new Map();
 
 // Integrations are rebuilt whenever config.json changes on disk (they are edited in the file).
@@ -261,7 +266,7 @@ const trace = createTrace({
     : {
         indexer,
         gateway,
-        roots: [require('./lib/claude').ROOT, require('./lib/codex').ROOT],
+        roots: [...LOG_ROOTS.claude, ...LOG_ROOTS.codex],
       }),
 });
 
@@ -565,6 +570,8 @@ const handler = async (req, res) => {
       return send(res, 200, {
         ...(DEMO ? { ...demo.live(), demoReady } : await processes.snapshot()),
         index: indexer.state,
+        // Where the logs are read from, for the Overview's empty state. The owner's own dashboard only (~ paths).
+        ...(DEMO ? {} : { logRoots: logRoots() }),
       });
     }
     if (url.pathname === '/api/insights') {

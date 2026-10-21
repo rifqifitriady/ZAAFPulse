@@ -362,7 +362,7 @@ The installers use your Node.js 18+ or download the official Node.js LTS (checks
 
 ```bash
 zaafpulse status      # is it running?
-zaafpulse doctor      # OS, Node.js, data folder, secret store, logs found, service
+zaafpulse doctor      # OS, Node.js, data folder, secret store, log folders and file counts, service
 zaafpulse eval --judge --session <id>   # judge one session with a local model, no dashboard needed
 zaafpulse open        # open the dashboard, signed in
 zaafpulse service restart | uninstall
@@ -419,6 +419,14 @@ To see the host's Claude Code and Codex logs, mount them read-only where the par
 ```
 
 The container runs as `node`, so those files must be readable by that user's uid. Setup, the master key and proxies: [docs/install.md](docs/install.md#docker).
+
+### Nothing shows up?
+
+If the Overview shows 0 sessions, 0 tokens and $0 even though your AI apps are running, ZAAFPulse has not found any logs. Run **`zaafpulse doctor`**: it lists every folder it reads, whether it exists, how many `.jsonl` files it holds and how recent the newest is. The Overview also says where it looked when it finds nothing.
+
+- Claude Code logs are read from `~/.claude/projects`, `~/.config/claude/projects` (or `$XDG_CONFIG_HOME/claude/projects`) and each folder in `CLAUDE_CONFIG_DIR` (comma-separated, each with a `projects/` folder inside). Codex logs are read from `~/.codex/sessions`, or `$CODEX_HOME/sessions`.
+- Using another folder? Set `CLAUDE_CONFIG_DIR` or `CODEX_HOME` **before starting ZAAFPulse**. The background service does not inherit your shell profile, so set them in the service itself: see [docs/install.md](docs/install.md#the-background-service-does-not-see-your-shell-variables).
+- Claude Desktop, ChatGPT and other chat apps keep no readable logs; they show as apps only.
 
 ### Run it on login (macOS, from source)
 

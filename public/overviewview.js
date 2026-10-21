@@ -25,6 +25,25 @@ function usageBuckets() {
 }
 const bucketLabel = (b) => (b.days > 1 ? `${dayLabel(b.date)} – ${dayLabel(b.last)}` : dayLabel(b.date));
 
+// The slim note above the Overview when there is nothing to show: the first index still running, or no log
+// folder holding any logs. Plain text only (the page escapes it); '' means no note.
+function emptyLogsNote(logRoots, index, sessions) {
+  if (sessions > 0 || !Array.isArray(logRoots) || !index) return '';
+  if (index.indexing)
+    return index.total > 0 ? `Indexing your logs… ${index.done}/${index.total} files` : 'Indexing your logs…';
+  if (index.lastScan == null) return ''; // the first scan has not started yet
+  if (logRoots.some((r) => r.files > 0)) return ''; // logs exist, this range is only quiet
+  const looked = logRoots.map((r) => `${r.path} (${r.exists ? 'empty' : 'missing'})`).join(' · ');
+  return (
+    `No Claude Code or Codex logs found. ZAAFPulse looked in: ${looked}. ` +
+    'Using another folder? Set CLAUDE_CONFIG_DIR or CODEX_HOME before starting ZAAFPulse. ' +
+    'Claude Desktop, ChatGPT and other chat apps keep no readable logs; they show as apps only.'
+  );
+}
+
+const overviewNote = (d) =>
+  emptyLogsNote((state.live || {}).logRoots, (state.live || {}).index || d.index, d.kpis.sessions);
+
 function viewOverview() {
   const d = state.data;
   const k = d.kpis;
@@ -56,6 +75,8 @@ function viewOverview() {
     .map(([v, l]) => `<button data-metric="${v}" aria-pressed="${state.metric === v}">${l}</button>`)
     .join('')}</div>`;
 
+  const logNote = overviewNote(d);
+  state.logNote = logNote; // the live poll re-renders when this changes (indexing progress, first logs found)
   return `<div class="holo-deck">
   ${hero(
     'AI USAGE OVERVIEW',
@@ -63,6 +84,7 @@ function viewOverview() {
     `Here's how AI has been working on this machine over the ${rangeText()}.`,
     `<span class="pill">${icon('calendar', 14)}${today}</span>`,
   )}
+  ${logNote ? `<div class="notice info" role="status">${icon('alert')}<div>${esc(logNote)}</div></div>` : ''}
   <div class="notice">${icon('alert')}<div><b>Cost is an API-equivalent estimate</b> at list price per token. On a Claude Max or ChatGPT plan you are not billed per token.${unpriced}${estimated}</div><a href="#settings">Edit prices ${icon('external', 12)}</a></div>
 
   <section class="holo stage">
@@ -395,3 +417,5 @@ function mountOverview() {
   const canvas = $('#ov-scene');
   if (canvas && state.data) isoStage(canvas, { draw: drawCity, fit: [13.4, 8.9], origin: [0.46, 0.62] });
 }
+
+if (typeof module !== 'undefined') module.exports = { emptyLogsNote };
