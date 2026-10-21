@@ -5748,6 +5748,7 @@ a.trace-link:focus-visible b {
 
 /* detail */
 .tr-detail {
+  container: trdetail / inline-size;
   border-top: 1px solid var(--h-edge);
   background: rgba(10, 12, 40, 0.6);
   padding: 12px 20px 16px;
@@ -5873,6 +5874,243 @@ a.trace-link:focus-visible b {
 }
 .tr-spacer {
   flex: 1;
+}
+
+/* local evals: the turn's pass line, the judge line, the Evals and Notes tabs, Good/Bad, the badges */
+.tr-tev {
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.tr-notice.tr-judge {
+  gap: 6px;
+  padding: 4px 12px;
+  border-color: rgba(169, 139, 255, 0.35);
+  background: rgba(169, 139, 255, 0.07);
+  color: var(--h-text-2);
+  font-size: 11.5px;
+}
+#tr-judge-msg {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tr-judge a {
+  flex: none;
+  color: var(--h-cyan);
+  text-underline-offset: 2px;
+}
+.tr-evals {
+  min-height: 0;
+  overflow: auto;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--h-edge);
+  border-radius: 10px;
+}
+.tr-evhead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 6px 16px;
+  background: #0d1033;
+  border-bottom: 1px solid var(--h-edge);
+  font-size: 12px;
+}
+.tr-rejudge.tr-btn {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 11.5px;
+}
+.tr-evals > .tr-quiet {
+  display: block;
+  padding: 12px 16px;
+}
+.tr-evgroup {
+  padding: 10px 16px 2px;
+  color: var(--h-muted);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 700;
+}
+.tr-evrow {
+  padding: 7px 16px;
+  border-bottom: 1px solid rgba(120, 140, 255, 0.08);
+}
+.tr-evrow:last-child {
+  border-bottom: 0;
+}
+/* A verdict that does not pass carries its colour on the left edge, so a long list reads at a glance. */
+.tr-evrow.fail {
+  box-shadow: inset 2px 0 0 var(--tr-red);
+}
+.tr-evrow.mid {
+  box-shadow: inset 2px 0 0 var(--tr-amber);
+}
+.tr-evtop {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 2em 7.5em;
+  gap: 10px;
+  align-items: center;
+}
+.tr-evt {
+  min-width: 0;
+  font-weight: 600;
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tr-pill {
+  justify-self: end;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.tr-pill.pass {
+  color: var(--tr-green);
+  background: rgba(67, 240, 163, 0.08);
+}
+.tr-pill.mid {
+  color: var(--tr-amber);
+  background: rgba(255, 181, 71, 0.08);
+}
+.tr-pill.fail {
+  color: var(--tr-red);
+  background: rgba(255, 90, 110, 0.1);
+}
+.tr-evs,
+.tr-evm {
+  color: var(--h-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.tr-evs {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.tr-evm {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, Menlo, monospace;
+}
+.tr-trim {
+  margin-left: 6px;
+  color: var(--tr-amber);
+  font-family: system-ui, -apple-system, sans-serif;
+}
+.tr-evx {
+  margin-top: 2px;
+  color: var(--h-text-2);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tr-evx.tr-quiet {
+  color: var(--h-muted);
+  font-style: italic;
+}
+.tr-notes {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+.tr-notes textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 0;
+  resize: none;
+  padding: 10px 14px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--h-edge);
+  border-radius: 10px;
+  color: var(--h-text);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.tr-notes textarea:focus-visible {
+  outline: none;
+  border-color: rgba(77, 232, 255, 0.55);
+}
+.tr-notebar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  font-size: 11.5px;
+}
+#tr-note-state {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#tr-note-count {
+  font-variant-numeric: tabular-nums;
+}
+.tr-notebar .tr-btn {
+  height: 28px;
+}
+.tr-btn[data-trate='good'].on {
+  border-color: rgba(67, 240, 163, 0.6);
+  background: rgba(67, 240, 163, 0.12);
+  color: var(--tr-green);
+}
+.tr-btn[data-trate='bad'].on {
+  border-color: rgba(255, 90, 110, 0.6);
+  background: rgba(255, 90, 110, 0.12);
+  color: var(--tr-red);
+}
+/* A rated session: a small thumb on the corner of its source badge, so it shows in the icon list too. */
+.tr-src {
+  position: relative;
+}
+.tr-fbm {
+  position: absolute;
+  right: -6px;
+  bottom: -6px;
+  padding: 2px;
+  border-radius: 50%;
+  background: var(--h-bg);
+  box-shadow: 0 0 0 1px var(--h-edge);
+  font-size: 10px;
+  line-height: 1;
+}
+/* A narrow detail: the tabs and the action buttons tighten so the span's name and facts keep their room. */
+@container trdetail (max-width: 640px) {
+  .tr-tabs {
+    gap: 2px;
+  }
+  .tr-tabs button {
+    padding: 5px 7px;
+  }
+}
+@container trdetail (max-width: 520px) {
+  .tr-acts .tr-bl {
+    display: none;
+  }
+}
+/* A map node's eval badges hang on its top edge, so the node keeps its size. */
+.tr-nev {
+  position: absolute;
+  top: -9px;
+  right: 14px;
+  display: flex;
+  gap: 4px;
+}
+.tr-nev .tr-ev {
+  background: #11143d;
+  line-height: 16px;
 }
 
 /* splitter */
