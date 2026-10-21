@@ -7,6 +7,8 @@
 
 /* ---------- pure helpers (no DOM; unit-tested in test/trace-ui.test.js) ---------- */
 const TR_NUM = (v) => (Number.isFinite(v) ? v : 0);
+// A table lookup by a value from a log: own keys only, so "constructor" or "__proto__" is just unknown.
+const trOwn = (table, key, fallback) => (typeof key === 'string' && Object.hasOwn(table, key) ? table[key] : fallback);
 const TR_COLOR = {
   session: '#4de8ff',
   turn: '#a98bff',
@@ -17,7 +19,7 @@ const TR_COLOR = {
   unknown: '#8f98cc',
   error: '#ff5a6e',
 };
-const trColor = (s) => (s && s.status === 'error' ? TR_COLOR.error : TR_COLOR[s && s.kind] || TR_COLOR.unknown);
+const trColor = (s) => (s && s.status === 'error' ? TR_COLOR.error : trOwn(TR_COLOR, s && s.kind, TR_COLOR.unknown));
 // The error categories lib/signals.js puts on a span, as the short words the tree and the detail show.
 const TR_SIGNAL = {
   execution: 'command failed',
@@ -55,9 +57,9 @@ function trLabel(s) {
 function trBadges(s) {
   const out = [];
   const sig = (Array.isArray(s.signals) ? s.signals : []).filter((x) => typeof x === 'string');
-  if (s.status === 'error') out.push({ label: TR_SIGNAL[sig[0]] || 'error', tone: 'bad' });
+  if (s.status === 'error') out.push({ label: trOwn(TR_SIGNAL, sig[0], 'error'), tone: 'bad' });
   else if (s.status === 'running') out.push({ label: 'running', tone: 'info' });
-  for (const x of sig.slice(s.status === 'error' ? 1 : 0)) out.push({ label: TR_SIGNAL[x] || x, tone: 'warn' });
+  for (const x of sig.slice(s.status === 'error' ? 1 : 0)) out.push({ label: trOwn(TR_SIGNAL, x, x), tone: 'warn' });
   if (s.kind === 'agent') out.push({ label: 'subagent', tone: 'pink' });
   return out;
 }
@@ -244,9 +246,11 @@ function textFragment(parts, doc, { offset = 0 } = {}) {
   return frag;
 }
 
+// Sources the live endpoint never changes: their sessions are not polled.
+const TR_STATIC = new Set(['gateway', 'kiro', 'gemini', 'antigravity']);
 // Whether a session may still be growing: its last span runs, or it ended under 10 minutes ago.
 function trIsLive(sk, now = Date.now()) {
-  if (!sk || !sk.session) return false;
+  if (!sk || !sk.session || TR_STATIC.has(sk.session.source)) return false;
   const spans = trValid(sk.spans);
   const last = spans.reduce((a, s) => (!a || TR_NUM(s.start) >= TR_NUM(a.start) ? s : a), null);
   if (last && last.status === 'running') return true;
@@ -269,6 +273,29 @@ function trLivePlan(cur, r) {
   return { adopt: true, repaint: trShape(r.skeleton) !== trShape(cur) };
 }
 
+// The move a key press asks for: 'down'/'up' (j/k) or 'prev'/'next' turn (←/→), else null. Only with focus in
+// the explorer or on the page itself, never while typing, never with a modifier (Shift too), and the arrows
+// stay with the tabs, the range buttons, the chip row and the splitter.
+const TR_TYPING = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
+function trNavKey(e, page = []) {
+  if (!e || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return null;
+  const t = e.target;
+  const at = (sel) => !!(t && typeof t.closest === 'function' && t.closest(sel));
+  if (!page.includes(t) && !at('#tr-app')) return null;
+  if (at(TR_TYPING)) return null;
+  if (e.key === 'j' || e.key === 'k') return e.key === 'j' ? 'down' : 'up';
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return null;
+  if (at('[role="tab"], .tr-seg, .tr-chips, #tr-split')) return null;
+  return e.key === 'ArrowLeft' ? 'prev' : 'next';
+}
+// The notice shown up front when the server shows no transcript text (S10), or '' when it does.
+const trOffNote = (settings) =>
+  settings && settings.content === false
+    ? 'Content viewing is off (ZAAFPULSE_CONTENT): titles, prompts, replies and tool output are not shown.'
+    : '';
+// A drag starts with the main button only (a right click opens the menu, a middle click scrolls).
+const trPrimary = (e) => !!e && e.button === 0;
+
 /* ---------- view ---------- */
 const TR_SRC = {
   claude: ['CC', '#d97757', 'Claude Code', 'Claude'],
@@ -278,7 +305,8 @@ const TR_SRC = {
   gemini: ['GM', '#1fa2d6', 'Gemini CLI', 'Gemini'],
   antigravity: ['AG', '#4285f4', 'Antigravity', 'Antigravity'],
 };
-const trSrc = (id) => TR_SRC[id] || [String(id || '?').slice(0, 2).toUpperCase(), '#8f98cc', String(id), String(id)];
+const trSrc = (id) =>
+  trOwn(TR_SRC, id, null) || [String(id || '?').slice(0, 2).toUpperCase(), '#8f98cc', String(id), String(id)];
 const TR_ROW_H = 34; // fixed, so a long tree can be windowed (P4)
 const TR_WINDOW_AT = 300;
 const TR_MAP_MAX = 150;
@@ -311,6 +339,7 @@ function viewTrace() {
       </aside>
       <main class="tr-tree" aria-label="Trace tree">
         <div class="tr-thead"><b id="tr-turn">No session selected</b><span class="tr-ev ok" hidden data-sub="2">relevance</span><span class="tr-muted" id="tr-sum"></span></div>
+        <div class="tr-notice tr-off" id="tr-off" role="status" hidden></div>
         <div class="tr-notice" id="tr-notice" hidden><span id="tr-notice-msg"></span><button type="button" class="tr-btn ghost" id="tr-refresh" hidden>Refresh</button></div>
         <div class="tr-cols" aria-hidden="true"><span>Span</span><span class="tr-tl">Timeline</span><span class="r">Time</span></div>
         <div class="tr-rows" id="tr-rows" role="tree" tabindex="0" aria-label="Spans · j and k move, Enter opens the detail"></div>
@@ -381,7 +410,7 @@ const trBadgeHtml = (badges) =>
 const TR_SHORT = { 'command failed': 'failed', hallucination: 'halluc.', 'process slip': 'slip', environment: 'env' };
 const trRowBadges = (badges) =>
   (badges || [])
-    .map((b) => `<span class="tr-ev ${esc(b.tone)}" title="${esc(b.label)}">${esc(TR_SHORT[b.label] || b.label)}</span>`)
+    .map((b) => `<span class="tr-ev ${esc(b.tone)}" title="${esc(b.label)}">${esc(trOwn(TR_SHORT, b.label, b.label))}</span>`)
     .join('');
 
 function mountTrace() {
@@ -817,7 +846,7 @@ function mountTrace() {
     const sess = sk.session || {};
     const [abbr, , srcName] = trSrc(sess.source);
     const d = Number.isFinite(n.start) && Number.isFinite(n.end) ? fmtDur(n.end - n.start) : '';
-    const sigLabel = TR_SIGNAL[n.signals[0]] || 'failed';
+    const sigLabel = trOwn(TR_SIGNAL, n.signals[0], 'failed');
     const err = n.status === 'error';
     switch (n.kind) {
       case 'session':
@@ -889,7 +918,7 @@ function mountTrace() {
     let html = '<svg class="tr-wires" id="tr-wires" aria-hidden="true"></svg>';
     nodes.forEach((n, i) => {
       const p = nodeParts(n, i);
-      const c = n.status === 'error' ? TR_COLOR.error : TR_COLOR[n.kind] || TR_COLOR.unknown;
+      const c = n.status === 'error' ? TR_COLOR.error : trOwn(TR_COLOR, n.kind, TR_COLOR.unknown);
       const side = i % 2 ? 'r' : 'l';
       const num = String(i + 1).padStart(2, '0');
       const noteHtml = `<div class="tr-note ${side}" style="--c:${c}"><span class="n">${num} · ${esc(p.note[0])}</span>${esc(p.note[1])}</div>`;
@@ -1320,8 +1349,7 @@ function mountTrace() {
   const onKey = (e) => {
     if (!S.alive || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
     const t = e.target;
-    const typing = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
-    if (t && t.closest && t.closest(typing)) return;
+    if (t && t.closest && t.closest(TR_TYPING)) return;
     if (typeof drawer !== 'undefined' && drawer && drawer.kind) return;
     const inApp = t && t.closest && t.closest('#tr-app');
     if (t && t.id === 'tr-split' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
@@ -1340,13 +1368,11 @@ function mountTrace() {
       }
       if (e.key === ' ' || t.closest('button, a')) return;
     }
-    if (e.key === 'j' || e.key === 'k') {
+    const nav = trNavKey(e, [document.body, document.documentElement]);
+    if (nav) {
       e.preventDefault();
-      moveSel(e.key === 'j' ? 1 : -1);
-    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-      if (t && t.closest && t.closest('.tr-chips')) return; // let a sideways chip row scroll
-      e.preventDefault();
-      stepTurn(e.key === 'ArrowLeft' ? -1 : 1);
+      if (nav === 'down' || nav === 'up') moveSel(nav === 'down' ? 1 : -1);
+      else stepTurn(nav === 'prev' ? -1 : 1);
     } else if (e.key === 'Enter' && S.sel) {
       // Outside the explorer Enter keeps its meaning (a sidebar link, a button): only the page itself.
       if (!inApp && t !== document.body && t !== document.documentElement) return;
@@ -1364,6 +1390,7 @@ function mountTrace() {
   }
   const splitter = $('#tr-split');
   splitter.addEventListener('pointerdown', (e) => {
+    if (!trPrimary(e)) return;
     e.preventDefault();
     splitter.setPointerCapture(e.pointerId);
     splitter.classList.add('drag');
@@ -1409,6 +1436,17 @@ function mountTrace() {
   });
 
   /* ---- start: the session in the link, or the newest one ---- */
+  trApi('/api/trace/settings')
+    .then((r) => {
+      const msg = trOffNote(r);
+      if (!S.alive || !msg) return;
+      const off = $('#tr-off');
+      off.textContent = msg;
+      off.hidden = false;
+    })
+    .catch(() => {
+      /* an older server: nothing to say up front */
+    });
   (async () => {
     const params = new URLSearchParams(location.hash.split('?')[1] || '');
     let key = params.get('key');
@@ -1434,4 +1472,20 @@ function mountTrace() {
 }
 
 if (typeof module !== 'undefined')
-  module.exports = { treeRows, mapNodes, textNodes, textFragment, fmtDur, trIsLive, trLabel, trBadges, trShape, trLivePlan };
+  module.exports = {
+    treeRows,
+    mapNodes,
+    textNodes,
+    textFragment,
+    fmtDur,
+    trIsLive,
+    trLabel,
+    trBadges,
+    trShape,
+    trLivePlan,
+    trNavKey,
+    trPrimary,
+    trColor,
+    trSrc,
+    trOffNote,
+  };
