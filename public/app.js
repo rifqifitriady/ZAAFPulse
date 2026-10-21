@@ -220,6 +220,7 @@ const TITLES = {
   overview: 'OVERVIEW',
   squad: 'AI OFFICE',
   sessions: 'SESSIONS',
+  trace: 'TRACE EXPLORER',
   projects: 'PROJECTS',
   agents: 'AGENT SKILLS',
   quality: 'QUALITY & SAFETY',
@@ -1066,6 +1067,7 @@ const VIEWS = {
   overview: viewOverview,
   squad: viewSquadPage,
   sessions: viewSessions,
+  trace: viewTrace,
   projects: viewProjects,
   agents: viewAgents,
   quality: viewQualityPage,
@@ -1128,7 +1130,7 @@ function render(animate = true) {
   unmountBrain();
   unmountStages();
   if (state.route === 'settings') return viewSettings(el);
-  if (!state.data && !['live', 'brain', 'integrations'].includes(state.route)) {
+  if (!state.data && !['live', 'brain', 'integrations', 'trace'].includes(state.route)) {
     el.innerHTML =
       '<div class="grid kpis">' +
       '<div class="skeleton"></div>'.repeat(4) +
@@ -1142,6 +1144,7 @@ function render(animate = true) {
   if (state.route === 'squad') mountSquadPage();
   if (state.route === 'quality') mountQualityPage();
   if (state.route === 'sessions') mountSessions();
+  if (state.route === 'trace') mountTrace();
   if (state.route === 'projects') mountProjects();
   if (state.route === 'skills' && state.sub === 'usage') mountAgents();
   if (state.route === 'integrations') mountIntegrations();
@@ -1297,8 +1300,11 @@ function applyTheme() {
     await loadSummary();
     if (state.route === 'live' && updateLive()) {
       /* patched in place */
-    } else if (!['settings', 'brain', 'squad'].includes(state.route) && !$('#view').contains(document.activeElement))
-      render(false); // squad pages poll on their own
+    } else if (
+      !['settings', 'brain', 'squad', 'trace'].includes(state.route) &&
+      !$('#view').contains(document.activeElement)
+    )
+      render(false); // squad and trace pages poll on their own
     if (drawer.kind && drawer.kind !== 'apps') paintDrawer(false);
   }, 60000);
 })();
