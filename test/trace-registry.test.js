@@ -108,6 +108,25 @@ test('demo mode serves synthetic sessions without files', async () => {
   assert.ok(sk.spans.length > 3);
 });
 
+test('keyFor finds the key of a listed session by source and id, and refuses the rest', async () => {
+  const t = createTrace({ demo: true, listTtlMs: 0 });
+  const rows = t.sessions({});
+  const claude = rows.find((r) => r.source === 'claude');
+  assert.equal(t.keyFor('claude', 'demo-claude-1'), claude.key);
+  assert.equal(t.keyFor('codex', 'demo-codex-1'), rows.find((r) => r.source === 'codex').key);
+  assert.ok((await t.session(t.keyFor('claude', 'demo-claude-1'), {})).spans.length > 3);
+  // A listed id under another source, an unknown id and a path are all just unknown.
+  for (const [src, sid] of [['codex', 'demo-claude-1'], ['claude', 'nope'], ['claude', '../../etc/passwd']])
+    assert.throws(() => t.keyFor(src, sid), (e) => e.status === 404 && /unknown session/.test(e.message), `${src} ${sid}`);
+  for (const [src, sid] of [['', 'demo-claude-1'], ['claude', ''], [undefined, undefined], ['claude', 42]])
+    assert.throws(() => t.keyFor(src, sid), (e) => e.status === 400, `${src} ${sid}`);
+});
+
+test('keyFor sees a file-backed session the listing just picked up', async () => {
+  const t = await make();
+  assert.equal(t.keyFor('claude', 's1'), t.sessions({}).find((r) => r.source === 'claude').key);
+});
+
 // ---- rows and keys ----
 
 test('client rows carry only the allowed fields and no path or size', async () => {
