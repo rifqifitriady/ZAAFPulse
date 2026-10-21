@@ -1,7 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { fakeServer } = require('./helpers');
-const { createModels, externalSystem } = require('../lib/evals/models');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { fakeServer, fakeClaude } = require('./helpers');
+const { createModels, externalSystem, externalPayload } = require('../lib/evals/models');
+const { createClaude } = require('../lib/evals/claude-cli');
 
 const SCHEMA = { type: 'object', properties: { label: { type: 'string' } }, required: ['label'] };
 const tags = (...names) => ({ body: { models: names.map((name) => ({ name })) } });
@@ -9,7 +13,7 @@ const ids = (...names) => ({ body: { data: names.map((id) => ({ id })) } });
 const WAIT = 'Install or start Ollama, or choose a provider';
 
 // Fake Ollama + LM Studio on random ports; "down" is a port that was open and then closed (never 11434/1234).
-async function rig({ ollama, lmstudio, settings = { model: '', provider: 'auto' }, gateway, now } = {}) {
+async function rig({ ollama, lmstudio, settings = { model: '', provider: 'auto' }, gateway, now, claude } = {}) {
   const o = ollama && (await fakeServer(ollama));
   const l = lmstudio && (await fakeServer(lmstudio));
   const dead = await fakeServer({});
@@ -22,6 +26,7 @@ async function rig({ ollama, lmstudio, settings = { model: '', provider: 'auto' 
     ollamaUrl: o ? o.url : deadUrl,
     lmstudioUrl: l ? l.url : deadUrl,
     ...(now ? { now } : {}),
+    claude: claude || createClaude({ env: { ZAAFPULSE_CLAUDE_BIN: path.join(os.tmpdir(), 'zp-no-claude', 'claude') } }),
   });
   return {
     m,
@@ -702,5 +707,146 @@ test('call: an Ollama that refuses "think" is asked again without it, once per m
     assert.equal(other.o.requests.filter((x) => x.method === 'POST').length, 1);
   } finally {
     await other.close();
+  }
+});
+
+// ---- the Claude Code judge (a fake claude; the real one is never started) ----
+const CLAUDE_MISSING = 'Claude Code not found: install it, or set ZAAFPULSE_CLAUDE_BIN';
+function claudeRig(mode = 'ok') {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-models-claude-'));
+  const log = path.join(dir, 'runs.jsonl');
+  const env = { ZAAFPULSE_CLAUDE_BIN: fakeClaude(path.join(dir, 'bin')), FAKE_CLAUDE_MODE: mode, FAKE_CLAUDE_LOG: log };
+  const runs = () =>
+    fs.existsSync(log)
+      ? fs
+          .readFileSync(log, 'utf8')
+          .split('\n')
+          .filter(Boolean)
+          .map((l) => JSON.parse(l))
+          .filter((r) => !r.version)
+      : [];
+  return {
+    claude: createClaude({ env, home: dir, systemDirs: [] }),
+    runs,
+    done: () => fs.rmSync(dir, { recursive: true, force: true }),
+  };
+}
+
+test('claude-code: chosen only by name, as an alias or "default", and waiting when it is not installed', async () => {
+  const c = claudeRig();
+  const pick = async (settings, claude = c.claude) => {
+    const t = await rig({ settings, claude });
+    try {
+      return await t.m.resolve();
+    } finally {
+      await t.close();
+    }
+  };
+  try {
+    const on = { ok: true, kind: 'claude-cli', provider: 'claude-code' };
+    assert.deepEqual(await pick({ provider: 'claude-code', model: '' }), { ...on, model: 'default' });
+    assert.deepEqual(await pick({ provider: 'claude-code', model: 'haiku' }), { ...on, model: 'haiku' });
+    assert.deepEqual(await pick({ provider: 'claude-code', model: 'claude-sonnet-5-5' }), {
+      ...on,
+      model: 'claude-sonnet-5-5',
+    });
+    // Never picked by Auto, even when it is installed and nothing local runs.
+    assert.deepEqual(await pick({ provider: 'auto', model: '' }), { ok: false, waiting: true, reason: WAIT });
+    assert.deepEqual(await pick({ provider: 'auto', model: 'haiku' }), { ok: false, waiting: true, reason: WAIT });
+    // A model name that could be read as a flag waits, and so does a missing CLI.
+    const bad = await pick({ provider: 'claude-code', model: '--bare' });
+    assert.equal(bad.ok, false);
+    assert.match(bad.reason, /model name/);
+    const none = await rig({ settings: { provider: 'claude-code', model: 'haiku' } });
+    try {
+      assert.deepEqual(await none.m.resolve(), { ok: false, waiting: true, reason: CLAUDE_MISSING });
+    } finally {
+      await none.close();
+    }
+  } finally {
+    c.done();
+  }
+});
+
+test('claude-code: a gateway provider with the same id is never the judge', async () => {
+  const sent = [];
+  const gateway = {
+    judge: {
+      providers: () => [{ id: 'claude-code', label: 'Gateway one', models: ['m1'] }],
+      hasPrice: () => true,
+      complete: async (a) => (sent.push(a), { text: '{}', usage: {} }),
+    },
+  };
+  const t = await rig({ gateway, settings: { provider: 'claude-code', model: 'm1' } });
+  try {
+    assert.deepEqual(await t.m.resolve(), { ok: false, waiting: true, reason: CLAUDE_MISSING });
+    assert.equal(sent.length, 0);
+  } finally {
+    await t.close();
+  }
+});
+
+test('claude-code: it is priced (the CLI reports cost) and has an estimate price for the cost cap', async () => {
+  const c = claudeRig();
+  const t = await rig({ settings: { provider: 'claude-code', model: 'haiku' }, claude: c.claude });
+  try {
+    const r = await t.m.resolve();
+    assert.equal(t.m.priced(r), true);
+    for (const model of ['haiku', 'sonnet', 'opus', 'default', 'claude-something-new']) {
+      const p = t.m.priceOf({ ...r, model });
+      assert.ok(p.input > 0 && p.output > 0, model);
+    }
+    assert.ok(t.m.priceOf({ ...r, model: 'haiku' }).input < t.m.priceOf({ ...r, model: 'default' }).input);
+  } finally {
+    await t.close();
+    c.done();
+  }
+});
+
+test('claude-code: the call sends the external payload (PII masked) on stdin, and reports cost and model', async () => {
+  const c = claudeRig();
+  const t = await rig({ settings: { provider: 'claude-code', model: '' }, claude: c.claude });
+  try {
+    const r = await t.m.resolve();
+    const system = 'Judge this. Owner is ana@example.com';
+    const user = 'From /Users/ana/work, call +62 812-3456-7890 or mail ana@example.com';
+    const out = await t.m.call(r, { system, user, schema: SCHEMA });
+    const preview = externalPayload(system, user, SCHEMA);
+    const [run] = c.runs();
+    assert.deepEqual(
+      { system: run.argv[run.argv.indexOf('--system-prompt') + 1], user: run.stdin },
+      preview,
+      'what is sent is what the preview shows',
+    );
+    assert.doesNotMatch(run.stdin + run.argv.join(' '), /ana@example|\/Users\/ana|812-3456/);
+    assert.equal(run.argv.includes('--model'), false, '"default" leaves the model to Claude Code');
+    assert.deepEqual(JSON.parse(run.argv[run.argv.indexOf('--json-schema') + 1]), SCHEMA);
+    assert.deepEqual(out.usage, { input: 1602, output: 40, cost: 0.0005 });
+    assert.equal(out.model, 'claude-haiku-5-5');
+    assert.equal(out.text, JSON.stringify({ label: 'ok', explanation: 'fake verdict' }));
+
+    const h = await rig({ settings: { provider: 'claude-code', model: 'haiku' }, claude: c.claude });
+    try {
+      await h.m.call(await h.m.resolve(), { system, user, schema: SCHEMA });
+      const argv = c.runs()[1].argv;
+      assert.equal(argv[argv.indexOf('--model') + 1], 'haiku');
+    } finally {
+      await h.close();
+    }
+  } finally {
+    await t.close();
+    c.done();
+  }
+});
+
+test('claude-code: an error from the CLI keeps its status', async () => {
+  const c = claudeRig('limit');
+  const t = await rig({ settings: { provider: 'claude-code', model: 'haiku' }, claude: c.claude });
+  try {
+    const r = await t.m.resolve();
+    await assert.rejects(t.m.call(r, { system: 's', user: 'u', schema: SCHEMA }), (e) => e.status === 429);
+  } finally {
+    await t.close();
+    c.done();
   }
 });

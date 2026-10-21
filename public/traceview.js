@@ -325,6 +325,9 @@ function trEvalTone(r, ev) {
   return r.label === labels[labels.length - 1] ? 'fail' : 'mid';
 }
 const TR_TONE_RANK = { fail: 0, mid: 1, pass: 2 };
+// The model that answered when the judge said (Claude Code's "haiku" is an alias), else the one chosen.
+const trJudgeModel = (j) =>
+  (j && ((typeof j.used === 'string' && j.used) || (typeof j.model === 'string' && j.model))) || 'judge';
 // One row per verdict for the Evals tab: the turn's verdicts before the session's, failing first, then in the
 // registry's order. Values stay plain strings; the page fills them in with textContent (S1).
 function evalRows(results, evaluators) {
@@ -341,7 +344,7 @@ function evalRows(results, evaluators) {
       tone: trEvalTone(r, ev),
       score: Number.isFinite(r.score) ? r.score : null,
       kind: r.kind === 'code' ? 'code' : 'judge',
-      model: r.kind === 'code' ? 'code' : (r.judge && typeof r.judge.model === 'string' && r.judge.model) || 'judge',
+      model: r.kind === 'code' ? 'code' : trJudgeModel(r.judge),
       trimmed: !!r.trimmed,
       explanation: typeof r.explanation === 'string' ? r.explanation : null,
       evidence: (Array.isArray(r.evidence) ? r.evidence : [])

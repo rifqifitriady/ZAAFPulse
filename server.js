@@ -30,6 +30,7 @@ const { createTrace, contentDefaultOff } = require('./lib/trace');
 const { createEvalEngine } = require('./lib/evals/engine');
 const { createEvalStore, createFeedbackStore } = require('./lib/evals/store');
 const { createModels } = require('./lib/evals/models');
+const { createClaude } = require('./lib/evals/claude-cli');
 const { createEvalApi } = require('./lib/evals/api');
 const { createPriceSync } = require('./lib/price-sync');
 const { createOpenRouter } = require('./lib/openrouter');
@@ -284,12 +285,15 @@ if (DEMO)
       rating: f.rating,
       note: f.note,
     });
+// One finder for the Claude Code CLI, shared by the judge and the settings page (which says whether it was found).
+const claudeCli = createClaude(DEMO ? { env: { ZAAFPULSE_CLAUDE_BIN: path.join(demoDir, 'no-claude') } } : {});
 const evalEngine = createEvalEngine({
   trace,
   indexer,
   models: createModels({
     settings: () => evalApi.settings(),
     gateway,
+    claude: claudeCli,
     ...(DEMO ? { fetchImpl: () => Promise.reject(new Error('demo mode makes no calls')) } : {}),
   }),
   store: createEvalStore({ file: path.join(evalDir, 'evals.jsonl') }),
@@ -306,6 +310,7 @@ const evalApi = createEvalApi({
   feedback: evalFeedback,
   gateway,
   contentOff,
+  claudeAvailable: () => claudeCli.available(),
   settings: {
     get: () => rawConfig().evals,
     save: (evals) => {

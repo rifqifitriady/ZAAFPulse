@@ -10,7 +10,7 @@ const net = require('net');
 const path = require('path');
 const { spawn } = require('child_process');
 const { createGateway } = require('../lib/gateway');
-const { fakeServer, secretsFor, NO_JUDGE_PORTS } = require('./helpers');
+const { fakeServer, secretsFor, NO_JUDGE_PORTS, fakeClaude } = require('./helpers');
 
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const ROOT = path.join(__dirname, '..');
@@ -120,6 +120,7 @@ test('evals api: demo results, summary, status and the shape of a result', async
       assert.equal(typeof r.pass, 'boolean');
       assert.equal(Object.hasOwn(r, 'target'), false, 'no raw session id in a result');
       assert.equal(Object.hasOwn(r, 'key'), false);
+      if (r.judge) assert.deepEqual(Object.keys(r.judge), ['kind', 'model', 'provider', 'used']);
     }
     assert.ok(list.some((r) => r.pass) && list.some((r) => !r.pass), 'a mix of pass and fail');
     const codexList = (await c.call(`/api/evals?key=${await keyOf(c, 'codex')}`)).json.results;
@@ -660,6 +661,94 @@ test('evals api: a server probes the judge ports it was given, not the default o
     await s.stop();
     await ollama.close();
     await lmstudio.close();
+  }
+});
+
+test('evals api: Claude Code is a provider of its own, previewed like an external one', async () => {
+  const data = tmp('zp-evals-api-claude-');
+  writeClaudeLog(data);
+  // A gateway provider that is also called claude-code: the built-in one wins and it is not listed twice.
+  fs.writeFileSync(
+    path.join(data, 'config.json'),
+    JSON.stringify({ gateway: { providers: [external('claude-code'), external('extone')] } }),
+  );
+  const binDir = tmp('zp-evals-api-claude-bin-');
+  const log = path.join(binDir, 'runs.jsonl');
+  const s = await startServer(
+    { ZAAFPULSE_AUTH: 'none', ZAAFPULSE_CONTENT: 'on', ZAAFPULSE_CLAUDE_BIN: fakeClaude(binDir), FAKE_CLAUDE_LOG: log },
+    { data },
+  );
+  const c = client(s.base);
+  try {
+    const cur = (await c.call('/api/evals/settings')).json;
+    const cc = cur.providers.filter((p) => p.id === 'claude-code');
+    assert.deepEqual(cc, [
+      {
+        id: 'claude-code',
+        label: 'Claude Code (your Claude login)',
+        kind: 'claude-cli',
+        external: true,
+        available: true,
+        models: ['haiku', 'sonnet', 'opus'],
+      },
+    ]);
+    assert.equal(cur.providers.find((p) => p.id === 'extone').external, true);
+
+    const set = (b) => c.post('/api/evals/settings', b);
+    assert.equal((await set({ provider: 'claude-code', model: 'haiku' })).status, 200);
+    let now = (await c.call('/api/evals/settings')).json;
+    assert.equal(now.provider, 'claude-code');
+    assert.equal(now.externalConfirmed, null);
+    const st = (await c.call('/api/evals/status')).json;
+    assert.equal(st.judge.kind, 'claude-cli');
+    assert.equal(st.judge.reason, 'Confirm the preview before sending to claude-code');
+
+    let key;
+    for (let i = 0; i < 60 && !key; i++) {
+      const row = (await c.call('/api/trace/sessions')).json.sessions.find((r) => r.source === 'claude');
+      if (row) key = row.key;
+      else await new Promise((r) => setTimeout(r, 250));
+    }
+    assert.ok(key);
+    assert.equal((await c.post('/api/evals/preview', { key, provider: 'extone' })).status, 400, 'not the selected one');
+    const p = await c.post('/api/evals/preview', { key, provider: 'claude-code' });
+    c.bodies.pop();
+    assert.equal(p.status, 200);
+    assert.match(p.json.system, /Answer with JSON only, matching this schema: \{/);
+    assert.doesNotMatch(p.text, /ant-api03|abcdefghijklmnop/, 'the key is masked');
+    now = (await c.call('/api/evals/settings')).json;
+    assert.equal(now.externalConfirmed, 'claude-code');
+    // History is not judged on its own, so the preview alone starts nothing.
+    const lines = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n') : [];
+    assert.deepEqual(lines.filter((l) => l && !l.includes('"version"')), []);
+    noPaths(c.bodies);
+  } finally {
+    await s.stop();
+  }
+
+  // Content off: the preview is refused, and without a claude binary it is listed as not available.
+  const data2 = tmp('zp-evals-api-claude-off-');
+  writeClaudeLog(data2);
+  fs.writeFileSync(path.join(data2, 'config.json'), JSON.stringify({ evals: { provider: 'claude-code' } }));
+  const s2 = await startServer({ ZAAFPULSE_AUTH: 'none', ZAAFPULSE_CONTENT: 'off' }, { data: data2 });
+  const c2 = client(s2.base);
+  try {
+    const cur = (await c2.call('/api/evals/settings')).json;
+    assert.equal(cur.providers.find((p) => p.id === 'claude-code').available, false);
+    const st = (await c2.call('/api/evals/status')).json;
+    assert.equal(st.judge.reason, 'Claude Code not found: install it, or set ZAAFPULSE_CLAUDE_BIN');
+    let key;
+    for (let i = 0; i < 60 && !key; i++) {
+      const row = (await c2.call('/api/trace/sessions')).json.sessions.find((r) => r.source === 'claude');
+      if (row) key = row.key;
+      else await new Promise((r) => setTimeout(r, 250));
+    }
+    const refused = await c2.post('/api/evals/preview', { key, provider: 'claude-code' });
+    assert.equal(refused.status, 403);
+    assert.equal((await c2.call('/api/evals/settings')).json.externalConfirmed, null);
+    noPaths(c2.bodies);
+  } finally {
+    await s2.stop();
   }
 });
 

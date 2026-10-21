@@ -178,6 +178,8 @@ test('service: the log folder variables are carried into the unit, plist and Win
     XDG_CONFIG_HOME: '/home/me/.cfg',
   });
   assert.deepEqual(service.settings({ CLAUDE_CONFIG_DIR: '' }), {}, 'an empty value is not carried');
+  // The Claude Code judge's binary, named by hand: a service has no shell PATH to find it on.
+  assert.deepEqual(service.settings({ ZAAFPULSE_CLAUDE_BIN: '/opt/claude' }), { ZAAFPULSE_CLAUDE_BIN: '/opt/claude' });
   const cmd = ['/usr/bin/node', '/app/bin/zaafpulse.js', 'start'];
   const unit = service.unitText(cmd, env, { system: false });
   assert.match(unit, /Environment=CLAUDE_CONFIG_DIR=\/home\/me\/work-claude,\/home\/me\/other/);
