@@ -199,6 +199,7 @@ test('judge: providers() leaves out disabled and unapproved providers and aliase
       { ...base, id: 'new', models: ['c'], approved: false },
       { ...base, id: 'mine', preset: 'vllm', models: ['d'], tier: 'private', approved: undefined },
     ],
+    routes: [{ name: 'router/smart', targets: ['on/a'], strategy: 'fallback' }],
   };
   const gateway = createGateway({
     dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'acc-gw-')),
@@ -213,6 +214,10 @@ test('judge: providers() leaves out disabled and unapproved providers and aliase
   assert.deepEqual(gateway.judge.providers()[0], { id: 'on', label: 'on', models: ['a'] });
   assert.equal(gateway.judge.aliased('fast'), true);
   assert.equal(gateway.judge.aliased('on/a'), false);
+  // A route name is refused by the judge too: a provider id "router" would otherwise reach it.
+  assert.equal(gateway.judge.routed('router/smart'), true);
+  assert.equal(gateway.judge.routed('router/other'), false);
+  assert.equal(gateway.judge.routed('on/a'), false);
 });
 
 test('judge: an aborted signal cancels the upstream request and no other target is tried', async () => {

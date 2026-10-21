@@ -324,3 +324,36 @@ test('latest: the newest result of any model for a target and evaluator version,
   again.compact();
   assert.equal(again.latest(t, 'relevance', 1).label, 'relevant');
 });
+
+// Final review: the CLI appends to the same file as a running dashboard, whose map was loaded earlier.
+test('compaction merges what another writer appended since the load, latest per key by ts', () => {
+  const file = tmp();
+  const dash = createEvalStore({ file, maxBytes: 1e9 });
+  dash.put(R(T(1), 'relevance', 'partly', 'qwen3', { ts: 1000 }));
+  const cli = createEvalStore({ file });
+  cli.put(R(T(2), 'relevance', 'relevant', 'qwen3', { ts: 2000 })); // only the CLI knows it
+  cli.put(R(T(1), 'relevance', 'relevant', 'qwen3', { ts: 3000 })); // newer than the dashboard's
+  dash.put(R(T(3), 'relevance', 'off-topic', 'qwen3', { ts: 4000 }));
+  dash.compact();
+  const after = createEvalStore({ file });
+  const label = (turn) => after.get(resultKey(T(turn), 'relevance', 1, 'qwen3')).label;
+  assert.equal(after.all().length, 3);
+  assert.equal(label(1), 'relevant', 'the newer CLI result wins');
+  assert.equal(label(2), 'relevant', 'the CLI result is kept');
+  assert.equal(label(3), 'off-topic');
+  assert.equal(lines(file).length, 3);
+  assert.equal(dash.get(resultKey(T(2), 'relevance', 1, 'qwen3')).label, 'relevant', 'the dashboard sees it now');
+
+  // The size-triggered compaction inside put merges too, and an older line on disk does not win over memory.
+  const small = tmp();
+  const a = createEvalStore({ file: small, maxBytes: 1500 });
+  a.put(R(T(1), 'relevance', 'relevant', 'qwen3', { ts: 5000 }));
+  const b = createEvalStore({ file: small });
+  b.put(R(T(1), 'relevance', 'partly', 'qwen3', { ts: 10 })); // older by ts
+  b.put(R(T(9), 'relevance', 'relevant', 'qwen3', { ts: 6000 }));
+  for (let i = 0; i < 8; i++) a.put(R(T(2), 'relevance', 'relevant', 'qwen3', { ts: 7000 + i })); // re-judged
+  assert.ok(lines(small).length < 11, 'a compaction ran');
+  const c = createEvalStore({ file: small });
+  assert.equal(c.get(resultKey(T(1), 'relevance', 1, 'qwen3')).label, 'relevant');
+  assert.ok(c.get(resultKey(T(9), 'relevance', 1, 'qwen3')), 'the other writer kept its result');
+});
