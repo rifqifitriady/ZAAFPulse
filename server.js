@@ -27,6 +27,10 @@ const {
 } = require('./lib/integration-config');
 const { createGateway } = require('./lib/gateway');
 const { createTrace, contentDefaultOff } = require('./lib/trace');
+const { createEvalEngine } = require('./lib/evals/engine');
+const { createEvalStore, createFeedbackStore } = require('./lib/evals/store');
+const { createModels } = require('./lib/evals/models');
+const { createEvalApi } = require('./lib/evals/api');
 const { createPriceSync } = require('./lib/price-sync');
 const { createOpenRouter } = require('./lib/openrouter');
 const { createIntegrations } = require('./lib/integrations');
@@ -177,6 +181,7 @@ function getIntegrations() {
       indexer,
       // These tools also answer gateway API keys on /mcp: no transcript-derived title may leave there.
       contentOff: true,
+      dataDir: DIR,
       demo: DEMO, // the demo trace sessions only: the stand-in indexer has no entries, and HOME is not read
     });
     const registry = createIntegrations({ config, secrets: createSecrets(), audit, local });
@@ -259,6 +264,61 @@ const trace = createTrace({
         roots: [require('./lib/claude').ROOT, require('./lib/codex').ROOT],
       }),
 });
+
+// Local evals: judge models read the masked text of finished turns, one queue, local first.
+// Settings live in config.json under "evals" (stored values only; defaults are filled in when read), results and
+// feedback in .data/. Demo keeps all of it in the throwaway folder and in memory.
+const evalDir = DEMO ? demoDir : path.join(DIR, '.data');
+const evalDemo = DEMO ? demo.evalsDemo() : null;
+const evalFeedback = createFeedbackStore({ file: path.join(evalDir, 'feedback.jsonl') });
+if (DEMO)
+  for (const f of evalDemo.feedback)
+    evalFeedback.set({
+      target: { source: f.source, session: f.session, turn: f.turn, span: null },
+      rating: f.rating,
+      note: f.note,
+    });
+const evalEngine = createEvalEngine({
+  trace,
+  indexer,
+  models: createModels({
+    settings: () => evalApi.settings(),
+    gateway,
+    ...(DEMO ? { fetchImpl: () => Promise.reject(new Error('demo mode makes no calls')) } : {}),
+  }),
+  store: createEvalStore({ file: path.join(evalDir, 'evals.jsonl') }),
+  feedback: evalFeedback,
+  settings: () => evalApi.settings(),
+  stateFile: path.join(evalDir, 'evals-state.json'),
+  log: (m) => console.error(m),
+  demo: DEMO,
+  demoData: evalDemo || {},
+});
+const evalApi = createEvalApi({
+  trace,
+  engine: evalEngine,
+  feedback: evalFeedback,
+  gateway,
+  contentOff,
+  settings: {
+    get: () => rawConfig().evals,
+    save: (evals) => {
+      if (DEMO) {
+        rawCache.value = { ...rawCache.value, evals };
+        return;
+      }
+      const raw = { ...rawConfig(), evals };
+      fs.writeFileSync(`${CONFIG_FILE}.tmp`, JSON.stringify(raw, null, 2));
+      fs.renameSync(`${CONFIG_FILE}.tmp`, CONFIG_FILE);
+      rawCache = { mtime: fs.statSync(CONFIG_FILE).mtimeMs, value: raw };
+    },
+  },
+});
+// A judging pass after each index refresh. It is only queued here: a failure must not break the refresh.
+const evalTick = () =>
+  Promise.resolve()
+    .then(() => evalEngine.tick())
+    .catch(() => console.error('evals: the judging pass failed'));
 
 // Second brain sources: Obsidian by default, plus Logseq, Notion, Tana, Roam, mem.ai, Reflect, Heybrain,
 // PARA folders, the RAG knowledge bases and vector databases. Settings in config.json under "brain";
@@ -589,6 +649,18 @@ const handler = async (req, res) => {
         return traceError(res, err);
       }
     }
+    // Local evals and feedback: results per session, trends, the judge model's status, settings and the preview.
+    // Behind the same sign-in; a session is named by its trace key, and the only text out is the masked preview.
+    {
+      const hit = await evalApi.route({
+        method: req.method,
+        path: url.pathname,
+        query: url.searchParams,
+        contentType: req.headers['content-type'],
+        readBody: () => readBody(req),
+      });
+      if (hit) return send(res, hit.status, hit.body);
+    }
     if (url.pathname === '/api/logs') {
       return send(res, 200, DEMO ? reqlogs.demoLogs() : reqlogs.logs());
     }
@@ -840,7 +912,10 @@ const handler = async (req, res) => {
     if (url.pathname === '/api/rescan' && req.method === 'POST') {
       if (!(req.headers['content-type'] || '').startsWith('application/json'))
         return send(res, 415, { error: 'json only' });
-      indexer.refresh().then(() => memo.clear());
+      indexer.refresh().then(() => {
+        memo.clear();
+        evalTick();
+      });
       return send(res, 202, indexer.state);
     }
 
@@ -872,8 +947,11 @@ server.listen(PORT, HOST, () => {
   if (auth.mode === 'local') console.log('Sign-in: only this OS account; open the dashboard with `zaafpulse open`');
   console.log(`Data: ${DIR}`);
   const t = Date.now();
-  indexer.refresh().then(() => console.log(`Indexed logs in ${((Date.now() - t) / 1000).toFixed(1)}s`));
-  setInterval(() => indexer.refresh(), RESCAN_MS).unref();
+  indexer.refresh().then(() => {
+    console.log(`Indexed logs in ${((Date.now() - t) / 1000).toFixed(1)}s`);
+    evalTick();
+  });
+  setInterval(() => indexer.refresh().then(evalTick), RESCAN_MS).unref();
   // Live prices: refresh now if the cached list is older than 12 hours, then check hourly. Never in demo mode.
   const syncPrices = () => {
     if (!DEMO && config.pricingSync.enabled && priceSync.stale()) priceSync.refresh();

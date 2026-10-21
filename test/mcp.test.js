@@ -66,6 +66,7 @@ test('mcp.js lists acc and configured tools and reports status', async () => {
     'acc_live_apps',
     'acc_integrations_status',
     'acc_trace_sessions',
+    'acc_evals',
     'extra_ping',
   ])
     assert.ok(names.includes(n), n);
@@ -244,4 +245,156 @@ test('local.traceSessions in demo mode lists only the synthetic sessions and rea
   // The synthetic Kiro session, not the two from HOME.
   assert.equal(rows.filter((r) => r.source === 'kiro').length, 1);
   assert.equal(rows.find((r) => r.source === 'claude').turns, 1, 'the demo Claude session, not the fixture with two turns');
+});
+
+// ---- acc_evals ----
+// Results are seeded through the store API into a temp data folder; HOME holds one Claude Code session.
+async function evalsTool(env, args = { range: 'all' }) {
+  const { replies } = await runMcp(
+    [
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '0' } },
+      },
+      { jsonrpc: '2.0', method: 'notifications/initialized' },
+      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'acc_evals', arguments: args } },
+    ],
+    {},
+    env,
+  );
+  const reply = replies.find((r) => r.id === 2);
+  assert.ok(!reply.error && !reply.result.isError, JSON.stringify(reply));
+  return { text: reply.result.content[0].text, out: JSON.parse(reply.result.content[0].text) };
+}
+
+function evalsRig(seed) {
+  const { createEvalStore } = require('../lib/evals/store');
+  const home = traceHome();
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'acc-mcp-data-'));
+  const file = path.join(data, '.data', 'evals.jsonl');
+  const store = createEvalStore({ file });
+  seed(store);
+  return { env: { ...home, ZAAFPULSE_DATA: data, ZAAFPULSE_CONTENT: 'on' }, file };
+}
+
+const judged = (session, turn, evaluator, label, ts, extra = {}) => ({
+  target: { source: 'claude', session, turn, span: null },
+  evaluator,
+  version: 1,
+  kind: 'judge',
+  label,
+  score: 0,
+  explanation: 'EXPLANATION-SENTINEL the answer quoted a private path',
+  judge: { kind: 'ollama', model: 'qwen3:8b', provider: 'ollama' },
+  ts,
+  ...extra,
+});
+
+test('acc_evals returns rates and the latest failures as ids and labels only', async () => {
+  const now = Date.now();
+  const { env, file } = evalsRig((store) => {
+    store.put(judged('s1', 0, 'faithfulness', 'unfaithful', now - 2000));
+    store.put(judged('s1', 1, 'faithfulness', 'faithful', now - 1000, { score: 1 }));
+    store.put(judged('s1', 1, 'relevance', 'off-topic', now - 500));
+    // A session this machine does not list has no key in this process, so it cannot be named.
+    store.put(judged('ghost', 0, 'faithfulness', 'unfaithful', now - 100));
+  });
+  // A line the store cannot read: a read-only reader must leave the file exactly as it is.
+  fs.appendFileSync(file, 'not json\n');
+  const before = fs.readFileSync(file, 'utf8');
+  const { text, out } = await evalsTool(env);
+  assert.deepEqual(Object.keys(out).sort(), ['evaluators', 'failures']);
+  assert.equal(out.evaluators.length, 11);
+  for (const e of out.evaluators) assert.deepEqual(Object.keys(e).sort(), ['id', 'kind', 'rate', 'total']);
+  const faith = out.evaluators.find((e) => e.id === 'faithfulness');
+  assert.equal(faith.kind, 'judge');
+  // The rates count every stored result, like the dashboard's card; only a failure needs a key to be named.
+  assert.equal(faith.total, 3);
+  assert.equal(faith.rate, 1 / 3);
+  assert.equal(out.evaluators.find((e) => e.id === 'task_completion').rate, null);
+  assert.deepEqual(
+    out.failures.map((f) => [f.source, f.turn, f.evaluator, f.label]),
+    [
+      ['claude', 1, 'relevance', 'off-topic'],
+      ['claude', 0, 'faithfulness', 'unfaithful'],
+    ],
+  );
+  for (const f of out.failures) {
+    assert.deepEqual(Object.keys(f).sort(), ['evaluator', 'key', 'label', 'source', 'ts', 'turn']);
+    assert.match(f.key, /^claude\.[0-9a-f]{32}$/);
+  }
+  assert.ok(out.failures[0].ts >= out.failures[1].ts, 'newest first');
+  // No explanation, no text, no path, no session id.
+  for (const bad of ['explanation', 'EXPLANATION-SENTINEL', 'private path', 'fix the login', '.jsonl', '"s1"', 'ghost'])
+    assert.equal(text.includes(bad), false, bad);
+  assert.equal(fs.readFileSync(file, 'utf8'), before, 'the tool never writes the results file');
+});
+
+test('acc_evals gives the latest 20 failures, and the range limits what counts', async () => {
+  const now = Date.now();
+  const { env } = evalsRig((store) => {
+    for (let i = 0; i < 25; i++) store.put(judged('s1', i, 'relevance', 'partly', now - 60e3 + i * 1000));
+    store.put(judged('s1', 99, 'faithfulness', 'unfaithful', now - 40 * 86400e3));
+  });
+  const all = (await evalsTool(env, { range: 'all' })).out;
+  assert.equal(all.failures.length, 20);
+  assert.equal(all.failures[0].turn, 24, 'newest first');
+  assert.ok(all.failures.every((f) => f.turn !== 99 || f.evaluator === 'faithfulness'));
+  const month = (await evalsTool(env, { range: '30' })).out;
+  assert.equal(month.evaluators.find((e) => e.id === 'faithfulness').total, 0);
+  assert.equal(month.evaluators.find((e) => e.id === 'relevance').total, 25);
+  assert.equal(all.evaluators.find((e) => e.id === 'faithfulness').total, 1);
+});
+
+test('acc_evals with no results or no data folder still answers', async () => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'acc-mcp-data-'));
+  const empty = await evalsTool({ ...traceHome(), ZAAFPULSE_DATA: data });
+  assert.deepEqual(empty.out.failures, []);
+  assert.equal(empty.out.evaluators.length, 11);
+  assert.ok(empty.out.evaluators.every((e) => e.kind === 'code' || e.total === 0));
+});
+
+test('local.evals in demo mode answers from the synthetic results and reads nothing under HOME', async () => {
+  const env = traceHome();
+  const script = `
+    const { createLocal } = require(${JSON.stringify(path.join(__dirname, '..', 'lib', 'local'))});
+    const indexer = { version: 1, state: {}, results: () => [], refresh: async () => {} }; // as server.js in DEMO
+    const local = createLocal({ cacheDir: process.env.HOME, indexer, contentOff: true, demo: true });
+    local.evals({}).then((r) => process.stdout.write(JSON.stringify(r)), (e) => {
+      process.stdout.write(JSON.stringify({ error: String(e && e.message) }));
+    });`;
+  const out = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['-e', script], {
+      env: { ...process.env, ...env },
+      stdio: ['ignore', 'pipe', 'inherit'],
+    });
+    let buf = '';
+    child.stdout.on('data', (d) => (buf += d));
+    child.on('error', reject);
+    child.on('exit', () => resolve(buf));
+  });
+  const res = JSON.parse(out);
+  assert.equal(res.evaluators.length, 11, out);
+  assert.ok(res.failures.length > 0, 'the demo has failing results');
+  assert.ok(res.failures.every((f) => /^[a-z]+\.[0-9a-f]{32}$/.test(f.key)));
+  assert.equal(out.includes('explanation'), false);
+});
+
+test('acc_evals ignores a stored result whose label its evaluator does not have', async () => {
+  const now = Date.now();
+  const { env, file } = evalsRig((store) => {
+    store.put(judged('s1', 0, 'faithfulness', 'unfaithful', now - 2000));
+  });
+  // Written by hand: the label is not one of faithfulness's, and carries text that must never come out.
+  const bad = judged('s1', 1, 'faithfulness', 'LABEL-SENTINEL-bogus', now - 1000);
+  fs.appendFileSync(file, JSON.stringify({ ...bad, key: 'claude|s1|1||faithfulness|1|qwen3:8b' }) + '\n');
+  const { text, out } = await evalsTool(env);
+  assert.equal(text.includes('LABEL-SENTINEL'), false);
+  assert.deepEqual(
+    out.failures.map((f) => [f.turn, f.evaluator, f.label]),
+    [[0, 'faithfulness', 'unfaithful']],
+  );
+  assert.equal(out.evaluators.find((e) => e.id === 'faithfulness').total, 1);
 });

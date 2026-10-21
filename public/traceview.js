@@ -273,7 +273,8 @@ function trLivePlan(cur, r) {
   return { adopt: true, repaint: trShape(r.skeleton) !== trShape(cur) };
 }
 
-// The move a key press asks for: 'down'/'up' (j/k) or 'prev'/'next' turn (←/→), else null. Only with focus in
+// The move a key press asks for: 'down'/'up' (j/k), 'prev'/'next' turn (←/→) or 'good'/'bad'/'note' (g/b/n),
+// else null. Only with focus in
 // the explorer or on the page itself, never while typing, never with a modifier (Shift too), and the arrows
 // stay with the tabs, the range buttons, the chip row and the splitter.
 const TR_TYPING = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
@@ -284,6 +285,8 @@ function trNavKey(e, page = []) {
   if (!page.includes(t) && !at('#tr-app')) return null;
   if (at(TR_TYPING)) return null;
   if (e.key === 'j' || e.key === 'k') return e.key === 'j' ? 'down' : 'up';
+  // g and b rate the turn, n opens its note.
+  if (e.key === 'g' || e.key === 'b' || e.key === 'n') return { g: 'good', b: 'bad', n: 'note' }[e.key];
   if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return null;
   if (at('[role="tab"], .tr-seg, .tr-chips, #tr-split')) return null;
   return e.key === 'ArrowLeft' ? 'prev' : 'next';
@@ -306,6 +309,175 @@ const trStartCollapsed = (stored, width) =>
   stored === '1' ? true : stored === '0' ? false : Number.isFinite(width) && width > 0 && width < TR_AUTO_COLLAPSE;
 // A drag starts with the main button only (a right click opens the menu, a middle click scrolls).
 const trPrimary = (e) => !!e && e.button === 0;
+
+/* ---------- local evals: verdicts, badges, the judge line (pure) ---------- */
+// The evaluator list from /api/evals/evaluators by id. A Map, so an id from a log is never a prototype key.
+const trEvIndex = (evaluators) =>
+  new Map(
+    (Array.isArray(evaluators) ? evaluators : []).filter((e) => e && typeof e.id === 'string').map((e) => [e.id, e]),
+  );
+// The evaluator's pass label passes, its last label fails, a label in between is mid. Without the list (or
+// for a label it does not know) only the server's pass flag counts.
+function trEvalTone(r, ev) {
+  const labels = ev && Array.isArray(ev.labels) ? ev.labels : null;
+  if (!labels || !labels.includes(r.label)) return r.pass === true ? 'pass' : 'fail';
+  if (r.label === ev.pass) return 'pass';
+  return r.label === labels[labels.length - 1] ? 'fail' : 'mid';
+}
+const TR_TONE_RANK = { fail: 0, mid: 1, pass: 2 };
+// One row per verdict for the Evals tab: the turn's verdicts before the session's, failing first, then in the
+// registry's order. Values stay plain strings; the page fills them in with textContent (S1).
+function evalRows(results, evaluators) {
+  const evs = trEvIndex(evaluators);
+  const order = new Map([...evs.keys()].map((id, i) => [id, i]));
+  const rows = [];
+  for (const r of Array.isArray(results) ? results : []) {
+    if (!r || typeof r.evaluator !== 'string') continue;
+    const ev = evs.get(r.evaluator) || null;
+    rows.push({
+      id: r.evaluator,
+      title: (ev && typeof ev.title === 'string' && ev.title) || r.evaluator,
+      label: typeof r.label === 'string' ? r.label : '',
+      tone: trEvalTone(r, ev),
+      score: Number.isFinite(r.score) ? r.score : null,
+      kind: r.kind === 'code' ? 'code' : 'judge',
+      model: r.kind === 'code' ? 'code' : (r.judge && typeof r.judge.model === 'string' && r.judge.model) || 'judge',
+      trimmed: !!r.trimmed,
+      explanation: typeof r.explanation === 'string' ? r.explanation : null,
+      evidence: (Array.isArray(r.evidence) ? r.evidence : [])
+        .filter((x) => x && (typeof x.label === 'string' || typeof x.tool === 'string'))
+        .map((x) => [x.tool, x.label].filter((v) => typeof v === 'string' && v).join(': ')),
+      scope: r.scope === 'session' || (ev && ev.scope === 'session') ? 'session' : 'turn',
+    });
+  }
+  const rank = (x) => (order.has(x.id) ? order.get(x.id) : Infinity);
+  return rows.sort(
+    (a, b) =>
+      (a.scope === 'session') - (b.scope === 'session') ||
+      TR_TONE_RANK[a.tone] - TR_TONE_RANK[b.tone] ||
+      rank(a) - rank(b) ||
+      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  );
+}
+// The turn header's line: how many verdicts the turn has, how many pass, and which evaluators fail.
+function turnEvalSummary(results) {
+  const list = (Array.isArray(results) ? results : []).filter((r) => r && typeof r.evaluator === 'string');
+  const failing = list.filter((r) => r.pass !== true).map((r) => r.evaluator);
+  return { judged: list.length, passed: list.length - failing.length, failing };
+}
+// The failing label of each code verdict whose evidence names this tool span's tool (a map node has the same
+// kind and tool). Evidence without a tool belongs to no span.
+function spanEvalBadges(span, results, evaluators) {
+  const name = span && span.kind === 'tool' && span.tool && typeof span.tool.name === 'string' ? span.tool.name : '';
+  if (!name || !Array.isArray(results)) return [];
+  const evs = trEvIndex(evaluators);
+  const out = [];
+  const seen = new Set();
+  for (const r of results) {
+    if (!r || r.kind !== 'code' || r.pass !== false || typeof r.label !== 'string' || !r.label) continue;
+    if (!Array.isArray(r.evidence) || !r.evidence.some((x) => x && x.tool === name)) continue;
+    const k = `${r.evaluator}\u0000${r.label}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    const ev = evs.get(r.evaluator) || null;
+    out.push({
+      label: r.label,
+      tone: trEvalTone(r, ev) === 'mid' ? 'warn' : 'bad',
+      title: `${(ev && ev.title) || r.evaluator}: ${r.label}`,
+    });
+  }
+  return out;
+}
+// The slim line over the tree from /api/evals/status, or null while the judge runs. `waiting` says nothing
+// would judge a session now, so "Judge this session" is off; a capped day still queues for tomorrow.
+const TR_WAIT_DEFAULT = 'Install or start Ollama, or choose a provider';
+function trJudgeBanner(st) {
+  if (!st || typeof st !== 'object') return null;
+  const j = st.judge && typeof st.judge === 'object' ? st.judge : {};
+  if (st.paused === 'judge off') return { text: 'Judging is off ·', waiting: true };
+  if (j.waiting) {
+    const why = typeof j.reason === 'string' && j.reason.trim() ? j.reason.trim().slice(0, 140) : TR_WAIT_DEFAULT;
+    if (why === TR_WAIT_DEFAULT)
+      return { text: 'Judge waiting: install or start Ollama, or choose a provider in', waiting: true };
+    return { text: `Judge waiting: ${why[0].toLowerCase()}${why.slice(1)} ·`, waiting: true };
+  }
+  if (st.paused === 'daily cap' || st.paused === 'cost cap')
+    return { text: `Judging paused: ${st.paused} reached, resumes tomorrow ·`, waiting: false };
+  if (typeof st.paused === 'string' && st.paused)
+    return { text: `Judging paused: ${st.paused.slice(0, 60)} ·`, waiting: false };
+  return null;
+}
+// Whether a rating or a note may be sent: only once the skeleton on show is the selected session's. While a
+// switch loads, S.key already names the new session and S.sk and S.turn are still the old one's.
+const trCanAct = (S) => !!S && !!S.sk && typeof S.key === 'string' && !!S.key && S.skKey === S.key;
+// Pressing the rating a turn already has takes it back.
+const trNextRating = (cur, pressed) => (cur === pressed ? null : pressed);
+// The body of a Good/Bad press, or null when nothing may be sent.
+function trRateBody(S, cur, pressed) {
+  if (!trCanAct(S) || (pressed !== 'good' && pressed !== 'bad')) return null;
+  return { key: S.key, turn: S.turn, rating: trNextRating(cur, pressed) };
+}
+// The line under a verdict: its explanation, why a judge's is missing, or a failing code check's evidence.
+function trEvalWhy(r, contentOff) {
+  if (!r) return null;
+  if (r.explanation) return { text: r.explanation, quiet: false };
+  if (r.kind === 'judge')
+    return { text: contentOff ? 'hidden while content viewing is off' : 'no explanation', quiet: true };
+  if (r.tone !== 'pass' && Array.isArray(r.evidence) && r.evidence.length)
+    return { text: r.evidence.join(' · '), quiet: false };
+  return null;
+}
+// After a note is saved: the draft goes only if it is still the text that was sent, and the field is refilled
+// only if the owner has not typed since.
+const trNoteSaved = ({ draft, sent, value }) => ({ dropDraft: draft === sent, refill: value === sent });
+// The keys the session list still has to ask markers for. A key on its way is not asked for twice; a key whose
+// rating changed while on its way is asked for again once that (older) answer is in.
+function trMarkQueue() {
+  const queue = new Set();
+  const flight = new Set();
+  const again = new Set();
+  return {
+    want(keys, has) {
+      for (const k of keys || []) if (typeof k === 'string' && k && !has(k) && !flight.has(k)) queue.add(k);
+    },
+    take(n) {
+      const batch = [...queue].slice(0, n);
+      for (const k of batch) {
+        queue.delete(k);
+        flight.add(k);
+      }
+      return batch;
+    },
+    // Ends a batch; returns the keys queued again, whose answer in this batch is stale.
+    done(batch) {
+      const re = [];
+      for (const k of batch) {
+        flight.delete(k);
+        if (again.delete(k)) {
+          queue.add(k);
+          re.push(k);
+        }
+      }
+      return re;
+    },
+    refresh(k) {
+      if (flight.has(k)) again.add(k);
+      else queue.add(k);
+    },
+    get size() {
+      return queue.size;
+    },
+  };
+}
+// A session row's marker from its counts of good and bad turns: a bad one wins, since it asks for a look.
+function trFeedbackMark(m) {
+  const n = (v) => (Number.isInteger(v) && v > 0 ? v : 0);
+  const good = n(m && m.good);
+  const bad = n(m && m.bad);
+  if (!good && !bad) return null;
+  const parts = [good ? `${good} good` : '', bad ? `${bad} bad` : ''].filter(Boolean);
+  return { mark: bad ? '👎' : '👍', tone: bad ? 'bad' : 'ok', title: `Your feedback: ${parts.join(', ')}` };
+}
 
 /* ---------- view ---------- */
 const TR_SRC = {
@@ -349,7 +521,8 @@ function viewTrace() {
         <div class="tr-list" id="tr-list" role="listbox" aria-label="Sessions"><div class="tr-empty">Loading sessions…</div></div>
       </aside>
       <main class="tr-tree" aria-label="Trace tree">
-        <div class="tr-thead"><b id="tr-turn">No session selected</b><span class="tr-ev ok" hidden data-sub="2">relevance</span><span class="tr-muted" id="tr-sum"></span></div>
+        <div class="tr-thead"><b id="tr-turn">No session selected</b><button type="button" class="tr-ev tr-tev" id="tr-tev" hidden></button><span class="tr-muted" id="tr-sum"></span></div>
+        <div class="tr-notice tr-judge" id="tr-judge" role="status" hidden><span id="tr-judge-msg"></span><a href="#settings">Settings → Evals</a></div>
         <div class="tr-notice tr-off" id="tr-off" role="status" hidden></div>
         <div class="tr-notice" id="tr-notice" hidden><span id="tr-notice-msg"></span><button type="button" class="tr-btn ghost" id="tr-refresh" hidden>Refresh</button></div>
         <div class="tr-cols" aria-hidden="true"><span>Span</span><span class="tr-tl">Timeline</span><span class="r">Time</span></div>
@@ -359,14 +532,20 @@ function viewTrace() {
     <section class="tr-detail" id="tr-detail" aria-label="Span detail">
       <div class="tr-dhead">
         <h3 id="tr-dname">Select a span</h3><span class="tr-dbadges" id="tr-dbadges"></span><span class="tr-muted" id="tr-dmeta"></span>
-        <div class="tr-tabs" role="tablist" aria-label="Span text"><button type="button" role="tab" data-ttab="output" class="on" aria-selected="true">Output</button><button type="button" role="tab" data-ttab="input" aria-selected="false">Input</button><button type="button" role="tab" data-ttab="evals" hidden data-sub="2">Evals</button><button type="button" role="tab" data-ttab="notes" hidden data-sub="2">Notes</button></div>
+        <div class="tr-tabs" role="tablist" aria-label="Span text"><button type="button" role="tab" data-ttab="output" class="on" aria-selected="true">Output</button><button type="button" role="tab" data-ttab="input" aria-selected="false">Input</button><button type="button" role="tab" data-ttab="evals" aria-selected="false">Evals</button><button type="button" role="tab" data-ttab="notes" aria-selected="false">Notes</button></div>
       </div>
       <div class="tr-txt" id="tr-txt" tabindex="0" aria-label="Span text"></div>
+      <div class="tr-evals" id="tr-evals" tabindex="0" aria-label="Evals for this turn" hidden></div>
+      <div class="tr-notes" id="tr-notes" hidden>
+        <textarea id="tr-note" maxlength="2000" placeholder="A note for this turn: what went well, what went wrong…" aria-label="Note for this turn"></textarea>
+        <div class="tr-notebar"><span class="tr-muted" id="tr-note-state"></span><span class="tr-muted" id="tr-note-count">0 / 2000</span><button type="button" class="tr-btn" id="tr-note-save" disabled>Save note</button></div>
+      </div>
       <div class="tr-acts">
-        <span class="tr-grp" hidden data-sub="2"><button type="button" class="tr-btn">👍 Good</button><button type="button" class="tr-btn">👎 Bad</button><button type="button" class="tr-btn ghost">✎ Add note</button></span>
+        <span class="tr-grp" id="tr-rate"><button type="button" class="tr-btn" data-trate="good" aria-pressed="false" aria-label="Good (g)" title="Good turn (g)">👍 <span class="tr-bl">Good</span></button><button type="button" class="tr-btn" data-trate="bad" aria-pressed="false" aria-label="Bad (b)" title="Bad turn (b)">👎 <span class="tr-bl">Bad</span></button><button type="button" class="tr-btn ghost" id="tr-addnote" title="Note for this turn (n)">✎ <span class="tr-bl" id="tr-addnote-l">Add note</span></button></span>
         <span class="tr-muted tr-dinfo" id="tr-dinfo"></span>
         <button type="button" class="tr-btn ghost" id="tr-more" hidden>Load next 64 KB</button>
         <span class="tr-spacer"></span>
+        <button type="button" class="tr-btn ghost" id="tr-judge-run" aria-label="Judge this session" title="Queue every finished turn of this session for the judge">⚖ <span class="tr-bl">Judge this session</span></button>
         <button type="button" class="tr-btn ghost" hidden data-sub="4">⤓ Add to dataset</button><button type="button" class="tr-btn ghost" hidden data-sub="4">↻ Replay turn</button><button type="button" class="tr-btn warn" hidden data-sub="3">⏸ Pause agent</button>
       </div>
     </section>
@@ -416,12 +595,17 @@ function trDay(ts) {
   return d.toLocaleDateString('en', { weekday: 'short', month: 'short', day: 'numeric' });
 }
 const trBadgeHtml = (badges) =>
-  (badges || []).map((b) => `<span class="tr-ev ${esc(b.tone)}">${esc(b.label)}</span>`).join('');
+  (badges || [])
+    .map((b) => `<span class="tr-ev ${esc(b.tone)}"${b.title ? ` title="${esc(b.title)}"` : ''}>${esc(b.label)}</span>`)
+    .join('');
 // In a tree row a long badge word gives way to the span name; the full word is its tooltip.
 const TR_SHORT = { 'command failed': 'failed', hallucination: 'halluc.', 'process slip': 'slip', environment: 'env' };
 const trRowBadges = (badges) =>
   (badges || [])
-    .map((b) => `<span class="tr-ev ${esc(b.tone)}" title="${esc(b.label)}">${esc(trOwn(TR_SHORT, b.label, b.label))}</span>`)
+    .map(
+      (b) =>
+        `<span class="tr-ev ${esc(b.tone)}" title="${esc(b.title || b.label)}">${esc(trOwn(TR_SHORT, b.label, b.label))}</span>`,
+    )
     .join('');
 
 function mountTrace() {
@@ -438,6 +622,7 @@ function mountTrace() {
     titles: new Map(), // key -> title read on demand (null: none)
     key: null,
     sk: null,
+    skKey: null, // the session S.sk belongs to; S.key moves first on a switch
     turn: 0,
     sel: null,
     tab: 'output',
@@ -453,6 +638,24 @@ function mountTrace() {
     poll: 0,
     frame: 0,
     listReq: 0,
+    // Local evals and feedback. Results and ratings are read per session and kept for that session only.
+    evs: [], // the evaluator list: titles, labels, pass label
+    evKey: null, // the session S.evAll belongs to
+    evAll: null, // every verdict of that session (null: not read yet)
+    evErr: '',
+    turnEv: [], // the verdicts of the turn on show
+    evSig: '',
+    fbKey: null,
+    fb: [], // the session's feedback records, one per rated or noted turn
+    marks: new Map(), // session key -> { good, bad } for the list's markers (null: none)
+    drafts: new Map(), // `${key}|${turn}` -> a note not saved yet, so a turn change loses nothing
+    judge: null, // the last /api/evals/status
+    judgeCount: null,
+    runPending: false,
+    running: false,
+    rating: false,
+    savingNote: false,
+    contentOff: false,
   };
   const timers = new Set();
   const later = (fn, ms) => {
@@ -556,6 +759,8 @@ function mountTrace() {
       html += `<div class="tr-sess${on ? ' on' : ''}" role="option" tabindex="0" aria-selected="${on}" data-tkey="${esc(r.key)}"${t ? '' : ' data-need'} title="${esc(t || fallback(r))}"><span class="tr-src" style="--c:${color}">${esc(abbr)}</span><div class="tr-t"><div class="tr-top1"><div class="tr-t1">${esc(t || fallback(r))}</div><span class="tr-when">${esc(trTime(r.end ?? r.start))}</span></div><div class="tr-t2">${esc(meta)}</div>${flags.length ? `<div class="tr-flags">${flags.join('')}</div>` : ''}</div></div>`;
     }
     list.innerHTML = html;
+    for (const el of $$('.tr-sess', list)) markRow(el);
+    wantMarks(rows.map((r) => r.key));
     // Titles that are not in the listing (Claude, Codex) are read for the rows that come into view.
     const need = $$('.tr-sess[data-need]', list);
     if (!need.length) return;
@@ -609,6 +814,62 @@ function mountTrace() {
     if (key === S.key) paintHeading();
   }
 
+  // A 👍 or 👎 on the source badge of a session with rated turns. The counts come in batches of up to 50
+  // sessions, once per session seen; the selected session's own feedback keeps its marker current.
+  function markRow(el) {
+    const src = $('.tr-src', el);
+    if (!src) return;
+    const old = $('.tr-fbm', src);
+    if (old) old.remove();
+    const m = trFeedbackMark(S.marks.get(el.dataset.tkey));
+    if (!m) return;
+    const i = document.createElement('span');
+    i.className = `tr-fbm ${m.tone}`;
+    i.textContent = m.mark;
+    i.title = m.title;
+    i.setAttribute('aria-label', m.title);
+    src.appendChild(i);
+  }
+  const paintMark = (key) => {
+    const el = $$('.tr-sess', list).find((x) => x.dataset.tkey === key);
+    if (el) markRow(el);
+  };
+  const marks = trMarkQueue();
+  let markBusy = false;
+  function wantMarks(keys) {
+    marks.want(keys, (k) => S.marks.has(k));
+    pumpMarks();
+  }
+  // A rating or note changed for a session that is not on show: ask for its counts again and repaint its row.
+  function refreshMark(key) {
+    S.marks.delete(key);
+    marks.refresh(key);
+    pumpMarks();
+  }
+  async function pumpMarks() {
+    if (markBusy) return;
+    markBusy = true;
+    try {
+      while (S.alive && marks.size) {
+        const batch = marks.take(50);
+        let got = {};
+        try {
+          const r = await trApi(`/api/feedback/sessions?keys=${batch.map(encodeURIComponent).join(',')}`);
+          got = (r && r.sessions) || {};
+        } catch {
+          /* an older server or a hiccup: those rows go without a marker */
+        }
+        const stale = new Set(marks.done(batch));
+        if (!S.alive) return;
+        for (const k of batch)
+          if (!stale.has(k) && !S.marks.has(k)) S.marks.set(k, Object.hasOwn(got, k) ? got[k] : null);
+        batch.forEach(paintMark);
+      }
+    } finally {
+      markBusy = false;
+    }
+  }
+
   async function loadSessions() {
     const qs = new URLSearchParams({ range: S.range });
     if (S.q) qs.set('q', S.q);
@@ -660,12 +921,26 @@ function mountTrace() {
       /* a sandboxed frame */
     }
     paintHeading();
+    S.evKey = null;
+    S.evAll = null;
+    S.evErr = '';
+    S.fbKey = null;
+    S.fb = [];
+    S.runPending = false;
+    clearEvalBadges();
+    paintRate();
+    $('#tr-note').disabled = true; // the old session's note stays on show until the new one loads
+    $('#tr-note-save').disabled = true;
+    paintJudge();
     loadSkeleton(turn);
+    loadEvals();
+    loadFeedback();
   }
 
   /* ---- one turn: tree, map and detail ---- */
   function clearTurn(msg) {
     S.sk = null;
+    S.skKey = null;
     S.rows = [];
     S.nodes = [];
     rowsBox.replaceChildren();
@@ -677,6 +952,9 @@ function mountTrace() {
     $('#tr-turn').textContent = 'No turn shown';
     $('#tr-sum').textContent = '';
     $('#tr-step').textContent = '– / –';
+    S.turnEv = [];
+    paintTurnEval();
+    paintRate();
     paintDetail();
   }
 
@@ -692,6 +970,7 @@ function mountTrace() {
       if (!S.alive || my !== S.req) return;
       const n = Array.isArray(sk.turns) ? sk.turns.length : 0;
       S.sk = sk;
+      S.skKey = key;
       S.turn = Number.isInteger(turn) ? Math.max(0, Math.min(n - 1, turn)) : Math.max(0, n - 1);
       S.cursor = undefined;
       S.collapsed = new Set();
@@ -792,6 +1071,10 @@ function mountTrace() {
     $('#tr-prev').disabled = S.turn <= 0;
     $('#tr-next').disabled = S.turn >= turns - 1;
     paintHeading();
+    S.turnEv = turnRes();
+    S.evSig = evSig();
+    paintTurnEval();
+    paintRate();
     paintRows();
     paintMap();
   }
@@ -828,10 +1111,11 @@ function mountTrace() {
     const pv = r.kind === 'turn' && !r.placeholder ? '<span class="tr-pv" data-tpreview="row"></span>' : '';
     const [op, what] = trNameParts(r.name);
     const d = Number.isFinite(r.start) && Number.isFinite(r.end) ? r.end - r.start : null;
+    const badges = r.placeholder ? r.badges : [...r.badges, ...spanEvalBadges(S.spans.get(r.id), S.turnEv, S.evs)];
     const attrs = r.placeholder
       ? `data-tturn="${r.turnIndex}" title="Open turn ${r.turnIndex + 1}"`
       : `data-tspan="${esc(r.id)}"${r.kids ? ` aria-expanded="${r.open}"` : ''}`;
-    return `<div class="tr-row${on ? ' on' : ''}${r.placeholder ? ' dim' : ''}" role="treeitem" aria-level="${r.depth + 1}" aria-selected="${on}" ${attrs} style="--c:${c}"><span class="tr-name" style="--lvl:${r.depth};--guide:${r.depth ? 'block' : 'none'}"><span class="tr-d"></span><span class="tr-lbl" title="${esc(r.name)}">${tw}${op ? `<span class="tr-op">${esc(op)}</span>` : ''}${esc(what)}${pv}</span>${trRowBadges(r.badges)}</span><span class="tr-track"><span style="left:${l.toFixed(2)}%;width:${width.toFixed(2)}%"></span></span><span class="tr-dur">${fmtDur(d)}</span></div>`;
+    return `<div class="tr-row${on ? ' on' : ''}${r.placeholder ? ' dim' : ''}" role="treeitem" aria-level="${r.depth + 1}" aria-selected="${on}" ${attrs} style="--c:${c}"><span class="tr-name" style="--lvl:${r.depth};--guide:${r.depth ? 'block' : 'none'}"><span class="tr-d"></span><span class="tr-lbl" title="${esc(r.name)}">${tw}${op ? `<span class="tr-op">${esc(op)}</span>` : ''}${esc(what)}${pv}</span>${trRowBadges(badges)}</span><span class="tr-track"><span style="left:${l.toFixed(2)}%;width:${width.toFixed(2)}%"></span></span><span class="tr-dur">${fmtDur(d)}</span></div>`;
   }
 
   // All rows, or for a long tree only the ones in view plus a margin, between two spacers (P4).
@@ -937,7 +1221,8 @@ function mountTrace() {
       const meta = p.preview
         ? `<span class="m"><span class="tr-pvn" data-tpreview="node"></span><span class="tr-pvd">${esc(p.meta)}</span></span>`
         : `<span class="m">${esc(p.meta)}</span>`;
-      const nodeHtml = `<div class="tr-node${i === sel ? ' on' : ''}${n.status === 'error' ? ' err' : ''}" role="button" tabindex="0" data-tspan="${esc(n.id)}" data-ni="${i}" data-c="${c}" style="--c:${c}" aria-label="${esc(`${p.title}${p.meta ? `, ${p.meta}` : ''}`)}"><span class="tr-ring${[...p.ring].length === 1 ? ' g' : ''}">${esc(p.ring)}</span><div class="tr-ntext"><b>${esc(p.title)}</b>${meta}</div></div>`;
+      const nb = spanEvalBadges(n, S.turnEv, S.evs);
+      const nodeHtml = `<div class="tr-node${i === sel ? ' on' : ''}${n.status === 'error' ? ' err' : ''}" role="button" tabindex="0" data-tspan="${esc(n.id)}" data-ni="${i}" data-c="${c}" style="--c:${c}" aria-label="${esc(`${p.title}${p.meta ? `, ${p.meta}` : ''}`)}"><span class="tr-ring${[...p.ring].length === 1 ? ' g' : ''}">${esc(p.ring)}</span><div class="tr-ntext"><b>${esc(p.title)}</b>${meta}</div>${nb.length ? `<span class="tr-nev">${trRowBadges(nb)}</span>` : ''}</div>`;
       html += side === 'l' ? noteHtml + nodeHtml : nodeHtml + noteHtml;
       if (i < nodes.length - 1) html += '<div class="tr-gap"></div>';
     });
@@ -1093,7 +1378,14 @@ function mountTrace() {
   function paintDetail() {
     const s = S.sel ? S.spans.get(S.sel) : null;
     const tabs = $$('[data-ttab]', app);
+    const evBox = $('#tr-evals');
+    const notesBox = $('#tr-notes');
     if (!s) {
+      txt.hidden = false;
+      evBox.hidden = true;
+      notesBox.hidden = true;
+      // Evals and Notes need a turn to belong to.
+      for (const b of tabs) if (b.dataset.ttab === 'evals' || b.dataset.ttab === 'notes') b.disabled = !S.sk;
       $('#tr-dname').textContent = S.sk ? 'Select a span' : 'No session selected';
       $('#tr-dbadges').innerHTML = '';
       $('#tr-dmeta').textContent = '';
@@ -1104,7 +1396,7 @@ function mountTrace() {
       return;
     }
     $('#tr-dname').textContent = trLabel(s);
-    $('#tr-dbadges').innerHTML = trBadgeHtml(trBadges(s));
+    $('#tr-dbadges').innerHTML = trBadgeHtml([...trBadges(s), ...spanEvalBadges(s, S.turnEv, S.evs)]);
     const meta = [];
     if (Number.isFinite(s.start) && Number.isFinite(s.end)) meta.push(fmtDur(s.end - s.start));
     if (s.model) meta.push(s.model);
@@ -1114,18 +1406,35 @@ function mountTrace() {
     $('#tr-dmeta').textContent = meta.join(' · ');
     $('#tr-dmeta').title = meta.join(' · ');
     const t = textsOf(s);
-    const tab = t[S.tab] ? S.tab : t.output ? 'output' : t.input ? 'input' : S.tab;
+    // Evals and Notes belong to the turn, so they stay open while the selection moves between its spans.
+    const pane = S.tab === 'evals' || S.tab === 'notes';
+    const tab = pane ? S.tab : t[S.tab] ? S.tab : t.output ? 'output' : t.input ? 'input' : S.tab;
     for (const b of tabs) {
       const on = b.dataset.ttab === tab;
       b.classList.toggle('on', on);
       b.setAttribute('aria-selected', String(on));
       if (b.dataset.ttab === 'input' || b.dataset.ttab === 'output') b.disabled = !t[b.dataset.ttab];
+      else b.disabled = false;
+    }
+    txt.hidden = pane;
+    evBox.hidden = tab !== 'evals';
+    notesBox.hidden = tab !== 'notes';
+    if (pane) {
+      S.creq++; // a text still on its way is not shown
+      txt.classList.remove('loading');
+      $('#tr-more').hidden = true;
+      info('');
+      if (tab === 'evals') paintEvals();
+      else paintNotes();
+      return;
     }
     loadContent(t[tab] || null);
   }
 
   function info(msg) {
-    $('#tr-dinfo').textContent = msg || '';
+    const el = $('#tr-dinfo');
+    el.textContent = msg || '';
+    el.title = msg || ''; // the row gives the text one line; the tooltip has all of it
   }
   async function loadContent(id, offset = 0) {
     const my = ++S.creq;
@@ -1205,6 +1514,342 @@ function mountTrace() {
     } finally {
       btn.disabled = false;
     }
+  }
+
+  /* ---- evals, Good/Bad and notes ---- */
+  const postJson = (body) => ({
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const sessionEv = () => (S.evKey === S.key && Array.isArray(S.evAll) ? S.evAll : []);
+  const turnRes = () => sessionEv().filter((r) => r && r.scope !== 'session' && r.turn === S.turn);
+  // What the tree and map badges are drawn from: the same signature needs no repaint.
+  const evSig = () =>
+    `${S.turn}#${S.turnEv
+      .filter((r) => r.kind === 'code' && r.pass === false && Array.isArray(r.evidence))
+      .map((r) => `${r.evaluator}:${r.label}:${r.evidence.map((x) => x && x.tool).join(',')}`)
+      .join(';')}`;
+
+  async function loadEvals() {
+    const key = S.key;
+    if (!key) return;
+    try {
+      const r = await trApi(`/api/evals?key=${encodeURIComponent(key)}`);
+      if (!S.alive || key !== S.key) return;
+      S.evAll = Array.isArray(r && r.results) ? r.results : [];
+      S.evErr = '';
+    } catch (e) {
+      if (!S.alive || key !== S.key) return;
+      if (S.evKey !== key) S.evAll = []; // a failed refresh keeps the verdicts already on show
+      S.evErr = e.message;
+    }
+    S.evKey = key;
+    paintEvalBits();
+  }
+  // New verdicts (or the evaluator list) arrived: the header line, the badges and an open Evals tab follow.
+  function paintEvalBits() {
+    if (!trCanAct(S)) return; // the next skeleton paints them from what has arrived by then
+    S.turnEv = turnRes();
+    paintTurnEval();
+    const sig = evSig();
+    if (sig !== S.evSig) {
+      S.evSig = sig;
+      paintRows();
+      paintMap();
+    }
+    const s = S.sel && S.spans.get(S.sel);
+    if (s) $('#tr-dbadges').innerHTML = trBadgeHtml([...trBadges(s), ...spanEvalBadges(s, S.turnEv, S.evs)]);
+    if (S.tab === 'evals' && !$('#tr-evals').hidden) paintEvals();
+  }
+  // A session switch: the old session's eval badges go at once, before the new tree arrives.
+  function clearEvalBadges() {
+    S.turnEv = [];
+    paintTurnEval();
+    if (!S.sk) return;
+    const sig = evSig();
+    if (sig !== S.evSig) {
+      S.evSig = sig;
+      paintRows();
+      paintMap();
+    }
+    const s = S.sel && S.spans.get(S.sel);
+    $('#tr-dbadges').innerHTML = s ? trBadgeHtml(trBadges(s)) : '';
+  }
+  // "8/10 pass" next to the turn's name; it opens the Evals tab.
+  function paintTurnEval() {
+    const b = $('#tr-tev');
+    const sum = turnEvalSummary(S.turnEv);
+    b.hidden = !S.sk || !sum.judged;
+    if (b.hidden) return;
+    const rows = evalRows(S.turnEv, S.evs);
+    const tone = rows.some((r) => r.tone === 'fail') ? 'bad' : rows.some((r) => r.tone === 'mid') ? 'warn' : 'ok';
+    b.className = `tr-ev tr-tev ${tone}`;
+    b.textContent = `${sum.passed}/${sum.judged} pass`;
+    const failing = rows.filter((r) => r.tone !== 'pass').map((r) => r.title);
+    const why = failing.length ? ` · not passing: ${failing.join(', ')}` : '';
+    b.title = `${sum.passed} of ${sum.judged} evals pass${why} · open the Evals tab`;
+  }
+
+  // The Evals tab: one row per verdict, built with textContent only (S1).
+  function paintEvals() {
+    const box = $('#tr-evals');
+    const mk = (tag, cls, text) => {
+      const el = document.createElement(tag);
+      if (cls) el.className = cls;
+      if (text != null) el.textContent = text;
+      return el;
+    };
+    // A refresh of the same turn (the status poll) keeps the reader's place; another turn starts at the top.
+    const keep = box.dataset.at === turnKey() ? box.scrollTop : 0;
+    box.dataset.at = turnKey();
+    box.replaceChildren();
+    const loaded = S.evKey === S.key && Array.isArray(S.evAll);
+    const sum = turnEvalSummary(S.turnEv);
+    const head = mk('div', 'tr-evhead');
+    head.append(mk('b', null, `Turn ${S.turn + 1}`));
+    if (sum.judged) head.append(mk('span', 'tr-muted', `${sum.passed} of ${sum.judged} pass`));
+    head.append(mk('span', 'tr-spacer'));
+    const re = mk('button', 'tr-btn ghost tr-rejudge', '↻ Re-judge');
+    re.type = 'button';
+    re.dataset.trejudge = '';
+    re.disabled = judgeBlocked();
+    re.title = 'Judge every finished turn of this session again';
+    head.append(re);
+    box.append(head);
+    if (!loaded) {
+      box.append(mk('div', 'tr-quiet', S.evErr ? `Could not read the evals: ${S.evErr}` : 'Reading the evals…'));
+      return;
+    }
+    const rows = evalRows([...S.turnEv, ...sessionEv().filter((r) => r && r.scope === 'session')], S.evs);
+    if (!rows.length) {
+      box.append(mk('div', 'tr-quiet', 'No verdicts for this turn yet.'));
+      return;
+    }
+    let group = 'turn';
+    for (const r of rows) {
+      if (r.scope !== group) {
+        group = r.scope;
+        box.append(mk('div', 'tr-evgroup', 'Whole session'));
+      }
+      const row = mk('div', `tr-evrow ${r.tone}`);
+      const top = mk('div', 'tr-evtop');
+      top.append(mk('span', 'tr-evt', r.title), mk('span', `tr-pill ${r.tone}`, r.label));
+      const score = mk('span', 'tr-evs', r.score === null ? '' : String(Math.round(r.score * 100) / 100));
+      score.title = 'Score, from 1 (pass) to 0';
+      const meta = mk('span', 'tr-evm', r.model);
+      if (r.trimmed) {
+        const cut = mk('span', 'tr-trim', 'trimmed');
+        cut.title = 'A long turn: the judge read its start and its end';
+        meta.append(cut);
+      }
+      top.append(score, meta);
+      row.append(top);
+      const why = trEvalWhy(r, S.contentOff);
+      if (why) {
+        const line = mk('div', why.quiet ? 'tr-evx tr-quiet' : 'tr-evx');
+        line.textContent = why.text; // an explanation is model text: never markup (S1)
+        row.append(line);
+      }
+      box.append(row);
+    }
+    box.scrollTop = keep;
+  }
+
+  // ---- the judge: its status every 30 s while the page is on screen, and "Judge this session" ----
+  const judgeBlocked = () => {
+    const b = trJudgeBanner(S.judge);
+    return !S.key || S.running || !!(b && b.waiting);
+  };
+  function paintJudge() {
+    const b = trJudgeBanner(S.judge);
+    $('#tr-judge').hidden = !b;
+    $('#tr-judge-msg').textContent = b ? b.text : '';
+    const off = judgeBlocked();
+    const run = $('#tr-judge-run');
+    run.disabled = off;
+    run.title =
+      b && b.waiting
+        ? 'The judge is waiting: see the line above the tree'
+        : 'Queue every finished turn of this session for the judge';
+    const re = $('[data-trejudge]', app);
+    if (re) re.disabled = off;
+  }
+  let statusTimer = 0;
+  let statusBusy = false;
+  let statusAt = 0;
+  function pollStatus() {
+    statusTimer = 0;
+    if (!S.alive || statusBusy || document.hidden) return; // a hidden page resumes on visibilitychange
+    statusBusy = true;
+    statusAt = Date.now();
+    trApi('/api/evals/status')
+      .then((st) => {
+        if (!S.alive) return;
+        S.judge = st && typeof st === 'object' ? st : null;
+        paintJudge();
+        // Judgments finished since the last look (or a queued run drained): read this session's verdicts again.
+        const count = S.judge && S.judge.today ? S.judge.today.count : null;
+        const drained = S.runPending && S.judge && S.judge.queue === 0;
+        if (S.key && (drained || (S.judgeCount !== null && count !== S.judgeCount))) {
+          S.runPending = false;
+          loadEvals();
+        }
+        S.judgeCount = count;
+      })
+      .catch(() => {
+        /* an older server or a hiccup: no line, the button stays on */
+      })
+      .finally(() => {
+        statusBusy = false;
+        if (S.alive && !document.hidden) statusTimer = later(pollStatus, 30000);
+      });
+  }
+  const onVisible = () => {
+    if (!S.alive || document.hidden || statusTimer || statusBusy) return;
+    statusTimer = later(pollStatus, Math.max(0, 30000 - (Date.now() - statusAt)));
+  };
+  async function runJudge() {
+    const key = S.key;
+    if (judgeBlocked()) return;
+    S.running = true;
+    paintJudge();
+    try {
+      const r = await trApi('/api/evals/run', postJson({ key }));
+      if (!S.alive || key !== S.key) return;
+      const n = Number.isInteger(r && r.queued) ? r.queued : 0;
+      const msg = n ? `${n} judgment${n === 1 ? '' : 's'} queued` : 'Nothing to queue';
+      info(r && r.sessionDeferred ? `${msg} · the session verdict waits until it goes idle` : msg);
+      if (n) S.runPending = true;
+    } catch (e) {
+      if (S.alive) info(`Could not queue the session: ${e.message}`);
+    } finally {
+      S.running = false;
+      if (S.alive) paintJudge();
+    }
+  }
+
+  // ---- feedback: Good/Bad and the note, per turn ----
+  const fbFor = (turn) => (S.fbKey === S.key ? S.fb : []).find((f) => f && f.turn === turn) || null;
+  async function loadFeedback() {
+    const key = S.key;
+    if (!key) return;
+    try {
+      const r = await trApi(`/api/feedback?key=${encodeURIComponent(key)}`);
+      if (!S.alive || key !== S.key) return;
+      S.fb = Array.isArray(r && r.feedback) ? r.feedback : [];
+      S.fbKey = key;
+      markFromFeedback();
+      paintRate();
+      if (S.tab === 'notes' && !$('#tr-notes').hidden) paintNotes();
+    } catch {
+      /* the buttons still save; the marker stays as the list had it */
+    }
+  }
+  function markFromFeedback() {
+    const m = { good: 0, bad: 0 };
+    for (const f of S.fb) if (f && (f.rating === 'good' || f.rating === 'bad')) m[f.rating]++;
+    S.marks.set(S.key, m);
+    paintMark(S.key);
+  }
+  // A saved record (or { cleared }) for one turn of the selected session.
+  function putFeedback(turn, r) {
+    S.fb = S.fb.filter((f) => f && f.turn !== turn);
+    if (r && !r.cleared && typeof r.id === 'string') S.fb.push(r);
+    markFromFeedback();
+    paintRate();
+  }
+  function paintRate() {
+    const f = trCanAct(S) ? fbFor(S.turn) : null;
+    for (const b of $$('[data-trate]', app)) {
+      const on = !!f && f.rating === b.dataset.trate;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', String(on));
+      b.disabled = !trCanAct(S) || S.rating;
+    }
+    $('#tr-addnote').disabled = !trCanAct(S);
+    const noteLabel = f && f.note ? 'Edit note' : 'Add note';
+    $('#tr-addnote-l').textContent = noteLabel;
+    $('#tr-addnote').setAttribute('aria-label', `${noteLabel} (n)`); // the word may give way to the icon
+  }
+  // A second press of the same rating takes it back; the note stays either way.
+  async function rate(rating) {
+    if (S.rating) return;
+    const cur = fbFor(S.turn);
+    const body = trRateBody(S, cur ? cur.rating : null, rating);
+    if (!body) return;
+    const { key, turn } = body;
+    S.rating = true;
+    paintRate();
+    try {
+      const r = await trApi('/api/feedback', postJson(body));
+      if (!S.alive) return;
+      if (key !== S.key) refreshMark(key);
+      else if (S.fbKey === key) putFeedback(turn, r);
+      else loadFeedback();
+    } catch (e) {
+      if (S.alive) info(`Could not save the rating: ${e.message}`);
+    } finally {
+      S.rating = false;
+      if (S.alive) paintRate();
+    }
+  }
+  const turnKey = () => `${S.key}|${S.turn}`;
+  const savedNote = () => {
+    const f = fbFor(S.turn);
+    return (f && typeof f.note === 'string' && f.note) || '';
+  };
+  function paintNotes() {
+    const ta = $('#tr-note');
+    const draft = S.drafts.get(turnKey());
+    ta.value = draft ?? savedNote();
+    ta.disabled = !trCanAct(S);
+    paintNoteBar();
+  }
+  function paintNoteBar(msg) {
+    const ta = $('#tr-note');
+    const saved = savedNote();
+    const dirty = ta.value !== saved;
+    $('#tr-note-count').textContent = `${ta.value.length} / 2000`;
+    $('#tr-note-save').disabled = !trCanAct(S) || !dirty || S.savingNote;
+    const f = fbFor(S.turn);
+    const idle = saved ? `Saved ${trTime(f.updatedAt)}` : 'Stays on this machine, never sent to a judge';
+    $('#tr-note-state').textContent = msg || (dirty ? 'Not saved' : idle);
+  }
+  function openNote() {
+    if (!trCanAct(S)) return;
+    S.tab = 'notes';
+    paintDetail();
+    $('#tr-note').focus();
+  }
+  async function saveNote() {
+    if (!trCanAct(S) || S.savingNote) return;
+    const key = S.key;
+    const turn = S.turn;
+    const note = $('#tr-note').value.slice(0, 2000);
+    S.savingNote = true;
+    paintNoteBar('Saving…');
+    let err = '';
+    let refill = true;
+    try {
+      const r = await trApi('/api/feedback', postJson({ key, turn, note }));
+      if (!S.alive) return;
+      const k = `${key}|${turn}`;
+      const after = trNoteSaved({ draft: S.drafts.get(k), sent: note, value: $('#tr-note').value });
+      if (after.dropDraft) S.drafts.delete(k);
+      refill = after.refill;
+      if (key !== S.key) refreshMark(key);
+      else if (S.fbKey === key) putFeedback(turn, r);
+      else loadFeedback();
+    } catch (e) {
+      err = `Could not save: ${e.message}`;
+    } finally {
+      S.savingNote = false;
+    }
+    if (!S.alive || key !== S.key || turn !== S.turn || $('#tr-notes').hidden) return;
+    if (err) paintNoteBar(err);
+    else if (refill) paintNotes();
+    else paintNoteBar(); // typed on while saving: the field keeps what is there now
   }
 
   /* ---- live tail ---- */
@@ -1322,6 +1967,14 @@ function mountTrace() {
     if ((el = q('[data-tturn]'))) return void loadSkeleton(Number(el.dataset.tturn));
     if ((el = q('[data-tspan]')))
       return void select(el.dataset.tspan, { scroll: el.classList.contains('tr-node') ? 'tree' : 'map' });
+    if ((el = q('[data-trate]'))) return void rate(el.dataset.trate);
+    if (q('#tr-addnote')) return void openNote();
+    if (q('#tr-note-save')) return void saveNote();
+    if (q('#tr-judge-run') || q('[data-trejudge]')) return void runJudge();
+    if (q('#tr-tev')) {
+      S.tab = 'evals';
+      return void paintDetail();
+    }
     if ((el = q('[data-ttab]'))) {
       if (el.disabled || el.hidden) return;
       S.tab = el.dataset.ttab;
@@ -1349,6 +2002,21 @@ function mountTrace() {
     }, 250);
   });
 
+  // The note: a draft per turn until saved; Cmd/Ctrl+Enter saves.
+  const noteBox = $('#tr-note');
+  noteBox.addEventListener('input', () => {
+    if (!trCanAct(S)) return;
+    if (noteBox.value === savedNote()) S.drafts.delete(turnKey());
+    else S.drafts.set(turnKey(), noteBox.value);
+    paintNoteBar();
+  });
+  noteBox.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      saveNote();
+    }
+  });
+
   rowsBox.addEventListener('scroll', () => {
     if (S.rows.length > TR_WINDOW_AT && !S.rowFrame)
       S.rowFrame = requestAnimationFrame(() => {
@@ -1357,7 +2025,8 @@ function mountTrace() {
       });
   });
 
-  // j/k move between spans, ←/→ change turn, Enter opens the detail; never while typing.
+  // j/k move between spans, ←/→ change turn, g/b rate the turn, n opens its note, Enter opens the detail; never
+  // while typing.
   const onKey = (e) => {
     if (!S.alive || e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
     const t = e.target;
@@ -1382,8 +2051,10 @@ function mountTrace() {
     }
     const nav = trNavKey(e, [document.body, document.documentElement]);
     if (nav) {
-      e.preventDefault();
-      if (nav === 'down' || nav === 'up') moveSel(nav === 'down' ? 1 : -1);
+      e.preventDefault(); // also keeps the n out of the note it focuses
+      if (nav === 'good' || nav === 'bad') rate(nav);
+      else if (nav === 'note') openNote();
+      else if (nav === 'down' || nav === 'up') moveSel(nav === 'down' ? 1 : -1);
       else stepTurn(nav === 'prev' ? -1 : 1);
     } else if (e.key === 'Enter' && S.sel) {
       // Outside the explorer Enter keeps its meaning (a sidebar link, a button): only the page itself.
@@ -1444,12 +2115,16 @@ function mountTrace() {
     if (io) io.disconnect();
     if (ro) ro.disconnect();
     document.removeEventListener('keydown', onKey);
+    document.removeEventListener('visibilitychange', onVisible);
     removeEventListener('resize', onResize);
   });
+  document.addEventListener('visibilitychange', onVisible);
 
   /* ---- start: the session in the link, or the newest one ---- */
   trApi('/api/trace/settings')
     .then((r) => {
+      S.contentOff = !!r && r.content === false;
+      if (S.alive && S.tab === 'evals' && !$('#tr-evals').hidden) paintEvals();
       const msg = trOffNote(r);
       if (!S.alive || !msg) return;
       const off = $('#tr-off');
@@ -1459,6 +2134,17 @@ function mountTrace() {
     .catch(() => {
       /* an older server: nothing to say up front */
     });
+  trApi('/api/evals/evaluators')
+    .then((r) => {
+      if (!S.alive) return;
+      S.evs = Array.isArray(r && r.evaluators) ? r.evaluators : [];
+      paintEvalBits();
+    })
+    .catch(() => {
+      /* an older server: verdicts show their ids and the server's pass flag */
+    });
+  paintRate();
+  pollStatus();
   (async () => {
     const params = new URLSearchParams(location.hash.split('?')[1] || '');
     let key = params.get('key');
@@ -1502,4 +2188,15 @@ if (typeof module !== 'undefined')
     trOffNote,
     trStartCollapsed,
     trNameParts,
+    evalRows,
+    turnEvalSummary,
+    spanEvalBadges,
+    trJudgeBanner,
+    trFeedbackMark,
+    trCanAct,
+    trNextRating,
+    trRateBody,
+    trEvalWhy,
+    trNoteSaved,
+    trMarkQueue,
   };

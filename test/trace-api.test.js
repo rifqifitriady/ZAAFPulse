@@ -9,7 +9,7 @@ const net = require('net');
 const path = require('path');
 const { spawn } = require('child_process');
 const { createGateway } = require('../lib/gateway');
-const { secretsFor } = require('./helpers');
+const { secretsFor, NO_JUDGE_PORTS } = require('./helpers');
 
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const ROOT = path.join(__dirname, '..');
@@ -34,6 +34,7 @@ async function startServer(env, { data = tmp('zp-trace-api-'), ports = freePort 
         ZAAFPULSE_AUTH: '',
         ZAAFPULSE_CONTENT: '',
         DEMO: '',
+        ...NO_JUDGE_PORTS,
         ...env,
         ZAAFPULSE_PORT: String(port),
         ZAAFPULSE_DATA: data,
@@ -429,6 +430,59 @@ test('gateway /mcp: acc_trace_sessions never returns a Kiro title, while the das
     assert.equal(rows.filter((r) => r.source === 'kiro').length, 2, 'the Kiro sessions are listed');
     for (const r of rows) assert.equal(r.title, null, `${r.source} title`);
     assert.doesNotMatch(reply.text, /dark mode|login redirect/i);
+    noPaths(mcp.bodies);
+  } finally {
+    await s.stop();
+  }
+});
+
+// acc_evals holds ids and labels only, so the gateway's /mcp answers it as it does the stdio server: the rates and the
+// failures, never the explanation a judge wrote about the transcript.
+test('gateway /mcp: acc_evals returns labels and keys, never an explanation', async () => {
+  const data = tmp('zp-trace-api-evals-');
+  const proj = path.join(data, '.claude', 'projects', 'proj');
+  fs.mkdirSync(proj, { recursive: true });
+  fs.copyFileSync(path.join(__dirname, 'fixtures', 'trace', 'claude', 'proj', 's1.jsonl'), path.join(proj, 's1.jsonl'));
+  const { createEvalStore } = require('../lib/evals/store');
+  createEvalStore({ file: path.join(data, '.data', 'evals.jsonl') }).put({
+    target: { source: 'claude', session: 's1', turn: 0, span: null },
+    evaluator: 'faithfulness',
+    version: 1,
+    kind: 'judge',
+    label: 'unfaithful',
+    score: 0,
+    explanation: 'EXPLANATION-SENTINEL it claims a test that never ran',
+    judge: { kind: 'ollama', model: 'qwen3:8b', provider: 'ollama' },
+    ts: Date.now(),
+  });
+  const gw = createGateway({
+    dataDir: path.join(data, '.data'),
+    getConfig: () => ({ gateway: {} }),
+    writeGatewayConfig: () => {},
+    secrets: secretsFor(),
+    resolveSecret: () => undefined,
+    getPricing: () => ({}),
+    getIntegrations: () => ({ listTools: async () => [], callTool: async () => ({}) }),
+  });
+  const apiKey = gw.keys.create({ name: 'mcp', scopes: ['mcp'], rpm: 60 }).secret;
+  gw.flush();
+  const s = await startServer({ ZAAFPULSE_AUTH: 'none', ZAAFPULSE_CONTENT: 'on' }, { data });
+  try {
+    const mcp = client(s.base, { authorization: `Bearer ${apiKey}` });
+    const reply = await mcp.post('/mcp', {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'acc_evals', arguments: { range: 'all' } },
+    });
+    assert.equal(reply.status, 200);
+    const out = JSON.parse(reply.json.result.content[0].text);
+    assert.deepEqual(
+      out.failures.map((f) => [f.source, f.turn, f.evaluator, f.label]),
+      [['claude', 0, 'faithfulness', 'unfaithful']],
+    );
+    assert.equal(out.evaluators.find((e) => e.id === 'faithfulness').total, 1);
+    assert.doesNotMatch(reply.text, /EXPLANATION-SENTINEL|never ran|explanation|fix the login/i);
     noPaths(mcp.bodies);
   } finally {
     await s.stop();
