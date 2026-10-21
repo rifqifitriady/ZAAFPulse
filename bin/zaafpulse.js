@@ -3,6 +3,7 @@
 //   zaafpulse [start] [--host 0.0.0.0] [--port 4777] [--data DIR] [--demo] [--open]
 //   zaafpulse set-password            admin password for server mode (asked twice, or --stdin)
 //   zaafpulse service install|uninstall|status|restart [--system] [--host H] [--port P]
+//   zaafpulse eval --judge --session <id> [--source claude|codex] [--data DIR] [--json]   judge one session locally
 //   zaafpulse status | open | doctor | mcp | register-mcp <client|all> [--remove] | version
 const fs = require('fs');
 const path = require('path');
@@ -11,7 +12,7 @@ const platform = require('../lib/platform');
 const pkg = require('../package.json');
 
 const argv = process.argv.slice(2);
-const VALUE_FLAGS = ['--host', '--port', '--data']; // every other flag is a switch
+const VALUE_FLAGS = ['--host', '--port', '--data', '--session', '--source']; // every other flag is a switch
 const flag = (name) => {
   const i = argv.indexOf(`--${name}`);
   if (i < 0) return undefined;
@@ -246,6 +247,25 @@ const commands = {
       die(err.message);
     }
   },
+  // Judge one session from the terminal with the local model of the data folder's settings (see docs/evals.md).
+  async eval() {
+    const { runEval, USAGE } = require('../lib/evals/cli');
+    const session = flag('session');
+    const source = flag('source');
+    // A flag that swallowed the next flag (`--session --json`) is a mistake, not a session id.
+    const bad = [session, source].some((v) => typeof v === 'string' && v.startsWith('-'));
+    if (bad) die(`${USAGE}\n--session and --source need a value that does not start with "-".`, 2);
+    if (!flag('judge') || typeof session !== 'string' || !session) die(USAGE, 2);
+    const code = await runEval({
+      session,
+      source: typeof source === 'string' ? source : undefined,
+      json: !!flag('json'),
+      dir: platform.dataDir(),
+      out: (m) => console.log(m),
+      err: (m) => console.error(m),
+    });
+    process.exitCode = code;
+  },
   version() {
     console.log(pkg.version);
   },
@@ -259,6 +279,8 @@ const commands = {
   zaafpulse service install         run in the background and at startup (--system: as a server service)
   zaafpulse service uninstall|status|restart
   zaafpulse status | open | doctor
+  zaafpulse eval --judge --session <id> [--source claude|codex] [--json]
+                                    judge one session with the local model (--data DIR: the data folder)
   zaafpulse register-mcp <client|all> [--remove]
                                     clients: ${mcpClients().join(', ')}
   zaafpulse mcp                     the stdio MCP server (what AI clients start)

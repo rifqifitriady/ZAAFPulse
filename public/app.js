@@ -747,6 +747,7 @@ async function viewSettings(el) {
       <p class="muted" style="margin-top:0">Each model call's tokens are multiplied by the price for the longest matching model prefix (for example <code>claude-opus-5-5</code> beats <code>claude-opus-5</code>). Cache reads and cache writes have their own rates. Models with no matching prefix count as $0 and are listed in the banner on Overview.</p>
       <p class="muted">Prices are USD per 1M tokens and update automatically from OpenRouter's public model list, which carries each provider's list price. Edit a model to pin your own price, or add a prefix such as <code>gpt-6</code> for models the list does not have.</p></div>
   </div>
+  ${evalsSettingsShell()}
   <section class="holo panel" id="prices-panel" style="margin-top:16px"><div class="skeleton" style="height:220px"></div></section></div>`;
 
   $('#profile-form').onsubmit = async (e) => {
@@ -767,6 +768,7 @@ async function viewSettings(el) {
     $('#profile-saved').textContent = 'Saved';
     await loadSummary();
   };
+  mountEvalsSettings();
   loadPrices().catch((err) => {
     $('#prices-panel').innerHTML = holoEmpty(`Could not load prices: ${esc(err.message)}`);
   });

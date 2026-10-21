@@ -58,4 +58,8 @@ const secretsFor = (env = {}) =>
     },
   });
 
-module.exports = { fakeServer, secretsFor };
+// The judge models are looked for at Ollama's and LM Studio's ports once the server has indexed. A spawned server.js
+// must not reach the machine's own ones, so tests point both at a closed port (9, discard) with these.
+const NO_JUDGE_PORTS = { ZAAFPULSE_OLLAMA_URL: 'http://127.0.0.1:9', ZAAFPULSE_LMSTUDIO_URL: 'http://127.0.0.1:9' };
+
+module.exports = { fakeServer, secretsFor, NO_JUDGE_PORTS };

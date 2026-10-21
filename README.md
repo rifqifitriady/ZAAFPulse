@@ -363,6 +363,7 @@ The installers use your Node.js 18+ or download the official Node.js LTS (checks
 ```bash
 zaafpulse status      # is it running?
 zaafpulse doctor      # OS, Node.js, data folder, secret store, logs found, service
+zaafpulse eval --judge --session <id>   # judge one session with a local model, no dashboard needed
 zaafpulse open        # open the dashboard, signed in
 zaafpulse service restart | uninstall
 zaafpulse help
@@ -444,7 +445,7 @@ Or use **Endpoint → MCP server** in the dashboard: it shows where the server i
 
 | Type | Platforms | Tools |
 |---|---|---|
-| `acc` (always on) | this dashboard | `usage_summary`, `quality`, `live_apps`, `trace_sessions` (session metadata only, no text; titles only from stdio and never over the gateway `/mcp`), `integrations_status` |
+| `acc` (always on) | this dashboard | `usage_summary`, `quality`, `live_apps`, `trace_sessions` (session metadata only, no text; titles only from stdio and never over the gateway `/mcp`), `evals` (pass rates and the latest failures as ids and labels, read-only, no explanations), `integrations_status` |
 | `dynatrace` | Dynatrace SaaS and Managed | problems, entities, metrics, logs, security problems, DQL (SaaS) |
 | `arize` | Arize Phoenix and Arize AX | projects, spans, traces, datasets, experiments, monitors (AX) |
 | `n8n` | n8n | workflows, executions; run allowlisted webhooks and (de)activate workflows when writes are on |
@@ -564,6 +565,17 @@ The **Trace explorer** page shows what one AI session did: its turns, model call
 
 What each source shows, privacy, the `/api/trace/*` routes and troubleshooting: **[docs/explorer.md](docs/explorer.md)**.
 
+## Local evals & feedback
+
+ZAAFPulse can grade finished turns, as well as detect signals in them. Six **code checks** reuse the Quality detectors (secret leak, risky command, prompt injection, non-existent target, tool loop, correction) and cost nothing. Five **judge evaluators** (faithfulness, task completion, tool selection, relevance, and user frustration across a session) are answered by a model that reads the masked text of the turn. You can also rate any turn **Good** or **Bad** and add a note, and the Quality page shows how often the judges agree with you.
+
+- **Local first.** The judge is the model chosen in Settings → Evals, else Ollama (`ollama pull qwen3:8b`), else LM Studio, else it waits and says so. Nothing goes to an external provider unless you pick one, read the exact masked text it would receive, and confirm; a daily cost cap applies, and a model with no known price is refused.
+- **Only new turns, plus one click for the rest.** A turn is judged once it is finished and only if it started after the judge became available; **Judge this session** in the Trace explorer (or `zaafpulse eval --judge --session <id>`) does the history of one session. One queue, 500 judgments a day by default.
+- **Untrusted input.** The text is masked, wrapped as data with a per-judgment tag, given to a model with no tools, and must come back as JSON with a label from a fixed list; anything else is dropped. Your notes are never sent. With `ZAAFPULSE_CONTENT=off` explanations are hidden and labels stay.
+- **Stored on this machine** in `.data/evals.jsonl`, `feedback.jsonl` and `evals-state.json` (mode 0600), with no prompt text in the results.
+
+The evaluators, model resolution, caps, scheduling, privacy, the `/api/evals/*` and `/api/feedback` routes, the `acc_evals` MCP tool, the CLI and the known limits: **[docs/evals.md](docs/evals.md)**.
+
 ## OpenTelemetry export
 
 ZAAFPulse can send traces of what the Agent Gateway does to any backend that accepts OTLP over HTTP. It writes OTLP itself, with no dependencies: binary protobuf by default, JSON when you set `"protocol": "http/json"`. gRPC is not supported.
@@ -607,7 +619,7 @@ Usage is counted once per API response across all log files: a resumed or forked
 
 ## What the quality metrics mean
 
-These are **signals detected in the logs, not a graded evaluation**. Every one comes from a heuristic detector (patterns and small parsers, no judge model, nothing sent anywhere), and every card opens the exact items that matched, so you can judge them yourself. How each detector was measured, and where it still misses: **[docs/quality-metrics.md](docs/quality-metrics.md)**.
+These are **signals detected in the logs, not a graded evaluation**. Every one comes from a heuristic detector (patterns and small parsers, no judge model, nothing sent anywhere; the optional [local evals](#local-evals--feedback) add a judge on top), and every card opens the exact items that matched, so you can judge them yourself. How each detector was measured, and where it still misses: **[docs/quality-metrics.md](docs/quality-metrics.md)**.
 
 | Metric | How it is detected |
 |---|---|
@@ -667,6 +679,7 @@ By default the server listens on `127.0.0.1` only and rejects requests whose `Ho
 | Integrations you configure (Dynatrace, Arize, n8n, OmniRoute, HTTP and MCP services) | When an AI client calls a tool, or the Integrations page checks health (at most once a minute per integration, or when you press Test) | The tool call, to the URL you configured |
 | Model providers you configure | When an app, agent, workflow or the playground calls a model, when their model lists load, and to refresh OAuth2 or service-account tokens | The request you or your agents sent |
 | Second-brain sources, remote A2A agents, URLs you give the RAG service | When you connect, sync or use them | Requests to that source's own API or address |
+| Ollama and LM Studio on this machine (local evals) | Only while a judge model is looked for or used (`127.0.0.1:11434`, `127.0.0.1:1234`); an external judge only if you pick that provider and confirm its preview ([Local evals](#local-evals--feedback)) | The masked text of a finished turn, to the judge you chose |
 | Your OTLP endpoint | Only when `"otel": { "enabled": true }` or an `OTEL_EXPORTER_OTLP_*ENDPOINT` variable is set ([OpenTelemetry](#opentelemetry-export)) | Spans; no prompt text unless `captureContent` is on |
 | GitHub and nodejs.org | Only while `install.sh` or `install.ps1` runs | The release (or `main` when you ask), and the official Node.js LTS when your system has no Node 18+ |
 
@@ -685,7 +698,7 @@ Nothing else: no telemetry, no update checks, no accounts. Demo mode fetches not
 <summary><b>Project structure</b></summary>
 
 ```
-bin/zaafpulse.js       the zaafpulse command: start, open, set-password, service, status, doctor, register-mcp, mcp
+bin/zaafpulse.js       the zaafpulse command: start, open, set-password, service, status, doctor, register-mcp, mcp, eval
 server.js              HTTP server, API routes, config, sign-in, TLS, demo switch
 mcp.js                 MCP server "zaafpulse" over stdio for AI clients
 lib/mcp/               MCP protocol (stdio server, protocol versions up to 2025-11-25, Streamable HTTP client)
@@ -703,6 +716,7 @@ lib/audit.js           tool-call log (.cache/mcp-audit.jsonl)
 lib/local.js           dashboard data for the acc connector
 lib/trace/             Trace explorer: adapters for Claude Code, Codex, the gateway, Kiro, Gemini CLI and Antigravity, on-demand
                        masked text reading (content.js), and the registry with opaque keys, a cache and a worker (index.js)
+lib/evals/             local evals: registry, code evaluators, judge prompts, models, engine, stores, HTTP API, CLI
 lib/claude.js          Claude Code log parser (usage + signals)
 lib/codex.js           Codex log parser (usage + signals), skips the history a fork copies
 lib/signals.js         non-existent-target, injection, secret, risky-command and correction detectors; relevance and
@@ -742,7 +756,7 @@ scripts/bench-index.js indexer benchmark on seeded synthetic logs
 install.sh, install.ps1 one-command installers for macOS/Linux and Windows
 Dockerfile, compose.yaml container image for servers
 .github/workflows/     ci.yml (the full suite on Linux, macOS and Windows), release.yml (binaries, checksums, attestations)
-test/                  52 node:test suites with fake HTTP and MCP servers
+test/                  62 node:test suites with fake HTTP and MCP servers
 test/fixtures/         the labelled synthetic signal corpus (signals/) and cost fixtures (cost/)
 config.example.json    every integration type with placeholder references
 docs/install.md        installers, sign-in, server mode, Docker, single-file binaries, verifying a download
@@ -751,6 +765,7 @@ docs/otel.md           OpenTelemetry export: spans, attributes, backends
 docs/quality-metrics.md how the quality and safety detectors are measured
 docs/performance.md    indexing speed: method and numbers
 docs/explorer.md       Trace explorer: sources, privacy, keyboard, API, troubleshooting
+docs/evals.md          local evals and feedback: evaluators, local judge, caps, privacy, API, MCP tool, CLI
 docs/release-hardening.md tag ruleset and immutable releases
 docs/assets/           README banner, diagrams, screenshots and GIFs
 ```
@@ -782,6 +797,7 @@ Apart from the sign-in routes in the first row, every `/api` route needs a signe
 | `GET /api/openrouter/endpoints?ids=…` | providers serving up to 40 models, with uptime and per-provider prices |
 | `GET /api/prices` · `POST /api/prices` | live price catalog (when synced), sync status, your pinned prices; `refresh`, `toggle`, `set`, `unpin`, `remove` |
 | `GET /api/trace/sources` · `sessions` · `title` · `session` · `content` · `live` · `find` · `POST /api/trace/reveal` | the Trace explorer: sessions of every source, one turn as spans, and their text on request, masked; see [docs/explorer.md](docs/explorer.md#http-api) |
+| `GET /api/evals` · `summary` · `status` · `evaluators` · `settings` · `POST /api/evals/run` · `settings` · `preview` · `GET /api/feedback` · `sessions` · `POST /api/feedback` | local evals and feedback: results per session, trends and judge agreement, the judge's status, settings, the external preview, and your ratings and notes; see [docs/evals.md](docs/evals.md#http-api) |
 | `POST /api/rescan` | re-index changed log files now |
 | `GET /api/integrations` | integration health, client registration and recent MCP tool calls |
 | `POST /api/integrations/test` | fresh health check of one integration (`{ "id": "..." }`) |
@@ -805,7 +821,7 @@ Everything is editable in **Settings** and saved to `config.json`:
 | Price auto-update (`pricingSync.enabled`) | on; fetches the public price list at startup and every 12 hours (toggle in Settings) |
 | OpenTelemetry export (`otel`) | off; set in `config.json` only ([docs/otel.md](docs/otel.md)) |
 
-Environment variables: `PORT` / `ZAAFPULSE_PORT` (default `4777`), `ZAAFPULSE_HOST`, `ZAAFPULSE_DATA`, `ZAAFPULSE_AUTH` (`local` by default on 127.0.0.1, `1` for password, `none` to turn sign-in off), `ZAAFPULSE_INDEX_WORKERS` (worker threads for the first index; `0` turns them off), `ZAAFPULSE_CONTENT` (`off` hides transcript text in the Trace explorer; in server mode it is off unless `on`), the server-mode settings in [docs/install.md](docs/install.md), the standard `OTEL_*` variables ([docs/otel.md](docs/otel.md)), and `DEMO=1` for synthetic data. Demo mode never writes `config.json`, the Keychain or your coding tools, and fetches nothing: model calls are answered by a scripted model inside the process, and gateway data lives in a temporary folder. It uses the cached price list if one exists.
+Environment variables: `PORT` / `ZAAFPULSE_PORT` (default `4777`), `ZAAFPULSE_HOST`, `ZAAFPULSE_DATA`, `ZAAFPULSE_AUTH` (`local` by default on 127.0.0.1, `1` for password, `none` to turn sign-in off), `ZAAFPULSE_INDEX_WORKERS` (worker threads for the first index; `0` turns them off), `ZAAFPULSE_CONTENT` (`off` hides transcript text in the Trace explorer, and eval explanations; in server mode it is off unless `on`), `ZAAFPULSE_OLLAMA_URL` and `ZAAFPULSE_LMSTUDIO_URL` (move the local judge servers; for tests and unusual setups, see [docs/evals.md](docs/evals.md)), the server-mode settings in [docs/install.md](docs/install.md), the standard `OTEL_*` variables ([docs/otel.md](docs/otel.md)), and `DEMO=1` for synthetic data. Demo mode never writes `config.json`, the Keychain or your coding tools, and fetches nothing: model calls are answered by a scripted model inside the process, and gateway data lives in a temporary folder. It uses the cached price list if one exists.
 </details>
 
 ## Contributing

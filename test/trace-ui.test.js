@@ -21,7 +21,19 @@ const {
   trOffNote,
   trStartCollapsed,
   trNameParts,
+  evalRows,
+  turnEvalSummary,
+  spanEvalBadges,
+  trJudgeBanner,
+  trFeedbackMark,
+  trCanAct,
+  trNextRating,
+  trRateBody,
+  trEvalWhy,
+  trNoteSaved,
+  trMarkQueue,
 } = require('../public/traceview.js');
+const { EVALUATORS } = require('../lib/evals/registry');
 
 const SRC = path.join(__dirname, '..', 'public', 'traceview.js');
 const claudeSpans = () => traceDemo(Date.UTC(2026, 9, 20, 12)).skeletons['demo-claude-1'].spans;
@@ -364,4 +376,299 @@ test('trNameParts: a tool call splits into its operation and its tool name; othe
   assert.deepEqual(trNameParts(null), ['', '']);
   const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
   assert.match(css, /@container trtree \(max-width: 400px\) \{\s*\.tr-row \.tr-op \{\s*display: none;/);
+});
+
+// ---- local evals in the explorer ----
+// The evaluator list as GET /api/evals/evaluators gives it to the page.
+const EVS = EVALUATORS.map(({ id, kind, scope, title, labels, pass }) => ({ id, kind, scope, title, labels, pass }));
+const res = (evaluator, label, extra = {}) => {
+  const e = EVALUATORS.find((x) => x.id === evaluator);
+  return {
+    evaluator,
+    kind: e ? e.kind : 'judge',
+    scope: e ? e.scope : 'turn',
+    turn: e && e.scope === 'session' ? null : 0,
+    label,
+    score: null,
+    pass: !!e && label === e.pass,
+    explanation: null,
+    judge: e && e.kind === 'judge' ? { kind: 'ollama', model: 'qwen3:8b', provider: 'ollama' } : null,
+    trimmed: false,
+    evidence: [],
+    ts: 1,
+    ...extra,
+  };
+};
+
+test('evalRows: the pass label is pass, the last label is fail, anything between is mid', () => {
+  const rows = evalRows(
+    [
+      res('task_completion', 'complete'),
+      res('tool_selection', 'questionable'),
+      res('relevance', 'off-topic'),
+      res('secret_leak', 'leaked'),
+      res('prompt_injection', 'local'),
+      res('faithfulness', 'faithful'),
+    ],
+    EVS,
+  );
+  const tone = Object.fromEntries(rows.map((r) => [r.id, r.tone]));
+  assert.deepEqual(tone, {
+    task_completion: 'pass',
+    tool_selection: 'mid',
+    relevance: 'fail',
+    secret_leak: 'fail',
+    prompt_injection: 'mid',
+    faithfulness: 'pass',
+  });
+  // Failing first, then the middle ones, then the passes; each group in the registry's order.
+  assert.deepEqual(
+    rows.map((r) => r.id),
+    ['secret_leak', 'relevance', 'prompt_injection', 'tool_selection', 'faithfulness', 'task_completion'],
+  );
+  const leak = rows.find((r) => r.id === 'secret_leak');
+  assert.equal(leak.title, 'Secret leak');
+  assert.equal(leak.label, 'leaked');
+  assert.equal(leak.model, 'code', 'a code evaluator has no model');
+  assert.equal(rows.find((r) => r.id === 'faithfulness').model, 'qwen3:8b');
+});
+
+test('evalRows: session verdicts after the turn ones, explanation and trimming kept, odd input tolerated', () => {
+  const rows = evalRows(
+    [
+      res('user_frustration', 'some', { explanation: 'Two corrections.' }),
+      res('faithfulness', 'unfaithful', { explanation: 'Claims a test that never ran.', trimmed: true, score: 0 }),
+      res('made_up', 'odd', { pass: false }),
+      null,
+      { evaluator: 42 },
+      res('relevance', 'relevant', { explanation: null }),
+    ],
+    EVS,
+  );
+  assert.deepEqual(
+    rows.map((r) => r.id),
+    ['faithfulness', 'made_up', 'relevance', 'user_frustration'],
+  );
+  const f = rows[0];
+  assert.equal(f.explanation, 'Claims a test that never ran.');
+  assert.equal(f.trimmed, true);
+  assert.equal(f.score, 0);
+  assert.equal(rows[1].title, 'made_up', 'an evaluator the page does not know shows its id');
+  assert.equal(rows[1].tone, 'fail');
+  assert.equal(rows[2].explanation, null, 'content off: the page says it is hidden');
+  assert.equal(rows[3].scope, 'session');
+  assert.equal(rows[3].tone, 'mid');
+  assert.deepEqual(evalRows(null, null), []);
+  assert.equal(evalRows([res('secret_leak', 'leaked')], null)[0].tone, 'fail', 'without the list: pass or fail');
+  // Own keys only: an evaluator id from a log is never a prototype lookup.
+  assert.equal(evalRows([res('constructor', 'x')], EVS)[0].title, 'constructor');
+});
+
+test('turnEvalSummary: how many verdicts, how many pass, which fail', () => {
+  const sum = turnEvalSummary([
+    res('secret_leak', 'leaked'),
+    res('tool_loop', 'none'),
+    res('faithfulness', 'faithful'),
+    res('task_completion', 'partial'),
+    res('relevance', 'relevant'),
+    null,
+  ]);
+  assert.deepEqual(sum, { judged: 5, passed: 3, failing: ['secret_leak', 'task_completion'] });
+  assert.deepEqual(turnEvalSummary([]), { judged: 0, passed: 0, failing: [] });
+  assert.deepEqual(turnEvalSummary(undefined), { judged: 0, passed: 0, failing: [] });
+});
+
+test('spanEvalBadges: a tool span gets the failing label of a code verdict that names its tool', () => {
+  const results = [
+    res('secret_leak', 'leaked', { evidence: [{ tool: 'Bash', label: 'Anthropic API key' }] }),
+    res('tool_loop', 'loop', { evidence: [{ tool: 'Read', label: 'same file read 4 times' }] }),
+    res('prompt_injection', 'local', { evidence: [{ tool: 'Bash', label: 'ignore previous' }] }),
+    res('risky_command', 'safe', { evidence: [{ tool: 'Bash', label: 'rm' }] }),
+    res('non_existent_target', 'hallucinated', { evidence: [{ tool: null, label: 'missing file' }] }),
+    res('faithfulness', 'unfaithful', { evidence: [{ tool: 'Bash', label: 'x' }] }),
+  ];
+  const bash = { id: 'a', kind: 'tool', name: 'execute_tool Bash', tool: { name: 'Bash' } };
+  const b = spanEvalBadges(bash, results, EVS);
+  assert.deepEqual(
+    b.map((x) => [x.label, x.tone]),
+    [
+      ['leaked', 'bad'],
+      ['local', 'warn'],
+    ],
+    'failing code verdicts only: a pass, a judge verdict and a null tool add nothing',
+  );
+  assert.match(b[0].title, /Secret leak/);
+  assert.deepEqual(
+    spanEvalBadges({ kind: 'tool', tool: { name: 'Read' } }, results, EVS).map((x) => x.label),
+    ['loop'],
+  );
+  // The same works for a map node, which carries the tool the same way.
+  assert.deepEqual(
+    spanEvalBadges({ kind: 'tool', label: 'execute_tool · Read', tool: { name: 'Read' }, count: 3 }, results).map(
+      (x) => x.label,
+    ),
+    ['loop'],
+  );
+  assert.deepEqual(spanEvalBadges({ kind: 'chat', tool: { name: 'Bash' } }, results), [], 'not a tool span');
+  assert.deepEqual(spanEvalBadges({ kind: 'tool', tool: null }, results), []);
+  assert.deepEqual(spanEvalBadges({ kind: 'tool', tool: { name: 'Grep' } }, results), []);
+  assert.deepEqual(spanEvalBadges(null, results), []);
+  assert.deepEqual(spanEvalBadges(bash, null), []);
+  // Two pieces of evidence for one tool give one badge.
+  const twice = [res('secret_leak', 'leaked', { evidence: [{ tool: 'Bash' }, { tool: 'Bash' }] })];
+  assert.equal(spanEvalBadges(bash, twice).length, 1);
+});
+
+test('trNavKey: g, b and n rate the turn and open the note, never while typing or with a modifier', () => {
+  const body = { closest: () => null };
+  const key = (k, target, extra = {}) => trNavKey({ key: k, target, ...extra }, [body]);
+  const row = el(true);
+  assert.equal(key('g', row), 'good');
+  assert.equal(key('b', row), 'bad');
+  assert.equal(key('n', body), 'note');
+  assert.equal(key('g', el(false)), null, 'outside the explorer');
+  for (const sel of ['input', 'textarea', 'select']) {
+    for (const k of ['g', 'b', 'n']) assert.equal(key(k, el(true, sel)), null, `${k} in ${sel}`);
+  }
+  for (const mod of ['shiftKey', 'metaKey', 'ctrlKey', 'altKey'])
+    assert.equal(key('b', row, { [mod]: true }), null, mod);
+  // On a tab the letters still work (only the arrows belong to the tabs).
+  assert.equal(key('g', el(true, '[role="tab"]')), 'good');
+});
+
+test('trJudgeBanner: a slim line when the judge waits or is paused, nothing when it runs', () => {
+  const ok = { judge: { ok: true, waiting: false, reason: null }, paused: null, queue: 0 };
+  assert.equal(trJudgeBanner(ok), null);
+  assert.equal(trJudgeBanner(null), null);
+  const waiting = (reason) => trJudgeBanner({ judge: { ok: false, waiting: true, reason } });
+  const none = waiting('Install or start Ollama, or choose a provider');
+  assert.equal(none.text, 'Judge waiting: install or start Ollama, or choose a provider in');
+  assert.equal(none.waiting, true);
+  const confirm = waiting('Confirm the preview before sending to openrouter');
+  assert.equal(confirm.text, 'Judge waiting: confirm the preview before sending to openrouter ·');
+  const back = waiting('Judge provider unavailable, retrying in 4 min');
+  assert.match(back.text, /^Judge waiting: judge provider unavailable, retrying in 4 min/);
+  const capped = trJudgeBanner({ ...ok, paused: 'daily cap' });
+  assert.match(capped.text, /^Judging paused: daily cap reached, resumes tomorrow/);
+  assert.match(trJudgeBanner({ ...ok, paused: 'cost cap' }).text, /^Judging paused: cost cap reached/);
+  const off = trJudgeBanner({ ...ok, paused: 'judge off' });
+  assert.match(off.text, /^Judging is off/);
+  assert.equal(off.waiting, true, 'nothing would judge a session now');
+  assert.equal(capped.waiting, false, 'a capped run still queues for tomorrow');
+  // A reason is shown as text, and a long one is cut.
+  const long = trJudgeBanner({ judge: { waiting: true, reason: 'x'.repeat(500) } });
+  assert.ok(long.text.length < 200);
+});
+
+test('trFeedbackMark: thumbs down wins over thumbs up, nothing without a rating', () => {
+  assert.equal(trFeedbackMark({ good: 2, bad: 0 }).mark, '👍');
+  assert.equal(trFeedbackMark({ good: 1, bad: 1 }).mark, '👎');
+  assert.equal(trFeedbackMark({ good: 1, bad: 1 }).title, 'Your feedback: 1 good, 1 bad');
+  assert.equal(trFeedbackMark({ good: 0, bad: 0 }), null);
+  assert.equal(trFeedbackMark(null), null);
+});
+
+test('the eval code builds no HTML from an explanation, a note, a label or a title (S1)', () => {
+  const src = fs.readFileSync(SRC, 'utf8');
+  // Every innerHTML assignment, with each esc(...) call taken out: what is left may not name such a value.
+  const sets = [...src.matchAll(/\binnerHTML\s*\+?=\s*([\s\S]*?);\s*\n/g)].map((m) => m[1]);
+  const unescaped = (s) => s.replace(/\besc\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)/g, 'ESC');
+  for (const rhs of sets)
+    assert.doesNotMatch(
+      unescaped(rhs),
+      /\b(explanation|note|label|title)\b/,
+      `innerHTML built from: ${rhs.slice(0, 80)}`,
+    );
+  // In a line of markup, such a value is always inside esc().
+  for (const line of src.split('\n').filter((l) => /<[a-z]/i.test(l)))
+    for (const m of unescaped(line).matchAll(/\$\{([^{}]*)\}/g))
+      assert.doesNotMatch(m[1], /\.(explanation|note|label|title)\b/, `unescaped in markup: ${m[0]}`);
+  // The eval pane and the note are filled with textContent and value only.
+  assert.match(src, /return \{ text: r\.explanation, quiet: false \}/);
+  assert.match(src, /line\.textContent = why\.text;/);
+  assert.doesNotMatch(src, /innerHTML[^;\n]*\b(evRows|evalRows|noteText)\b/);
+});
+
+// ---- review fixes: one action line, ratings pinned to the session on show ----
+test('the action row stays on one line: the info text gives way, the buttons do not wrap', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
+  const acts = /\n\.tr-acts \{([^}]*)\}/.exec(css);
+  assert.ok(acts, 'a .tr-acts rule');
+  assert.match(acts[1], /flex-wrap: nowrap;/);
+  const info = /\n\.tr-dinfo \{([^}]*)\}/.exec(css);
+  assert.match(info[1], /flex: 1 1 0;/);
+  assert.match(info[1], /min-width: 0;/);
+  assert.match(info[1], /text-overflow: ellipsis;/);
+  assert.match(info[1], /white-space: nowrap;/);
+  // With "Load next 64 KB" in a narrow row, Edit note and Judge keep their icons only.
+  const compact = /\.tr-acts:has\(#tr-more:not\(\[hidden\]\)\) :is\(#tr-addnote, #tr-judge-run\) \.tr-bl \{/;
+  assert.match(css, compact);
+  const src = fs.readFileSync(SRC, 'utf8');
+  for (const name of ['Good (g)', 'Bad (b)', 'Judge this session'])
+    assert.match(src, new RegExp(`aria-label="${name.replace(/[()]/g, '\\$&')}"`), `${name} keeps a name as an icon`);
+});
+
+test('trCanAct: only once the skeleton on show belongs to the selected session', () => {
+  assert.equal(trCanAct({ key: 'A', skKey: 'A', sk: {} }), true);
+  assert.equal(trCanAct({ key: 'B', skKey: 'A', sk: {} }), false, 'a switch to B is still loading');
+  assert.equal(trCanAct({ key: 'A', skKey: 'A', sk: null }), false, 'no skeleton');
+  assert.equal(trCanAct({ key: null, skKey: null, sk: {} }), false);
+  assert.equal(trCanAct(null), false);
+});
+
+test('trNextRating: the same rating again takes it back, another one replaces it', () => {
+  assert.equal(trNextRating(null, 'good'), 'good');
+  assert.equal(trNextRating('good', 'good'), null);
+  assert.equal(trNextRating('bad', 'bad'), null);
+  assert.equal(trNextRating('good', 'bad'), 'bad');
+  assert.equal(trNextRating(undefined, 'bad'), 'bad');
+});
+
+test('trRateBody: a rating names the session and turn on show, and a key switch in flight blocks it', () => {
+  const S = { key: 'A', skKey: 'A', sk: { turns: [{}, {}, {}] }, turn: 2 };
+  assert.deepEqual(trRateBody(S, null, 'good'), { key: 'A', turn: 2, rating: 'good' });
+  assert.deepEqual(trRateBody(S, 'good', 'good'), { key: 'A', turn: 2, rating: null });
+  // The list selected B: S.key moved, the tree and S.turn are still A's.
+  S.key = 'B';
+  assert.equal(trRateBody(S, null, 'good'), null, 'nothing is sent for B with A\'s turn');
+  S.skKey = 'B';
+  assert.deepEqual(trRateBody(S, null, 'bad'), { key: 'B', turn: 2, rating: 'bad' });
+  assert.equal(trRateBody(S, null, 'meh'), null);
+});
+
+test('trEvalWhy: the explanation, a hidden one, a missing one, or the evidence of a failing code check', () => {
+  const judge = { kind: 'judge', tone: 'fail', explanation: null, evidence: [] };
+  const said = trEvalWhy({ ...judge, explanation: 'Claims a test.' }, false);
+  assert.deepEqual(said, { text: 'Claims a test.', quiet: false });
+  assert.deepEqual(trEvalWhy(judge, true), { text: 'hidden while content viewing is off', quiet: true });
+  assert.deepEqual(trEvalWhy(judge, false), { text: 'no explanation', quiet: true });
+  const code = { kind: 'code', tone: 'fail', explanation: null, evidence: ['Bash: Anthropic API key'] };
+  assert.deepEqual(trEvalWhy(code, true), { text: 'Bash: Anthropic API key', quiet: false });
+  assert.equal(trEvalWhy({ ...code, tone: 'pass' }, false), null, 'a passing code check says nothing');
+  assert.equal(trEvalWhy({ ...code, evidence: [] }, false), null);
+});
+
+test('trNoteSaved: a draft typed after the save stays, and the field is only refilled when nothing changed', () => {
+  assert.deepEqual(trNoteSaved({ draft: 'abc', sent: 'abc', value: 'abc' }), { dropDraft: true, refill: true });
+  // Typed on while the save was on its way.
+  assert.deepEqual(trNoteSaved({ draft: 'abcd', sent: 'abc', value: 'abcd' }), { dropDraft: false, refill: false });
+  assert.deepEqual(trNoteSaved({ draft: undefined, sent: 'abc', value: 'abc' }), { dropDraft: false, refill: true });
+});
+
+test('trMarkQueue: a key in flight is not asked twice; a refresh during the flight asks again after it', () => {
+  const q = trMarkQueue();
+  const none = () => false;
+  q.want(['a', 'b', '', null], none);
+  const first = q.take(50);
+  assert.deepEqual(first, ['a', 'b']);
+  q.want(['a', 'b', 'c'], none); // a repaint while a and b are on their way
+  assert.deepEqual(q.take(50), ['c']);
+  q.refresh('a'); // a rating changed for a, still in flight
+  assert.deepEqual(q.done(first), ['a'], 'a goes again: the answer in flight is older than the change');
+  assert.deepEqual(q.take(50), ['a']);
+  q.want(['b'], (k) => k === 'b');
+  assert.equal(q.size, 0, 'a key with a marker is not asked for');
+  q.refresh('b');
+  assert.deepEqual(q.take(1), ['b'], 'a refresh outside a flight just queues');
+  assert.equal(q.take(50).length, 0);
 });
