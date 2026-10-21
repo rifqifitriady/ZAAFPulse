@@ -282,7 +282,8 @@ const commands = {
       die(err.message);
     }
   },
-  // Judge one session from the terminal with the local model of the data folder's settings (see docs/evals.md).
+  // Judge one session from the terminal with the judge of the data folder's settings: a local model, or Claude Code
+  // once its preview was confirmed in the dashboard (see docs/evals.md).
   async eval() {
     const { runEval, USAGE } = require('../lib/evals/cli');
     const session = flag('session');
@@ -316,7 +317,8 @@ const commands = {
   zaafpulse status | open
   zaafpulse doctor                  log folders read, file counts, newest log, data folder, server
   zaafpulse eval --judge --session <id> [--source claude|codex] [--json]
-                                    judge one session with the local model (--data DIR: the data folder)
+                                    judge one session with the local model or a confirmed Claude Code
+                                    (--data DIR: the data folder)
   zaafpulse register-mcp <client|all> [--remove]
                                     clients: ${mcpClients().join(', ')}
   zaafpulse mcp                     the stdio MCP server (what AI clients start)

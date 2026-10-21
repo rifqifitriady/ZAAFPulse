@@ -8,6 +8,9 @@ const { createEvalEngine } = require('../lib/evals/engine');
 const { createEvalStore, createFeedbackStore } = require('../lib/evals/store');
 const R = require('../lib/evals/registry');
 const { buildPrompt } = require('../lib/evals/judge');
+const { createModels, externalPayload } = require('../lib/evals/models');
+const { createClaude } = require('../lib/evals/claude-cli');
+const { fakeClaude } = require('./helpers');
 
 const dirs = [];
 after(() => {
@@ -71,7 +74,7 @@ function rig({ settings = {}, resolved = LOCAL, entries = [], demo, demoData } =
     priced: (resolved) => resolved.kind !== 'external' || st.priced,
     priceOf: (resolved) => {
       if (st.priceThrows) throw new Error('price table broke');
-      return resolved.kind === 'external' && st.priced ? st.price : null;
+      return (resolved.kind === 'external' || resolved.kind === 'claude-cli') && st.priced ? st.price : null;
     },
     call: async (resolved, { system, user, schema }) => {
       calls.push({ resolved, system, user });
@@ -86,7 +89,8 @@ function rig({ settings = {}, resolved = LOCAL, entries = [], demo, demoData } =
       const label = schema.properties.label.enum[0];
       const text = st.text ? st.text() : JSON.stringify({ label, explanation: 'fine' });
       const cost = st.costs ? st.costs.shift() : st.cost;
-      return { text, usage: { input: st.usageIn, output: st.usageIn ? 5 : 0, cost } };
+      const usage = { input: st.usageIn, output: st.usageIn ? 5 : 0, cost };
+      return { text, usage, ...(st.model ? { model: st.model } : {}) };
     },
   };
   const trace = {
@@ -1330,4 +1334,189 @@ test('a tick job for a newly enabled evaluator leaves the verdicts another model
   await q.settle();
   const asked = q.store.all().filter((x) => x.judge.model === 'llama3.1:8b');
   assert.equal(asked.length, 4, 'both evaluators for both turns');
+});
+
+// ---- the Claude Code judge: external, so the preview gate, the masking and both caps apply ----
+const CLI = { ok: true, kind: 'claude-cli', model: 'haiku', provider: 'claude-code' };
+const cliRig = (over = {}) =>
+  rig({
+    resolved: CLI,
+    settings: { provider: 'claude-code', externalConfirmed: 'claude-code', costCapUSD: 1, ...over },
+  });
+
+test('claude-code: nothing is sent before its own preview is confirmed', async () => {
+  const r = cliRig({ externalConfirmed: null });
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(2), T0 + 5 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.calls.length, 0);
+  assert.equal(r.mats.length, 0, 'not even read');
+  const s = await r.engine.status();
+  assert.equal(s.judge.reason, 'Confirm the preview before sending to claude-code');
+  assert.equal(s.judge.confirm, 'claude-code');
+  r.st.settings.externalConfirmed = 'openrouter';
+  await r.engine.drain();
+  assert.equal(r.calls.length, 0, "another provider's confirmation does not count");
+  r.st.settings.externalConfirmed = 'claude-code';
+  await r.engine.drain();
+  assert.equal(r.calls.length, 2);
+  const st = await r.engine.status();
+  assert.equal(st.judge.kind, 'claude-cli');
+  assert.equal(st.judge.ok, true);
+});
+
+test('claude-code: the cost cap counts the reported total_cost_usd, and the estimate when there is none', async () => {
+  const r = cliRig({ costCapUSD: 0.05 });
+  r.st.costs = [0.03, 0.03, 0.03];
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(3), T0 + 6 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.calls.length, 2, '0.03, then 0.06 reaches the cap');
+  let s = await r.engine.status();
+  assert.ok(Math.abs(s.today.cost - 0.06) < 1e-9);
+  assert.equal(s.paused, 'cost cap');
+
+  // A reported cost below the input estimate is what the CLI worked out (cache reads are cheap): it is kept.
+  const material = { prompt: 'SECRET-PROMPT-TEXT', answer: 'a', tools: [], available: [] };
+  const built = buildPrompt(R.get('faithfulness'), material);
+  const tokens = (built.system.length + built.user.length) / 4;
+  const low = cliRig();
+  low.st.price = { input: (0.02 * 1e6) / tokens, output: 0 };
+  low.st.costs = [0.001];
+  await low.arm();
+  low.st.entries.push(entry('s', turnsAfter(1), T0 + 5 * MIN));
+  low.clock.t = T0 + 20 * MIN;
+  await low.engine.tick();
+  await low.settle();
+  assert.ok(Math.abs((await low.engine.status()).today.cost - 0.001) < 1e-9);
+
+  // No cost (or a zero one, which no real call has) counts the estimate.
+  for (const missing of [null, 0, NaN]) {
+    const n = cliRig();
+    n.st.price = { input: (0.02 * 1e6) / tokens, output: 0 };
+    n.st.costs = [missing];
+    await n.arm();
+    n.st.entries.push(entry('s', turnsAfter(1), T0 + 5 * MIN));
+    n.clock.t = T0 + 20 * MIN;
+    await n.engine.tick();
+    await n.settle();
+    s = await n.engine.status();
+    assert.ok(Math.abs(s.today.cost - 0.02) < 1e-9, `${missing}: charged ${s.today.cost}`);
+  }
+});
+
+test('claude-code: the daily count applies, and the model that answered is kept with the result', async () => {
+  const r = cliRig({ dailyCap: 1 });
+  r.st.model = 'claude-haiku-5-5';
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(2), T0 + 5 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.calls.length, 1);
+  assert.equal((await r.engine.status()).paused, 'daily cap');
+  const [res] = r.store.all();
+  assert.deepEqual(res.judge, {
+    kind: 'claude-cli',
+    model: 'haiku',
+    provider: 'claude-code',
+    used: 'claude-haiku-5-5',
+  });
+});
+
+test('claude-code: a CLI that keeps failing is backed off like any external provider', async () => {
+  const r = cliRig();
+  r.st.failures = 99;
+  r.st.failStatus = 502;
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(1), T0 + 5 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  for (let i = 0; i < 4; i++) {
+    await r.engine.tick();
+    await r.settle();
+  }
+  const s = await r.engine.status();
+  assert.match(s.judge.reason, /Judge provider unavailable, retrying in/);
+  assert.equal(r.calls.length, 3);
+  assert.equal(s.today.count, 3, 'each attempt may have reached Anthropic, so it counts');
+});
+
+// The real models module and a fake claude: the gate holds every call, and once the preview is confirmed the CLI
+// receives exactly the masked text the preview shows.
+test('claude-code end to end: no call before the preview, then exactly the preview text', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-engine-claude-'));
+  dirs.push(dir);
+  const log = path.join(dir, 'runs.jsonl');
+  const env = { ZAAFPULSE_CLAUDE_BIN: fakeClaude(path.join(dir, 'bin')), FAKE_CLAUDE_LOG: log };
+  const runs = () =>
+    fs.existsSync(log)
+      ? fs
+          .readFileSync(log, 'utf8')
+          .split('\n')
+          .filter(Boolean)
+          .map((l) => JSON.parse(l))
+          .filter((x) => !x.version)
+      : [];
+  const settings = {
+    judge: true,
+    provider: 'claude-code',
+    model: 'haiku',
+    evaluators: only('relevance'),
+    costCapUSD: 1,
+  };
+  const models = createModels({ settings: () => settings, claude: createClaude({ env, home: dir, systemDirs: [] }) });
+  const material = {
+    prompt: 'Mail ana@example.com about /Users/ana/notes.txt',
+    answer: 'Sent to ana@example.com from 10.1.2.3',
+    tools: [],
+    available: [],
+  };
+  const clock = { t: T0 };
+  const entries = [];
+  const engine = createEvalEngine({
+    trace: {
+      material: async (source, sid, turn) => ({ material, target: { source, session: sid, turn, span: null } }),
+      materialSession: async () => null,
+      sessions: () => [],
+      sourceOf: (k) => ({ source: 'claude', sid: k }),
+      keyFor: (s, sid) => sid,
+      turnsOf: async () => [],
+    },
+    indexer: { entries: () => entries },
+    models,
+    store: createEvalStore({ file: path.join(dir, 'evals.jsonl') }),
+    feedback: createFeedbackStore({ file: path.join(dir, 'feedback.jsonl') }),
+    settings: () => settings,
+    stateFile: path.join(dir, 'state.json'),
+    now: () => clock.t,
+  });
+  await engine.tick();
+  clock.t += MIN;
+  entries.push(entry('s', [T0 + 2 * MIN, T0 + 3 * MIN], T0 + 4 * MIN));
+  clock.t = T0 + 20 * MIN;
+  await engine.tick();
+  await engine.drain();
+  assert.equal(runs().length, 0, 'not confirmed: the CLI was never started');
+  assert.equal((await engine.status()).judge.confirm, 'claude-code');
+
+  settings.externalConfirmed = 'claude-code';
+  await engine.drain();
+  const sent = runs();
+  assert.equal(sent.length, 2);
+  const built = buildPrompt(R.get('relevance'), material);
+  const preview = externalPayload(built.system, built.user, built.schema);
+  for (const run of sent) {
+    assert.deepEqual({ system: run.argv[run.argv.indexOf('--system-prompt') + 1], user: run.stdin }, preview);
+    assert.doesNotMatch(JSON.stringify(run), /ana@example|\/Users\/ana|10\.1\.2\.3/);
+  }
+  const s = await engine.status();
+  assert.equal(s.today.count, 2);
+  assert.ok(Math.abs(s.today.cost - 0.001) < 1e-9, 'the fake reports 0.0005 a call');
+  const stored = createEvalStore({ file: path.join(dir, 'evals.jsonl') }).all();
+  assert.equal(stored.length, 2);
+  assert.ok(stored.every((x) => x.label === 'relevant' && x.judge.used === 'claude-haiku-5-5'));
 });

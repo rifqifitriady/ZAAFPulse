@@ -108,7 +108,8 @@ function evalGroups(summary, evaluators, now = Date.now()) {
   return out;
 }
 
-const EV_KIND = { ollama: 'Ollama', lmstudio: 'LM Studio' };
+const EV_KIND = { ollama: 'Ollama', lmstudio: 'LM Studio', 'claude-cli': 'Claude Code' };
+const EV_CLAUDE = 'claude-code';
 // Cents for whole amounts, up to four decimals below a dollar so a few cheap calls do not read as $0.00.
 const evMoney = (c) =>
   `$${!Number.isFinite(c) || c <= 0 ? '0.00' : c < 1 ? c.toFixed(4).replace(/0{1,2}$/, '') : c.toFixed(2)}`;
@@ -134,7 +135,8 @@ function evalsStatusLine(st) {
   return { text: `${who} · ${str(j.model, 120) || 'default model'} · ${today}`, tone: 'good' };
 }
 
-// The provider choices: local first, then one entry per gateway provider that says it sends masked text.
+// The provider choices: local first, then Claude Code and one entry per gateway provider, each saying where the
+// masked text goes. Claude Code also carries whether the server found the CLI.
 function evalsProviderOptions(providers) {
   const out = [
     { id: 'auto', label: 'Auto (local first)', external: false },
@@ -142,10 +144,28 @@ function evalsProviderOptions(providers) {
     { id: 'lmstudio', label: 'LM Studio', external: false },
   ];
   for (const p of Array.isArray(providers) ? providers : []) {
-    if (!p || typeof p.id !== 'string' || p.kind !== 'external' || out.some((o) => o.id === p.id)) continue;
-    out.push({ id: p.id, label: `External: ${p.id} (sends masked text)`, external: true });
+    if (!p || typeof p.id !== 'string' || out.some((o) => o.id === p.id)) continue;
+    if (p.kind === 'claude-cli' && p.id === EV_CLAUDE) {
+      const label = 'Claude Code (your Claude login) · sends masked text to Anthropic';
+      out.push({ id: p.id, label, external: true, available: p.available === true });
+    } else if (p.kind === 'external') {
+      out.push({ id: p.id, label: `External: ${p.id} (sends masked text)`, external: true });
+    }
   }
   return out;
+}
+
+// The line under the provider choice: what leaves the machine, and for Claude Code whether it was found.
+function evalsProviderHint(opt) {
+  if (!opt || !opt.external) return 'Nothing leaves this machine. Auto tries Ollama, then LM Studio.';
+  if (opt.id === EV_CLAUDE) {
+    return opt.available
+      ? 'Claude Code found. Masked turn text goes to Anthropic through your Claude login, within your plan limits ' +
+          'or API billing. Save it, then preview what will be sent.'
+      : 'Claude Code not found on this machine: install it, or set ZAAFPULSE_CLAUDE_BIN. It is looked for again ' +
+          'every 5 minutes.';
+  }
+  return 'Masked turn text goes to this provider. Save it, then preview what will be sent.';
 }
 
 // Model names for the datalist: the chosen provider's, or every local one for Auto. Nothing is probed here.
@@ -184,7 +204,7 @@ function evalsPatch(cur, next) {
 function evalsConfirm(settings, providers) {
   const s = evIsObj(settings) ? settings : {};
   const list = Array.isArray(providers) ? providers : [];
-  const ext = list.some((p) => p && p.kind === 'external' && p.id === s.provider);
+  const ext = list.some((p) => p && (p.kind === 'external' || p.external === true) && p.id === s.provider);
   if (!ext) return 'local';
   return s.externalConfirmed === s.provider ? 'confirmed' : 'unconfirmed';
 }
@@ -408,13 +428,15 @@ async function mountEvalsSettings() {
     const ext = evalsProviderOptions(S.cur.providers).find((o) => o.id === picked);
     const isExt = !!(ext && ext.external);
     const hint = $('#ev-prov-hint');
-    hint.textContent = isExt
-      ? 'Masked turn text goes to this provider. Save it, then preview what will be sent.'
-      : 'Nothing leaves this machine. Auto tries Ollama, then LM Studio.';
-    // An external judge has no default model: the gateway needs one of the provider's own names.
-    form.model.placeholder = isExt
-      ? "Required: one of the provider's models"
-      : 'Empty = the first model the provider has';
+    hint.textContent = evalsProviderHint(ext);
+    // A gateway judge has no default model: the gateway needs one of the provider's own names. Claude Code has its
+    // own default, and a small model spends less of the owner's limits.
+    form.model.placeholder =
+      picked === EV_CLAUDE
+        ? "Empty = Claude Code's default; haiku saves your limits"
+        : isExt
+          ? "Required: one of the provider's models"
+          : 'Empty = the first model the provider has';
     const box = $('#ev-ext');
     box.hidden = !isExt;
     if (!isExt) return;
@@ -528,6 +550,7 @@ if (typeof module !== 'undefined')
     evalsModelList,
     evalsPatch,
     evalsConfirm,
+    evalsProviderHint,
     previewKey,
     previewError,
   };

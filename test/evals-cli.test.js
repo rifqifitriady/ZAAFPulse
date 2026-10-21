@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
-const { fakeServer, NO_JUDGE_PORTS } = require('./helpers');
+const { fakeServer, NO_JUDGE_PORTS, fakeClaude } = require('./helpers');
 
 const BIN = path.join(__dirname, '..', 'bin', 'zaafpulse.js');
 const FIXTURE = path.join(__dirname, 'fixtures', 'trace', 'claude', 'proj', 's1.jsonl');
@@ -225,4 +225,36 @@ test('eval refuses a --session or --source value that is really the next flag', 
   const b = await runCli(['eval', '--judge', '--session', 's1', '--source', '--json'], r);
   assert.equal(b.code, 2);
   assert.match(b.err, /usage: zaafpulse eval/);
+});
+
+test('eval with Claude Code: refused until its preview was confirmed, then judged through the CLI', async () => {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'evals-cli-claude-'));
+  const log = path.join(bin, 'runs.jsonl');
+  const env = { ZAAFPULSE_CLAUDE_BIN: fakeClaude(bin), FAKE_CLAUDE_LOG: log };
+  const runs = () =>
+    fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter((l) => l && !l.includes('"version"')) : [];
+  const args = ['eval', '--judge', '--session', 's1', '--json'];
+
+  const refused = await runCli(args, { ...rig({ evals: { provider: 'claude-code', model: 'haiku' } }), env });
+  assert.equal(refused.code, 2);
+  assert.match(refused.err, /confirm the Claude Code preview in Settings → Evals first/);
+  assert.equal(runs().length, 0, 'nothing was sent');
+  const other = { provider: 'claude-code', model: 'haiku', externalConfirmed: 'openrouter' };
+  assert.equal((await runCli(args, { ...rig({ evals: other }), env })).code, 2);
+  assert.equal(runs().length, 0);
+
+  const ok = { evals: { provider: 'claude-code', model: 'haiku', externalConfirmed: 'claude-code' } };
+  const res = await runCli(args, { ...rig(ok), env });
+  assert.equal(res.code, 0, res.err);
+  const rows = JSON.parse(res.out);
+  assert.equal(rows.length, 9);
+  assert.ok(rows.every((x) => x.model === 'claude-haiku-5-5'), 'the model that answered');
+  assert.equal(runs().length, 9);
+  assert.ok(runs().every((l) => JSON.parse(l).argv.includes('haiku')));
+
+  // Confirmed, but no claude here: exit 2 with the reason.
+  const missing = await runCli(args, { ...rig(ok) });
+  assert.equal(missing.code, 2);
+  assert.match(missing.err, /Claude Code not found/);
+  fs.rmSync(bin, { recursive: true, force: true });
 });
