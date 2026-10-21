@@ -4,7 +4,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
-const { fakeServer, NO_JUDGE_PORTS } = require('./helpers');
+const { fakeServer, NO_JUDGE_PORTS, fakeClaude } = require('./helpers');
+const { destinationOf } = require('../lib/evals/claude-cli');
 
 const BIN = path.join(__dirname, '..', 'bin', 'zaafpulse.js');
 const FIXTURE = path.join(__dirname, 'fixtures', 'trace', 'claude', 'proj', 's1.jsonl');
@@ -225,4 +226,88 @@ test('eval refuses a --session or --source value that is really the next flag', 
   const b = await runCli(['eval', '--judge', '--session', 's1', '--source', '--json'], r);
   assert.equal(b.code, 2);
   assert.match(b.err, /usage: zaafpulse eval/);
+});
+
+test('eval with Claude Code: refused until its preview was confirmed, then judged through the CLI', async () => {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'evals-cli-claude-'));
+  const log = path.join(bin, 'runs.jsonl');
+  const env = { ZAAFPULSE_CLAUDE_BIN: fakeClaude(bin), FAKE_CLAUDE_LOG: log };
+  const runs = () =>
+    fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter((l) => l && !l.includes('"version"')) : [];
+  const args = ['eval', '--judge', '--session', 's1', '--json'];
+
+  const refused = await runCli(args, { ...rig({ evals: { provider: 'claude-code', model: 'haiku' } }), env });
+  assert.equal(refused.code, 2);
+  assert.match(refused.err, /confirm the Claude Code preview in Settings → Evals first/);
+  assert.equal(runs().length, 0, 'nothing was sent');
+  const other = { provider: 'claude-code', model: 'haiku', externalConfirmed: 'openrouter' };
+  assert.equal((await runCli(args, { ...rig({ evals: other }), env })).code, 2);
+  assert.equal(runs().length, 0);
+  // Confirmed for another destination (the environment changed since the preview): refused as well.
+  const moved = { provider: 'claude-code', model: 'haiku', externalConfirmed: 'claude-code@ffffffffff' };
+  const was = await runCli(args, { ...rig({ evals: moved }), env });
+  assert.equal(was.code, 2);
+  assert.match(was.err, /The Claude Code destination changed; preview again in Settings → Evals/);
+  assert.equal(runs().length, 0);
+
+  const token = destinationOf({ ...process.env }).token;
+  const ok = { evals: { provider: 'claude-code', model: 'haiku', externalConfirmed: token } };
+  const res = await runCli(args, { ...rig(ok), env });
+  assert.equal(res.code, 0, res.err);
+  const rows = JSON.parse(res.out);
+  assert.equal(rows.length, 9);
+  assert.ok(rows.every((x) => x.model === 'claude-haiku-5-5'), 'the model that answered');
+  assert.equal(runs().length, 9);
+  assert.ok(runs().every((l) => JSON.parse(l).argv.includes('haiku')));
+
+  // Confirmed, but no claude here: exit 2 with the reason.
+  const missing = await runCli(args, { ...rig(ok) });
+  assert.equal(missing.code, 2);
+  assert.match(missing.err, /Claude Code not found/);
+  fs.rmSync(bin, { recursive: true, force: true });
+});
+
+test('eval with Claude Code: Ctrl-C, SIGTERM or SIGHUP kills the running call, removes its folder, exits 130', {
+  skip: process.platform === 'win32',
+}, async () => {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'evals-cli-claude-sig-'));
+  const log = path.join(bin, 'runs.jsonl');
+  const env = { ZAAFPULSE_CLAUDE_BIN: fakeClaude(bin), FAKE_CLAUDE_LOG: log, FAKE_CLAUDE_MODE: 'hang' };
+  const runs = () =>
+    fs.existsSync(log)
+      ? fs
+          .readFileSync(log, 'utf8')
+          .split('\n')
+          .filter((l) => l && !l.includes('"version"'))
+          .map((l) => JSON.parse(l))
+      : [];
+  const alive = (pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const token = destinationOf({ ...process.env }).token;
+  const ok = { evals: { provider: 'claude-code', model: 'haiku', externalConfirmed: token } };
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+    const r = rig(ok);
+    const child = spawn(process.execPath, [BIN, 'eval', '--judge', '--session', 's1', '--json'], {
+      env: { ...process.env, HOME: r.home, USERPROFILE: r.home, ZAAFPULSE_DATA: r.data, ...NO_JUDGE_PORTS, ...env },
+      stdio: 'ignore',
+    });
+    const done = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
+    const before = runs().length;
+    for (let i = 0; i < 200 && runs().length === before; i++) await new Promise((x) => setTimeout(x, 25));
+    const run = runs()[before];
+    assert.ok(run, `${sig}: the judge call started`);
+    child.kill(sig);
+    assert.deepEqual(await done, { code: 130, signal: null }, sig);
+    // The CLI leads its own process group, so the signal alone never reached it: the handler stopped it.
+    for (let i = 0; i < 40 && alive(run.pid); i++) await new Promise((x) => setTimeout(x, 25));
+    assert.equal(alive(run.pid), false, `${sig}: the call was killed`);
+    assert.equal(fs.existsSync(run.cwd), false, `${sig}: its folder was removed`);
+  }
+  fs.rmSync(bin, { recursive: true, force: true });
 });

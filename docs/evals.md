@@ -4,7 +4,8 @@ ZAAFPulse can grade what your agents did. Two kinds of evaluator look at each fi
 that reuse the detectors behind the Quality page (free, on all data), and **judge evaluators** where a model
 reads the masked text of the turn and answers with one label from a fixed list. The judge is **local first**:
 Ollama or LM Studio on this machine. Nothing is sent to an external provider unless you choose one, look at the
-exact text it would receive, and confirm.
+exact text it would receive, and confirm. One external choice is built in: [Claude Code](#claude-code), which judges
+with your own Claude login through the Claude Code CLI.
 
 You also rate turns yourself (Good or Bad, with an optional note), and the Quality page shows how often the
 judges agree with you.
@@ -43,10 +44,14 @@ The judge is resolved in this order, and the first that works is used:
 
 1. **The model in Settings → Evals.** With the provider set to Ollama or LM Studio and a model name, that choice is
    used as given. With a gateway provider selected, that provider and model are used (see
-   [External providers](#external-providers)).
+   [External providers](#external-providers)). With **Claude Code** selected, your Claude Code CLI judges (see
+   [Claude Code](#claude-code)).
 2. **Ollama**, asked at `http://127.0.0.1:11434/api/tags`.
 3. **LM Studio**, asked at `http://127.0.0.1:1234/v1/models`.
 4. **Wait.** There is no judge yet.
+
+Claude Code and the gateway providers are used only when you select them. **Automatic** never picks one, not even
+when Claude Code is installed and no local model runs.
 
 With the provider on **Automatic**, the model you typed is used when the server lists it. Otherwise the first
 listed model that matches this order is picked: `qwen3`, `qwen2.5`, `llama3.3`, `llama3.2`, `llama3.1`, `mistral`,
@@ -115,7 +120,7 @@ above), turn text leaves this machine only through an external provider you chos
   below what its input alone costs, is counted at its estimate. Local models cost nothing and are not counted
   against this cap.
 - **Unpriced external models are refused.** The cost cap needs a price. If the gateway has no price for the chosen
-  model, nothing is sent and Settings says so.
+  model, nothing is sent and Settings says so. Claude Code is not refused: it reports the cost of each call.
 - **Per-provider backoff.** A provider that keeps failing (three tries in a row) is left alone for 1, 2, 4 … up to 30
   minutes, then probed with a single job.
 - **Input budget.** A judge reads about 6,000 tokens (24,000 characters). Longer material is trimmed to its head and
@@ -187,13 +192,122 @@ like an IPv4 address and is masked as `‹ip›`. Not caught: a phone number wit
 dots, or none at all, and a name in free text. A local judge reads the text with secrets masked only, since it
 never leaves the machine.
 
-1. Choose the provider and a model. The model must have a price in the gateway (see the cost cap above).
+1. Choose the provider and a model. The model must have a price in the gateway (see the cost cap above). For Claude
+   Code the model is optional.
 2. Open the **preview**. It shows the exact masked text that would be sent for the latest finished turn of a session,
    including the system message and the personal-data masking above. Showing it is what confirms the provider.
 3. Only then does the first call go out. Changing the provider asks for a new preview.
 
 The preview is text from a transcript, so it is refused (`403`, "content viewing is off") while content viewing is
 off. In server mode, set `ZAAFPULSE_CONTENT=on` to use an external judge.
+
+### Claude Code
+
+**Claude Code (your Claude login)** in Settings → Evals judges with the Claude Code CLI you already use, signed in
+with your Claude account. No API key is needed, and nothing is set up in the gateway.
+
+- **What is sent, and to whom.** The same masked text as for any external provider (secrets and personal data
+  masked, the [preview](#external-providers) shows it exactly). It goes where your Claude Code sends its requests,
+  which ZAAFPulse reads from the environment the CLI gets. The first switch that is on wins, in this order (a switch
+  is on for `1`, `true`, `yes` or `on`, off for `0`, `false`, `no`, `off` or empty, as Claude Code reads it):
+
+  | Set in that environment | The text goes to | Billed to |
+  |---|---|---|
+  | `CLAUDE_CODE_USE_BEDROCK` | AWS Bedrock (`via <host>` with `ANTHROPIC_BEDROCK_BASE_URL`) | your cloud account (AWS) |
+  | `CLAUDE_CODE_USE_MANTLE` | AWS Bedrock (Mantle) (`ANTHROPIC_BEDROCK_MANTLE_BASE_URL`) | your cloud account (AWS) |
+  | `CLAUDE_CODE_USE_VERTEX` | Google Vertex AI (`ANTHROPIC_VERTEX_BASE_URL`) | your cloud account (GCP) |
+  | `CLAUDE_CODE_USE_FOUNDRY` | Microsoft Foundry (`ANTHROPIC_FOUNDRY_BASE_URL`) | your cloud account (Azure) |
+  | `CLAUDE_CODE_USE_ANTHROPIC_AWS` | Claude Platform on AWS (`ANTHROPIC_AWS_BASE_URL`) | your cloud account (AWS) |
+  | `CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD` | Claude on Google Cloud (`ANTHROPIC_GOOGLE_CLOUD_BASE_URL`) | your cloud account (GCP) |
+  | `ANTHROPIC_BASE_URL` (with or without `CLAUDE_CODE_USE_GATEWAY`) | that host, shown as `<host> (ANTHROPIC_BASE_URL)` | API billing with a key or token, else your Claude login |
+  | none of these | Anthropic | API billing with `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`, else your Claude login |
+
+  A switch with any other value is shown as `<VAR>=<value>?` and counts as a destination of its own. Settings →
+  Evals (the provider list and its hint), the preview ("Sent to …") and the judge status show the result, for example
+  "Anthropic, through your Claude login". The environment is kept as it is, so an API-key, router or cloud setup
+  goes on working; only hosts are shown, never a key or a full address. Managed or policy settings of Claude Code
+  can route it as well; those are not detected.
+- **The preview confirms one destination.** Choose Claude Code, save, open the preview. What is stored
+  (`externalConfirmed`) is `claude-code@<hash>`, a short hash of every `CLAUDE_CODE_USE_*` switch (on, or its
+  odd value), the host of every `ANTHROPIC_*_BASE_URL`, and which of `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
+  `ANTHROPIC_FOUNDRY_API_KEY` and `ANTHROPIC_FOUNDRY_AUTH_TOKEN` are set (never their values), the Foundry host
+  (from `ANTHROPIC_FOUNDRY_RESOURCE` as `<resource>.services.ai.azure.com` when no base URL is set, also shown in the
+  destination), the cloud account and region (`AWS_PROFILE`, `AWS_REGION`, `ANTHROPIC_VERTEX_PROJECT_ID`,
+  `CLOUD_ML_REGION`) and the Claude config folder the CLI gets (`CLAUDE_CONFIG_DIR`, which holds the login and so picks
+  the account), all hashed, never shown or stored as text. When any of these
+  changes (say you set `ANTHROPIC_BASE_URL` or an API key and restart), nothing is sent and the judge says "The
+  Claude Code destination changed; preview again". The daily count and the cost cap apply, and a provider that keeps
+  failing is backed off, as for a gateway provider.
+- **Not in the hash.** `HTTPS_PROXY` (and `HTTP_PROXY`, `NO_PROXY`), `NODE_EXTRA_CA_CERTS` and `ANTHROPIC_MODEL` are
+  passed to the CLI as they are and are not part of it. A proxy or an extra CA certificate can change the route the
+  text takes on its way out (a proxy that inspects TLS sees it); `ANTHROPIC_MODEL` can change the model, and so the
+  cost, when no model is set in Settings. Changing them asks for no new preview.
+- **What it costs.** It uses your Claude plan's usage limits, or API billing, whichever your Claude Code uses. The
+  cost shown in Settings and counted against the cost cap is what Claude Code reports for each call
+  (`total_cost_usd`): the **API-equivalent list price**. On a subscription you are not billed that amount per token,
+  but the calls count against your plan's limits. Before a call, the cap check uses an estimate at a high list price
+  for the model family (the top tier when no model is set); a call that reports no cost is counted at that estimate.
+- **The model.** Leave it empty for Claude Code's own default, or type an alias (`haiku`, `sonnet`, `opus`) or a full
+  model name; it is passed as `--model`. A small model such as **`haiku`** is recommended: a judgment is a short
+  classification, and it saves your limits. Each result keeps the model that actually answered (`judge.used` in the
+  API; the trace explorer shows it). A name that is not plain name characters, or that starts with a dash, is refused.
+- **How it runs.** One `claude -p` per judgment, with no tools (`--tools ""`, and `--disallowedTools "mcp__*"` as a
+  second fence), no MCP servers (`--strict-mcp-config`), no slash commands, no settings files
+  (`--setting-sources ""`), the judge's system prompt instead of Claude Code's, and the answer forced to the
+  evaluator's JSON schema (`--json-schema`). It writes no session (`--no-session-persistence`), and in case one is
+  ever written, a session whose folder is the judge's own (`zaafpulse-judge-…`, also in the dash-encoded and
+  decoded forms of the log folder name) is never judged. The call is not listed as a running Claude Code on the Live
+  page either: it is known by that folder in its command line or as its working folder, or by its pid. It runs in a new
+  empty temporary folder, which is removed after the call, so no project `CLAUDE.md` is picked up; a `CLAUDE.md` in a
+  folder above it was checked to have no effect. Whether `--setting-sources ""` also keeps out your user-level
+  `~/.claude/CLAUDE.md` (or `$CLAUDE_CONFIG_DIR/CLAUDE.md`) has not been checked against a signed-in CLI; the judge's own
+  system prompt replaces Claude Code's either way. The turn text goes in on stdin, never on the command line, which
+  other users of the machine can see in `ps`. `--bare` is not used: it would turn off the Claude account login.
+- **Time and size limits.** After 120 seconds the CLI and every process it started (its process group, on macOS and
+  Linux) get SIGTERM, then SIGKILL 5 seconds later; whatever still holds its output, the call ends within 126
+  seconds. On Windows the CLI itself is stopped and the call ends within the same bound. An answer the CLI gave
+  before it exited is still read when the time runs out while a helper holds its output. An answer over 1 MB is
+  refused. Switching the judge to another provider or switching judging off cancels a running call; stopping the
+  dashboard (`SIGTERM`, Ctrl-C or `SIGHUP`) kills it at once (SIGKILL to its group) and removes its folder; on Windows
+  the folder is removed once the CLI has exited, as Windows holds it until then. The `--version` check that finds
+  the CLI is killed with SIGKILL after 10 seconds, so a binary that ignores SIGTERM cannot hold the search.
+- **Not signed in.** An answer that the login is gone (or an API key is refused) backs the judge off with "Claude
+  Code is not signed in, retrying in N min", instead of failing each turn. Sign in again with `claude` in a terminal.
+- **Where the CLI is found.** `ZAAFPULSE_CLAUDE_BIN` if set (then only that file is tried), else `claude` on `PATH`
+  (absolute entries only), else `~/.claude/local/claude`, `~/.local/bin/claude`, `/opt/homebrew/bin/claude` and
+  `/usr/local/bin/claude`, else the copy inside an IDE extension (`~/.vscode`, `~/.vscode-insiders`, `~/.cursor`,
+  `~/.windsurf`, `~/.antigravity-ide` and `~/.antigravity`, each under
+  `extensions/anthropic.claude-code-*/resources/native-binary/`) or bundled with Claude Desktop on macOS
+  (`~/Library/Application Support/Claude/claude-code/<version>/`). Among the extension and Desktop copies the highest
+  version wins. On Windows the names are `claude.exe` and `claude.cmd` on `PATH`, `%USERPROFILE%\.local\bin\claude.exe`,
+  `%USERPROFILE%\.claude\local\claude.exe`, `%APPDATA%\npm\claude.cmd` and the extension's `native-binary\claude.exe`.
+  A `.cmd` is started through the package it wraps, never through a shell.
+- **Which binary counts.** One whose `--version` says `(Claude Code)` within 10 seconds. On macOS and Linux a binary
+  found on its own must have a file and folder (and a real file behind a link) that belong to you or to root and are
+  not writable by everyone; writable by the group is fine (umask 002). Another one is passed over. The binary named
+  in `ZAAFPULSE_CLAUDE_BIN` is taken as you set it: it only has to exist and be executable. A script (`.js`, or the package behind a `.cmd`) runs through node:
+  this process's own, or in the single-file build a `node` found on `PATH` or in the usual folders; with none, the
+  script is passed over. The answer is kept for 5 minutes, and dropped at once when the binary can no longer be
+  started. It is looked for only while Claude Code is the saved provider, or when you pick it in Settings → Evals
+  (the page then asks again with `?refresh=1`); until then no binary is started and the page says "not checked
+  yet". Settings → Evals says whether it was found ("checking" while the first search is still running), never
+  where.
+- **Not found.** The judge waits with "Claude Code not found: install it, or set ZAAFPULSE_CLAUDE_BIN". A background
+  service has no shell `PATH`; `zaafpulse service install` carries `ZAAFPULSE_CLAUDE_BIN` into the service when it is
+  set.
+- **Its environment.** The CLI gets your environment (it needs `HOME` and its login), without the `ZAAFPULSE_*`
+  variables and without what a parent Claude Code session, the Agent SDK or VS Code sets for its own children
+  (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SSE_PORT`, `CLAUDE_CODE_IDE_*`, `CLAUDE_CODE_SESSION_*`,
+  `CLAUDE_CODE_MESSAGING_*`, `CLAUDE_CODE_PLUGIN_DIRS`, `VSCODE_*` and the like). `CLAUDE_CONFIG_DIR` is passed on
+  only when it is one valid folder, the same one ZAAFPulse reads the logs from (with `~` expanded); a value with a
+  comma, a relative one or one that is too broad is left out, so the CLI uses its default folder, and the server log
+  says so once. `ZAAFPULSE_CLAUDE_DIRS` is ZAAFPulse's own and never reaches the CLI.
+- **From the command line.** `zaafpulse eval` checks the confirmation against the environment of the terminal it runs
+  in: a terminal whose `ANTHROPIC_*` variables differ from the dashboard's is a different destination, and is refused
+  until it is previewed.
+- **A gateway provider called `claude-code`.** The built-in one wins: a gateway provider with the id `claude-code` is
+  left out of the judge's provider list and cannot be the judge. It still works in the gateway; give it another id to
+  judge with it.
 
 ## Your ratings
 
@@ -234,10 +348,10 @@ never by its raw id. A state change needs a JSON body.
 | `GET /api/evals/summary?range=1..30` | the pass count, total, rate and daily counts per evaluator, and the judge agreement. `range` is days (default 7) |
 | `GET /api/evals/status` | the judge (`ok`, `kind`, `model`, `provider`, `waiting`, `reason`), the queue length, today's count and cost, `paused` (`judge off`, `daily cap` or `cost cap`) and `since` |
 | `GET /api/evals/evaluators` | the evaluators: `id`, `kind`, `scope`, `title`, `labels`, `pass` |
-| `GET /api/evals/settings` | the settings in force and the providers you can choose |
+| `GET /api/evals/settings` | the settings in force and the providers you can choose. Claude Code is `{ "id": "claude-code", "label": "Claude Code (your Claude login)", "kind": "claude-cli", "external": true, "available": true, "checked": true, "destination": "Anthropic, through your Claude login", "confirm": "claude-code@…", "models": ["haiku", "sonnet", "opus"] }`, with `available` saying whether the CLI was found (`null` while the first search runs, and when it was not looked for: then `checked` is `false`). It is looked for only when Claude Code is the saved provider, or with `?refresh=1` |
 | `POST /api/evals/settings` | JSON with any of `judge`, `provider`, `model`, `dailyCap`, `costCapUSD`, `evaluators`; a name it does not know is refused |
 | `POST /api/evals/run` | JSON `{ "key" }`: queue every finished turn of the session; returns `{ "queued" }` (and `sessionDeferred` when the whole-session verdict waits) |
-| `POST /api/evals/preview` | JSON `{ "key", "provider" }`: the exact masked text for that external provider (`system`, `user`, `evaluator`, `turn`); confirms the provider |
+| `POST /api/evals/preview` | JSON `{ "key", "provider" }`: the exact masked text for that external provider or Claude Code (`system`, `user`, `evaluator`, `turn`, and for Claude Code `destination`); confirms the provider (Claude Code: that destination) |
 | `GET /api/feedback?key=…&turn=N` | the ratings and notes of a session, or of one turn |
 | `POST /api/feedback` | JSON `{ "key", "turn", "rating", "note" }`; `rating` is `good`, `bad` or `null`; an omitted field keeps its value |
 | `GET /api/feedback/sessions?keys=a,b` | `{ "sessions": { key: { good, bad } } }` for up to 50 session keys, so the session list can mark rated sessions |
@@ -274,8 +388,8 @@ The read-only `acc_evals` tool tells an AI client how your agents are doing, as 
 zaafpulse eval --judge --session <id> [--source claude|codex] [--data DIR] [--json]
 ```
 
-This judges every finished turn of one session without the dashboard running, with the local model, and prints
-a table of turn, evaluator and label:
+This judges every finished turn of one session without the dashboard running, with the local model (or Claude
+Code, see below), and prints a table of turn, evaluator and label:
 
 ```text
 TURN     EVALUATOR         LABEL         MODEL
@@ -300,15 +414,20 @@ session  user_frustration  none          qwen3:8b
 | Exit code | Meaning |
 |---|---|
 | `0` | the session was judged |
-| `2` | no local judge is available, the session is unknown, judging is off, the settings select an external provider, or judging stopped early on a cap |
+| `2` | no local judge is available, the session is unknown, judging is off, the settings select a gateway provider or a Claude Code that is not confirmed or not found, or judging stopped early on a cap |
 | `1` | nothing was judged for another reason (no finished turn yet, or no valid answer from the model) |
+| `130` | stopped by Ctrl-C, `SIGTERM` or `SIGHUP` (a closed terminal); a running Claude Code call is killed first (SIGKILL to its group) and its folder removed |
 
-An external provider in the settings makes it print "external judges need the running dashboard" and exit 2: the CLI
-has no gateway and no preview step, so it never sends text anywhere but to your local model.
+A gateway provider in the settings makes it print "external judges need the running dashboard" and exit 2: the CLI
+has no gateway and no preview step. **Claude Code** works from the CLI once its preview was confirmed in Settings →
+Evals of the same data folder, for the destination this terminal's environment gives; before that the CLI prints
+"confirm the Claude Code preview in Settings → Evals first" (or "The Claude Code destination changed; preview
+again") and exits 2, and nothing is sent. The `MODEL` column shows the model that
+answered.
 
-The CLI starts from the day's count in `evals-state.json` and adds to it. A dashboard that is already running keeps
-its own count and does not see the CLI's, so the two together can pass the daily count by up to one CLI run. The CLI
-is local only, so no external cost is involved. The running dashboard reads the results file when it starts, so
+The CLI starts from the day's count and cost in `evals-state.json` and adds to them. A dashboard that is already
+running keeps its own counters and does not see the CLI's, so the two together can pass the daily count, and with
+Claude Code the cost cap, by up to one CLI run. The running dashboard reads the results file when it starts, so
 results written by the CLI show there after a restart.
 
 ## Known limits
@@ -321,8 +440,11 @@ results written by the CLI show there after a restart.
 - **Feedback is per turn.** A rating or a note belongs to a turn, not to a span.
 - **The gateway has no tool inputs for the judge.** A collaboration run is judged from its task, its step texts and
   its answer; plain gateway requests keep no text and get only code results.
-- **External judges are not available from the CLI.** Use the dashboard, where the preview step and the cost cap
-  apply.
+- **Gateway judges are not available from the CLI.** Use the dashboard, where the preview step and the cost cap
+  apply. Claude Code is, once its preview was confirmed in the dashboard.
+- **Claude Code's cost is an API-equivalent.** On a Claude subscription the cost cap counts list prices you are not
+  billed, while the real limit is your plan's usage limit, which ZAAFPulse cannot read. A usage-limit answer from the
+  CLI backs the judge off like any failing provider.
 - **Small local models are noisy.** Compare their verdicts with your own ratings in the judge agreement before you
   rely on them.
 - **The `acc_evals` code-failure scan is bounded.** It covers only the 100 most recently active sessions, so an

@@ -165,6 +165,82 @@ test('processes: Linux /proc, meminfo and Windows CIM rows become the same app l
   );
 });
 
+test('processes: the judge\'s own Claude Code calls are not a running app', () => {
+  const judgeDir = path.join(os.tmpdir(), 'zaafpulse-judge-Ab12Cd');
+  const row = (pid, args, extra = {}) => ({ pid, cpu: 1, rssKB: 1024, upSec: 5, args, ...extra });
+  const rows = [
+    row(21, '/home/u/.local/bin/claude --resume'), // the owner's session
+    row(22, '/home/u/.local/bin/claude -p --output-format json', { cwd: judgeDir }), // the judge, by its folder
+    row(23, `/home/u/.local/bin/claude -p --add-dir ${judgeDir}`), // the judge's folder in argv
+    row(24, '/home/u/.local/bin/claude -p --output-format json'), // a judge call this process started
+  ];
+  const apps = processes.groupApps(rows, { skip: new Set([24]) });
+  assert.deepEqual(
+    apps.map((a) => [a.id, a.processes]),
+    [['claude', 1]],
+  );
+  // Linux: the working folder comes from /proc/<pid>/cwd.
+  if (process.platform !== 'win32') {
+    const root = tmp('zp-proc-');
+    fs.writeFileSync(path.join(root, 'uptime'), '1000.00 900.00');
+    const mk = (pid, cmd, cwd) => {
+      const d = path.join(root, String(pid));
+      fs.mkdirSync(d);
+      fs.writeFileSync(path.join(d, 'cmdline'), cmd.split(' ').join('\0'));
+      fs.writeFileSync(path.join(d, 'stat'), `${pid} (x) S ${'0 '.repeat(10)}100 0 0 0 0 0 0 0 100 0`);
+      fs.writeFileSync(path.join(d, 'status'), 'VmRSS:\t1024 kB\n');
+      fs.symlinkSync(cwd, path.join(d, 'cwd'));
+    };
+    fs.mkdirSync(judgeDir, { recursive: true });
+    mk(31, '/home/u/.local/bin/claude -p', judgeDir);
+    mk(32, '/home/u/.local/bin/claude --resume', os.tmpdir());
+    const linux = processes.procRows(root, 100);
+    assert.equal(linux.find((r) => r.pid === 31).cwd, judgeDir);
+    assert.deepEqual(
+      processes.groupApps(linux).map((a) => [a.id, a.processes]),
+      [['claude', 1]],
+    );
+    fs.rmSync(judgeDir, { recursive: true, force: true });
+  }
+  // macOS: lsof's field output gives each process's working folder.
+  const out = `p41\nfcwd\nn${judgeDir}\np42\nfcwd\nn/Users/u/work\n`;
+  assert.deepEqual([...processes.parseLsofCwd(out)], [
+    [41, judgeDir],
+    [42, '/Users/u/work'],
+  ]);
+});
+
+test('service: the log folder variables are carried into the unit, plist and Windows launcher', () => {
+  const env = service.settings({
+    CLAUDE_CONFIG_DIR: '/home/me/work-claude',
+    ZAAFPULSE_CLAUDE_DIRS: '/home/me/work-claude,/home/me/other',
+    CODEX_HOME: '/home/me/cx',
+    XDG_CONFIG_HOME: '/home/me/.cfg',
+    HOME: '/home/me',
+  });
+  assert.deepEqual(env, {
+    CLAUDE_CONFIG_DIR: '/home/me/work-claude',
+    ZAAFPULSE_CLAUDE_DIRS: '/home/me/work-claude,/home/me/other',
+    CODEX_HOME: '/home/me/cx',
+    XDG_CONFIG_HOME: '/home/me/.cfg',
+  });
+  assert.deepEqual(service.settings({ CLAUDE_CONFIG_DIR: '' }), {}, 'an empty value is not carried');
+  // The Claude Code judge's binary, named by hand: a service has no shell PATH to find it on.
+  assert.deepEqual(service.settings({ ZAAFPULSE_CLAUDE_BIN: '/opt/claude' }), { ZAAFPULSE_CLAUDE_BIN: '/opt/claude' });
+  const cmd = ['/usr/bin/node', '/app/bin/zaafpulse.js', 'start'];
+  const unit = service.unitText(cmd, env, { system: false });
+  assert.match(unit, /Environment=CLAUDE_CONFIG_DIR=\/home\/me\/work-claude\n/);
+  assert.match(unit, /Environment=ZAAFPULSE_CLAUDE_DIRS=\/home\/me\/work-claude,\/home\/me\/other/);
+  assert.match(unit, /Environment=CODEX_HOME=\/home\/me\/cx/);
+  assert.match(unit, /Environment=XDG_CONFIG_HOME=\/home\/me\/.cfg/);
+  const pl = service.plist(cmd, env, '/tmp/l.log');
+  assert.match(pl, /<key>ZAAFPULSE_CLAUDE_DIRS<\/key><string>\/home\/me\/work-claude,\/home\/me\/other<\/string>/);
+  assert.match(pl, /<key>CODEX_HOME<\/key><string>\/home\/me\/cx<\/string>/);
+  const vbs = service.vbsText(cmd, env, 'C:\\Z\\logs\\server.log');
+  assert.match(vbs, /e\("ZAAFPULSE_CLAUDE_DIRS"\) = "\/home\/me\/work-claude,\/home\/me\/other"/);
+  assert.match(vbs, /e\("CODEX_HOME"\) = "\/home\/me\/cx"/);
+});
+
 test('service: unit, plist and Windows launcher carry settings but never secrets', () => {
   const env = service.settings({
     ZAAFPULSE_HOST: '0.0.0.0',

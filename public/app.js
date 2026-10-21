@@ -210,6 +210,7 @@ const state = {
   range: store.get('range', '30'),
   metric: store.get('metric', 'cost'),
   toolFilter: 'all',
+  logNote: '', // the Overview's empty-state note as last drawn
   search: '',
   data: null,
   live: null,
@@ -1293,9 +1294,20 @@ function applyTheme() {
   ]);
   render();
   // Live data refreshes often; summaries follow the server's one-minute rescan.
+  const indexing = () => !!(state.live && state.live.index && state.live.index.indexing);
+  let wasIndexing = indexing();
   setInterval(async () => {
     await loadLive();
     if (state.route === 'live' && !updateLive()) render(false);
+    // The Overview's empty-state note follows the first index (its progress is in the live data) and the first logs
+    // found; the summary is reloaded once, when the index finishes, not at every progress step.
+    const finished = wasIndexing && !indexing();
+    wasIndexing = indexing();
+    if (state.route === 'overview' && state.data && !$('#view').contains(document.activeElement)) {
+      const step = liveNoteStep(state.logNote, overviewNote(state.data), finished);
+      if (step === 'summary') await loadSummary().catch(() => {});
+      if (step) render(false);
+    }
     if (drawer.kind === 'apps') paintDrawer(false);
   }, 5000);
   setInterval(async () => {
