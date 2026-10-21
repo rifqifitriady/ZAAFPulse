@@ -165,6 +165,32 @@ test('processes: Linux /proc, meminfo and Windows CIM rows become the same app l
   );
 });
 
+test('service: the log folder variables are carried into the unit, plist and Windows launcher', () => {
+  const env = service.settings({
+    CLAUDE_CONFIG_DIR: '/home/me/work-claude,/home/me/other',
+    CODEX_HOME: '/home/me/cx',
+    XDG_CONFIG_HOME: '/home/me/.cfg',
+    HOME: '/home/me',
+  });
+  assert.deepEqual(env, {
+    CLAUDE_CONFIG_DIR: '/home/me/work-claude,/home/me/other',
+    CODEX_HOME: '/home/me/cx',
+    XDG_CONFIG_HOME: '/home/me/.cfg',
+  });
+  assert.deepEqual(service.settings({ CLAUDE_CONFIG_DIR: '' }), {}, 'an empty value is not carried');
+  const cmd = ['/usr/bin/node', '/app/bin/zaafpulse.js', 'start'];
+  const unit = service.unitText(cmd, env, { system: false });
+  assert.match(unit, /Environment=CLAUDE_CONFIG_DIR=\/home\/me\/work-claude,\/home\/me\/other/);
+  assert.match(unit, /Environment=CODEX_HOME=\/home\/me\/cx/);
+  assert.match(unit, /Environment=XDG_CONFIG_HOME=\/home\/me\/.cfg/);
+  const pl = service.plist(cmd, env, '/tmp/l.log');
+  assert.match(pl, /<key>CLAUDE_CONFIG_DIR<\/key><string>\/home\/me\/work-claude,\/home\/me\/other<\/string>/);
+  assert.match(pl, /<key>CODEX_HOME<\/key><string>\/home\/me\/cx<\/string>/);
+  const vbs = service.vbsText(cmd, env, 'C:\\Z\\logs\\server.log');
+  assert.match(vbs, /e\("CLAUDE_CONFIG_DIR"\) = "\/home\/me\/work-claude,\/home\/me\/other"/);
+  assert.match(vbs, /e\("CODEX_HOME"\) = "\/home\/me\/cx"/);
+});
+
 test('service: unit, plist and Windows launcher carry settings but never secrets', () => {
   const env = service.settings({
     ZAAFPULSE_HOST: '0.0.0.0',
