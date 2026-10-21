@@ -16,9 +16,9 @@ const { createAntigravity } = require('../lib/trace/antigravity');
 const { validate, totals, commandName } = require('../lib/trace/model');
 const L = require('../lib/trace/light');
 
-// Read-only opens need Node 22.12; earlier Node would open the database read-write.
+// Read-only opens need Node 22.13 (23.4): node:sqlite unflagged, with readOnly; earlier Node would open read-write.
 const [major, minor] = process.versions.node.split('.').map(Number);
-const sqliteOk = !!sqlite && (major > 22 || (major === 22 && minor >= 12));
+const sqliteOk = !!sqlite && (major > 23 || (major === 22 && minor >= 13) || (major === 23 && minor >= 4));
 
 const F = path.join(__dirname, 'fixtures', 'trace');
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), `zp-${p}-`));
@@ -296,6 +296,53 @@ test('antigravity: a locked database is read from a copy that is deleted afterwa
   }
 });
 
+test('antigravity: a locked database that has not changed is not copied again', { skip: !sqliteOk }, async () => {
+  const dir = tmp('ag');
+  const db = path.join(dir, 'conversation_summaries.db');
+  const w = makeDb(db);
+  try {
+    w.exec('BEGIN EXCLUSIVE');
+    let copied = 0;
+    const a = createAntigravity({ files: [db], onCopy: () => copied++, minRefresh: 0 });
+    assert.equal(a.sessions().length, 1);
+    // An unknown id forces a new listing: the database is still locked and unchanged, so the rows are reused.
+    await assert.rejects(a.skeleton(null, 'nope', {}), (e) => e.status === 404);
+    assert.equal(copied, 1);
+    const t = new Date(Date.now() + 5000);
+    fs.utimesSync(db, t, t); // it changed: copied again
+    await assert.rejects(a.skeleton(null, 'nope', {}), (e) => e.status === 404);
+    assert.equal(copied, 2);
+    assert.equal(a.sessions().length, 1);
+  } finally {
+    w.close();
+    cleanup(dir);
+  }
+});
+
+test('antigravity: when every database fails to read, the source says so, without a path', { skip: !sqliteOk }, () => {
+  const dir = tmp('ag');
+  const bad = path.join(dir, 'conversation_summaries.db');
+  fs.writeFileSync(bad, 'this is not a database file, just text that is long enough to be read as a header.');
+  const good = path.join(dir, 'good.db');
+  makeDb(good).close();
+  try {
+    const one = createAntigravity({ files: [bad] });
+    assert.equal(one.available().ok, true, 'the file is there');
+    assert.throws(() => one.sessions(), /database unreadable/);
+    const { createTrace } = require('../lib/trace');
+    const src = createTrace({ light: [one], listTtlMs: 0 }).sources().find((s) => s.id === 'antigravity');
+    assert.equal(src.ok, false);
+    assert.match(src.reason, /database unreadable/);
+    assert.ok(!src.reason.includes(dir) && !/[\\/]/.test(src.reason), src.reason);
+    // One good database of two: the source is fine and lists it.
+    const both = createAntigravity({ files: [bad, good] });
+    assert.equal(both.sessions().length, 1);
+    assert.equal(createTrace({ light: [both], listTtlMs: 0 }).sources().find((s) => s.id === 'antigravity').ok, true);
+  } finally {
+    cleanup(dir);
+  }
+});
+
 test('antigravity: masked title, killed means error, an orphan child is its own session', { skip: !sqliteOk }, async () => {
   const dir = tmp('ag');
   const db = path.join(dir, 'conversation_summaries.db');
@@ -329,10 +376,10 @@ test('antigravity: masked title, killed means error, an orphan child is its own 
 test('antigravity: reports why it is unavailable', () => {
   const missing = createAntigravity({ files: [path.join(os.tmpdir(), 'zp-no-such.db')] }).available();
   assert.equal(missing.ok, false);
-  assert.equal(missing.reason, sqliteOk ? 'not installed' : 'needs Node 22.12 or newer');
+  assert.equal(missing.reason, sqliteOk ? 'not installed' : 'needs Node 22.13 or newer');
 });
 
-test('antigravity: below Node 22.12 nothing opens the database (earlier 22.x ignores readOnly)', () => {
+test('antigravity: below Node 22.13 nothing opens the database (node:sqlite is flagged there, and before 22.12 readOnly is ignored)', () => {
   const dir = tmp('ag');
   const db = path.join(dir, 'conversation_summaries.db');
   fs.writeFileSync(db, 'not a database');
@@ -346,13 +393,13 @@ test('antigravity: below Node 22.12 nothing opens the database (earlier 22.x ign
     },
   };
   try {
-    for (const v of ['22.5.0', '22.9.1', '22.11.0', '20.18.0', '18.20.4']) {
+    for (const v of ['22.5.0', '22.9.1', '22.11.0', '22.12.0', '22.12.9', '23.0.0', '23.3.0', '20.18.0', '18.20.4']) {
       const a = createAntigravity({ files: [db], version: v, sqlite: stub });
-      assert.deepEqual(a.available(), { ok: false, reason: 'needs Node 22.12 or newer' }, v);
+      assert.deepEqual(a.available(), { ok: false, reason: 'needs Node 22.13 or newer' }, v);
       assert.deepEqual(a.sessions(), []);
     }
     assert.equal(opened, 0);
-    for (const v of ['22.12.0', '22.20.1', '23.0.0', '24.16.0']) assert.equal(createAntigravity({ files: [db], version: v, sqlite: stub }).available().ok, true, v);
+    for (const v of ['22.13.0', '22.20.1', '23.4.0', '24.16.0', '25.0.0']) assert.equal(createAntigravity({ files: [db], version: v, sqlite: stub }).available().ok, true, v);
   } finally {
     cleanup(dir);
   }
@@ -589,6 +636,14 @@ test('commandName fails closed: quoted or parenthesised assignments, unparsable 
   assert.equal(commandName('tool' + 'x'.repeat(70)), null, 'longer than a plausible program name');
   assert.equal(commandName('sudo -u'), null);
   assert.equal(commandName(null), null);
+  // `_` inside a name, never as its first character; a key that holds `_` still fails closed.
+  assert.equal(commandName('pip_audit --strict'), 'pip_audit');
+  assert.equal(commandName('./my_tool.sh run'), 'my_tool.sh');
+  assert.equal(commandName('sudo /opt/bin/run_all'), 'run_all');
+  assert.equal(commandName('_hidden run'), null);
+  const gh = ['gh', 'p_', 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'].join(''); // built here so no token sits in the repo
+  assert.equal(commandName(`${gh} x`), null, 'a GitHub token is not a program name');
+  assert.equal(commandName(`/usr/bin/${gh}`), null);
 });
 
 test('kiro and gemini name a command tool by its program', async () => {

@@ -152,3 +152,41 @@ test('a Bash call is named by its program, never by an env assignment that holds
     fs.unlinkSync(f);
   }
 });
+
+// Names stay on show with content off, so a tool name, a subagent type or a file name is masked and capped.
+test('tool names, subagent types and file names are masked and capped at 80 characters', async () => {
+  const key = ['sk', 'ant', 'Ab3dE7gH1jK5mN9pQ2sT4vX6zC8'].join('-'); // built here so no key sits in the repo
+  const long = 'x'.repeat(200);
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-claude-mask-'));
+  fs.cpSync(dir, path.join(tmp, 'proj'), { recursive: true });
+  const main = path.join(tmp, 'proj', 's1.jsonl');
+  fs.writeFileSync(main, fs.readFileSync(main, 'utf8').replace('"subagent_type":"Explore"', `"subagent_type":"Explore ${key} ${long}"`));
+  const sid = 'mk1';
+  const use = (id, name, input) => ({ type: 'tool_use', id, name, input });
+  const lines = [
+    { type: 'user', sessionId: sid, timestamp: '2026-10-20T10:00:01.000Z', cwd: '/w/p', message: { role: 'user', content: 'go' } },
+    { type: 'assistant', sessionId: sid, timestamp: '2026-10-20T10:00:02.000Z', requestId: 'r1', message: { id: 'm1', role: 'assistant', model: 'claude-opus-5-5', usage: { input_tokens: 1, output_tokens: 1 }, content: [use('t1', `mcp.${key}.x`, { file_path: `/w/p/${key}.${long}.txt` }), use('t2', 'WebFetch', { url: `https://${long}.example.com/` })] } },
+  ];
+  const other = path.join(tmp, 'proj', 'mk1.jsonl');
+  fs.writeFileSync(other, lines.map((o) => JSON.stringify(o) + '\n').join(''));
+  const entries = await entriesFor([main, path.join(tmp, 'proj', 's1', 'subagents', 'agent-ag1.jsonl'), other]);
+  const agent = (await adapter.skeleton(entries[0], 's1', { turn: 0, entries })).spans.find((s) => s.kind === 'agent');
+  const tools = (await adapter.skeleton(entries[2], sid, { entries })).spans.filter((s) => s.kind === 'tool');
+  const shown = [agent.name, ...tools.flatMap((t) => [t.name, t.tool.name, t.tool.target])];
+  for (const v of shown) {
+    assert.ok(!v.includes(key), `no key in ${v.slice(0, 40)}`);
+    assert.ok(v.replace(/^(execute_tool|invoke_agent) /, '').length <= 80, `capped: ${v.length}`);
+  }
+  assert.match(agent.name, /^invoke_agent Explore \u2039/);
+  assert.match(tools[0].tool.target, /hidden/);
+});
+
+test('a skeleton line over the read limit fails with 413 instead of being buffered whole', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-claude-big-'));
+  const file = path.join(tmp, 'big.jsonl');
+  const user = { type: 'user', sessionId: 'big', timestamp: '2026-10-20T10:00:01.000Z', cwd: '/w/p', message: { role: 'user', content: 'go' } };
+  const huge = { type: 'assistant', sessionId: 'big', timestamp: '2026-10-20T10:00:02.000Z', requestId: 'r1', message: { id: 'm1', role: 'assistant', model: 'claude-opus-5-5', usage: { input_tokens: 1, output_tokens: 1 }, content: [{ type: 'text', text: 'y'.repeat(17 * 1024 * 1024) }] } };
+  fs.writeFileSync(file, JSON.stringify(user) + '\n' + JSON.stringify(huge) + '\n');
+  const [e] = await entriesFor([file]);
+  await assert.rejects(adapter.skeleton(e, 'big', { entries: [e] }), (er) => er.status === 413);
+});
