@@ -250,6 +250,7 @@ const contentOff = contentDefaultOff(process.env, SERVER_MODE);
 const trace = createTrace({
   demo: DEMO,
   contentOff,
+  pricing: () => config.pricing, // the owner's prices, as for the dashboard's totals (config reloads)
   ...(DEMO
     ? {}
     : {
