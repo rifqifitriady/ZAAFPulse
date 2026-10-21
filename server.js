@@ -175,7 +175,8 @@ function getIntegrations() {
       cacheDir: path.join(DIR, '.cache'),
       config,
       indexer,
-      contentOff: contentDefaultOff(process.env, SERVER_MODE),
+      // These tools also answer gateway API keys on /mcp: no transcript-derived title may leave there.
+      contentOff: true,
     });
     const registry = createIntegrations({ config, secrets: createSecrets(), audit, local });
     local.integrationsStatus = () => registry.status();

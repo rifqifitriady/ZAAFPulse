@@ -363,3 +363,43 @@ test('trace api: sign-in gate, gateway keys refused, and the live cursor round-t
     await s.stop();
   }
 });
+
+// The gateway's /mcp answers any key with the mcp scope, so no transcript-derived title may come out of it, even
+// where the dashboard itself shows one (loopback, content on).
+test('gateway /mcp: acc_trace_sessions never returns a Kiro title, while the dashboard does', async () => {
+  const data = tmp('zp-trace-api-mcp-');
+  fs.cpSync(path.join(__dirname, 'fixtures', 'trace', 'kiro'), path.join(data, '.kiro', 'sessions'), { recursive: true });
+  const gw = createGateway({
+    dataDir: path.join(data, '.data'),
+    getConfig: () => ({ gateway: {} }),
+    writeGatewayConfig: () => {},
+    secrets: secretsFor(),
+    resolveSecret: () => undefined,
+    getPricing: () => ({}),
+    getIntegrations: () => ({ listTools: async () => [], callTool: async () => ({}) }),
+  });
+  const apiKey = gw.keys.create({ name: 'mcp', scopes: ['mcp'], rpm: 60 }).secret;
+  gw.flush();
+  const s = await startServer({ ZAAFPULSE_AUTH: 'none', ZAAFPULSE_CONTENT: 'on' }, { data });
+  try {
+    const dash = (await client(s.base).call('/api/trace/sessions?range=30')).json.sessions;
+    const kiro = dash.filter((r) => r.source === 'kiro');
+    assert.deepEqual(kiro.map((r) => r.title).sort(), ['Add dark mode', 'Fix the login redirect'], 'the dashboard shows titles');
+
+    const mcp = client(s.base, { authorization: `Bearer ${apiKey}` });
+    const reply = await mcp.post('/mcp', {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'acc_trace_sessions', arguments: { range: 'all' } },
+    });
+    assert.equal(reply.status, 200);
+    const rows = JSON.parse(reply.json.result.content[0].text);
+    assert.equal(rows.filter((r) => r.source === 'kiro').length, 2, 'the Kiro sessions are listed');
+    for (const r of rows) assert.equal(r.title, null, `${r.source} title`);
+    assert.doesNotMatch(reply.text, /dark mode|login redirect/i);
+    noPaths(mcp.bodies);
+  } finally {
+    await s.stop();
+  }
+});
