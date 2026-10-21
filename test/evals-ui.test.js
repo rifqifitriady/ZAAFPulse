@@ -351,6 +351,18 @@ test('Claude Code: an option of its own that says where the text goes, with its 
   assert.equal(was('claude-code@ffffffffff'), 'changed');
 });
 
+test('Claude Code: not checked until it is picked; picking it asks the server to look', () => {
+  const list = WITH_CLAUDE(null).map((p) => (p.id === 'claude-code' ? { ...p, checked: false } : p));
+  const opt = evalsProviderOptions(list).find((o) => o.id === 'claude-code');
+  assert.equal(opt.available, null);
+  assert.equal(opt.checked, false);
+  assert.match(evalsProviderHint(opt), /^Claude Code not checked yet/);
+  // Still looking (the server's search took too long): "checking".
+  assert.equal(evalsProviderOptions(WITH_CLAUDE(null)).find((o) => o.id === 'claude-code').checked, true);
+  const src = fs.readFileSync(SRC, 'utf8');
+  assert.match(src, /trApi\('\/api\/evals\/settings\?refresh=1'\)/, 'the page refreshes the list when it is picked');
+});
+
 test('Claude Code: the hint says whether it was found, and the status line names it', () => {
   const opt = (available) => evalsProviderOptions(WITH_CLAUDE(available)).find((o) => o.id === 'claude-code');
   assert.equal(

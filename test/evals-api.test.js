@@ -684,7 +684,11 @@ test('evals api: Claude Code is a provider of its own, previewed like an externa
   // The server's own environment decides where Claude Code sends the text.
   const dest = destinationOf({ ...process.env });
   try {
-    const cur = (await c.call('/api/evals/settings')).json;
+    // Not the selected provider: not looked for until the list is refreshed.
+    const before = (await c.call('/api/evals/settings')).json.providers.find((p) => p.id === 'claude-code');
+    assert.equal(before.available, null);
+    assert.equal(before.checked, false);
+    const cur = (await c.call('/api/evals/settings?refresh=1')).json;
     const cc = cur.providers.filter((p) => p.id === 'claude-code');
     assert.deepEqual(cc, [
       {
@@ -693,6 +697,7 @@ test('evals api: Claude Code is a provider of its own, previewed like an externa
         kind: 'claude-cli',
         external: true,
         available: true,
+        checked: true,
         destination: dest.text,
         confirm: dest.token,
         models: ['haiku', 'sonnet', 'opus'],
@@ -771,7 +776,7 @@ test('evals api: a slow Claude Code search answers "checking" instead of holding
     claudeWaitMs: 50,
   });
   const started = Date.now();
-  const r = await api.route({ method: 'GET', path: '/api/evals/settings', query: new URLSearchParams() });
+  const r = await api.route({ method: 'GET', path: '/api/evals/settings', query: new URLSearchParams('refresh=1') });
   assert.ok(Date.now() - started < 1000);
   assert.equal(r.status, 200);
   assert.equal(r.body.providers.find((p) => p.id === 'claude-code').available, null);
@@ -783,8 +788,33 @@ test('evals api: a slow Claude Code search answers "checking" instead of holding
     settings: { get: () => ({}), save() {} },
     claude: { available: () => Promise.reject(new Error('boom')), destination: () => destinationOf({}) },
   });
-  const b = await broken.route({ method: 'GET', path: '/api/evals/settings', query: new URLSearchParams() });
+  const b = await broken.route({ method: 'GET', path: '/api/evals/settings', query: new URLSearchParams('refresh=1') });
   assert.equal(b.body.providers.find((p) => p.id === 'claude-code').available, false);
+});
+
+test('evals api: Claude Code is looked for only when it is the provider, or when the list is refreshed', async () => {
+  let looks = 0;
+  let provider = 'auto';
+  const api = createEvalApi({
+    trace: {},
+    engine: { kick() {} },
+    feedback: {},
+    gateway: null,
+    settings: { get: () => ({ provider }), save() {} },
+    claude: {
+      available: async () => (looks++, true),
+      destination: () => destinationOf({}),
+    },
+  });
+  const get = async (q = '') => {
+    const r = await api.route({ method: 'GET', path: '/api/evals/settings', query: new URLSearchParams(q) });
+    return r.body.providers.find((p) => p.id === 'claude-code');
+  };
+  assert.deepEqual([(await get()).available, (await get()).checked, looks], [null, false, 0], 'not checked');
+  assert.deepEqual([(await get('refresh=1')).available, looks], [true, 1], 'an explicit refresh looks');
+  provider = 'claude-code';
+  const picked = await get();
+  assert.deepEqual([picked.available, picked.checked, looks], [true, true, 2], 'the selected provider is looked for');
 });
 
 test('server: SIGHUP (a closed terminal) shuts down the way SIGTERM does', { skip: process.platform === 'win32' }, async () => {
