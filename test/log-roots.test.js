@@ -11,7 +11,7 @@ const claude = require('../lib/claude');
 const codex = require('../lib/codex');
 const { createContent } = require('../lib/trace/content');
 const { describeRoots } = require('../lib/logroots');
-const { emptyLogsNote } = require('../public/overviewview');
+const { emptyLogsNote, liveNoteStep } = require('../public/overviewview');
 const { NO_JUDGE_PORTS } = require('./helpers');
 
 const ROOT = path.join(__dirname, '..');
@@ -459,4 +459,16 @@ test('docs: one CLAUDE_CONFIG_DIR folder, the list in ZAAFPULSE_CLAUDE_DIRS, and
   assert.match(explorer, /install\.md#where-the-logs-are-read-from/);
   assert.match(explorer, /403 "not a\s+log file"/);
   assert.match(explorer, /savedOutput/);
+});
+
+test('Overview: the live poll redraws the note as indexing goes on and reloads the summary once, when it ends', () => {
+  const going = 'Indexing your logs… 12/40 files';
+  assert.equal(liveNoteStep(going, 'Indexing your logs… 13/40 files', false), 'render', 'progress: redraw only');
+  assert.equal(liveNoteStep(going, going, false), null);
+  assert.equal(liveNoteStep(going, '', true), 'summary', 'the index finished: the numbers are new');
+  assert.equal(liveNoteStep('', '', true), null, 'no note: the minute poll is enough');
+  assert.equal(liveNoteStep('No Claude Code or Codex logs found.', '', false), 'render');
+  const app = fs.readFileSync(j(ROOT, 'public', 'app.js'), 'utf8');
+  assert.match(app, /liveNoteStep\(/);
+  assert.doesNotMatch(app, /overviewNote\(state\.data\) !== state\.logNote/, 'no summary reload per progress step');
 });

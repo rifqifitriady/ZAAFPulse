@@ -159,6 +159,7 @@ function evalsProviderOptions(providers) {
         label,
         external: true,
         available: p.available === null ? null : p.available === true,
+        checked: p.checked !== false, // false: the server has not looked for it (it is not the saved provider)
         destination: typeof p.destination === 'string' ? p.destination.slice(0, 160) : null,
         confirm: typeof p.confirm === 'string' ? p.confirm : null,
       });
@@ -173,6 +174,8 @@ function evalsProviderOptions(providers) {
 function evalsProviderHint(opt) {
   if (!opt || !opt.external) return 'Nothing leaves this machine. Auto tries Ollama, then LM Studio.';
   if (opt.id === EV_CLAUDE) {
+    if (opt.available === null && opt.checked === false)
+      return 'Claude Code not checked yet: it is looked for on this machine once you pick it.';
     if (opt.available === null) return 'Checking for Claude Code on this machine…';
     const where = opt.destination || 'Anthropic, through your Claude login';
     return opt.available
@@ -451,6 +454,19 @@ async function mountEvalsSettings() {
     const isExt = !!(ext && ext.external);
     const hint = $('#ev-prov-hint');
     hint.textContent = evalsProviderHint(ext);
+    // Claude Code is looked for only when it is picked: ask the server once, then paint again with what it found.
+    if (picked === EV_CLAUDE && ext && ext.checked === false && !S.claudeAsked) {
+      S.claudeAsked = true;
+      hint.textContent = 'Checking for Claude Code on this machine…';
+      trApi('/api/evals/settings?refresh=1')
+        .then((r) => {
+          if (r && Array.isArray(r.providers)) S.cur.providers = r.providers;
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (form.isConnected) paintExternal();
+        });
+    }
     // A gateway judge has no default model: the gateway needs one of the provider's own names. Claude Code has its
     // own default, and a small model spends less of the owner's limits.
     form.model.placeholder =

@@ -43,6 +43,14 @@ function emptyLogsNote(logRoots, index, sessions) {
   );
 }
 
+// What the 5-second live poll does with the Overview's note: `shown` is the note as drawn, `next` the note from the
+// fresh live data. The note is drawn again when its text changed (indexing progress comes with the live data), and
+// the summary is reloaded once, when an index has finished while a note was up (the numbers changed then).
+function liveNoteStep(shown, next, indexFinished) {
+  if (indexFinished && shown) return 'summary';
+  return next !== shown ? 'render' : null;
+}
+
 const overviewNote = (d) =>
   emptyLogsNote((state.live || {}).logRoots, (state.live || {}).index || d.index, d.kpis.sessions);
 
@@ -420,4 +428,4 @@ function mountOverview() {
   if (canvas && state.data) isoStage(canvas, { draw: drawCity, fit: [13.4, 8.9], origin: [0.46, 0.62] });
 }
 
-if (typeof module !== 'undefined') module.exports = { emptyLogsNote };
+if (typeof module !== 'undefined') module.exports = { emptyLogsNote, liveNoteStep };

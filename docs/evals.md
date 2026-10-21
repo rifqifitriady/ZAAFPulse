@@ -288,7 +288,9 @@ with your Claude account. No API key is needed, and nothing is set up in the gat
   in `ZAAFPULSE_CLAUDE_BIN` is taken as you set it: it only has to exist and be executable. A script (`.js`, or the package behind a `.cmd`) runs through node:
   this process's own, or in the single-file build a `node` found on `PATH` or in the usual folders; with none, the
   script is passed over. The answer is kept for 5 minutes, and dropped at once when the binary can no longer be
-  started. Settings → Evals says whether it was found ("checking" while the first search is still running), never
+  started. It is looked for only while Claude Code is the saved provider, or when you pick it in Settings → Evals
+  (the page then asks again with `?refresh=1`); until then no binary is started and the page says "not checked
+  yet". Settings → Evals says whether it was found ("checking" while the first search is still running), never
   where.
 - **Not found.** The judge waits with "Claude Code not found: install it, or set ZAAFPULSE_CLAUDE_BIN". A background
   service has no shell `PATH`; `zaafpulse service install` carries `ZAAFPULSE_CLAUDE_BIN` into the service when it is
@@ -346,7 +348,7 @@ never by its raw id. A state change needs a JSON body.
 | `GET /api/evals/summary?range=1..30` | the pass count, total, rate and daily counts per evaluator, and the judge agreement. `range` is days (default 7) |
 | `GET /api/evals/status` | the judge (`ok`, `kind`, `model`, `provider`, `waiting`, `reason`), the queue length, today's count and cost, `paused` (`judge off`, `daily cap` or `cost cap`) and `since` |
 | `GET /api/evals/evaluators` | the evaluators: `id`, `kind`, `scope`, `title`, `labels`, `pass` |
-| `GET /api/evals/settings` | the settings in force and the providers you can choose. Claude Code is `{ "id": "claude-code", "label": "Claude Code (your Claude login)", "kind": "claude-cli", "external": true, "available": true, "destination": "Anthropic, through your Claude login", "confirm": "claude-code@…", "models": ["haiku", "sonnet", "opus"] }`, with `available` saying whether the CLI was found (`null` while the first search runs) |
+| `GET /api/evals/settings` | the settings in force and the providers you can choose. Claude Code is `{ "id": "claude-code", "label": "Claude Code (your Claude login)", "kind": "claude-cli", "external": true, "available": true, "checked": true, "destination": "Anthropic, through your Claude login", "confirm": "claude-code@…", "models": ["haiku", "sonnet", "opus"] }`, with `available` saying whether the CLI was found (`null` while the first search runs, and when it was not looked for: then `checked` is `false`). It is looked for only when Claude Code is the saved provider, or with `?refresh=1` |
 | `POST /api/evals/settings` | JSON with any of `judge`, `provider`, `model`, `dailyCap`, `costCapUSD`, `evaluators`; a name it does not know is refused |
 | `POST /api/evals/run` | JSON `{ "key" }`: queue every finished turn of the session; returns `{ "queued" }` (and `sessionDeferred` when the whole-session verdict waits) |
 | `POST /api/evals/preview` | JSON `{ "key", "provider" }`: the exact masked text for that external provider or Claude Code (`system`, `user`, `evaluator`, `turn`, and for Claude Code `destination`); confirms the provider (Claude Code: that destination) |
