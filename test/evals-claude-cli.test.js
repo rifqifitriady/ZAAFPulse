@@ -299,21 +299,91 @@ test('destination: where the text goes and who pays, from the environment the CL
   const url = 'https://' + ['user', 'pw'].join(':') + '@gw.example.com:8443/v1';
   assert.equal(d({ ANTHROPIC_BASE_URL: url }).to, 'gw.example.com:8443 (ANTHROPIC_BASE_URL)');
   assert.equal(d({ ANTHROPIC_BASE_URL: 'not a url' }).to, 'a custom address (ANTHROPIC_BASE_URL)');
-  assert.equal(d({ CLAUDE_CODE_USE_BEDROCK: '1' }).to, 'AWS Bedrock');
-  assert.equal(d({ CLAUDE_CODE_USE_VERTEX: 'true' }).to, 'Google Vertex AI');
-  assert.equal(d({ CLAUDE_CODE_USE_BEDROCK: '0' }).to, 'Anthropic', '0 is off');
+  // Each cloud, with its own gateway URL's host when one is set, billed to that cloud account.
+  const AWS = 'your cloud account (AWS)';
+  const GCP = 'your cloud account (GCP)';
+  const AZURE = 'your cloud account (Azure)';
+  const via = 'via gw.example.com:8443';
+  const cases = [
+    [{ CLAUDE_CODE_USE_BEDROCK: '1' }, 'AWS Bedrock', AWS],
+    [{ CLAUDE_CODE_USE_BEDROCK: '1', ANTHROPIC_BEDROCK_BASE_URL: url }, `AWS Bedrock ${via}`, AWS],
+    [{ CLAUDE_CODE_USE_MANTLE: 'yes' }, 'AWS Bedrock (Mantle)', AWS],
+    [{ CLAUDE_CODE_USE_VERTEX: 'TRUE' }, 'Google Vertex AI', GCP],
+    [{ CLAUDE_CODE_USE_VERTEX: 'on', ANTHROPIC_VERTEX_BASE_URL: url }, `Google Vertex AI ${via}`, GCP],
+    [{ CLAUDE_CODE_USE_FOUNDRY: '1' }, 'Microsoft Foundry', AZURE],
+    [{ CLAUDE_CODE_USE_FOUNDRY: '1', ANTHROPIC_FOUNDRY_BASE_URL: url }, `Microsoft Foundry ${via}`, AZURE],
+    [{ CLAUDE_CODE_USE_ANTHROPIC_AWS: '1' }, 'Claude Platform on AWS', AWS],
+    [{ CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD: '1' }, 'Claude on Google Cloud', GCP],
+  ];
+  for (const [env, to, billing] of cases) {
+    assert.equal(d(env).to, to, JSON.stringify(env));
+    assert.equal(d(env).billing, billing, JSON.stringify(env));
+    assert.equal(d(env).text, `${to}, billed to ${billing}`);
+  }
+  const gateway = d({ CLAUDE_CODE_USE_GATEWAY: '1', ANTHROPIC_BASE_URL: url });
+  assert.equal(gateway.to, 'gw.example.com:8443 (CLAUDE_CODE_USE_GATEWAY)');
+  // Claude Code's own rule: 1, true, yes, on are on; 0, false, no, off and empty are off.
+  for (const off of ['0', 'false', 'No', 'off', '']) {
+    assert.equal(d({ CLAUDE_CODE_USE_BEDROCK: off }).to, 'Anthropic', off);
+  }
+  // Anything else is shown as a question and is a destination of its own.
+  assert.equal(d({ CLAUDE_CODE_USE_BEDROCK: 'maybe' }).to, 'Anthropic (CLAUDE_CODE_USE_BEDROCK=maybe?)');
+  assert.notEqual(d({ CLAUDE_CODE_USE_BEDROCK: 'maybe' }).token, d({}).token);
   const key = ['sk', 'test', 'x'].join('-');
   assert.equal(d({ ANTHROPIC_API_KEY: key }).billing, 'API billing');
   assert.equal(d({ ANTHROPIC_AUTH_TOKEN: key }).text, 'Anthropic, with API billing');
   assert.equal(d({ ZAAFPULSE_X: '1', ANTHROPIC_API_KEY: '' }).billing, 'your Claude login');
-  // A confirmation token per destination and billing; never the key or the URL itself.
-  const tokens = [{}, { ANTHROPIC_API_KEY: key }, { CLAUDE_CODE_USE_BEDROCK: '1' }, { ANTHROPIC_BASE_URL: url }].map(
-    (e) => d(e).token,
-  );
-  assert.ok(tokens.every((x) => /^claude-code@[0-9a-f]{10}$/.test(x)));
-  assert.equal(new Set(tokens).size, 4);
-  assert.equal(d({}).token, d({ HOME: '/elsewhere' }).token, 'stable for the same destination');
   assert.deepEqual(createClaude({ env: { ANTHROPIC_API_KEY: key } }).destination(), d({ ANTHROPIC_API_KEY: key }));
+});
+
+test('destination: the token changes with every routing variable, never with a key value', () => {
+  const t = (env) => destinationOf(env).token;
+  const base = t({});
+  assert.match(base, /^claude-code@[0-9a-f]{10}$/);
+  assert.equal(base, t({ HOME: '/elsewhere', PATH: '/bin' }), 'other variables do not matter');
+  const host = (h) => `https://${h}/v1`;
+  const vars = [
+    'CLAUDE_CODE_USE_BEDROCK',
+    'CLAUDE_CODE_USE_VERTEX',
+    'CLAUDE_CODE_USE_FOUNDRY',
+    'CLAUDE_CODE_USE_MANTLE',
+    'CLAUDE_CODE_USE_GATEWAY',
+    'CLAUDE_CODE_USE_ANTHROPIC_AWS',
+    'CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD',
+    'CLAUDE_CODE_USE_CCR_V2',
+    'CLAUDE_CODE_USE_SOMETHING_NEW',
+  ];
+  const seen = new Set([base]);
+  for (const v of vars) {
+    const on = t({ [v]: '1' });
+    assert.notEqual(on, base, v);
+    seen.add(on);
+    assert.equal(t({ [v]: 'true' }), on, `${v}: the same "on"`);
+  }
+  const urls = [
+    'ANTHROPIC_BASE_URL',
+    'ANTHROPIC_BEDROCK_BASE_URL',
+    'ANTHROPIC_BEDROCK_MANTLE_BASE_URL',
+    'ANTHROPIC_VERTEX_BASE_URL',
+    'ANTHROPIC_FOUNDRY_BASE_URL',
+    'ANTHROPIC_AWS_BASE_URL',
+    'ANTHROPIC_GOOGLE_CLOUD_BASE_URL',
+  ];
+  for (const v of urls) {
+    const a = t({ [v]: host('a.example.com') });
+    assert.notEqual(a, base, v);
+    assert.notEqual(t({ [v]: host('b.example.com') }), a, `${v}: another host`);
+    assert.equal(t({ [v]: 'https://a.example.com/other/path' }), a, `${v}: the host counts, not the path`);
+    seen.add(a);
+  }
+  const k1 = ['sk', 'one'].join('-');
+  const k2 = ['sk', 'two'].join('-');
+  const keys = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_FOUNDRY_API_KEY', 'ANTHROPIC_FOUNDRY_AUTH_TOKEN'];
+  for (const v of keys) {
+    assert.notEqual(t({ [v]: k1 }), base, `${v} present`);
+    assert.equal(t({ [v]: k1 }), t({ [v]: k2 }), `${v}: its value is never part of it`);
+  }
+  assert.equal(seen.size, 1 + vars.length + urls.length, 'each variable gives a token of its own');
 });
 
 test('call: session and IDE variables of a parent Claude Code or VS Code never reach the child', async () => {
@@ -424,4 +494,23 @@ test('call: an answer that says the login is gone backs off as "not signed in"',
     assert.equal(e.message, 'Claude Code is not signed in');
     return true;
   });
+});
+
+test('call: a timeout during the drain still reads the answer the CLI gave', { skip: !POSIX }, async () => {
+  const t = rig('orphan-answer');
+  const r = await judge(t, { timeoutMs: 700, graceMs: 200 });
+  assert.deepEqual(JSON.parse(r.text), { label: 'relevant', explanation: 'fake verdict' });
+});
+
+test('stopAll: a running call is killed and its folder removed at once', async () => {
+  const t = rig('hang');
+  const bin = await t.claude.find();
+  const p = t.claude.run(bin, { system: 's', user: 'u', schema: SCHEMA });
+  for (let i = 0; i < 150 && !t.runs().length; i++) await new Promise((r) => setTimeout(r, 20));
+  const [run] = t.runs();
+  t.claude.stopAll();
+  assert.equal(fs.existsSync(run.cwd), false, 'removed before stopAll returns');
+  await assert.rejects(p, (e) => e.status === 0);
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(alive(run.pid), false);
 });

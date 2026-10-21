@@ -149,7 +149,11 @@ function evalsProviderOptions(providers) {
   for (const p of Array.isArray(providers) ? providers : []) {
     if (!p || typeof p.id !== 'string' || out.some((o) => o.id === p.id)) continue;
     if (p.kind === 'claude-cli' && p.id === EV_CLAUDE) {
-      const label = 'Claude Code (your Claude login) · sends masked text to Anthropic';
+      // The destination the server detected (Anthropic, a cloud, a router), else a neutral line.
+      const where = typeof p.destination === 'string' && p.destination ? p.destination.slice(0, 160) : null;
+      const label = where
+        ? `Claude Code · sends masked text to ${where}`
+        : 'Claude Code · sends masked text off this machine';
       out.push({
         id: p.id,
         label,
