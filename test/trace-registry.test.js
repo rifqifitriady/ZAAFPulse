@@ -1012,3 +1012,166 @@ test('content is off by default in server mode only, and the setting wins either
   assert.equal(contentDefaultOff({ ZAAFPULSE_CONTENT: 'on' }, true), false, 'server mode, asked for');
   assert.equal(contentDefaultOff({}, false), false, 'loopback without a value');
 });
+
+// ---- judge material (server-side only: never returned by an HTTP route) ----
+
+test('material: the Claude turn prompt, answer and tools, with the subagent span and the tools offered', async () => {
+  const t = await make();
+  const m = await t.material('claude', 's1', 0);
+  assert.equal(m.material.prompt, 'fix the login redirect');
+  assert.equal(m.material.answer, 'Changed the redirect.');
+  const agent = m.material.tools.find((x) => x.name === 'Agent');
+  assert.ok(agent, 'the subagent span is a tool');
+  assert.equal(agent.output, 'found src/auth.js');
+  assert.deepEqual(Object.keys(agent).sort(), ['name', 'output', 'status', 'target'], 'no tool input');
+  assert.ok(m.material.available.includes('Agent'));
+  assert.ok(!('prompts' in m.material));
+  assert.deepEqual(m.target, { source: 'claude', session: 's1', turn: 0, span: null });
+  // The first turn ends where the second begins.
+  const turns = await t.turnsOf(t.keyFor('claude', 's1'));
+  assert.equal(m.finishedAt, turns[1].ts);
+  // The last turn ends with its own spans, not at a next turn; no turn means the last one.
+  const last = await t.material('claude', 's1');
+  assert.equal(last.material.prompt, 'now run the tests');
+  assert.equal(last.target.turn, turns.length - 1);
+  assert.ok(Number.isFinite(last.finishedAt) && last.finishedAt >= turns[turns.length - 1].ts);
+  assert.equal(await t.material('claude', 's1', 99), null, 'a turn that does not exist');
+});
+
+test('material: a secret in the prompt or a tool output comes back masked', async () => {
+  const k = secret();
+  const { root, file } = tmpClaude([
+    U('s9', '00', `deploy with ${k}`),
+    A('s9', '01', 'm1', [{ type: 'tool_use', id: 'tu1', name: 'Bash', input: { command: `echo ${k}` } }]),
+    U('s9', '02', [{ type: 'tool_result', tool_use_id: 'tu1', content: `KEY=${k}\nrest` }]),
+    A('s9', '03', 'm2', [{ type: 'text', text: 'done' }]),
+  ]);
+  const e = await tmpEntry(file);
+  const t = createTrace({ indexer: { entries: () => [e] }, light: [], roots: [root] });
+  const m = await t.material('claude', 's9', 0);
+  assert.ok(!JSON.stringify(m).includes(k), 'no live secret anywhere in the material');
+  assert.match(m.material.prompt, /hidden/);
+  assert.match(m.material.tools[0].output, /KEY=.*hidden.*\nrest/);
+  assert.equal(m.material.tools[0].name, 'Bash');
+});
+
+test('material: an unknown session, a light source and a gateway request are null; a bad turn is refused', async () => {
+  const t = await make({ light: [fakeLight('kiro', 1)], gateway: { runs: () => [], run: () => null, requests: () => [{ ts: 1000, keyId: 'k', provider: 'p', model: 'm', sessionId: 'c1', kind: 'chat', status: 200, ms: 5, input: 1, output: 1, cost: 0 }] } });
+  assert.equal(await t.material('claude', 'nope', 0), null);
+  assert.equal(await t.material('nope', 's1', 0), null);
+  assert.equal(await t.material('kiro', 'kiro-0', 0), null);
+  assert.equal(await t.material('gateway', 'req:c1', 0), null);
+  assert.equal(await t.materialSession('kiro', 'kiro-0'), null);
+  assert.equal(await t.materialSession('gateway', 'req:c1'), null);
+  assert.equal(await t.materialSession('claude', 'nope'), null);
+  assert.equal(await t.material(undefined, undefined, 0), null);
+  await assert.rejects(t.material('claude', 's1', -1), (e) => e.status === 400);
+  await assert.rejects(t.material('claude', 's1', 'x'), (e) => e.status === 400);
+});
+
+test('material: the raw skeleton is not left in the client cache', async () => {
+  const t = await make();
+  await t.material('claude', 's1', 0);
+  assert.deepEqual([t.stats().cached, t.stats().contentIds], [0, 0]);
+});
+
+test('material: a Codex turn works', async () => {
+  const t = await make({ indexer: await fakeIndexer([await codexEntry()]) });
+  const sid = Object.keys((await codexEntry()).result.sessions)[0];
+  const m = await t.material('codex', sid, 0);
+  assert.equal(m.material.prompt, 'add pagination');
+  assert.ok(m.material.tools.some((x) => x.name && x.output.trim() === 'src'));
+});
+
+test('sourceOf maps a key back to its source and session id; a forged key is a 404', async () => {
+  const t = await make();
+  const key = t.keyFor('claude', 's1');
+  assert.deepEqual(t.sourceOf(key), { source: 'claude', sid: 's1' });
+  const [body, tag] = key.split('.');
+  const flip = tag[0] === 'a' ? 'b' : 'a';
+  for (const bad of [`${body}.${flip}${tag.slice(1)}`, 'claude.' + '0'.repeat(32), 'x', Buffer.from('claude:s1').toString('base64url')])
+    assert.throws(() => t.sourceOf(bad), (e) => e.status === 404 && /unknown session/.test(e.message), bad.slice(0, 20));
+  assert.throws(() => t.sourceOf(undefined), (e) => e.status === 400);
+});
+
+test('turnsOf lists the index and time of each turn, nothing else', async () => {
+  const t = await make();
+  const turns = await t.turnsOf(t.keyFor('claude', 's1'));
+  assert.deepEqual(turns.map((x) => x.index), [0, 1]);
+  for (const x of turns) assert.deepEqual(Object.keys(x).sort(), ['index', 'ts']);
+  await assert.rejects(t.turnsOf('claude.' + '0'.repeat(32)), (e) => e.status === 404);
+});
+
+test('materialSession: the prompt of each turn, at most 1000 characters, latest 30 turns', async () => {
+  const t = await make();
+  const m = await t.materialSession('claude', 's1');
+  assert.deepEqual(m.material, { prompts: ['fix the login redirect', 'now run the tests'] });
+  assert.deepEqual(m.target, { source: 'claude', session: 's1', turn: null, span: null });
+
+  const k = secret();
+  const lines = [];
+  for (let i = 0; i < 35; i++) {
+    const ts = String(i).padStart(2, '0');
+    lines.push(U('s9', ts, i === 34 ? `${'x'.repeat(1500)} ${k}` : i === 33 ? `with ${k}` : `p${i}`));
+    lines.push(A('s9', ts, `m${i}`, [{ type: 'text', text: 'ok' }]));
+  }
+  const { root, file } = tmpClaude(lines);
+  const e = await tmpEntry(file);
+  const big = createTrace({ indexer: { entries: () => [e] }, light: [], roots: [root] });
+  const p = (await big.materialSession('claude', 's9')).material.prompts;
+  assert.equal(p.length, 30);
+  assert.equal(p[0], 'p5', 'the latest 30 turns, oldest first');
+  assert.ok(p[29].length <= 1000);
+  assert.ok(!JSON.stringify(p).includes(k));
+  assert.match(p[28], /hidden/);
+});
+
+test('material and materialSession work with content off (server-internal), and content stays 403', async () => {
+  const t = await make({ contentOff: true });
+  assert.equal((await t.material('claude', 's1', 0)).material.prompt, 'fix the login redirect');
+  assert.equal((await t.materialSession('claude', 's1')).material.prompts.length, 2);
+  assert.equal(t.stats().contentIds, 0);
+});
+
+test('material: a gateway run is judged like a turn: the task masked, the answer, the steps', async () => {
+  const k = secret();
+  const T0 = 1700000000000;
+  const run = {
+    id: 'r1',
+    pattern: 'vote',
+    state: 'completed',
+    createdAt: T0,
+    updatedAt: T0 + 5000,
+    task: `ship it with ${k}`,
+    answer: 'final answer',
+    steps: [{ n: 1, agent: 'a', model: 'm', text: 'step a text', status: 'done' }],
+    trace: [
+      { id: 'x0', parent: null, name: 'invoke_workflow vote', start: 0, end: 5000, status: 'ok', attrs: {} },
+      { id: 'x1', parent: 'x0', name: 'invoke_agent a', start: 100, end: 3000, status: 'ok', attrs: {} },
+      { id: 'x2', parent: 'x1', name: 'chat m', start: 200, end: 2000, status: 'ok', attrs: { 'zp.agent': 'a', 'gen_ai.request.model': 'm' } },
+    ],
+  };
+  const t = await make({ gateway: { runs: () => [run], run: (id) => (id === 'r1' ? run : null), requests: () => [] } });
+  const m = await t.material('gateway', 'run:r1', 0);
+  assert.match(m.material.prompt, /^ship it with .*hidden/);
+  assert.ok(!JSON.stringify(m).includes(k));
+  assert.equal(m.material.answer, 'final answer');
+  assert.ok(m.material.tools.some((x) => x.output === 'step a text'));
+  assert.deepEqual(m.target, { source: 'gateway', session: 'run:r1', turn: 0, span: null });
+  assert.equal(m.finishedAt, T0 + 5000);
+  const s = await t.materialSession('gateway', 'run:r1');
+  assert.equal(s.material.prompts.length, 1);
+  assert.ok(!JSON.stringify(s).includes(k));
+});
+
+test('material: demo mode serves the synthetic turn through the same content path', async () => {
+  const t = createTrace({ demo: true, listTtlMs: 0 });
+  const m = await t.material('claude', 'demo-claude-1', 0);
+  assert.match(m.material.prompt, /^fix auth redirect/);
+  assert.match(m.material.answer, /^Fixed:/);
+  assert.ok(m.material.tools.some((x) => x.name === 'Agent') && m.material.tools.some((x) => x.name === 'Bash' && x.status === 'error'));
+  assert.ok(!JSON.stringify(m).includes('sk-ant-api03'), 'the demo secret is masked');
+  assert.ok(m.material.tools.some((x) => /hidden/.test(x.output)));
+  assert.equal(await t.material('kiro', 'demo-kiro-1', 0), null);
+  assert.equal((await t.materialSession('claude', 'demo-claude-1')).material.prompts.length, 1);
+});
