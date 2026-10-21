@@ -11,15 +11,18 @@ const FIXTURE = path.join(__dirname, 'fixtures', 'trace', 'claude', 'proj', 's1.
 
 // A temp HOME with one Claude Code session that went quiet an hour ago (so every turn is finished), and an empty
 // data folder. Nothing here is this machine's own.
-function rig(config) {
+function rig(config, { fresh = false, lines } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'evals-cli-home-'));
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'evals-cli-data-'));
   const proj = path.join(home, '.claude', 'projects', 'proj');
   fs.mkdirSync(proj, { recursive: true });
   const file = path.join(proj, 's1.jsonl');
-  fs.copyFileSync(FIXTURE, file);
-  const hourAgo = new Date(Date.now() - 3600e3);
-  fs.utimesSync(file, hourAgo, hourAgo);
+  if (lines) fs.writeFileSync(file, fs.readFileSync(FIXTURE, 'utf8').split('\n').slice(0, lines).join('\n') + '\n');
+  else fs.copyFileSync(FIXTURE, file);
+  if (!fresh) {
+    const hourAgo = new Date(Date.now() - 3600e3);
+    fs.utimesSync(file, hourAgo, hourAgo);
+  }
   if (config) fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify(config));
   return { home, data };
 }
@@ -181,4 +184,45 @@ test('eval needs --judge and --session, and is in the usage text', async () => {
   assert.equal(noSession.code, 2);
   const help = await runCli(['help'], r);
   assert.match(help.out, /zaafpulse eval --judge --session <id>/);
+});
+
+test('eval stops early and exits 2 when the daily cap is reached part-way', async () => {
+  const ollama = await fakeOllama();
+  try {
+    const res = await runCli(['eval', '--judge', '--session', 's1'], {
+      ...rig({ evals: { dailyCap: 1 } }),
+      env: { ZAAFPULSE_OLLAMA_URL: ollama.url },
+    });
+    assert.equal(res.code, 2, res.err);
+    assert.match(res.err, /stopped early \(daily cap\)/);
+    assert.equal(ollama.requests.filter((q) => q.path === '/api/chat').length, 1);
+  } finally {
+    await ollama.close();
+  }
+});
+
+test('eval exits 1 when the session has no finished turn to judge', async () => {
+  const ollama = await fakeOllama();
+  try {
+    // One turn, and the log was just written: that turn is still running.
+    const res = await runCli(['eval', '--judge', '--session', 's1'], {
+      ...rig(null, { fresh: true, lines: 4 }),
+      env: { ZAAFPULSE_OLLAMA_URL: ollama.url },
+    });
+    assert.equal(res.code, 1, res.err);
+    assert.match(res.err, /Nothing was judged/);
+    assert.equal(ollama.requests.filter((q) => q.path === '/api/chat').length, 0);
+  } finally {
+    await ollama.close();
+  }
+});
+
+test('eval refuses a --session or --source value that is really the next flag', async () => {
+  const r = rig();
+  const a = await runCli(['eval', '--judge', '--session', '--json'], r);
+  assert.equal(a.code, 2);
+  assert.match(a.err, /need a value that does not start with "-"/);
+  const b = await runCli(['eval', '--judge', '--session', 's1', '--source', '--json'], r);
+  assert.equal(b.code, 2);
+  assert.match(b.err, /usage: zaafpulse eval/);
 });

@@ -251,8 +251,11 @@ const commands = {
   async eval() {
     const { runEval, USAGE } = require('../lib/evals/cli');
     const session = flag('session');
-    if (!flag('judge') || typeof session !== 'string' || !session) die(USAGE, 2);
     const source = flag('source');
+    // A flag that swallowed the next flag (`--session --json`) is a mistake, not a session id.
+    const bad = [session, source].some((v) => typeof v === 'string' && v.startsWith('-'));
+    if (bad) die(`${USAGE}\n--session and --source need a value that does not start with "-".`, 2);
+    if (!flag('judge') || typeof session !== 'string' || !session) die(USAGE, 2);
     const code = await runEval({
       session,
       source: typeof source === 'string' ? source : undefined,
