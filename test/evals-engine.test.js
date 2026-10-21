@@ -70,6 +70,7 @@ function rig({ settings = {}, resolved = LOCAL, entries = [], demo, demoData } =
   let inflight = 0;
   let maxInflight = 0;
   const models = {
+    stop: () => (st.stopped = (st.stopped || 0) + 1),
     resolve: async () => st.resolved,
     priced: (resolved) => resolved.kind !== 'external' || st.priced,
     priceOf: (resolved) => {
@@ -1599,6 +1600,7 @@ test('a running call is cancelled when the provider is switched, and by stop()',
   q.engine.stop();
   await q.settle();
   assert.equal(q.calls[0].signal.aborted, true);
+  assert.equal(q.st.stopped, 1, 'and the models were told to stop their running calls at once');
   await q.engine.tick();
   await q.settle();
   assert.equal(q.calls.length, 1, 'a stopped engine starts nothing new');

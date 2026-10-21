@@ -323,11 +323,19 @@ test('Claude Code: an option of its own that says where the text goes, with its 
       ['auto', 'Auto (local first)', false],
       ['ollama', 'Ollama', false],
       ['lmstudio', 'LM Studio', false],
-      ['claude-code', 'Claude Code (your Claude login) · sends masked text to Anthropic', true],
+      [
+        'claude-code',
+        'Claude Code · sends masked text to gw.example.com (ANTHROPIC_BASE_URL), with API billing',
+        true,
+      ],
       ['openai', 'External: openai (sends masked text)', true],
     ],
   );
   assert.equal(opts.find((o) => o.id === 'claude-code').available, true);
+  // Without a destination from the server, the label stays neutral.
+  const bare = WITH_CLAUDE(true).map((p) => (p.id === 'claude-code' ? { ...p, destination: null } : p));
+  const plain = evalsProviderOptions(bare).find((o) => o.id === 'claude-code').label;
+  assert.equal(plain, 'Claude Code · sends masked text off this machine');
   assert.equal(opts.find((o) => o.id === 'claude-code').destination, WITH_CLAUDE(true)[3].destination);
   assert.equal(evalsProviderOptions(WITH_CLAUDE(false)).find((o) => o.id === 'claude-code').available, false);
   assert.deepEqual(evalsModelList(WITH_CLAUDE(true), 'claude-code'), ['haiku', 'sonnet', 'opus']);

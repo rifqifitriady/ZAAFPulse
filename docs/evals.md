@@ -208,21 +208,29 @@ with your Claude account. No API key is needed, and nothing is set up in the gat
 
 - **What is sent, and to whom.** The same masked text as for any external provider (secrets and personal data
   masked, the [preview](#external-providers) shows it exactly). It goes where your Claude Code sends its requests,
-  which ZAAFPulse reads from the environment the CLI gets:
+  which ZAAFPulse reads from the environment the CLI gets. The first switch that is on wins, in this order (a switch
+  is on for `1`, `true`, `yes` or `on`, off for `0`, `false`, `no`, `off` or empty, as Claude Code reads it):
 
-  | Set in that environment | The text goes to |
-  |---|---|
-  | `CLAUDE_CODE_USE_BEDROCK` (not `0` or `false`) | AWS Bedrock |
-  | `CLAUDE_CODE_USE_VERTEX` | Google Vertex AI |
-  | `ANTHROPIC_BASE_URL` | that host, shown as `<host> (ANTHROPIC_BASE_URL)` (a router or gateway) |
-  | none of these | Anthropic |
+  | Set in that environment | The text goes to | Billed to |
+  |---|---|---|
+  | `CLAUDE_CODE_USE_BEDROCK` | AWS Bedrock (`via <host>` with `ANTHROPIC_BEDROCK_BASE_URL`) | your cloud account (AWS) |
+  | `CLAUDE_CODE_USE_MANTLE` | AWS Bedrock (Mantle) (`ANTHROPIC_BEDROCK_MANTLE_BASE_URL`) | your cloud account (AWS) |
+  | `CLAUDE_CODE_USE_VERTEX` | Google Vertex AI (`ANTHROPIC_VERTEX_BASE_URL`) | your cloud account (GCP) |
+  | `CLAUDE_CODE_USE_FOUNDRY` | Microsoft Foundry (`ANTHROPIC_FOUNDRY_BASE_URL`) | your cloud account (Azure) |
+  | `CLAUDE_CODE_USE_ANTHROPIC_AWS` | Claude Platform on AWS (`ANTHROPIC_AWS_BASE_URL`) | your cloud account (AWS) |
+  | `CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD` | Claude on Google Cloud (`ANTHROPIC_GOOGLE_CLOUD_BASE_URL`) | your cloud account (GCP) |
+  | `ANTHROPIC_BASE_URL` (with or without `CLAUDE_CODE_USE_GATEWAY`) | that host, shown as `<host> (ANTHROPIC_BASE_URL)` | API billing with a key or token, else your Claude login |
+  | none of these | Anthropic | API billing with `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`, else your Claude login |
 
-  `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` means **API billing**; otherwise it runs on **your Claude login**.
-  Settings → Evals, the preview ("Sent to …") and the judge status show both, for example "Anthropic, through your
-  Claude login". The environment is kept as it is, so an API-key or router setup goes on working; only the host is
-  shown, never the key or the full address.
+  A switch with any other value is shown as `<VAR>=<value>?` and counts as a destination of its own. Settings →
+  Evals (the provider list and its hint), the preview ("Sent to …") and the judge status show the result, for example
+  "Anthropic, through your Claude login". The environment is kept as it is, so an API-key, router or cloud setup
+  goes on working; only hosts are shown, never a key or a full address. Managed or policy settings of Claude Code
+  can route it as well; those are not detected.
 - **The preview confirms one destination.** Choose Claude Code, save, open the preview. What is stored
-  (`externalConfirmed`) is `claude-code@<hash>`, a short hash of the destination and the billing. When either
+  (`externalConfirmed`) is `claude-code@<hash>`, a short hash of every `CLAUDE_CODE_USE_*` switch (on, or its
+  odd value), the host of every `ANTHROPIC_*_BASE_URL`, and which of `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
+  `ANTHROPIC_FOUNDRY_API_KEY` and `ANTHROPIC_FOUNDRY_AUTH_TOKEN` are set (never their values). When any of these
   changes (say you set `ANTHROPIC_BASE_URL` or an API key and restart), nothing is sent and the judge says "The
   Claude Code destination changed; preview again". The daily count and the cost cap apply, and a provider that keeps
   failing is backed off, as for a gateway provider.
@@ -245,9 +253,10 @@ with your Claude account. No API key is needed, and nothing is set up in the gat
   other users of the machine can see in `ps`. `--bare` is not used: it would turn off the Claude account login.
 - **Time and size limits.** After 120 seconds the CLI and every process it started (its process group, on macOS and
   Linux) get SIGTERM, then SIGKILL 5 seconds later; whatever still holds its output, the call ends within 126
-  seconds. On Windows the CLI itself is stopped and the call ends within the same bound. An answer over 1 MB is
-  refused. Switching the judge to another provider, switching judging off or stopping the dashboard cancels a
-  running call.
+  seconds. On Windows the CLI itself is stopped and the call ends within the same bound. An answer the CLI gave
+  before it exited is still read when the time runs out while a helper holds its output. An answer over 1 MB is
+  refused. Switching the judge to another provider or switching judging off cancels a running call; stopping the
+  dashboard kills it at once (SIGKILL to its group) and removes its folder.
 - **Not signed in.** An answer that the login is gone (or an API key is refused) backs the judge off with "Claude
   Code is not signed in, retrying in N min", instead of failing each turn. Sign in again with `claude` in a terminal.
 - **Where the CLI is found.** `ZAAFPULSE_CLAUDE_BIN` if set (then only that file is tried), else `claude` on `PATH`

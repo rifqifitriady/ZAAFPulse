@@ -853,6 +853,18 @@ test('claude-code: an error from the CLI keeps its status', async () => {
   }
 });
 
+test('claude-code: stop() stops the running Claude Code calls at once', async () => {
+  let stops = 0;
+  const claude = { find: async () => null, destination: () => ({}), stopAll: () => stops++ };
+  const t = await rig({ claude });
+  try {
+    t.m.stop();
+    assert.equal(stops, 1);
+  } finally {
+    await t.close();
+  }
+});
+
 test('claude-code: the signal of the caller cancels a running call', async () => {
   const c = claudeRig('hang');
   const t = await rig({ settings: { provider: 'claude-code', model: 'haiku' }, claude: c.claude });
