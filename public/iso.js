@@ -113,6 +113,45 @@ function readouts(items) {
 }
 
 /* ---------- isometric engine ---------- */
+// Collision-free callout positions: each box is {x, y (text baseline row), w}; the box spans y-10..y+9.
+// Moves a box up past the ones already placed, keeps it on the canvas, and drops it when no room is left.
+function placeLabels(ls, reserved, { W, H, avoid = [], top = 4 }) {
+  const placed = [];
+  for (const l of [...ls].sort((p, q) => q.y - p.y)) {
+    l.x = Math.max(6, Math.min(l.x, W - l.w - 6));
+    let ok = false;
+    for (let moved = true, guard = 0; guard < 60; guard++) {
+      moved = false;
+      // Overlap test (< 21) is looser than the 22px move, so float rounding cannot re-trigger it forever.
+      for (const o of placed)
+        if (l.x < o.x + o.w + 4 && o.x < l.x + l.w + 4 && Math.abs(l.y - o.y) < 21) {
+          l.y = o.y - 22;
+          moved = true;
+        }
+      // Wall titles stay readable: a callout over one moves above it, or below it near the top edge.
+      for (const r of reserved)
+        if (l.x < r.x + r.w && r.x < l.x + l.w && l.y + 10 > r.y0 && l.y - 11 < r.y1) {
+          l.y = r.y0 - 13 > 14 ? r.y0 - 13 : r.y1 + 12;
+          moved = true;
+        }
+      // HTML over the canvas (page heading, legend): step out toward the nearer canvas edge, never into it.
+      for (const r of avoid)
+        if (l.x < r.x + r.w && r.x < l.x + l.w && l.y + 10 > r.y && l.y - 11 < r.y + r.h) {
+          l.y = r.y + r.h / 2 < H / 2 ? r.y + r.h + 12 : r.y - 12;
+          moved = true;
+        }
+      // Past the canvas edge there is nowhere left to go: give up on this one.
+      if (l.y - 10 < top || l.y + 10 > H - 4) break;
+      if (!moved) {
+        ok = true;
+        break;
+      }
+    }
+    if (ok) placed.push(l);
+  }
+  return placed;
+}
+
 const isoStages = new Set();
 
 // draw(g) runs every animation frame with the projection and drawing helpers in g.
@@ -456,33 +495,16 @@ function isoStage(canvas, { draw, yaw = -0.42, pitch = 0.56, fit = [12.6, 8.3], 
         ctx.restore();
       },
       // Callouts with leader lines; each item {at: [sx, sy], text, color}. Stacked upward so none overlap.
-      labels(items) {
+      // opts.avoid: extra screen boxes {x, y, w, h} (HTML laid over the canvas) a callout must not cover.
+      // A callout that cannot be placed inside the canvas without overlap is dropped, with its leader line.
+      labels(items, opts = {}) {
         ctx.font = '600 11.5px system-ui, sans-serif';
         const ls = items.map((it) => {
           const w = ctx.measureText(it.text).width + 12;
           return { ...it, w, x: it.at[0] - 26 - w, y: it.at[1] - 30 };
         });
-        const placed = [];
-        for (const l of [...ls].sort((p, q) => q.y - p.y)) {
-          l.x = Math.max(6, l.x);
-          for (let moved = true, guard = 0; moved && guard < 60; guard++) {
-            moved = false;
-            // Overlap test (< 21) is looser than the 22px move, so float rounding cannot re-trigger it forever.
-            for (const o of placed)
-              if (l.x < o.x + o.w + 4 && o.x < l.x + l.w + 4 && Math.abs(l.y - o.y) < 21) {
-                l.y = o.y - 22;
-                moved = true;
-              }
-            // Wall titles stay readable: a callout over one moves above it, or below it near the top edge.
-            for (const r of reserved)
-              if (l.x < r.x + r.w && r.x < l.x + l.w && l.y + 10 > r.y0 && l.y - 11 < r.y1) {
-                l.y = r.y0 - 13 > 14 ? r.y0 - 13 : r.y1 + 12;
-                moved = true;
-              }
-          }
-          placed.push(l);
-        }
-        for (const l of ls) {
+        const placed = placeLabels(ls, reserved, { W: st.W, H: st.H, avoid: opts.avoid });
+        for (const l of placed) {
           ctx.strokeStyle = 'rgba(223, 230, 255, .55)';
           ctx.lineWidth = 1;
           ctx.beginPath();
