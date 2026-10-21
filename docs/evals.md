@@ -259,9 +259,10 @@ with your Claude account. No API key is needed, and nothing is set up in the gat
   version wins. On Windows the names are `claude.exe` and `claude.cmd` on `PATH`, `%USERPROFILE%\.local\bin\claude.exe`,
   `%USERPROFILE%\.claude\local\claude.exe`, `%APPDATA%\npm\claude.cmd` and the extension's `native-binary\claude.exe`.
   A `.cmd` is started through the package it wraps, never through a shell.
-- **Which binary counts.** One whose `--version` says `(Claude Code)` within 10 seconds. On macOS and Linux the file
-  and its folder (and the real file behind a link) must belong to you or to root, and must not be writable by the
-  group or by others; another one is passed over. A script (`.js`, or the package behind a `.cmd`) runs through node:
+- **Which binary counts.** One whose `--version` says `(Claude Code)` within 10 seconds. On macOS and Linux a binary
+  found on its own must have a file and folder (and a real file behind a link) that belong to you or to root and are
+  not writable by everyone; writable by the group is fine (umask 002). Another one is passed over. The binary named
+  in `ZAAFPULSE_CLAUDE_BIN` is taken as you set it: it only has to exist and be executable. A script (`.js`, or the package behind a `.cmd`) runs through node:
   this process's own, or in the single-file build a `node` found on `PATH` or in the usual folders; with none, the
   script is passed over. The answer is kept for 5 minutes, and dropped at once when the binary can no longer be
   started. Settings → Evals says whether it was found ("checking" while the first search is still running), never
