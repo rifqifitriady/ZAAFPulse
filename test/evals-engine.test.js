@@ -1201,3 +1201,26 @@ test('a refresh merged into a queued session job updates the turn count it will 
   assert.equal(r.calls.length, 2);
   assert.equal(r.store.all()[0].turns, 20);
 });
+
+test('latestFinishedTurn: a later turn finishes the one before; the last one needs the session to be quiet', async () => {
+  const r = rig();
+  r.clock.t = T0 + 30 * MIN;
+  const now = r.clock.t;
+  r.st.entries.push(entry('one-live', [now - 60e3], now - 10e3)); // one turn, just written
+  r.st.entries.push(entry('two-live', [now - 90e3, now - 60e3], now - 10e3)); // the first is done
+  r.st.entries.push(entry('two-idle', [now - 900e3, now - 800e3], now - 600e3)); // quiet for 10 minutes
+  r.st.entries.push(entry('one-idle', [now - 900e3], now - 600e3));
+  r.st.entries.push(entry('empty', [], now - 600e3));
+  assert.equal(await r.engine.latestFinishedTurn('claude', 'one-live'), null);
+  assert.equal(await r.engine.latestFinishedTurn('claude', 'two-live'), 0);
+  assert.equal(await r.engine.latestFinishedTurn('claude', 'two-idle'), 1);
+  assert.equal(await r.engine.latestFinishedTurn('claude', 'one-idle'), 0);
+  assert.equal(await r.engine.latestFinishedTurn('claude', 'empty'), null);
+  // The same session becomes finished when it goes quiet.
+  r.clock.t += 5 * MIN;
+  assert.equal(await r.engine.latestFinishedTurn('claude', 'one-live'), 0);
+  assert.equal(await r.engine.latestFinishedTurn('claude', 'two-live'), 1);
+  // Not in the index (a gateway run): the registry's last turn.
+  assert.equal(await r.engine.latestFinishedTurn('gateway', 'run:1'), 0);
+  await assert.rejects(r.engine.latestFinishedTurn('', 'x'), { status: 400 });
+});

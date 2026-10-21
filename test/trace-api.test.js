@@ -9,7 +9,7 @@ const net = require('net');
 const path = require('path');
 const { spawn } = require('child_process');
 const { createGateway } = require('../lib/gateway');
-const { secretsFor } = require('./helpers');
+const { secretsFor, NO_JUDGE_PORTS } = require('./helpers');
 
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const ROOT = path.join(__dirname, '..');
@@ -34,6 +34,7 @@ async function startServer(env, { data = tmp('zp-trace-api-'), ports = freePort 
         ZAAFPULSE_AUTH: '',
         ZAAFPULSE_CONTENT: '',
         DEMO: '',
+        ...NO_JUDGE_PORTS,
         ...env,
         ZAAFPULSE_PORT: String(port),
         ZAAFPULSE_DATA: data,

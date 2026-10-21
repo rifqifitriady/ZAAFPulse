@@ -8,6 +8,7 @@ const net = require('net');
 const path = require('path');
 const { Readable } = require('stream');
 const { spawn, execFile } = require('child_process');
+const { NO_JUDGE_PORTS } = require('./helpers');
 const {
   createAuth,
   pickMode,
@@ -281,6 +282,7 @@ async function startServer(env) {
         ...process.env,
         ZAAFPULSE_AUTH: '',
         DEMO: '',
+        ...NO_JUDGE_PORTS,
         ...env,
         ZAAFPULSE_PORT: String(port),
         ZAAFPULSE_DATA: data,
@@ -389,6 +391,7 @@ test('server: demo data opens without sign-in; a short admin password from the e
       // Password mode on loopback (ZAAFPULSE_AUTH=1), so nothing ever listens beyond this machine.
       env: {
         ...process.env,
+        ...NO_JUDGE_PORTS,
         ZAAFPULSE_AUTH: '1',
         ZAAFPULSE_PORT: String(port),
         ZAAFPULSE_DATA: tmp('zp-shortpw-'),

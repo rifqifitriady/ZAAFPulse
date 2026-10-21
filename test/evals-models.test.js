@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { fakeServer } = require('./helpers');
-const { createModels } = require('../lib/evals/models');
+const { createModels, externalSystem } = require('../lib/evals/models');
 
 const SCHEMA = { type: 'object', properties: { label: { type: 'string' } }, required: ['label'] };
 const tags = (...names) => ({ body: { models: names.map((name) => ({ name })) } });
@@ -227,6 +227,7 @@ test('call: external goes through gateway.judge.complete and returns its usage a
     assert.equal(seen[0].model, 'cloud/big-1');
     assert.equal(seen[0].messages[1].content, 'USR');
     assert.ok(seen[0].messages[0].content.startsWith('SYS'));
+    assert.equal(seen[0].messages[0].content, externalSystem('SYS', SCHEMA), 'the preview shows this very text');
     assert.ok(seen[0].messages[0].content.includes('"label"'), 'the schema is described in the prompt');
     assert.equal('tools' in seen[0], false);
   } finally {
