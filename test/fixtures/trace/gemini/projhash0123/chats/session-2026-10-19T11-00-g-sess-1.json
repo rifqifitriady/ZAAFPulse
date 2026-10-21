@@ -1,0 +1,72 @@
+{
+  "sessionId": "g-sess-1",
+  "projectHash": "projhash0123",
+  "startTime": "2026-10-19T11:00:00.000Z",
+  "lastUpdated": "2026-10-19T11:10:00.000Z",
+  "messages": [
+    {
+      "id": "a1",
+      "timestamp": "2026-10-19T11:00:00.000Z",
+      "type": "user",
+      "content": "Summarise the build script"
+    },
+    {
+      "id": "a2",
+      "timestamp": "2026-10-19T11:00:05.000Z",
+      "type": "gemini",
+      "content": "Reading it now.",
+      "model": "gemini-2.5-pro",
+      "tokens": {
+        "input": 1200,
+        "output": 80,
+        "cached": 400,
+        "thoughts": 10,
+        "tool": 0,
+        "total": 1290
+      },
+      "toolCalls": [
+        {
+          "id": "t1",
+          "name": "read_file",
+          "args": {
+            "absolute_path": "/work/demo-app/build.sh"
+          },
+          "status": "success",
+          "timestamp": "2026-10-19T11:00:06.000Z"
+        },
+        {
+          "id": "t2",
+          "name": "run_shell_command",
+          "args": {
+            "command": "sh build.sh --dry"
+          },
+          "status": "error",
+          "timestamp": "2026-10-19T11:00:07.000Z"
+        }
+      ]
+    },
+    {
+      "id": "a3",
+      "timestamp": "2026-10-19T11:05:00.000Z",
+      "type": "user",
+      "content": [
+        {
+          "text": "And the test script?"
+        }
+      ]
+    },
+    {
+      "id": "a4",
+      "timestamp": "2026-10-19T11:05:09.000Z",
+      "type": "gemini",
+      "content": "It runs node --test.",
+      "model": "gemini-2.5-pro",
+      "tokens": {
+        "input": 2000,
+        "output": 150,
+        "cached": 0,
+        "total": 2150
+      }
+    }
+  ]
+}

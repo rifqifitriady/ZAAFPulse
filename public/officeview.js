@@ -295,7 +295,7 @@ function paintOffice() {
       ? `<table class="holo-table"><thead><tr><th>Agent</th><th>State</th><th>Doing</th><th class="r">Calls · 10m</th><th class="r">Last action</th></tr></thead><tbody>
     ${ag
       .map(
-        (a) => `<tr><td><span class="tool-dot" style="background:${agentColor(a)}"></span><b>${esc(agentName(a))}</b>
+        (a) => `<tr><td><span class="tool-dot" style="background:${agentColor(a)}"></span>${agentTraceHref(a) ? `<a class="trace-link" href="${esc(agentTraceHref(a))}" title="Open in the trace explorer"><b>${esc(agentName(a))}</b></a>` : `<b>${esc(agentName(a))}</b>`}
         <small class="block muted">${a.kind === 'subagent' ? `subagent of ${esc(agentName(office.agents.find((p) => p.id === a.parent) || { kind: 'session', project: a.project }))}` : esc(toolName(a.tool))}${a.model ? ` · ${esc(a.model.replace(/^claude-/, ''))}` : ''}</small></td>
       <td><span class="state-pill" style="--c:${STATE_COLOR[a.state]}"><i></i>${STATE_TEXT[a.state]}</span></td>
       <td class="clip-wide">${esc(doing(a))}</td><td class="r num">${a.calls10m || 0}</td><td class="r muted">${ago(a.lastTs)}</td></tr>`,
@@ -738,6 +738,19 @@ async function pollOffice() {
     /* server restarting */
   }
 }
+// The trace explorer link of an agent: its session id comes from the agent id (claude:<sid>, a subagent's
+// claude:<parent>:<agent> opens the parent session, codex:rollout-…-<uuid> holds the session uuid).
+function agentTraceHref(a) {
+  if (!a || typeof a.id !== 'string' || a.kind === 'guest' || !['claude', 'codex'].includes(a.tool)) return null;
+  let sid = a.id.split(':')[1];
+  if (!sid) return null;
+  if (a.tool === 'codex') {
+    const m = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.exec(sid);
+    if (m) sid = m[0];
+  }
+  return `#trace?s=${encodeURIComponent(sid)}&src=${a.tool}`;
+}
+
 function mountSquad() {
   const canvas = $('#of-scene');
   if (!canvas) return;
