@@ -168,7 +168,11 @@ test('old form: prompt comes from user_message, reply from agent_message', async
 test('a log with task_started only still gives one turn per task', async () => {
   const { sk } = await skel('rollout-tasks.jsonl', 0);
   assert.deepEqual(validate(sk.spans), []);
-  assert.deepEqual(sk.spans.map((s) => s.kind), ['session', 'turn', 'answer']);
+  // No token_count in the turn: its one model call shows without usage.
+  assert.deepEqual(sk.spans.map((s) => s.kind), ['session', 'turn', 'chat', 'answer']);
+  const chat = sk.spans.find((s) => s.kind === 'chat');
+  assert.equal(chat.usage, null);
+  assert.equal(chat.cost, null);
 });
 
 // --- cases built on the fly ---
@@ -262,4 +266,82 @@ test('a shell call is named by its program, never by an env assignment that hold
   const sk = await adapter.skeleton(e, 'cmd1', { turn: 0, entries: [e] });
   assert.deepEqual(sk.spans.filter((s) => s.kind === 'tool').map((s) => s.tool.target), ['node', 'git']);
   assert.equal(JSON.stringify(sk).includes('Ab3dE7gH1jK5'), false);
+});
+
+// Many real logs carry one token_count for the whole file. Each model call still shows: a run of output lines
+// up to a tool result is one call; the token_count at the end measures the last one only.
+const msg = (ts, text) => L(ts, 'response_item', { type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] });
+const userMsg = (ts, text) => L(ts, 'response_item', { type: 'message', role: 'user', content: [{ type: 'input_text', text }] });
+const fcall = (ts, id, cmd) => L(ts, 'response_item', { type: 'function_call', name: 'shell', call_id: id, arguments: JSON.stringify({ command: ['bash', '-lc', cmd] }) });
+const fout = (ts, id) => L(ts, 'response_item', { type: 'function_call_output', call_id: id, output: 'ok' });
+const total = (ts, input, output) =>
+  L(ts, 'event_msg', { type: 'token_count', info: { total_token_usage: { input_tokens: input, cached_input_tokens: 0, output_tokens: output, total_tokens: input + output }, last_token_usage: { input_tokens: input, cached_input_tokens: 0, output_tokens: output, total_tokens: input + output } } });
+
+test('codex: with one token_count for the whole log, every model call is a chat span; usage is counted once', async () => {
+  const { file } = tmpLog([
+    L('00.000', 'session_meta', { id: 'one' }),
+    L('00.500', 'event_msg', { type: 'task_started' }),
+    L('00.600', 'turn_context', { model: 'gpt-5.6-terra' }),
+    userMsg('01.000', 'first task'),
+    msg('02.000', 'looking'),
+    fcall('03.000', 'a', 'ls'),
+    fout('04.000', 'a'),
+    msg('05.000', 'and then'),
+    fcall('06.000', 'b', 'cat x'),
+    fout('07.000', 'b'),
+    msg('08.000', 'done one'),
+    L('09.000', 'event_msg', { type: 'task_complete' }),
+    L('10.000', 'event_msg', { type: 'task_started' }),
+    userMsg('10.500', 'second task'),
+    msg('11.000', 'checking'),
+    fcall('12.000', 'c', 'pwd'),
+    fout('13.000', 'c'),
+    msg('14.000', 'done two'),
+    total('15.000', 900, 90),
+  ]);
+  const e = await entryOf(file);
+  assert.equal(e.result.sessions.one.turns.length, 2);
+  const chats = async (turn) => (await adapter.skeleton(e, 'one', { turn, entries: [e] })).spans.filter((s) => s.kind === 'chat');
+  const first = await chats(0);
+  assert.equal(first.length, 3, 'three model calls in the first turn, none measured');
+  for (const c of first) {
+    assert.equal(c.model, 'gpt-5.6-terra');
+    assert.equal(c.usage, null);
+    assert.equal(c.cost, null);
+  }
+  // The calls read in order, each with its own reply text.
+  const cr = createContent({ roots: [path.dirname(file)] });
+  assert.deepEqual(await Promise.all(first.map(async (c) => (await cr.read(c.text)).text)), ['looking', 'and then', 'done one']);
+  assert.ok(first.every((c, i) => i === 0 || c.start >= first[i - 1].end), 'calls follow one another');
+  const second = await chats(1);
+  assert.equal(second.length, 2);
+  assert.equal(second[0].usage, null, 'the call before the tool result is not measured');
+  assert.ok(second[1].usage && second[1].usage.output > 0, 'the token_count measures the last call');
+  assert.equal(second.filter((c) => c.usage).length, 1, 'counted once');
+  assert.equal((await cr.read(second[1].text)).text, 'done two');
+});
+
+test('codex: per-request token_count lines keep one measured chat per request and add none', async () => {
+  const { file } = tmpLog([
+    L('00.000', 'session_meta', { id: 'per' }),
+    L('00.500', 'event_msg', { type: 'task_started' }),
+    L('00.600', 'turn_context', { model: 'gpt-5.6-terra' }),
+    userMsg('01.000', 'task'),
+    msg('02.000', 'looking'),
+    fcall('03.000', 'a', 'ls'),
+    fout('04.000', 'a'),
+    total('04.500', 100, 10), // after the tool result, as real logs write it
+    fcall('05.000', 'b', 'pwd'),
+    total('05.500', 220, 25), // before the tool result
+    fout('06.000', 'b'),
+    msg('07.000', 'done'),
+    total('08.000', 400, 40),
+  ]);
+  const e = await entryOf(file);
+  const sk = await adapter.skeleton(e, 'per', { turn: 0, entries: [e] });
+  const chats = sk.spans.filter((s) => s.kind === 'chat');
+  assert.equal(chats.length, 3);
+  assert.ok(chats.every((c) => c.usage && c.cost > 0), 'every chat is measured, none is added without usage');
+  assert.deepEqual(chats.map((c) => c.usage.output), [10, 15, 15]);
+  assert.deepEqual(validate(sk.spans), []);
 });

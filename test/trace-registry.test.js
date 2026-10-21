@@ -548,6 +548,44 @@ test('a small file never starts a worker', async () => {
   assert.equal(t.stats().workers, 0);
 });
 
+// ---- pricing ----
+
+test("the owner's pricing reaches the row cost, the span cost and the worker, and a getter's change applies", async () => {
+  const { DEFAULT_PRICING } = require('../lib/pricing');
+  const scale = (k) => Object.fromEntries(Object.entries(DEFAULT_PRICING).map(([m, p]) => [m, { ...p, input: p.input * k, output: p.output * k, cacheRead: p.cacheRead * k, cacheWrite5m: p.cacheWrite5m * k, cacheWrite1h: p.cacheWrite1h * k, tiers: undefined }]));
+  const ten = scale(10);
+  // rollout-new has usage rows from the parser, so its listing has a cost.
+  const ix = await fakeIndexer([await entryOf(path.join(FIX, 'codex', 'rollout-new.jsonl'), 'codex', codexParser)]);
+  const costs = async (t) => {
+    const out = {};
+    for (const r of t.sessions({})) {
+      const sk = await t.session(r.key, { turn: 0 });
+      out[r.source] = { row: r.cost, spans: sk.spans.reduce((a, x) => a + (x.cost || 0), 0) };
+    }
+    return out;
+  };
+  const base = await costs(await make({ indexer: ix, pricing: scale(1) }));
+  const mine = await costs(await make({ indexer: ix, pricing: ten }));
+  const viaWorker = await costs(await make({ indexer: ix, pricing: ten, workerMinBytes: 0 }));
+  for (const src of ['claude', 'codex']) {
+    assert.ok(base[src].row > 0 && base[src].spans > 0, src);
+    const near = (a, b, what) => assert.ok(Math.abs(a - b) < 1e-9 * Math.max(1, b), `${src} ${what}: ${a} vs ${b}`);
+    near(mine[src].row, base[src].row * 10, 'row');
+    near(mine[src].spans, base[src].spans * 10, 'spans');
+    near(viaWorker[src].spans, base[src].spans * 10, 'worker spans');
+  }
+  // A getter (config.json reloads): a new list is used by the next listing, and a cached skeleton is rebuilt.
+  let cur = scale(1);
+  const t = await make({ indexer: ix, pricing: () => cur });
+  const before = await costs(t);
+  cur = ten;
+  const after = await costs(t);
+  for (const src of ['claude', 'codex']) {
+    assert.ok(Math.abs(after[src].row - before[src].row * 10) < 1e-9, `${src} row after the change`);
+    assert.ok(Math.abs(after[src].spans - before[src].spans * 10) < 1e-9, `${src} spans after the change`);
+  }
+});
+
 // ---- live ----
 
 test('live: an unchanged file reports changed false, growth rebuilds the last turn; the cursor is opaque', async () => {
