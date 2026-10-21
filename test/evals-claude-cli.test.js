@@ -262,7 +262,7 @@ test('call: the child gets the owner environment, without the dashboard settings
   assert.deepEqual(childEnv(env), { HOME: '/h', PATH: '/bin' });
 });
 
-test('call: CLAUDE_CONFIG_DIR reaches the child only as one valid folder; anything else is dropped once, logged', () => {
+test('call: CLAUDE_CONFIG_DIR reaches the child only as one valid folder; others are dropped, logged once', () => {
   const home = path.resolve(path.sep, 'h', 'me');
   const one = path.resolve(path.sep, 'a', 'one');
   const logs = [];
