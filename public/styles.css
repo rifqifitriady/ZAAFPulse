@@ -6157,11 +6157,27 @@ svg.tr-wires {
     display: none;
   }
 }
-/* A narrow tree keeps the span names readable: the timeline column gives a little first. */
-@container trtree (max-width: 500px) {
+/* A narrow tree keeps the span names readable: the timeline column gives a little first, then goes. */
+@container trtree (max-width: 560px) {
   .tr-cols,
   .tr-row {
     grid-template-columns: minmax(0, 1fr) 100px 56px;
+  }
+}
+@container trtree (max-width: 460px) {
+  .tr-cols,
+  .tr-row {
+    grid-template-columns: minmax(0, 1fr) 56px;
+  }
+  .tr-track,
+  .tr-cols .tr-tl {
+    display: none;
+  }
+}
+/* Tighter still: a tool call shows its tool name alone (the dot's colour says it is a tool). */
+@container trtree (max-width: 400px) {
+  .tr-row .tr-op {
+    display: none;
   }
 }
 /* Under 1100 px of window the halves stack: the explorer fills a screen, the map follows below it. The

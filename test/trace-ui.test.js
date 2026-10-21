@@ -19,6 +19,8 @@ const {
   trSrc,
   trBadges,
   trOffNote,
+  trStartCollapsed,
+  trNameParts,
 } = require('../public/traceview.js');
 
 const SRC = path.join(__dirname, '..', 'public', 'traceview.js');
@@ -334,4 +336,32 @@ test('the halves stack by window width at 1100 px, not by the deck width', () =>
   assert.doesNotMatch(css, /@container trace \(max-width: 1100px\)/);
   const m = /@media \(max-width: 1100px\) \{\s*\.trace-app\.holo-deck \{\s*grid-template-columns: minmax\(0, 1fr\);/.exec(css);
   assert.ok(m, 'the stacking rule is a viewport media query');
+});
+
+test('trStartCollapsed: a stored choice wins; without one a narrow explorer half starts with the list as icons', () => {
+  assert.equal(trStartCollapsed('1', 1200), true, 'the user collapsed it');
+  assert.equal(trStartCollapsed('0', 500), false, 'the user opened it, even when narrow');
+  assert.equal(trStartCollapsed('', 599), true, '1280 px with the sidebar open');
+  assert.equal(trStartCollapsed(null, 759), true);
+  assert.equal(trStartCollapsed('', 760), false);
+  assert.equal(trStartCollapsed('', 900), false);
+  assert.equal(trStartCollapsed('', 0), false, 'not measured yet: keep the list');
+  assert.equal(trStartCollapsed(undefined, NaN), false);
+});
+
+test('a narrow tree drops the timeline column and keeps the span name and the time', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
+  const m = /@container trtree \(max-width: 460px\) \{([\s\S]*?)\n\}/.exec(css);
+  assert.ok(m, 'a 460 px rule for the tree');
+  assert.match(m[1], /grid-template-columns: minmax\(0, 1fr\) 56px;/);
+  assert.match(m[1], /\.tr-track,\s*\.tr-cols \.tr-tl \{\s*display: none;/);
+});
+
+test('trNameParts: a tool call splits into its operation and its tool name; other names stay whole', () => {
+  assert.deepEqual(trNameParts('execute_tool · Read'), ['execute_tool · ', 'Read']);
+  assert.deepEqual(trNameParts('chat · claude-opus-5-5'), ['', 'chat · claude-opus-5-5']);
+  assert.deepEqual(trNameParts('Explore'), ['', 'Explore']);
+  assert.deepEqual(trNameParts(null), ['', '']);
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
+  assert.match(css, /@container trtree \(max-width: 400px\) \{\s*\.tr-row \.tr-op \{\s*display: none;/);
 });

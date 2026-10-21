@@ -293,6 +293,17 @@ const trOffNote = (settings) =>
   settings && settings.content === false
     ? 'Content viewing is off (ZAAFPULSE_CONTENT): titles, prompts, replies and tool output are not shown.'
     : '';
+// A tree row's name as the operation and what it acts on: "execute_tool · Read" is ['execute_tool · ', 'Read'].
+// In a narrow tree the operation of a tool call gives way, so the tool name itself always shows.
+function trNameParts(name) {
+  const m = /^(execute_tool · )(.+)$/.exec(String(name || ''));
+  return m ? [m[1], m[2]] : ['', String(name || '')];
+}
+// Whether the session list starts as icons: a choice the user made (stored '1' or '0') always wins; without
+// one, a narrow explorer half (a laptop with the sidebar open) starts collapsed so the span names have room.
+const TR_AUTO_COLLAPSE = 760;
+const trStartCollapsed = (stored, width) =>
+  stored === '1' ? true : stored === '0' ? false : Number.isFinite(width) && width > 0 && width < TR_AUTO_COLLAPSE;
 // A drag starts with the main button only (a right click opens the menu, a middle click scrolls).
 const trPrimary = (e) => !!e && e.button === 0;
 
@@ -475,7 +486,7 @@ function mountTrace() {
     b.setAttribute('aria-expanded', String(!on));
     b.title = on ? 'Show the session list' : 'Collapse sessions';
   };
-  setCollapsed(store.get('trace.collapsed', '') === '1');
+  setCollapsed(trStartCollapsed(store.get('trace.collapsed', ''), $('.tr-left', app).getBoundingClientRect().width));
 
   const notice = (msg, refresh) => {
     const n = $('#tr-notice');
@@ -815,11 +826,12 @@ function mountTrace() {
         ? '<span class="tr-tw" aria-hidden="true">▸</span>'
         : '';
     const pv = r.kind === 'turn' && !r.placeholder ? '<span class="tr-pv" data-tpreview="row"></span>' : '';
+    const [op, what] = trNameParts(r.name);
     const d = Number.isFinite(r.start) && Number.isFinite(r.end) ? r.end - r.start : null;
     const attrs = r.placeholder
       ? `data-tturn="${r.turnIndex}" title="Open turn ${r.turnIndex + 1}"`
       : `data-tspan="${esc(r.id)}"${r.kids ? ` aria-expanded="${r.open}"` : ''}`;
-    return `<div class="tr-row${on ? ' on' : ''}${r.placeholder ? ' dim' : ''}" role="treeitem" aria-level="${r.depth + 1}" aria-selected="${on}" ${attrs} style="--c:${c}"><span class="tr-name" style="--lvl:${r.depth};--guide:${r.depth ? 'block' : 'none'}"><span class="tr-d"></span><span class="tr-lbl">${tw}${esc(r.name)}${pv}</span>${trRowBadges(r.badges)}</span><span class="tr-track"><span style="left:${l.toFixed(2)}%;width:${width.toFixed(2)}%"></span></span><span class="tr-dur">${fmtDur(d)}</span></div>`;
+    return `<div class="tr-row${on ? ' on' : ''}${r.placeholder ? ' dim' : ''}" role="treeitem" aria-level="${r.depth + 1}" aria-selected="${on}" ${attrs} style="--c:${c}"><span class="tr-name" style="--lvl:${r.depth};--guide:${r.depth ? 'block' : 'none'}"><span class="tr-d"></span><span class="tr-lbl" title="${esc(r.name)}">${tw}${op ? `<span class="tr-op">${esc(op)}</span>` : ''}${esc(what)}${pv}</span>${trRowBadges(r.badges)}</span><span class="tr-track"><span style="left:${l.toFixed(2)}%;width:${width.toFixed(2)}%"></span></span><span class="tr-dur">${fmtDur(d)}</span></div>`;
   }
 
   // All rows, or for a long tree only the ones in view plus a margin, between two spacers (P4).
@@ -1488,4 +1500,6 @@ if (typeof module !== 'undefined')
     trColor,
     trSrc,
     trOffNote,
+    trStartCollapsed,
+    trNameParts,
   };
