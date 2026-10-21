@@ -363,7 +363,7 @@ The installers use your Node.js 18+ or download the official Node.js LTS (checks
 ```bash
 zaafpulse status      # is it running?
 zaafpulse doctor      # OS, Node.js, data folder, secret store, log folders and file counts, service
-zaafpulse eval --judge --session <id>   # judge one session with a local model, no dashboard needed
+zaafpulse eval --judge --session <id>   # judge one session with a local model (or a confirmed Claude Code), no dashboard needed
 zaafpulse open        # open the dashboard, signed in
 zaafpulse service restart | uninstall
 zaafpulse help
@@ -578,6 +578,7 @@ What each source shows, privacy, the `/api/trace/*` routes and troubleshooting: 
 ZAAFPulse can grade finished turns, as well as detect signals in them. Six **code checks** reuse the Quality detectors (secret leak, risky command, prompt injection, non-existent target, tool loop, correction) and cost nothing. Five **judge evaluators** (faithfulness, task completion, tool selection, relevance, and user frustration across a session) are answered by a model that reads the masked text of the turn. You can also rate any turn **Good** or **Bad** and add a note, and the Quality page shows how often the judges agree with you.
 
 - **Local first.** The judge is the model chosen in Settings → Evals, else Ollama (`ollama pull qwen3:8b`), else LM Studio, else it waits and says so. Nothing goes to an external provider unless you pick one, read the exact masked text it would receive, and confirm; a daily cost cap applies, and a model with no known price is refused.
+- **Or the Claude you already use.** **Claude Code (your Claude login)** judges through your Claude Code CLI and Claude account, no API key: masked text goes to Anthropic after the same preview, within your plan's limits or API billing (whichever your login uses). The cost shown is the API-equivalent that Claude Code reports; `haiku` is recommended to save limits. Each call has no tools, no MCP and no settings, writes no session, and runs in an empty temporary folder ([docs/evals.md](docs/evals.md#claude-code)).
 - **Only new turns, plus one click for the rest.** A turn is judged once it is finished and only if it started after the judge became available; **Judge this session** in the Trace explorer (or `zaafpulse eval --judge --session <id>`) does the history of one session. One queue, 500 judgments a day by default.
 - **Untrusted input.** The text is masked, wrapped as data with a per-judgment tag, given to a model with no tools, and must come back as JSON with a label from a fixed list; anything else is dropped. Your notes are never sent. With `ZAAFPULSE_CONTENT=off` explanations are hidden and labels stay.
 - **Stored on this machine** in `.data/evals.jsonl`, `feedback.jsonl` and `evals-state.json` (mode 0600), with no prompt text in the results.
@@ -688,6 +689,7 @@ By default the server listens on `127.0.0.1` only and rejects requests whose `Ho
 | Model providers you configure | When an app, agent, workflow or the playground calls a model, when their model lists load, and to refresh OAuth2 or service-account tokens | The request you or your agents sent |
 | Second-brain sources, remote A2A agents, URLs you give the RAG service | When you connect, sync or use them | Requests to that source's own API or address |
 | Ollama and LM Studio on this machine (local evals) | Only while a judge model is looked for or used (`127.0.0.1:11434`, `127.0.0.1:1234`); an external judge only if you pick that provider and confirm its preview ([Local evals](#local-evals--feedback)) | The masked text of a finished turn, to the judge you chose |
+| Anthropic, through your Claude Code CLI (local evals) | Only when you choose **Claude Code** as the judge and confirm its preview; `claude --version` runs to find the CLI | The masked text of a finished turn, through your Claude login |
 | Your OTLP endpoint | Only when `"otel": { "enabled": true }` or an `OTEL_EXPORTER_OTLP_*ENDPOINT` variable is set ([OpenTelemetry](#opentelemetry-export)) | Spans; no prompt text unless `captureContent` is on |
 | GitHub and nodejs.org | Only while `install.sh` or `install.ps1` runs | The release (or `main` when you ask), and the official Node.js LTS when your system has no Node 18+ |
 
@@ -829,7 +831,7 @@ Everything is editable in **Settings** and saved to `config.json`:
 | Price auto-update (`pricingSync.enabled`) | on; fetches the public price list at startup and every 12 hours (toggle in Settings) |
 | OpenTelemetry export (`otel`) | off; set in `config.json` only ([docs/otel.md](docs/otel.md)) |
 
-Environment variables: `PORT` / `ZAAFPULSE_PORT` (default `4777`), `ZAAFPULSE_HOST`, `ZAAFPULSE_DATA`, `ZAAFPULSE_AUTH` (`local` by default on 127.0.0.1, `1` for password, `none` to turn sign-in off), `ZAAFPULSE_INDEX_WORKERS` (worker threads for the first index; `0` turns them off), `ZAAFPULSE_CONTENT` (`off` hides transcript text in the Trace explorer, and eval explanations; in server mode it is off unless `on`), `ZAAFPULSE_OLLAMA_URL` and `ZAAFPULSE_LMSTUDIO_URL` (move the local judge servers; for tests and unusual setups, see [docs/evals.md](docs/evals.md)), the server-mode settings in [docs/install.md](docs/install.md), the standard `OTEL_*` variables ([docs/otel.md](docs/otel.md)), and `DEMO=1` for synthetic data. Demo mode never writes `config.json`, the Keychain or your coding tools, and fetches nothing: model calls are answered by a scripted model inside the process, and gateway data lives in a temporary folder. It uses the cached price list if one exists.
+Environment variables: `PORT` / `ZAAFPULSE_PORT` (default `4777`), `ZAAFPULSE_HOST`, `ZAAFPULSE_DATA`, `ZAAFPULSE_AUTH` (`local` by default on 127.0.0.1, `1` for password, `none` to turn sign-in off), `ZAAFPULSE_INDEX_WORKERS` (worker threads for the first index; `0` turns them off), `ZAAFPULSE_CONTENT` (`off` hides transcript text in the Trace explorer, and eval explanations; in server mode it is off unless `on`), `ZAAFPULSE_OLLAMA_URL` and `ZAAFPULSE_LMSTUDIO_URL` (move the local judge servers; for tests and unusual setups, see [docs/evals.md](docs/evals.md)), `ZAAFPULSE_CLAUDE_BIN` (the Claude Code CLI for the [Claude Code judge](docs/evals.md#claude-code), when it is not found on its own), the server-mode settings in [docs/install.md](docs/install.md), the standard `OTEL_*` variables ([docs/otel.md](docs/otel.md)), and `DEMO=1` for synthetic data. Demo mode never writes `config.json`, the Keychain or your coding tools, and fetches nothing: model calls are answered by a scripted model inside the process, and gateway data lives in a temporary folder. It uses the cached price list if one exists.
 </details>
 
 ## Contributing
