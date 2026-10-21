@@ -230,7 +230,10 @@ with your Claude account. No API key is needed, and nothing is set up in the gat
 - **The preview confirms one destination.** Choose Claude Code, save, open the preview. What is stored
   (`externalConfirmed`) is `claude-code@<hash>`, a short hash of every `CLAUDE_CODE_USE_*` switch (on, or its
   odd value), the host of every `ANTHROPIC_*_BASE_URL`, and which of `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
-  `ANTHROPIC_FOUNDRY_API_KEY` and `ANTHROPIC_FOUNDRY_AUTH_TOKEN` are set (never their values). When any of these
+  `ANTHROPIC_FOUNDRY_API_KEY` and `ANTHROPIC_FOUNDRY_AUTH_TOKEN` are set (never their values), the Foundry host
+  (from `ANTHROPIC_FOUNDRY_RESOURCE` as `<resource>.services.ai.azure.com` when no base URL is set, also shown in the
+  destination), and the cloud account and region (`AWS_PROFILE`, `AWS_REGION`, `ANTHROPIC_VERTEX_PROJECT_ID`,
+  `CLOUD_ML_REGION`: hashed, never shown or stored as text). When any of these
   changes (say you set `ANTHROPIC_BASE_URL` or an API key and restart), nothing is sent and the judge says "The
   Claude Code destination changed; preview again". The daily count and the cost cap apply, and a provider that keeps
   failing is backed off, as for a gateway provider.

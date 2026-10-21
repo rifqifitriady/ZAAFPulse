@@ -378,7 +378,7 @@ test('destination: the token changes with every routing variable, never with a k
   }
   const k1 = ['sk', 'one'].join('-');
   const k2 = ['sk', 'two'].join('-');
-  const keys = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_FOUNDRY_API_KEY', 'ANTHROPIC_FOUNDRY_AUTH_TOKEN'];
+  const keys = ['API_KEY', 'AUTH_TOKEN', 'FOUNDRY_API_KEY', 'FOUNDRY_AUTH_TOKEN'].map((k) => `ANTHROPIC_${k}`);
   for (const v of keys) {
     assert.notEqual(t({ [v]: k1 }), base, `${v} present`);
     assert.equal(t({ [v]: k1 }), t({ [v]: k2 }), `${v}: its value is never part of it`);
@@ -513,4 +513,29 @@ test('stopAll: a running call is killed and its folder removed at once', async (
   await assert.rejects(p, (e) => e.status === 0);
   await new Promise((r) => setTimeout(r, 100));
   assert.equal(alive(run.pid), false);
+});
+
+test('destination: a Foundry resource without a base URL is its Azure host, shown and fingerprinted', () => {
+  const on = { CLAUDE_CODE_USE_FOUNDRY: '1' };
+  const a = destinationOf({ ...on, ANTHROPIC_FOUNDRY_RESOURCE: 'my-res' });
+  assert.equal(a.to, 'Microsoft Foundry via my-res.services.ai.azure.com');
+  assert.notEqual(a.token, destinationOf(on).token);
+  assert.notEqual(a.token, destinationOf({ ...on, ANTHROPIC_FOUNDRY_RESOURCE: 'other-res' }).token);
+  // The base URL wins when both are set.
+  const url = 'https://gw.example.com/x';
+  const b = destinationOf({ ...on, ANTHROPIC_FOUNDRY_RESOURCE: 'my-res', ANTHROPIC_FOUNDRY_BASE_URL: url });
+  assert.equal(b.to, 'Microsoft Foundry via gw.example.com');
+  // A resource name that is not a plain name is not shown as one.
+  assert.equal(destinationOf({ ...on, ANTHROPIC_FOUNDRY_RESOURCE: 'a/b c' }).to, 'Microsoft Foundry');
+});
+
+test('destination: a switch of cloud account or region asks for a new preview, its value never shown', () => {
+  const base = destinationOf({ CLAUDE_CODE_USE_BEDROCK: '1' });
+  for (const v of ['AWS_PROFILE', 'AWS_REGION', 'ANTHROPIC_VERTEX_PROJECT_ID', 'CLOUD_ML_REGION']) {
+    const one = destinationOf({ CLAUDE_CODE_USE_BEDROCK: '1', [v]: 'secret-acct-1' });
+    const two = destinationOf({ CLAUDE_CODE_USE_BEDROCK: '1', [v]: 'secret-acct-2' });
+    assert.notEqual(one.token, base.token, v);
+    assert.notEqual(one.token, two.token, `${v}: another value`);
+    assert.doesNotMatch(JSON.stringify(one), /secret-acct/, `${v}: not in the label or the token`);
+  }
 });
