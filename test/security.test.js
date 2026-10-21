@@ -6,7 +6,7 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const { spawn } = require('child_process');
-const { fakeServer, secretsFor } = require('./helpers');
+const { fakeServer, secretsFor, NO_JUDGE_PORTS } = require('./helpers');
 const { createGateway } = require('../lib/gateway');
 const { createAuth, setPassword, localLoginCode, clientKey, pickMode } = require('../lib/auth');
 const { createSecrets, checkRef } = require('../lib/secrets');
@@ -446,6 +446,7 @@ test('server: security headers, no framing, proxy and foreign-host requests refu
   const child = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
     env: {
       ...process.env,
+      ...NO_JUDGE_PORTS,
       DEMO: '1',
       ZAAFPULSE_PORT: String(port),
       ZAAFPULSE_DATA: data,
@@ -581,6 +582,7 @@ test('server: data folders stay usable and private after a restart; X-Real-IP pr
   const child = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
     env: {
       ...process.env,
+      ...NO_JUDGE_PORTS,
       DEMO: '1',
       ZAAFPULSE_PORT: String(port),
       ZAAFPULSE_DATA: data,
