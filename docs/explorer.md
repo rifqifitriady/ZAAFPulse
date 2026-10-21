@@ -76,7 +76,7 @@ buttons switch turns.
 | Key | Does |
 |---|---|
 | `j` / `k` | next / previous span |
-| `Enter` | open the selected span's text, or activate the focused session, turn or span |
+| `Enter` or `Space` | open the selected span's text, or activate the focused session, turn or span (`Enter` on the page itself focuses the text) |
 | `←` / `→` | previous / next turn |
 | `←` / `→` on the splitter | move the splitter by 2% |
 
@@ -123,10 +123,15 @@ JSON. A query value (`cursor`, `q`, `flags`, `source`, `sid`) longer than 512 ch
 The `acc_trace_sessions` tool lists the latest sessions as metadata only, for an AI client that wants to point
 you at a session. Arguments: `range` (`7`, `30`, `90` or `all`; default 30) and `limit` (1 to 200; default 50).
 Each row has `key`, `source`, `title`, `project`, `start`, `end`, `turns`, `tools`, `errors`, `cost` and
-`flags`. It returns no text, file path, content id or size, and no row comes from the gateway, because the MCP
-process has none. Keys are made per process and are valid only for the ZAAFPulse process that made them. The
-title is `null` when `ZAAFPULSE_CONTENT=off`, and in this tool it is also `null` for Claude Code and Codex,
-because the MCP process is given no log folder to read text from.
+`flags`. It returns no text, file path, content id or size, and no gateway session, because the tool is given no
+gateway and no log folder to read text from.
+
+- **Titles.** Claude Code and Codex titles are prompts, so they are always `null` here. Kiro, Gemini CLI and
+  Antigravity titles come from their own logs: the stdio MCP server (`node mcp.js`) returns them, and returns
+  `null` when `ZAAFPULSE_CONTENT=off`. The gateway's `/mcp` endpoint, which any gateway key with the `mcp`
+  scope can call, **never** returns a transcript-derived title, whatever `ZAAFPULSE_CONTENT` says.
+- **Keys** are made per process. A key from the stdio MCP server is not valid anywhere else. A key from the
+  gateway's `/mcp` is valid in the same ZAAFPulse server's dashboard (`/api/trace/*`), until that server restarts.
 
 ## Troubleshooting
 
@@ -141,4 +146,4 @@ because the MCP process is given no log folder to read text from.
 | **Content viewing is off** | `ZAAFPULSE_CONTENT=off`, or server mode without `ZAAFPULSE_CONTENT=on`. See [Turning content off](#turning-content-off). |
 | A Kiro session shows no cost and no text | Kiro does not store usage or messages. |
 | A new turn does not show yet | The last turn comes from the index, which refreshes on its own schedule; growth inside the last turn shows at once. |
-| A session is missing | A session with no turns is not listed, the page shows at most 500, and 30 days is the longest range. |
+| A session is missing | A session with no turns is not listed, the page shows at most 500, and its longest range is 30 days (the MCP tool also takes 90 and `all`). |

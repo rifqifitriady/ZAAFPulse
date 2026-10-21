@@ -110,12 +110,16 @@ test('mcp.js exports tool-call spans when otel is on, keeps stdout to protocol, 
   }
 });
 
-// A temp HOME with one Claude Code session, so the tool reads a real fixture and never this machine's logs.
+const KIRO = path.join(__dirname, 'fixtures', 'trace', 'kiro');
+
+// A temp HOME with one Claude Code session and two Kiro sessions, so the tool reads fixtures and never this
+// machine's logs. Kiro is there because its titles are the ones that can carry text.
 function traceHome() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'acc-mcp-home-'));
   const proj = path.join(home, '.claude', 'projects', 'proj');
   fs.mkdirSync(proj, { recursive: true });
   fs.copyFileSync(path.join(__dirname, 'fixtures', 'trace', 'claude', 'proj', 's1.jsonl'), path.join(proj, 's1.jsonl'));
+  fs.cpSync(KIRO, path.join(home, '.kiro', 'sessions'), { recursive: true });
   return { HOME: home, USERPROFILE: home };
 }
 
@@ -141,35 +145,74 @@ async function traceSessions(env, args = { range: 'all' }) {
 
 test('acc_trace_sessions lists session metadata and nothing from the transcript', async () => {
   const rows = await traceSessions({ ...traceHome(), ZAAFPULSE_CONTENT: 'on' });
-  assert.equal(rows.length, 1);
-  const r = rows[0];
-  assert.equal(r.source, 'claude');
+  assert.deepEqual(rows.map((r) => r.source).sort(), ['claude', 'kiro', 'kiro']);
+  const r = rows.find((x) => x.source === 'claude');
   assert.match(r.key, /^claude\.[0-9a-f]+$/);
   assert.equal(r.turns, 2);
   assert.ok(r.tools >= 1 && r.cost > 0);
-  assert.deepEqual(Object.keys(r).sort(), [
-    'cost',
-    'end',
-    'errors',
-    'flags',
-    'key',
-    'project',
-    'source',
-    'start',
-    'title',
-    'tools',
-    'turns',
-  ]);
-  // No text, content id, file path or size, in any field.
-  const json = JSON.stringify(rows);
-  for (const bad of ['fix the login redirect', 'Changed the redirect', '"text"', '.jsonl', '.claude', '"size"', '"file"'])
+  assert.equal(r.title, null, 'a Claude Code title is a prompt: never read here');
+  for (const row of rows)
+    assert.deepEqual(Object.keys(row).sort(), [
+      'cost',
+      'end',
+      'errors',
+      'flags',
+      'key',
+      'project',
+      'source',
+      'start',
+      'title',
+      'tools',
+      'turns',
+    ]);
+  // No text, content id, file path or size, in any field but the Kiro titles.
+  const json = JSON.stringify(rows.map((x) => ({ ...x, title: null })));
+  for (const bad of ['fix the login redirect', 'Changed the redirect', '"text"', '.jsonl', '.claude', '.kiro', '"size"', '"file"', 'ci_'])
     assert.equal(json.includes(bad), false, bad);
 });
 
-test('acc_trace_sessions falls back from a bad limit and hides titles when ZAAFPULSE_CONTENT=off', async () => {
+test('acc_trace_sessions hides a Kiro title when ZAAFPULSE_CONTENT=off', async () => {
   const env = traceHome();
-  assert.equal((await traceSessions(env, { range: 'all', limit: 0 })).length, 1, 'a bad limit falls back to the default');
-  const off = await traceSessions({ ...env, ZAAFPULSE_CONTENT: 'off' });
-  assert.equal(off.length, 1);
-  assert.equal(off[0].title, null);
+  const kiroTitles = async (extra) =>
+    (await traceSessions({ ...env, ...extra })).filter((r) => r.source === 'kiro').map((r) => r.title);
+  const on = await kiroTitles({ ZAAFPULSE_CONTENT: 'on' });
+  assert.deepEqual(on.sort(), ['Add dark mode', 'Fix the login redirect']);
+  assert.deepEqual(await kiroTitles({ ZAAFPULSE_CONTENT: 'off' }), [null, null]);
+});
+
+test('acc_trace_sessions: a bad limit falls back to the default and a small one applies', async () => {
+  const env = traceHome();
+  assert.equal((await traceSessions(env, { range: 'all', limit: 0 })).length, 3);
+  assert.equal((await traceSessions(env, { range: 'all', limit: 2 })).length, 2);
+  assert.equal((await traceSessions(env, { range: 'all', limit: 500 })).length, 3);
+});
+
+test('local.traceSessions: titles follow contentOff, and limit is clamped to 200', async () => {
+  const { createLocal } = require('../lib/local');
+  const { createKiro } = require('../lib/trace/kiro');
+  const light = [createKiro({ root: KIRO })];
+  const indexer = { entries: () => [] }; // shared, so nothing is refreshed and no log of this machine is read
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'acc-local-'));
+  const titles = async (contentOff) =>
+    (await createLocal({ cacheDir, indexer, contentOff, light }).traceSessions({})).map((r) => r.title).sort();
+  assert.deepEqual(await titles(false), ['Add dark mode', 'Fix the login redirect']);
+  assert.deepEqual(await titles(true), [null, null]);
+  const local = createLocal({ cacheDir, indexer, contentOff: false, light });
+  assert.equal((await local.traceSessions({ limit: 1 })).length, 1);
+
+  // Enough sessions to see the caps: 50 by default, 200 at most.
+  const many = fs.mkdtempSync(path.join(os.tmpdir(), 'acc-local-many-'));
+  const t0 = Date.parse('2026-10-19T09:00:00Z');
+  for (let i = 0; i < 210; i++) {
+    const dir = path.join(many, 'ws', `sess_${i}`);
+    fs.mkdirSync(dir, { recursive: true });
+    const at = (ms) => new Date(t0 + i * 60000 + ms).toISOString();
+    fs.writeFileSync(path.join(dir, 'session.json'), JSON.stringify({ id: `sess_${i}`, title: `t${i}`, createdAt: at(0) }));
+    const call = { type: 'tool_call', toolCallId: 'c', toolName: 'readFile', args: {}, status: 'completed', executionId: 'e' };
+    fs.writeFileSync(path.join(dir, 'messages.jsonl'), JSON.stringify({ id: 'm', timestamp: at(1000), payload: call }) + '\n');
+  }
+  const big = createLocal({ cacheDir, indexer, contentOff: false, light: [createKiro({ root: many })] });
+  assert.equal((await big.traceSessions({})).length, 50);
+  assert.equal((await big.traceSessions({ limit: 500 })).length, 200);
+  assert.equal((await big.traceSessions({ limit: 120 })).length, 120);
 });

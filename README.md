@@ -444,7 +444,7 @@ Or use **Endpoint → MCP server** in the dashboard: it shows where the server i
 
 | Type | Platforms | Tools |
 |---|---|---|
-| `acc` (always on) | this dashboard | `usage_summary`, `quality`, `live_apps`, `trace_sessions` (session metadata only, no text), `integrations_status` |
+| `acc` (always on) | this dashboard | `usage_summary`, `quality`, `live_apps`, `trace_sessions` (session metadata only, no text; titles only from stdio and never over the gateway `/mcp`), `integrations_status` |
 | `dynatrace` | Dynatrace SaaS and Managed | problems, entities, metrics, logs, security problems, DQL (SaaS) |
 | `arize` | Arize Phoenix and Arize AX | projects, spans, traces, datasets, experiments, monitors (AX) |
 | `n8n` | n8n | workflows, executions; run allowlisted webhooks and (de)activate workflows when writes are on |
@@ -560,7 +560,7 @@ The **Trace explorer** page shows what one AI session did: its turns, model call
 - **Secrets are masked.** **show** reveals one value at a time and nothing is stored. Text is read only from `~/.claude/projects` and `~/.codex/sessions`.
 - **`ZAAFPULSE_CONTENT=off` turns text off.** In server mode text is off unless you set `ZAAFPULSE_CONTENT=on`.
 - **Fast on large logs.** A 310 MB session shows its last turn in about 5 ms (about 21 ms in a worker thread), and one content page takes about 1 ms ([numbers](docs/performance.md#trace-explorer-showing-one-session-of-a-huge-log)).
-- **Keyboard:** `j` and `k` move between spans, `←` and `→` change turn, `Enter` opens the text.
+- **Keyboard:** `j` and `k` move between spans, `←` and `→` change turn, `Enter` or `Space` opens the text.
 
 What each source shows, privacy, the `/api/trace/*` routes and troubleshooting: **[docs/explorer.md](docs/explorer.md)**.
 
@@ -742,7 +742,7 @@ scripts/bench-index.js indexer benchmark on seeded synthetic logs
 install.sh, install.ps1 one-command installers for macOS/Linux and Windows
 Dockerfile, compose.yaml container image for servers
 .github/workflows/     ci.yml (the full suite on Linux, macOS and Windows), release.yml (binaries, checksums, attestations)
-test/                  41 node:test suites with fake HTTP and MCP servers
+test/                  52 node:test suites with fake HTTP and MCP servers
 test/fixtures/         the labelled synthetic signal corpus (signals/) and cost fixtures (cost/)
 config.example.json    every integration type with placeholder references
 docs/install.md        installers, sign-in, server mode, Docker, single-file binaries, verifying a download
