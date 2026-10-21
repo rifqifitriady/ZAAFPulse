@@ -276,6 +276,11 @@ zaafpulse register-mcp <claude|kiro|antigravity|cursor|vscode|claude-desktop|cod
 zaafpulse mcp
 ```
 
+The server stops cleanly on `SIGTERM`, Ctrl-C (`SIGINT`) and `SIGHUP`: it cancels a running judge call and flushes
+its logs. Because it handles `SIGHUP` itself, a server started with `nohup node server.js &` still exits when that
+terminal closes. Use `zaafpulse start` in a terminal you keep open, or `zaafpulse service install` for one that keeps
+running.
+
 ## Environment variables
 
 | Variable | Default | |
@@ -309,7 +314,7 @@ ZAAFPulse reads Claude Code and Codex transcripts from these folders, in this or
 | Claude Code | each `ZAAFPULSE_CLAUDE_DIRS` entry plus `/projects` (a comma-separated list; when it is set, only these are read), otherwise `$CLAUDE_CONFIG_DIR/projects` (one folder; when it is set, only that one is read), otherwise `$XDG_CONFIG_HOME/claude/projects` (`~/.config/claude/projects`), then `~/.claude/projects` |
 | Codex | `$CODEX_HOME/sessions`, otherwise `~/.codex/sessions` |
 
-`CLAUDE_CONFIG_DIR` is one folder, as Claude Code reads it (the same variable also picks Claude Code's login, and `zaafpulse register` reads its `.claude.json` there). A value with a comma in it is ignored with "one folder only; use ZAAFPULSE_CLAUDE_DIRS for several": put several folders in `ZAAFPULSE_CLAUDE_DIRS` instead.
+`CLAUDE_CONFIG_DIR` is one folder, as Claude Code reads it (the same variable also picks Claude Code's login, and `zaafpulse register-mcp` reads its `.claude.json` there). A value with a comma in it is ignored with "one folder only; use ZAAFPULSE_CLAUDE_DIRS for several": put several folders in `ZAAFPULSE_CLAUDE_DIRS` instead.
 
 Only absolute folders are used (`~` counts as your home folder). A relative value, or one that would put the logs folder directly in your home folder or at the top of a drive (`CLAUDE_CONFIG_DIR=~`, `CODEX_HOME=/`, or a link that leads there), is ignored and shown as "ignored" in `zaafpulse doctor` and on the Overview. Folders that are links to one another count once.
 
