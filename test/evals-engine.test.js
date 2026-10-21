@@ -1628,7 +1628,8 @@ test("the judge's own sessions are skipped also when the project comes from the 
   const raw = path.join(os.tmpdir(), 'zaafpulse-judge-Ab12Cd');
   const root = path.resolve(path.sep, 'cfg', 'projects');
   const file = path.join(root, raw.replace(/[^A-Za-z0-9]/g, '-'), 's.jsonl');
-  const decoded = require('../lib/claude').projectFromDir(file, { CLAUDE_CONFIG_DIR: path.dirname(root) }, os.homedir());
+  const env = { CLAUDE_CONFIG_DIR: path.dirname(root) };
+  const decoded = require('../lib/claude').projectFromDir(file, env, os.homedir());
   assert.match(decoded, /zaafpulse\/judge\/Ab12Cd$/);
   const r = rig();
   await r.arm();

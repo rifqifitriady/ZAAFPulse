@@ -455,7 +455,8 @@ test('docs: one CLAUDE_CONFIG_DIR folder, the list in ZAAFPULSE_CLAUDE_DIRS, and
   assert.match(readme, /`ZAAFPULSE_CLAUDE_DIRS`[^\n]*when it is set; otherwise from `\$CLAUDE_CONFIG_DIR\/projects`/);
   const explorer = doc('docs/explorer.md');
   assert.doesNotMatch(explorer, /not honoured/);
-  assert.doesNotMatch(explorer, /Text is read from `~\/\.claude\/projects` and `~\/\.codex\/sessions`\s+and nowhere else/);
+  const old = /Text is read from `~\/\.claude\/projects` and `~\/\.codex\/sessions`\s+and nowhere else/;
+  assert.doesNotMatch(explorer, old);
   assert.match(explorer, /install\.md#where-the-logs-are-read-from/);
   assert.match(explorer, /403 "not a\s+log file"/);
   assert.match(explorer, /savedOutput/);

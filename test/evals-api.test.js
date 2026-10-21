@@ -817,7 +817,9 @@ test('evals api: Claude Code is looked for only when it is the provider, or when
   assert.deepEqual([picked.available, picked.checked, looks], [true, true, 2], 'the selected provider is looked for');
 });
 
-test('server: SIGHUP (a closed terminal) shuts down the way SIGTERM does', { skip: process.platform === 'win32' }, async () => {
+test('server: SIGHUP (a closed terminal) shuts down the way SIGTERM does', {
+  skip: process.platform === 'win32',
+}, async () => {
   const s = await startServer({ ZAAFPULSE_AUTH: 'none' });
   try {
     const gone = new Promise((resolve) => s.child.once('exit', (code, signal) => resolve({ code, signal })));

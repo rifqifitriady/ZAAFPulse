@@ -188,6 +188,7 @@ function fakeClaude(dir, name = process.platform === 'win32' ? 'claude.js' : 'cl
 // What a child process needs on Windows to start at all (SystemRoot), find programs (PATHEXT) and a temp folder (TEMP,
 // TMP), for tests that hand a child an env of their own instead of process.env. Only the names that are set.
 const WIN_ENV = ['SystemRoot', 'SYSTEMROOT', 'PATHEXT', 'TEMP', 'TMP'];
-const winEnv = () => Object.fromEntries(WIN_ENV.filter((k) => process.env[k] !== undefined).map((k) => [k, process.env[k]]));
+const winEnv = () =>
+  Object.fromEntries(WIN_ENV.filter((k) => process.env[k] !== undefined).map((k) => [k, process.env[k]]));
 
 module.exports = { fakeServer, secretsFor, NO_JUDGE_PORTS, fakeClaude, winEnv };
