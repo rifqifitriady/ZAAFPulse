@@ -296,6 +296,7 @@ zaafpulse mcp
 | `CLAUDE_CONFIG_DIR` | | Claude Code's config folder(s), comma-separated; logs are read from each `<folder>/projects`. See [Where the logs are read from](#where-the-logs-are-read-from) |
 | `XDG_CONFIG_HOME` | `~/.config` | Parent of Claude Code's `claude/projects` folder, as newer Claude Code versions use it |
 | `CODEX_HOME` | `~/.codex` | Codex's folder; logs are read from `<folder>/sessions` |
+| `ZAAFPULSE_CLAUDE_BIN` | found on its own | The `claude` binary for the Claude Code judge. See [docs/evals.md](evals.md#claude-code) |
 | `DEMO` | | `1` for synthetic data |
 
 ## Where the logs are read from
