@@ -552,7 +552,7 @@ A new key is shown once and masked (`zp_Q7m_k•••••••••••�
 
 ## Trace & Session Explorer
 
-The **Trace explorer** page shows what one AI session did: its turns, model calls, tool calls and subagents as a tree of spans with a timeline, a map of the same turn, and the text of any span on request. It reads Claude Code, Codex, the Agent Gateway, Kiro, Gemini CLI and Antigravity, each as deep as that tool's own logs allow (Claude Code and Codex in full; Antigravity at conversation level, which needs Node 22.12 or newer).
+The **Trace explorer** page shows what one AI session did: its turns, model calls, tool calls and subagents as a tree of spans with a timeline, a map of the same turn, and the text of any span on request. It reads Claude Code, Codex, the Agent Gateway, Kiro, Gemini CLI and Antigravity, each as deep as that tool's own logs allow (Claude Code and Codex in full; Antigravity at conversation level, which needs Node 22.13 or newer).
 
 <img alt="Trace explorer: sessions from Claude Code, Codex and Kiro on the left, the span tree of one turn with a failed Bash call and a masked secret, and the session map on the right" src="docs/assets/screen-trace.jpg">
 

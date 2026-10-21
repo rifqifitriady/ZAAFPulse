@@ -6,7 +6,9 @@ span on request. It covers Claude Code, Codex, the Agent Gateway, Kiro, Gemini C
 as that tool's own logs allow.
 
 Everything is read from files already on this machine. Nothing is sent anywhere, and no transcript text is
-copied into the index or any cache.
+copied into the index or any file cache. The one exception is in memory: the titles of Claude Code and Codex
+sessions are their first prompts, masked and cut to 80 characters, kept in the running process so the list
+does not read them again.
 
 ## What each source shows
 
@@ -21,10 +23,14 @@ copied into the index or any cache.
 
 Notes per source:
 
-- **Claude Code and Codex** have full depth. A session's turn offsets live in the index, so the page reads
+- **Claude Code and Codex** have full depth. Costs use your prices from Settings, as the dashboard's totals
+  do. A session's turn offsets live in the index, so the page reads
   only the turn you look at (the last one first), never the whole file. A session that is still growing is
   polled every 5 seconds and its last turn follows it. Gateway, Kiro, Gemini CLI and Antigravity sessions are
   not polled.
+- **Codex** logs often carry a single `token_count` for the whole file instead of one per request. Every model
+  call still shows as a chat span (a run of output up to the next tool result), and the calls nothing measured
+  have no tokens and no cost; the one `token_count` is counted once, on the call it follows.
 - **Agent Gateway** requests are metadata only. Titles hold the pattern, state, model and counts, never a task
   or a prompt, so they stay visible even when content is off.
 - **Kiro** stores tool calls and their results but no usage and no user message. A turn starts at a user
@@ -32,14 +38,19 @@ Notes per source:
 - **Gemini CLI** support follows a chat layout modelled on a synthetic file (`messages` with `user` and
   `gemini` entries). A chat that is laid out differently may show fewer details. Only the first user message
   is read, for the title.
-- **Antigravity** is conversation level only: no tool calls, no text, no cost. It needs Node 22.12 or newer
+- **Antigravity** is conversation level only: no tool calls, no text, no cost. It needs Node 22.13 or newer
   (see [Troubleshooting](#troubleshooting)).
+- Tool names, file names, subagent types and model names stay on show when content is off, so they are masked
+  and cut to 80 characters like a title.
 - Sessions carry flags where the source knows them: **errors**, **loop detected** and **injection**, the same
   detectors as the Quality page.
 
 On the page: choose 24 h, 7 d or 30 d, search by title, project or branch, filter by source or by sessions
 with errors, and drag the splitter between the tree and the map. A session opens on its last turn; the turn
-buttons switch turns.
+buttons switch turns. Search never reads a transcript: it matches the titles the list has already read (a
+Claude Code or Codex title is read when its row comes into view), the project and the branch. Under 1100 px of
+window width the two halves stack, the map below the explorer. In demo mode, links from the Sessions and AI
+Office pages open the synthetic session of their tool.
 
 ## Privacy
 
@@ -57,13 +68,18 @@ buttons switch turns.
   source.
 - **The API never sees a path.** Sessions and text are addressed by opaque ids that are made per process. A
   client cannot pass a file name.
-- **Antigravity's database is opened read-only.** If it is locked, a copy is read and then deleted. Only
-  metadata columns are selected; the preview and summary text are never read.
+- **Antigravity's database is opened read-only.** The database and its WAL are never modified. A read-only
+  connection to a database in WAL mode may still update the `-shm` file, SQLite's shared-memory index, as every
+  reader does. If the database is locked, a copy is read and then deleted, and while it stays locked and
+  unchanged the rows of that copy are reused instead of copying again. Only metadata columns are selected; the
+  preview and summary text are never read.
 - **The same sign-in as the rest of the dashboard.** Every `/api/trace/*` route needs it, and a gateway API
   key does not open them.
 - **Demo mode** (`DEMO=1`) serves synthetic sessions and reads no real file.
 
 ### Turning content off
+
+With content off, the page says so above the tree from the start.
 
 | Setting | Effect |
 |---|---|
@@ -80,7 +96,10 @@ buttons switch turns.
 | `←` / `→` | previous / next turn |
 | `←` / `→` on the splitter | move the splitter by 2% |
 
-Keys do nothing while you type in a field or while a drawer is open.
+`j`, `k`, `←` and `→` act only while the focus is inside the explorer or on the page itself, never with Shift
+or another modifier, and the arrows keep their own meaning on the Output and Input tabs, the range buttons and
+the source chips. Keys do nothing while you type in a field or while a drawer is open. The splitter drags with
+the main mouse button only.
 
 ## Performance
 
@@ -106,6 +125,7 @@ All routes sit behind the dashboard sign-in. Ids are opaque and valid only for t
 | Route | Returns |
 |---|---|
 | `GET /api/trace/sources` | the six sources in a fixed order, each with `id`, `ok`, `reason` and `count` |
+| `GET /api/trace/settings` | `{ "content": true }` or `{ "content": false }`: whether text can be shown at all |
 | `GET /api/trace/sessions?range=1..30&source=…&q=…&flags=errors` | up to 500 sessions, newest first: `key`, `title`, `source`, `project`, `branch`, `start`, `end`, `turns`, `tools`, `errors`, `cost`, `flags`. `range` is days (default 7) |
 | `GET /api/trace/title?key=…` | `{ "title": … }`, read from the first prompt and masked; `null` with content off |
 | `GET /api/trace/session?key=…&turn=N` | the spans of one turn (the last when `turn` is left out) and the list of turns. Text and results are content ids |
@@ -124,7 +144,8 @@ The `acc_trace_sessions` tool lists the latest sessions as metadata only, for an
 you at a session. Arguments: `range` (`7`, `30`, `90` or `all`; default 30) and `limit` (1 to 200; default 50).
 Each row has `key`, `source`, `title`, `project`, `start`, `end`, `turns`, `tools`, `errors`, `cost` and
 `flags`. It returns no text, file path, content id or size, and no gateway session, because the tool is given no
-gateway and no log folder to read text from.
+gateway and no log folder to read text from. In demo mode (`DEMO=1`) it lists the synthetic sessions only and
+reads nothing under your home folder.
 
 - **Titles.** Claude Code and Codex titles are prompts, so they are always `null` here. Kiro, Gemini CLI and
   Antigravity titles come from their own logs: the stdio MCP server (`node mcp.js`) returns them, and returns
@@ -137,7 +158,8 @@ gateway and no log folder to read text from.
 
 | You see | Why and what to do |
 |---|---|
-| **Antigravity: needs Node 22.12 or newer** | Antigravity's database is read through `node:sqlite` in read-only mode, which Node honours from 22.12. An older Node would open it read-write, so it is not opened at all. Run ZAAFPulse with Node 22.12 or newer. |
+| **Antigravity: needs Node 22.13 or newer** | Antigravity's database is read through `node:sqlite` in read-only mode. Node honours `readOnly` from 22.12 (an older Node would open the database read-write), and loads `node:sqlite` without the `--experimental-sqlite` flag from 22.13 (on the 23 line: 23.2 and 23.4). Below that the database is not opened at all. Run ZAAFPulse with Node 22.13 or newer. |
+| **Antigravity: database unreadable: …** | Every Antigravity database there failed to read (one that fails next to a good one is skipped). The reason names no path. |
 | **Antigravity: read-only SQLite not supported by this Node** or **read-only check failed** | The runtime check that proves the database would be opened read-only did not pass. Nothing was opened. Update Node. |
 | A source shows **not installed** | Its folder (`~/.kiro/sessions`, `~/.gemini/tmp`, the Antigravity database) does not exist. |
 | A source shows **not configured** | It is not set up here. The Agent Gateway is not available in the MCP tool. |
@@ -147,3 +169,13 @@ gateway and no log folder to read text from.
 | A Kiro session shows no cost and no text | Kiro does not store usage or messages. |
 | A new turn does not show yet | The last turn comes from the index, which refreshes on its own schedule; growth inside the last turn shows at once. |
 | A session is missing | A session with no turns is not listed, the page shows at most 500, and its longest range is 30 days (the MCP tool also takes 90 and `all`). |
+
+## Known limits and follow-ups
+
+Not done in this version, on purpose:
+
+- `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are not honoured: logs are read from `~/.claude/projects` and
+  `~/.codex/sessions` only, as in the rest of ZAAFPulse.
+- There is no link from a span to the Logs page.
+- Lines a parser could not read (shown as **unreadable line** spans) do not count in a source's error badge.
+- The fixtures cover no compacted Claude Code session and no interrupted Claude Code turn.
