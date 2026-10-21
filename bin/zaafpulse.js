@@ -212,23 +212,54 @@ const commands = {
     } catch (err) {
       add('Secret store', err.message, false);
     }
-    add(
-      'Claude Code',
-      fs.existsSync(path.join(home, '.claude', 'projects')) ? '~/.claude/projects found' : 'no logs on this machine',
-      fs.existsSync(path.join(home, '.claude', 'projects')),
-    );
-    add(
-      'Codex',
-      fs.existsSync(path.join(home, '.codex', 'sessions')) ? '~/.codex/sessions found' : 'no logs on this machine',
-      fs.existsSync(path.join(home, '.codex', 'sessions')),
-    );
+    // Where each tool's logs are read from: every folder, whether it exists, how many logs it holds and how fresh
+    // they are. Counts and times only; no transcript text is read.
+    const logs = require('../lib/logroots');
+    const ago = (ms) => {
+      const m = Math.max(0, Math.round(ms / 60000));
+      if (m < 1) return 'just now';
+      if (m < 120) return `${m} min ago`;
+      return m < 2880 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`;
+    };
+    const env = process.env;
+    for (const [name, mod, depth, vars] of [
+      ['Claude Code', require('../lib/claude'), 4, ['CLAUDE_CONFIG_DIR', 'XDG_CONFIG_HOME']],
+      ['Codex', require('../lib/codex'), 5, ['CODEX_HOME']],
+    ]) {
+      let total = 0;
+      let newest = 0;
+      const lines = [];
+      for (const root of mod.roots(env, home)) {
+        const files = logs.walkJsonl(root, depth);
+        for (const f of files) {
+          try {
+            newest = Math.max(newest, fs.statSync(f).mtimeMs);
+          } catch {
+            /* gone since the listing */
+          }
+        }
+        total += files.length;
+        const shown = logs.tilde(root, home);
+        lines.push(
+          logs.isDir(root)
+            ? `    ${shown}  ${files.length} .jsonl file${files.length === 1 ? '' : 's'}`
+            : `    ${shown}  missing`,
+        );
+      }
+      const found = `${total} log file${total === 1 ? '' : 's'}, newest ${ago(Date.now() - newest)}`;
+      add(name, total ? found : 'no logs found', total > 0);
+      rows.push(...lines);
+      for (const v of vars)
+        rows.push(`    ${v.padEnd(18)} ${env[v] ? `set (${logs.tilde(env[v], home)})` : 'not set'}`);
+    }
     const vaults = platform.registeredVaults();
     add(
       'Obsidian',
       vaults.length ? `${vaults.length} vault(s)` : 'not found (set a path in Settings)',
       vaults.length > 0,
     );
-    add('Server', (await ping()) ? `answering at ${localUrl()}` : `not running on port ${port()}`, await ping());
+    const up = await ping();
+    add('Server', up ? `answering at ${localUrl()}` : `not running on port ${port()}`, up);
     let svc = '?';
     try {
       svc = require('../lib/service').status({ system: systemMode() });
@@ -278,7 +309,8 @@ const commands = {
   zaafpulse set-password            set the admin password for server mode
   zaafpulse service install         run in the background and at startup (--system: as a server service)
   zaafpulse service uninstall|status|restart
-  zaafpulse status | open | doctor
+  zaafpulse status | open
+  zaafpulse doctor                  log folders read, file counts, newest log, data folder, server
   zaafpulse eval --judge --session <id> [--source claude|codex] [--json]
                                     judge one session with the local model (--data DIR: the data folder)
   zaafpulse register-mcp <client|all> [--remove]

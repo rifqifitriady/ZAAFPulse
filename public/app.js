@@ -1296,6 +1296,16 @@ function applyTheme() {
   setInterval(async () => {
     await loadLive();
     if (state.route === 'live' && !updateLive()) render(false);
+    // The Overview's empty-state note follows the first index and the first logs found.
+    if (
+      state.route === 'overview' &&
+      state.data &&
+      overviewNote(state.data) !== state.logNote &&
+      !$('#view').contains(document.activeElement)
+    ) {
+      await loadSummary().catch(() => {});
+      render(false);
+    }
     if (drawer.kind === 'apps') paintDrawer(false);
   }, 5000);
   setInterval(async () => {
