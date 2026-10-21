@@ -30,6 +30,7 @@ function viewQualityPage() {
 async function mountQualityPage() {
   if (!state.sub || !QUALITY_COPY[state.sub]) {
     mountFailureCity();
+    mountEvalsCard();
     return;
   }
   if (state.sub === 'models' || state.sub === 'rankings') {

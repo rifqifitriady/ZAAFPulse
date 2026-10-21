@@ -131,6 +131,7 @@ function viewQuality() {
     ) +
     `<div class="notice info">${icon('alert')}<div><b>These are signals detected in your local logs</b>, not a graded evaluation. Every card opens the exact items that were matched, so you can judge them yourself.</div></div>
     ${qualityKpis()}
+    ${evalsCardShell()}
     <section class="holo stage failures-stage">
       <canvas id="quality-scene" aria-label="3D chart of failed tool calls per day, stacked by cause, with daily accuracy and tool calls on the back walls"></canvas>
       <div class="stage-tl"><div class="holo-kicker">MODEL-CAUSED FAILURES PER DAY</div>
