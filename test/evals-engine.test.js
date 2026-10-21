@@ -1621,3 +1621,25 @@ test("the judge's own Claude Code sessions (run in its temp folder) are never ju
   const { queued } = await r.engine.tick();
   assert.equal(queued, 2, 'only the session that is not the judge');
 });
+
+test("the judge's own sessions are skipped also when the project comes from the decoded log folder name", async () => {
+  // A session file with no cwd gets its project from its folder: Claude Code writes the judge's temp folder there
+  // with every character that is not a letter or digit as a dash, and projectFromDir turns the dashes into slashes.
+  const raw = path.join(os.tmpdir(), 'zaafpulse-judge-Ab12Cd');
+  const root = path.resolve(path.sep, 'cfg', 'projects');
+  const file = path.join(root, raw.replace(/[^A-Za-z0-9]/g, '-'), 's.jsonl');
+  const decoded = require('../lib/claude').projectFromDir(file, { CLAUDE_CONFIG_DIR: path.dirname(root) }, os.homedir());
+  assert.match(decoded, /zaafpulse\/judge\/Ab12Cd$/);
+  const r = rig();
+  await r.arm();
+  const times = turnsAfter(2);
+  const own = entry('own', times, T0 + 5 * MIN);
+  own.result.sessions.own.project = decoded;
+  const mine = entry('mine', times, T0 + 5 * MIN);
+  // A project of the owner's whose decoded name only starts like the judge's folder is still judged.
+  mine.result.sessions.mine.project = '/Users/me/work/zaafpulse/judge/notes/app';
+  r.st.entries.push(own, mine);
+  r.clock.t = T0 + 20 * MIN;
+  const { queued } = await r.engine.tick();
+  assert.equal(queued, 2, 'only the session that is not the judge');
+});
