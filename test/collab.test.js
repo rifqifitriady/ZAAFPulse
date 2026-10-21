@@ -725,3 +725,30 @@ test('a failed run whose upstream broke still reports 502 upstream_error', async
     await t.close();
   }
 });
+
+test('trace explorer: a tool-using agent step links to its last chat round, and run calls are not requests', async () => {
+  const { createGatewayAdapter } = require('../lib/trace/gateway');
+  const t = await setup(
+    async (r) => (toolMsgs(r).length ? 'final after the tool' : toolCall('acc_usage_summary', {})),
+    { tools: [{ name: 'acc_usage_summary', description: 'usage', inputSchema: { type: 'object', properties: {} } }] },
+  );
+  try {
+    const { run } = await t.collab.run({ pattern: 'agent', agent: 'hr-finance', task: 'usage this month' });
+    assert.equal(run.state, 'completed');
+    assert.equal(run.steps.length, 1);
+    const agentSpan = run.trace.find((s) => s.name === 'invoke_agent hr-finance');
+    assert.equal(run.steps[0].span, agentSpan.id);
+    const chats = run.trace.filter((s) => s.name.startsWith('chat ') && s.parent === agentSpan.id);
+    assert.equal(chats.length, 2, 'one chat per tool round');
+    const adapter = createGatewayAdapter(t.gateway.trace);
+    const sk = await adapter.skeleton(null, `run:${run.id}`, {});
+    const linked = sk.spans.filter((s) => s.kind === 'chat').map((s) => (s.text ? s.text.step : null));
+    assert.deepEqual(linked, [null, 0]);
+    // every call the run made is tagged, so the run is not also listed as request sessions
+    assert.ok(t.gateway.trace.requests().length >= 2);
+    assert.ok(t.gateway.trace.requests().every((q) => q.runId === run.id));
+    assert.deepEqual(adapter.sessions().map((x) => x.id), [`run:${run.id}`]);
+  } finally {
+    await t.close();
+  }
+});

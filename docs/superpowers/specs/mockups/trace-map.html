@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trace &amp; Session Map</title>
+<style>
+  :root {
+    --h-bg: #070a1f; --h-panel: rgba(18, 22, 64, 0.72); --h-edge: rgba(120, 140, 255, 0.22);
+    --h-edge-hi: rgba(160, 150, 255, 0.55); --h-text: #dfe6ff; --h-muted: #8f98cc;
+    --h-cyan: #4de8ff; --h-pink: #ff4fd8; --amber: #ffb547; --red: #ff5a6e; --green: #43f0a3; --violet: #a98bff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; color: var(--h-text); font: 14px/1.45 "Inter", system-ui, -apple-system, Segoe UI, sans-serif;
+    background: radial-gradient(120% 70% at 50% 0%, #1a1650 0%, #0b0d2c 45%, var(--h-bg) 100%) fixed;
+    min-height: 100vh; padding: 28px 16px 40px;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; }
+  .eyebrow { color: var(--h-cyan); font-size: 11px; letter-spacing: .18em; text-transform: uppercase; font-weight: 700; }
+  h1 {
+    font-size: clamp(30px, 5vw, 50px); line-height: 1.02; margin: 8px 0 10px; letter-spacing: -.02em;
+    background: linear-gradient(90deg, #fff, #b9b2ff 55%, var(--h-pink)); -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .sub { color: var(--h-muted); max-width: 520px; margin: 0; }
+  .top { display: flex; gap: 20px; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; margin-bottom: 26px; }
+  .summary {
+    background: var(--h-panel); border: 1px solid var(--h-edge); border-radius: 16px; padding: 14px 16px; min-width: 270px;
+    box-shadow: 0 20px 50px -25px rgba(77, 232, 255, .25), inset 0 1px 0 rgba(255,255,255,.05); backdrop-filter: blur(6px);
+  }
+  .summary .who { display: flex; gap: 10px; align-items: center; border-bottom: 1px solid var(--h-edge); padding-bottom: 10px; margin-bottom: 8px; }
+  .badge { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--h-edge-hi); color: var(--h-cyan); font-weight: 800; font-size: 12px; }
+  .summary b { display: block; }
+  .muted { color: var(--h-muted); font-size: 12px; }
+  .check { display: flex; gap: 8px; align-items: center; font-size: 12.5px; padding: 3px 0; }
+  .check i { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--green); display: inline-grid; place-items: center; font-style: normal; font-size: 9px; color: var(--green); }
+  .check.bad i { border-color: var(--red); color: var(--red); }
+
+  /* map */
+  .map { position: relative; display: grid; grid-template-columns: 1fr minmax(280px, 380px) 1fr; column-gap: 26px; }
+  .node {
+    grid-column: 2; position: relative; z-index: 2; display: flex; gap: 14px; align-items: center;
+    background: var(--h-panel); border: 1px solid var(--h-edge); border-radius: 16px; padding: 14px 16px;
+    box-shadow: 0 18px 40px -24px rgba(20, 10, 80, .9), inset 0 1px 0 rgba(255,255,255,.05); backdrop-filter: blur(6px);
+  }
+  .node .ring {
+    flex: none; width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 12px;
+    border: 1.5px solid var(--c); color: var(--c); background: radial-gradient(circle, color-mix(in srgb, var(--c) 22%, transparent), transparent 70%);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--c) 55%, transparent); animation: pulse 2.8s ease-out infinite;
+  }
+  .node h3 { margin: 0; font-size: 16px; }
+  .node .meta { color: var(--h-muted); font-size: 12px; font-family: ui-monospace, Menlo, monospace; margin-top: 2px; }
+  .pill { display: inline-flex; gap: 5px; align-items: center; margin-top: 6px; margin-right: 4px; padding: 1px 8px; border-radius: 999px; font-size: 11px; border: 1px solid var(--edge, var(--h-edge)); color: var(--pc, var(--h-text)); background: rgba(255,255,255,.03); }
+  .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .ok { --pc: var(--green); } .bad { --pc: var(--red); } .warn { --pc: var(--amber); } .info { --pc: var(--h-cyan); }
+  .node.err { border-color: rgba(255, 90, 110, .45); animation: flicker 4s ease-in-out infinite; }
+  .gap { grid-column: 2; height: 70px; position: relative; }
+  .note { position: relative; z-index: 2; align-self: center; font-size: 12.5px; color: var(--h-muted); }
+  .note.l { grid-column: 1; text-align: right; } .note.r { grid-column: 3; }
+  .note .n { color: var(--c, var(--h-cyan)); font-weight: 800; font-size: 13px; display: inline-flex; gap: 6px; align-items: center; }
+  .note .n::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 10px currentColor; }
+  .note b { display: block; color: var(--h-text); font-size: 14px; margin: 2px 0; }
+  .end { grid-column: 2; justify-self: center; text-align: center; z-index: 2; }
+  .end .ring { width: 72px; height: 72px; margin: 0 auto 8px; border-width: 2px; }
+  svg.wires { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; pointer-events: none; overflow: visible; }
+  .wire { fill: none; stroke-width: 2.4; stroke-linecap: round; opacity: .9; }
+  .flow { stroke-dasharray: 6 10; animation: flow 1.6s linear infinite; }
+  .glow { filter: drop-shadow(0 0 6px currentColor); }
+  @keyframes flow { to { stroke-dashoffset: -32; } }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--c) 50%, transparent); } 70% { box-shadow: 0 0 0 14px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+  @keyframes flicker { 0%, 92%, 100% { box-shadow: 0 18px 40px -24px rgba(20,10,80,.9), 0 0 0 0 rgba(255,90,110,0); } 95% { box-shadow: 0 18px 40px -24px rgba(20,10,80,.9), 0 0 22px 2px rgba(255,90,110,.45); } }
+  @media (prefers-reduced-motion: reduce) { .flow, .node .ring, .node.err { animation: none !important; } .packet { display: none; } }
+  @media (max-width: 760px) { .map { grid-template-columns: 1fr; } .node, .gap, .end { grid-column: 1; } .note { grid-column: 1 !important; text-align: left !important; margin: 8px 0 0 66px; } svg.wires { display: none; } }
+
+  /* question */
+  .q { margin-top: 38px; border-top: 1px solid var(--h-edge); padding-top: 20px; }
+  .q h2 { margin: 0 0 4px; font-size: 18px; }
+  .opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin-top: 12px; }
+  .opt { background: var(--h-panel); border: 1px solid var(--h-edge); border-radius: 14px; padding: 12px 14px; cursor: pointer; transition: border-color .2s, transform .2s; }
+  .opt:hover { border-color: var(--h-edge-hi); transform: translateY(-1px); }
+  .opt.selected { border-color: var(--h-cyan); box-shadow: 0 0 0 1px var(--h-cyan), 0 0 24px -6px var(--h-cyan); }
+  .opt .k { color: var(--h-cyan); font-weight: 800; }
+  .opt p { margin: 4px 0 0; color: var(--h-muted); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div>
+      <div class="eyebrow">Trace &amp; Session Map</div>
+      <h1>From Prompt<br>to Answer</h1>
+      <p class="sub">How one turn of a coding-agent session flows: the prompt, every model call, every tool, the subagents it spawned, and how the result was judged. Synthetic sample data.</p>
+    </div>
+    <div class="summary">
+      <div class="who"><span class="badge">CC</span><div><b>ZAAFPulse · fix auth</b><span class="muted">Claude Code · branch fix/auth · 14 turns · 212 spans</span></div></div>
+      <div class="check"><i>✓</i>Tokens 186k · cache hit 71%</div>
+      <div class="check"><i>✓</i>Cost $4.12 (API-equivalent)</div>
+      <div class="check bad"><i>!</i>2 tool errors · 0 loops</div>
+      <div class="check"><i>✓</i>Evals 5 of 6 passed · judge: local qwen3</div>
+      <div class="check"><i>✓</i>Your feedback: 👍 on turn 3</div>
+    </div>
+  </div>
+
+  <div class="map" id="map">
+    <svg class="wires" id="wires" aria-hidden="true"></svg>
+
+    <div class="note l" style="--c: var(--h-cyan)"><span class="n">01</span><b>Session</b>Where the work happened: tool, project, branch and how long it ran.</div>
+    <div class="node" style="--c: var(--h-cyan)"><span class="ring">CC</span><div><h3>Session</h3><div class="meta">claude-code · ZAAFPulse · 42 min</div><span class="pill info">Active</span></div></div>
+    <div class="gap"></div>
+
+    <div class="node" style="--c: var(--violet)"><span class="ring">T3</span><div><h3>Turn 3 · prompt</h3><div class="meta">"fix the login redirect after sign-out"</div><span class="pill ok">relevance .82</span></div></div>
+    <div class="note r" style="--c: var(--violet)"><span class="n">02</span><b>Turn</b>One prompt and everything the agent did to answer it.</div>
+    <div class="gap"></div>
+
+    <div class="note l" style="--c: var(--h-cyan)"><span class="n">03</span><b>Model call</b>Tokens in and out, cache, latency to first token and cost.</div>
+    <div class="node" style="--c: var(--h-cyan)"><span class="ring">LLM</span><div><h3>chat · opus-5.5</h3><div class="meta">2.1k → 480 tok · TTFT 0.9 s · $0.04</div><span class="pill ok">OK</span></div></div>
+    <div class="gap"></div>
+
+    <div class="node" style="--c: var(--amber)"><span class="ring">⚙</span><div><h3>Tool · Read</h3><div class="meta">src/auth.js · 40 ms</div><span class="pill ok">Resolved</span></div></div>
+    <div class="note r" style="--c: var(--amber)"><span class="n">04</span><b>Tool call</b>What the agent touched and whether it worked.</div>
+    <div class="gap"></div>
+
+    <div class="note l" style="--c: var(--red)"><span class="n">05</span><b>Failure</b>Errors light up red with the signal that classified them.</div>
+    <div class="node err" style="--c: var(--red)"><span class="ring">✗</span><div><h3>Tool · Bash</h3><div class="meta">npm test · exit 1 · 3.2 s</div><span class="pill bad">Command failed</span><span class="pill warn">not counted vs accuracy</span></div></div>
+    <div class="gap"></div>
+
+    <div class="node" style="--c: var(--h-pink)"><span class="ring">SUB</span><div><h3>Subagent · Explore</h3><div class="meta">9 tools · 31k tok · $0.31</div><span class="pill info">Resolved</span></div></div>
+    <div class="note r" style="--c: var(--h-pink)"><span class="n">06</span><b>Subagent</b>Every subagent, nested and parallel ones too, with its own tree.</div>
+    <div class="gap"></div>
+
+    <div class="note l" style="--c: var(--green)"><span class="n">07</span><b>Judged</b>Deterministic checks always; the LLM judge runs on a local model first.</div>
+    <div class="node" style="--c: var(--green)"><span class="ring">✓</span><div><h3>Answer</h3><div class="meta">480 tok · secrets masked</div><span class="pill ok">faithful</span><span class="pill bad">task incomplete</span></div></div>
+    <div class="gap"></div>
+
+    <div class="end" style="--c: var(--h-cyan)"><div class="node" style="all: unset;"></div><span class="ring" style="display:grid;place-items:center;border-radius:50%;border:2px solid var(--h-cyan);color:var(--h-cyan);width:72px;height:72px;margin:0 auto 8px;font-weight:800;animation:pulse 2.8s ease-out infinite;background:radial-gradient(circle, rgba(77,232,255,.2), transparent 70%)">⤓</span><b>Outcome</b><div class="muted">👍 feedback · added to dataset "auth regressions"</div></div>
+  </div>
+
+  <div class="q">
+    <h2>Where should this map live in layout B?</h2>
+    <p class="muted">Click one, then tell me in the terminal.</p>
+    <div class="opts">
+      <div class="opt" data-choice="tab" onclick="toggleSelect(this)"><span class="k">1 · Tab "Map"</span><p>Next to "Tree" in the centre pane: the same session, drawn as this flow.</p></div>
+      <div class="opt" data-choice="turn" onclick="toggleSelect(this)"><span class="k">2 · Per turn</span><p>Clicking a turn in the tree opens its map in the drawer; the tree stays the main view.</p></div>
+      <div class="opt" data-choice="full" onclick="toggleSelect(this)"><span class="k">3 · Full-screen page</span><p>A separate "Session map" page with a turn picker, for presenting or reviewing.</p></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Draws the glowing connectors between consecutive nodes (an S-curve, alternating sides like the
+  // reference) plus a short arm to each note, then sends a "packet" travelling down the whole chain.
+  const COLORS = ['#4de8ff', '#a98bff', '#4de8ff', '#ffb547', '#ff5a6e', '#ff4fd8', '#43f0a3', '#4de8ff'];
+  function draw() {
+    const map = document.getElementById('map');
+    const svg = document.getElementById('wires');
+    const nodes = [...map.querySelectorAll('.node:not([style*="all: unset"]), .end .ring')];
+    const notes = [...map.querySelectorAll('.note')];
+    const box = map.getBoundingClientRect();
+    const pt = (el, side) => {
+      const r = el.getBoundingClientRect();
+      const x = side === 'l' ? r.left : side === 'r' ? r.right : r.left + r.width / 2;
+      const y = side === 'top' ? r.top : side === 'bottom' ? r.bottom : r.top + r.height / 2;
+      return [x - box.left, y - box.top];
+    };
+    let html = '<defs><filter id="g"><feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>';
+    let chain = '';
+    for (let i = 0; i < nodes.length - 1; i++) {
+      const [x1, y1] = pt(nodes[i], 'bottom');
+      const [x2, y2] = pt(nodes[i + 1], 'top');
+      const off = (i % 2 ? -1 : 1) * 150;
+      const mid = (y1 + y2) / 2;
+      const d = `M${x1},${y1} C${x1},${mid} ${x1 + off},${mid} ${x1 + off / 2},${mid} S${x2},${mid} ${x2},${y2}`;
+      chain += (i ? ' ' : '') + d;
+      const c = COLORS[i % COLORS.length];
+      html += `<path class="wire" d="${d}" stroke="${c}" stroke-opacity=".28"/>`;
+      html += `<path class="wire flow" d="${d}" stroke="${c}" filter="url(#g)" style="animation-delay:${-i * 0.2}s"/>`;
+    }
+    notes.forEach((n, i) => {
+      const target = nodes[i];
+      if (!target) return;
+      const left = n.classList.contains('l');
+      const [nx, ny] = pt(n, left ? 'r' : 'l');
+      const [tx, ty] = pt(target, left ? 'l' : 'r');
+      const c = getComputedStyle(n).getPropertyValue('--c').trim() || '#4de8ff';
+      const color = c.startsWith('var(') ? getComputedStyle(document.documentElement).getPropertyValue(c.slice(4, -1)).trim() : c;
+      const kx = left ? nx + 12 : nx - 12;
+      html += `<path class="wire flow" d="M${tx},${ty} H${(tx + kx) / 2} V${ny} H${kx}" stroke="${color}" stroke-opacity=".75" filter="url(#g)"/>`;
+      html += `<circle cx="${kx}" cy="${ny}" r="3.5" fill="${color}" filter="url(#g)"/>`;
+    });
+    html += `<path id="chain" d="${chain}" fill="none" stroke="none"/>`;
+    html += `<circle class="packet" r="5" fill="#fff" filter="url(#g)"><animateMotion dur="7s" repeatCount="indefinite" rotate="auto"><mpath href="#chain"/></animateMotion></circle>`;
+    html += `<circle class="packet" r="4" fill="#4de8ff" filter="url(#g)"><animateMotion dur="7s" begin="-3.5s" repeatCount="indefinite"><mpath href="#chain"/></animateMotion></circle>`;
+    svg.innerHTML = html;
+  }
+  addEventListener('load', draw);
+  addEventListener('resize', () => { clearTimeout(window.__t); window.__t = setTimeout(draw, 120); });
+  if (typeof toggleSelect !== 'function') {
+    window.toggleSelect = (el) => { document.querySelectorAll('.opt').forEach((o) => o.classList.toggle('selected', o === el)); };
+  }
+</script>
+</body>
+</html>

@@ -171,7 +171,7 @@ function viewSessions() {
         .map(
           (
             s,
-          ) => `<tr><td><b class="clip" title="${esc(s.projectPath)}">${esc(s.project)}</b><small class="block muted clip">${esc(s.branch && s.branch !== 'HEAD' ? s.branch + ' · ' : '')}${esc((s.entrypoint || '').replace(/^claude-/, ''))} · ${esc(s.id.slice(0, 8))}</small></td>
+          ) => `<tr><td><a class="trace-link" href="#trace?s=${encodeURIComponent(s.id)}&amp;src=${encodeURIComponent(s.tool)}" title="Open in the trace explorer · ${esc(s.projectPath)}"><b class="clip">${esc(s.project)}</b></a><small class="block muted clip">${esc(s.branch && s.branch !== 'HEAD' ? s.branch + ' · ' : '')}${esc((s.entrypoint || '').replace(/^claude-/, ''))} · ${esc(s.id.slice(0, 8))}</small></td>
         <td><span class="tool-dot" style="background:${WORK_NEON[s.tool]}"></span>${esc(SERIES.find((x) => x.id === s.tool)?.name)}</td>
         <td class="muted">${esc((s.model || '').replace(/^claude-/, ''))}${s.models.length > 1 ? ` +${s.models.length - 1}` : ''}</td>
         <td class="muted">${fmtDate(s.start)}</td><td class="r num">${dur((s.end - s.start) / 1000)}</td>

@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"s1","agentId":"ag1","isSidechain":true,"uuid":"su1","timestamp":"2026-10-20T10:00:03.000Z","message":{"role":"user","content":"find auth"}}
+{"type":"assistant","sessionId":"s1","agentId":"ag1","isSidechain":true,"uuid":"sa1","timestamp":"2026-10-20T10:00:05.000Z","requestId":"r9","message":{"id":"msg_9","role":"assistant","model":"claude-haiku-5-5","usage":{"input_tokens":50,"output_tokens":5},"content":[{"type":"text","text":"src/auth.js"}]}}

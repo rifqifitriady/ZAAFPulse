@@ -1,0 +1,6 @@
+{"id":"m1","timestamp":"2026-10-19T09:00:01.000Z","payload":{"type":"tool_call","toolCallId":"tc1","toolName":"readFile","args":{"path":"src/login.js"},"status":"completed","kind":"other","executionId":"ex1","actionType":"tool"}}
+{"id":"m2","timestamp":"2026-10-19T09:00:02.000Z","payload":{"type":"tool_result","toolCallId":"tc1","content":"x","success":true,"durationMs":900,"executionId":"ex1"}}
+{"id":"m3","timestamp":"2026-10-19T09:00:03.000Z","payload":{"type":"tool_call","toolCallId":"tc2","toolName":"executeBash","args":{"command":"npm test"},"status":"completed","kind":"other","executionId":"ex1","actionType":"tool"}}
+{"id":"m4","timestamp":"2026-10-19T09:00:08.000Z","payload":{"type":"tool_result","toolCallId":"tc2","content":"x","success":false,"durationMs":5000,"executionId":"ex1"}}
+{"id":"m5","timestamp":"2026-10-19T09:04:00.000Z","payload":{"type":"tool_call","toolCallId":"tc3","toolName":"fsWrite","args":{"path":"src/login.js"},"status":"completed","kind":"other","executionId":"ex2","actionType":"tool"}}
+{"id":"m6","timestamp":"2026-10-19T09:04:02.000Z","payload":{"type":"tool_result","toolCallId":"tc3","content":"x","success":true,"durationMs":1500,"executionId":"ex2"}}

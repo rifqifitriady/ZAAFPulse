@@ -1,0 +1,4 @@
+{"timestamp":"2026-10-20T13:00:00.000Z","type":"session_meta","payload":{"id":"c3","cwd":"/w/q","originator":"codex_cli"}}
+{"timestamp":"2026-10-20T13:00:01.000Z","type":"event_msg","payload":{"type":"task_started"}}
+{"timestamp":"2026-10-20T13:00:05.000Z","type":"event_msg","payload":{"type":"agent_message","message":"ok"}}
+{"timestamp":"2026-10-20T13:01:00.000Z","type":"event_msg","payload":{"type":"task_started"}}
