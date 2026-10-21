@@ -238,6 +238,7 @@ session  user_frustration  none          qwen3:8b
 - The table counts turns from 1, like the explorer. `--json` prints an array of `{ turn, evaluator, label, model,
   explanation }` with `turn` counted from 0 (`null` for the session verdict). `explanation` is `null` when
   `ZAAFPULSE_CONTENT=off`.
+- Turns are numbered from 1 in the table, and from 0 in `--json`, the API and the MCP tool.
 - Progress and messages go to stderr; the table or JSON goes to stdout.
 - A turn that is still running is not judged, and the whole-session verdict is held back for a session active in
   the last 30 minutes.
@@ -251,8 +252,10 @@ session  user_frustration  none          qwen3:8b
 An external provider in the settings makes it print "external judges need the running dashboard" and exit 2: the CLI
 has no gateway and no preview step, so it never sends text anywhere but to your local model.
 
-The CLI counts against the same daily cap as the dashboard. The running dashboard reads the results file when it
-starts, so results written by the CLI show there after a restart.
+The CLI starts from the day's count in `evals-state.json` and adds to it. A dashboard that is already running keeps
+its own count and does not see the CLI's, so the two together can pass the daily count by up to one CLI run. The CLI
+is local only, so no external cost is involved. The running dashboard reads the results file when it starts, so
+results written by the CLI show there after a restart.
 
 ## Known limits
 
@@ -268,4 +271,8 @@ starts, so results written by the CLI show there after a restart.
   apply.
 - **Small local models are noisy.** Compare their verdicts with your own ratings in the judge agreement before you
   rely on them.
+- **The `acc_evals` code-failure scan is bounded.** It covers only the 100 most recently active sessions, so an
+  older code-check failure can be missing from `failures`.
+- **The evaluator rates include sessions `acc_evals` cannot name.** They count every stored result in the range;
+  only `failures` is limited to sessions this process lists.
 - **A clock moved back by more than a day** gives the day counters a fresh start.

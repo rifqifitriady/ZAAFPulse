@@ -381,3 +381,20 @@ test('local.evals in demo mode answers from the synthetic results and reads noth
   assert.ok(res.failures.every((f) => /^[a-z]+\.[0-9a-f]{32}$/.test(f.key)));
   assert.equal(out.includes('explanation'), false);
 });
+
+test('acc_evals ignores a stored result whose label its evaluator does not have', async () => {
+  const now = Date.now();
+  const { env, file } = evalsRig((store) => {
+    store.put(judged('s1', 0, 'faithfulness', 'unfaithful', now - 2000));
+  });
+  // Written by hand: the label is not one of faithfulness's, and carries text that must never come out.
+  const bad = judged('s1', 1, 'faithfulness', 'LABEL-SENTINEL-bogus', now - 1000);
+  fs.appendFileSync(file, JSON.stringify({ ...bad, key: 'claude|s1|1||faithfulness|1|qwen3:8b' }) + '\n');
+  const { text, out } = await evalsTool(env);
+  assert.equal(text.includes('LABEL-SENTINEL'), false);
+  assert.deepEqual(
+    out.failures.map((f) => [f.turn, f.evaluator, f.label]),
+    [[0, 'faithfulness', 'unfaithful']],
+  );
+  assert.equal(out.evaluators.find((e) => e.id === 'faithfulness').total, 1);
+});
