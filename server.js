@@ -171,7 +171,12 @@ function getIntegrations() {
   }
   if (!integ.registry || integ.mtimeMs !== mtimeMs) {
     config = loadConfig(); // also on the first build: config.json may have been edited since startup
-    const local = createLocal({ cacheDir: path.join(DIR, '.cache'), config, indexer });
+    const local = createLocal({
+      cacheDir: path.join(DIR, '.cache'),
+      config,
+      indexer,
+      contentOff: contentDefaultOff(process.env, SERVER_MODE),
+    });
     const registry = createIntegrations({ config, secrets: createSecrets(), audit, local });
     local.integrationsStatus = () => registry.status();
     integ = { mtimeMs, registry };
