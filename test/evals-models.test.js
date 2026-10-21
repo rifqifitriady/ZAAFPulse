@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { fakeServer, fakeClaude } = require('./helpers');
+const { fakeServer, fakeClaude, winEnv } = require('./helpers');
 const { createModels, externalSystem, externalPayload } = require('../lib/evals/models');
 const { createClaude, destinationOf } = require('../lib/evals/claude-cli');
 
@@ -715,7 +715,12 @@ const CLAUDE_MISSING = 'Claude Code not found: install it, or set ZAAFPULSE_CLAU
 function claudeRig(mode = 'ok') {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-models-claude-'));
   const log = path.join(dir, 'runs.jsonl');
-  const env = { ZAAFPULSE_CLAUDE_BIN: fakeClaude(path.join(dir, 'bin')), FAKE_CLAUDE_MODE: mode, FAKE_CLAUDE_LOG: log };
+  const env = {
+    ...winEnv(),
+    ZAAFPULSE_CLAUDE_BIN: fakeClaude(path.join(dir, 'bin')),
+    FAKE_CLAUDE_MODE: mode,
+    FAKE_CLAUDE_LOG: log,
+  };
   const runs = () =>
     fs.existsSync(log)
       ? fs

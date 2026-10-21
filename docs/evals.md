@@ -266,7 +266,9 @@ with your Claude account. No API key is needed, and nothing is set up in the gat
   seconds. On Windows the CLI itself is stopped and the call ends within the same bound. An answer the CLI gave
   before it exited is still read when the time runs out while a helper holds its output. An answer over 1 MB is
   refused. Switching the judge to another provider or switching judging off cancels a running call; stopping the
-  dashboard kills it at once (SIGKILL to its group) and removes its folder.
+  dashboard (`SIGTERM`, Ctrl-C or `SIGHUP`) kills it at once (SIGKILL to its group) and removes its folder; on Windows
+  the folder is removed once the CLI has exited, as Windows holds it until then. The `--version` check that finds
+  the CLI is killed with SIGKILL after 10 seconds, so a binary that ignores SIGTERM cannot hold the search.
 - **Not signed in.** An answer that the login is gone (or an API key is refused) backs the judge off with "Claude
   Code is not signed in, retrying in N min", instead of failing each turn. Sign in again with `claude` in a terminal.
 - **Where the CLI is found.** `ZAAFPULSE_CLAUDE_BIN` if set (then only that file is tried), else `claude` on `PATH`
@@ -410,6 +412,7 @@ session  user_frustration  none          qwen3:8b
 | `0` | the session was judged |
 | `2` | no local judge is available, the session is unknown, judging is off, the settings select a gateway provider or a Claude Code that is not confirmed or not found, or judging stopped early on a cap |
 | `1` | nothing was judged for another reason (no finished turn yet, or no valid answer from the model) |
+| `130` | stopped by Ctrl-C, `SIGTERM` or `SIGHUP` (a closed terminal); a running Claude Code call is killed first (SIGKILL to its group) and its folder removed |
 
 A gateway provider in the settings makes it print "external judges need the running dashboard" and exit 2: the CLI
 has no gateway and no preview step. **Claude Code** works from the CLI once its preview was confirmed in Settings →
