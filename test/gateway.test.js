@@ -160,6 +160,32 @@ test('streaming passes chunks through and records usage from the final chunk', a
   }
 });
 
+test('judge: lists routable providers without secrets, completes with no tools and records agent judge', async () => {
+  const t = await setup(() => ({ body: completion('{"label":"ok"}') }));
+  try {
+    const list = t.gateway.judge.providers();
+    assert.deepEqual(list, [{ id: 'fake', label: 'fake', models: [] }]);
+    assert.ok(!JSON.stringify(list).includes(t.upstream.url), 'no base URL in the list');
+    const r = await t.gateway.judge.complete({
+      model: 'fake/llama-9',
+      messages: [{ role: 'user', content: 'judge this' }],
+    });
+    assert.equal(r.text, '{"label":"ok"}');
+    assert.equal(r.usage.input, 1000);
+    assert.equal(r.usage.output, 500);
+    assert.ok(r.usage.cost > 0);
+    const sent = t.upstream.requests.find((q) => q.path === '/chat/completions').body;
+    assert.equal('tools' in sent, false);
+    assert.equal('tool_choice' in sent, false);
+    assert.equal(sent.temperature, 0);
+    const e = t.gateway.usage.recent(1)[0];
+    assert.equal(e.agent, 'judge');
+    assert.equal(e.model, 'fake/llama-9');
+  } finally {
+    await t.close();
+  }
+});
+
 test('agents: tool loop over integration tools, sessions and agent models', async () => {
   let n = 0;
   const t = await setup((r) => {
