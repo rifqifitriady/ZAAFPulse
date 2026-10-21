@@ -307,6 +307,8 @@ ZAAFPulse reads Claude Code and Codex transcripts from these folders, in this or
 | Claude Code | each `CLAUDE_CONFIG_DIR` entry plus `/projects` (a comma-separated list; when it is set, only these are read), otherwise `$XDG_CONFIG_HOME/claude/projects` (`~/.config/claude/projects`), then `~/.claude/projects` |
 | Codex | `$CODEX_HOME/sessions`, otherwise `~/.codex/sessions` |
 
+Only absolute folders are used. A relative value, or one that would put the logs folder directly in your home folder or at the top of a drive (`CLAUDE_CONFIG_DIR=~`, `CODEX_HOME=/`), is ignored and shown as "ignored" in `zaafpulse doctor` and on the Overview. Folders that are links to one another count once.
+
 `zaafpulse doctor` prints the folders it resolved, whether each exists, how many `.jsonl` files it holds, how old the newest one is, and whether `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are set. When there are no logs at all, the Overview says so and lists the same folders. Claude Desktop, ChatGPT and other chat apps keep no readable logs; they appear as apps only.
 
 ### The background service does not see your shell variables

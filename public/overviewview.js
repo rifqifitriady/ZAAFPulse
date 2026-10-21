@@ -33,7 +33,9 @@ function emptyLogsNote(logRoots, index, sessions) {
     return index.total > 0 ? `Indexing your logs… ${index.done}/${index.total} files` : 'Indexing your logs…';
   if (index.lastScan == null) return ''; // the first scan has not started yet
   if (logRoots.some((r) => r.files > 0)) return ''; // logs exist, this range is only quiet
-  const looked = logRoots.map((r) => `${r.path} (${r.exists ? 'empty' : 'missing'})`).join(' · ');
+  const looked = logRoots
+    .map((r) => `${r.path} (${r.ignored ? `ignored: ${r.ignored}` : r.exists ? 'empty' : 'missing'})`)
+    .join(' · ');
   return (
     `No Claude Code or Codex logs found. ZAAFPulse looked in: ${looked}. ` +
     'Using another folder? Set CLAUDE_CONFIG_DIR or CODEX_HOME before starting ZAAFPulse. ' +
