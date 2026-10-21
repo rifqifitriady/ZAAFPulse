@@ -374,7 +374,7 @@ test('discovery: in the single-file build a script runs through a real node, or 
   }
 });
 
-test('discovery: only absolute PATH entries, and no binary that others can write', { skip: !POSIX }, async () => {
+test('discovery: only absolute PATH entries, and no found binary that anyone can write', { skip: !POSIX }, async () => {
   const dir = tmp('zp-claude-rel-');
   fakeClaude(dir);
   const rel = path.relative(process.cwd(), dir);
@@ -383,14 +383,30 @@ test('discovery: only absolute PATH entries, and no binary that others can write
 
   const loose = tmp('zp-claude-loose-');
   const f = fakeClaude(loose);
-  fs.chmodSync(f, 0o775);
   const onPath = () => createClaude({ env: { PATH: loose }, home: tmp(), systemDirs: [] }).find();
-  assert.equal(await onPath(), null, 'group-writable');
-  assert.equal(await createClaude({ env: { ZAAFPULSE_CLAUDE_BIN: f } }).find(), null, 'also when named');
+  // Group-writable is normal under umask 002 (Ubuntu's default): a file of this user is found.
+  fs.chmodSync(f, 0o775);
+  fs.chmodSync(loose, 0o775);
+  assert.equal((await onPath()).file, f, 'group-writable file and folder');
+  // Writable by anyone: passed over.
+  fs.chmodSync(f, 0o777);
+  assert.equal(await onPath(), null, 'other-writable file');
   fs.chmodSync(f, 0o755);
   fs.chmodSync(loose, 0o777);
-  assert.equal(await onPath(), null, 'open folder');
+  assert.equal(await onPath(), null, 'other-writable folder');
   fs.chmodSync(loose, 0o755);
+});
+
+test('discovery: ZAAFPULSE_CLAUDE_BIN is trusted as the owner set it', { skip: !POSIX }, async () => {
+  const dir = tmp('zp-claude-named-');
+  const f = fakeClaude(dir);
+  fs.chmodSync(f, 0o775);
+  fs.chmodSync(dir, 0o775);
+  assert.equal((await createClaude({ env: { ZAAFPULSE_CLAUDE_BIN: f } }).find()).file, f, 'group-writable');
+  // It must still exist and be executable.
+  fs.chmodSync(f, 0o664);
+  assert.equal(await createClaude({ env: { ZAAFPULSE_CLAUDE_BIN: f } }).find(), null, 'not executable');
+  fs.chmodSync(f, 0o755);
 });
 
 test('discovery: a binary that cannot be started any more is looked for again at once', async () => {
