@@ -25,7 +25,8 @@ test('pii: phone numbers with separators or a leading +', () => {
   assert.equal(maskPii('call +6281234567890 now'), 'call ‹phone› now');
   assert.equal(maskPii('office (021) 555 1234 ext'), 'office ‹phone› ext');
   assert.equal(maskPii('US 555-123-4567'), 'US ‹phone›');
-  assert.equal(maskPii('mobile 0812 3456 7890'), 'mobile ‹phone›');
+  assert.equal(maskPii('call +1 (415) 555-0172 or +62-22-4230031'), 'call ‹phone› or ‹phone›');
+  assert.equal(maskPii('mobile 0812-3456-7890'), 'mobile ‹phone›');
 });
 
 test('pii: the user name in home-folder paths, any case and either slash', () => {
@@ -140,4 +141,43 @@ test('pii: the preview equals the external payload and is masked; a local judge 
   await local.call(await local.resolve(), built);
   assert.equal(body.messages[1].content, built.user);
   assert.match(body.messages[1].content, /\/Users\/jane\/app to \+62 812-3456-7890/);
+});
+
+// Re-review on real material: number runs that are not phone numbers, versions after a letter or a slash, and
+// image names with an @2x suffix.
+test('pii: dot-grouped, decimal and space-separated numbers are not phone numbers', () => {
+  const keep = [
+    'revenue 11.927.074.289 and 851.933.719',
+    'scores 769.563 697.129',
+    'size 1080 1080 24 and 01 02 03 04 05',
+    'mobile 0812 3456 7890 written with spaces only',
+    'US 555.123.4567 with dots only',
+  ];
+  for (const s of keep) assert.equal(maskPii(s), s, s);
+});
+
+test('pii: a four-part version after a letter, a slash or an @ is not an address', () => {
+  const keep = ['brew openjdk@21/21.0.12.1', 'LibreOffice26.2.4.2', 'path /opt/1.2.3.4/bin', 'pkg@1.2.3.4'];
+  for (const s of keep) assert.equal(maskPii(s), s, s);
+  // A bare four-part version still looks like an address (documented), and a URL host is still masked.
+  assert.equal(maskPii('LibreOffice 26.2.4.2'), 'LibreOffice ‹ip›');
+  const urls = 'http://10.0.0.5:8080/x and //192.168.1.9/share';
+  assert.equal(maskPii(urls), 'http://‹ip›:8080/x and //‹ip›/share');
+});
+
+test('pii: image names with @2x are not emails, and an email is still found', () => {
+  const keep = ['icon@2x.png', 'logo@3x.JPG', 'hero@2x.webp and a@1.5x.svg', 'sprite@2x.gif', 'photo@2x.jpeg'];
+  for (const s of keep) assert.equal(maskPii(s), s, s);
+  assert.equal(maskPii('icon@3x.retina.png'), 'icon@3x.retina.png');
+  assert.equal(maskPii('mail ops@example.com.'), 'mail ‹email›.');
+  assert.equal(maskPii('to a.b@mail.example.org'), 'to ‹email›');
+});
+
+test('pii: a long run without an @ is masked in linear time', () => {
+  for (const run of ['a'.repeat(24000), 'a.b-'.repeat(6000), '1'.repeat(24000), '1.2-3 '.repeat(4000)]) {
+    const t0 = process.hrtime.bigint();
+    assert.equal(maskPii(run), run);
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    assert.ok(ms < 20, `${run.slice(0, 8)}… took ${ms.toFixed(1)} ms`);
+  }
 });
