@@ -27,7 +27,7 @@ down to 0 (the last label), evenly spaced.
 | `correction` | code | turn | `accepted`, `corrected` | the correction detector: your next prompt corrected this turn |
 | `faithfulness` | judge | turn | `faithful`, `unfaithful` | the final answer and the tool results of the turn |
 | `task_completion` | judge | turn | `complete`, `partial`, `incomplete` | the prompt, the final answer and the tool results |
-| `tool_selection` | judge | turn | `appropriate`, `questionable`, `wrong` | the prompt, the tool calls (name, target, status; no outputs) and the tools that were available |
+| `tool_selection` | judge | turn | `appropriate`, `questionable`, `wrong` | the prompt, the tool calls (name, target, status; no outputs) and the names of the other tools used in the turn |
 | `relevance` | judge | turn | `relevant`, `partly`, `off-topic` | the prompt and the final answer |
 | `user_frustration` | judge | session | `none`, `some`, `high` | your prompts of the session (the latest 30, 1,000 characters each) |
 
@@ -52,6 +52,22 @@ With the provider on **Automatic**, the model you typed is used when the server 
 listed model that matches this order is picked: `qwen3`, `qwen2.5`, `llama3.3`, `llama3.2`, `llama3.1`, `mistral`,
 `gemma3`, `gemma2`, `phi4`. Embedding and rerank models are ignored. The answer is cached for 30 seconds.
 
+- **Light models first.** The pick prefers a model of at most 14B parameters: the size comes from Ollama's
+  `details.parameter_size`, else from the name (`llama3.3:70b`). With `llama3.3:70b` and `qwen3:8b` listed,
+  `qwen3:8b` judges. A larger model is used only when no ranked family has a lighter one. A model you name in
+  Settings is used whatever its size.
+- **The first judging loads the model.** Ollama loads a model into memory on its first call, which can take a while
+  and use a lot of memory for a large one. The Evals card on the Quality overview and the status line in Settings →
+  Evals show which model is judging; in the Trace explorer each result names the model that gave it.
+- **Ollama cloud models are never used.** Ollama 0.12 and later list cloud models (`gpt-oss:120b-cloud`,
+  `glm-4.6:cloud`) next to the local ones, and a request to one is forwarded to ollama.com. The automatic pick
+  leaves out every model that `/api/tags` marks with `remote_host` or `remote_model`, or whose name ends in `cloud`.
+  A cloud model named in Settings is refused with "Ollama cloud models send text off this machine; choose an
+  external provider in the gateway instead", and nothing is sent. To judge with a hosted model, add it as a provider
+  in the Agent Gateway and choose it as an [external provider](#external-providers): the preview, the masking and the
+  cost cap then apply.
+- **LM Studio** lists only the models on this machine, so it has no such filter.
+
 To get a judge, install [Ollama](https://ollama.com) and pull a model:
 
 ```bash
@@ -61,8 +77,22 @@ ollama pull qwen3:8b
 Start Ollama (the desktop app or `ollama serve`); ZAAFPulse finds it within a minute. Calls use temperature 0 and
 the model is asked for JSON in the shape of the evaluator's schema.
 
+- **Ollama context window.** Ollama's default context (2,048 or 4,096 tokens) is smaller than the judge's input,
+  and Ollama drops the start of the context, where the instructions are, without saying so. Each call therefore
+  sets `num_ctx` from the prompt size (about 3 characters a token, plus 1,024 for the answer), at least 8,192 and at
+  most 32,768 tokens, and sends `think: false` so a thinking model answers directly.
+- **LM Studio context window.** LM Studio takes no context size per request: the loaded model's context length
+  applies. Load the judge model with a context of **at least 8k tokens** (8,192), or the start of the prompt is cut.
+  ZAAFPulse cannot read the loaded context length from the OpenAI-compatible `/v1/models` it asks, so it does not
+  shrink the input for LM Studio.
+
+### Network
+
 For tests and unusual setups, two environment variables move the local servers. They hold the base address, and
-the masked turn text is sent there, so point them only at a machine you trust:
+the full turn text (secrets masked, personal data not) is sent there, wherever they point. Point them only at a
+machine you trust: an address on another machine is not a local judge, and none of the external-provider safeguards
+(preview, personal-data masking, cost cap) apply to it. With the defaults, and Ollama cloud models left out (see
+above), turn text leaves this machine only through an external provider you chose.
 
 | Variable | Default |
 |---|---|
@@ -80,8 +110,9 @@ the masked turn text is sent there, so point them only at a machine you trust:
   the next local day.
 - **External cost cap.** At most $1 a day by default (`costCapUSD`, 0 to 100) for an external provider. Each call is
   estimated from its input size before it is made; one that would pass the day's budget waits for the next day. The
-  call that crosses the cap finishes, so a day can overshoot by one call. Local models cost nothing and are not
-  counted against this cap.
+  call that crosses the cap finishes, so a day can overshoot by one call. A reply that reports no usage, or a cost
+  below what its input alone costs, is counted at its estimate. Local models cost nothing and are not counted
+  against this cap.
 - **Unpriced external models are refused.** The cost cap needs a price. If the gateway has no price for the chosen
   model, nothing is sent and Settings says so.
 - **Per-provider backoff.** A provider that keeps failing (three tries in a row) is left alone for 1, 2, 4 … up to 30
@@ -89,7 +120,10 @@ the masked turn text is sent there, so point them only at a machine you trust:
 - **Input budget.** A judge reads about 6,000 tokens (24,000 characters). Longer material is trimmed to its head and
   its tail, and the result is marked as trimmed.
 - **Idempotency.** A result is keyed by the target, the evaluator, its version and the judge model, so a turn is
-  never judged twice by the same model. A different model judges it again and replaces the older verdict in the views.
+  never judged twice by the same model. The automatic pass skips a turn that any model has judged at the current
+  evaluator version, so switching the model judges only new turns. **Judge this session** judges the session again
+  with the current model, and its verdict replaces the older one in the views. A new evaluator version (a changed
+  judge prompt) is judged again.
 - **Invalid answers are dropped.** A reply that is not exactly the JSON object, or whose label is not in the
   evaluator's list, is discarded and not retried.
 
@@ -112,6 +146,7 @@ the masked turn text is sent there, so point them only at a machine you trust:
 
 - **Masked input.** A judge reads text only through the same masked reader as the Trace explorer. Secrets are
   replaced by labels before the text is cut to size, and transcript files are never read directly by the evals.
+  Text for an external provider also has personal data masked (see [External providers](#external-providers)).
 - **Untrusted wrapper.** The text is copied from agent sessions, so it may try to steer the judge. Every piece is
   sent inside a block tagged `untrusted-<hash>`; the tag is derived from a hash of the material, so it differs for each
   judgment and the material cannot contain it. Invisible format characters are stripped, a look-alike tag in the
@@ -131,11 +166,26 @@ the masked turn text is sent there, so point them only at a machine you trust:
 ### External providers
 
 An external judge is a provider from the Agent Gateway that you pick under **Settings → Evals**. It is never chosen
-for you, and it is never a fallback for a missing local model.
+for you, and it is never a fallback for a missing local model. The model must belong to that provider: a route
+(`router/…`), an alias, or a name of another provider is refused, also for a provider whose id is `router`.
+
+**What is masked.** On top of the secret masking every judge gets, text for an external provider has personal data
+replaced, in both the system and the user message:
+
+| Found | Replaced by |
+|---|---|
+| email addresses | `‹email›` |
+| IPv4 and IPv6 addresses (not `127.0.0.1`, `0.0.0.0` or `::1`) | `‹ip›` |
+| phone numbers: 9 to 15 digits with a leading `+`, or in groups split by spaces, dots or dashes | `‹phone›` |
+| the user name in `/Users/<name>/`, `/home/<name>/` and `C:\Users\<name>\` (any case) | `‹user›` |
+
+The patterns are conservative, so version numbers, ports, hashes, dates, times and long plain numbers (ids,
+timestamps) are kept. A phone number written without separators or `+`, or a name in free text, is not caught.
+A local judge reads the text with secrets masked only, since it never leaves the machine.
 
 1. Choose the provider and a model. The model must have a price in the gateway (see the cost cap above).
 2. Open the **preview**. It shows the exact masked text that would be sent for the latest finished turn of a session,
-   including the system message. Showing it is what confirms the provider.
+   including the system message and the personal-data masking above. Showing it is what confirms the provider.
 3. Only then does the first call go out. Changing the provider asks for a new preview.
 
 The preview is text from a transcript, so it is refused (`403`, "content viewing is off") while content viewing is
@@ -161,7 +211,7 @@ All files are in the `.data` folder of the data folder, mode `0600`, and are not
 
 | File | Holds |
 |---|---|
-| `evals.jsonl` | judge results, one line per result key, with no prompt text. Rotates at 10 MB: it is rewritten with the latest result per key, and if it is still over the cap the oldest results go until it is about 80% of it |
+| `evals.jsonl` | judge results, one line per result key, with no prompt text. Rotates at 10 MB: it is rewritten with the latest result per key, and if it is still over the cap the oldest results go until it is about 80% of it. The file is read again before the rewrite, so results the CLI appended meanwhile are kept |
 | `feedback.jsonl` | your ratings and notes, one line per target |
 | `evals-state.json` | the moment the judge first became available, and today's count and cost against the caps |
 
@@ -276,3 +326,10 @@ results written by the CLI show there after a restart.
 - **The evaluator rates include sessions `acc_evals` cannot name.** They count every stored result in the range;
   only `failures` is limited to sessions this process lists.
 - **A clock moved back by more than a day** gives the day counters a fresh start.
+- **A quiet last turn can be judged mid-flight.** The last turn of a session counts as finished after 2 quiet
+  minutes. An agent that is still working but writes nothing for that long (a long build, a slow tool) has its turn
+  judged on what it had so far, and the automatic pass does not judge it again. Use **Judge this session** to judge
+  it again later.
+- **The cost estimate assumes about 4 characters a token.** Text in Chinese, Japanese or Korean has more tokens per
+  character, so its estimate is too low. The error is bounded to one call: the reported cost is what counts once
+  the call returns, and the next call is checked against it.
