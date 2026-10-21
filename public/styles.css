@@ -5839,15 +5839,20 @@ a.trace-link:focus-visible b {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap; /* one line on every tab, so the text panel keeps the same height */
   min-height: 32px;
   min-width: 0;
+}
+.tr-acts > .tr-btn,
+.tr-acts > .tr-grp {
+  flex: none;
 }
 .tr-grp {
   display: inline-flex;
   gap: 8px;
 }
 .tr-dinfo {
+  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6093,6 +6098,13 @@ a.trace-link:focus-visible b {
   }
   .tr-tabs button {
     padding: 5px 7px;
+  }
+}
+/* When "Load next 64 KB" joins the row, Edit note and Judge keep their icons (the tooltip names them) so the
+   info text still has room. */
+@container trdetail (max-width: 660px) {
+  .tr-acts:has(#tr-more:not([hidden])) :is(#tr-addnote, #tr-judge-run) .tr-bl {
+    display: none;
   }
 }
 @container trdetail (max-width: 520px) {

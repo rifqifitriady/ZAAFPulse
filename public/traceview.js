@@ -407,6 +407,68 @@ function trJudgeBanner(st) {
     return { text: `Judging paused: ${st.paused.slice(0, 60)} ·`, waiting: false };
   return null;
 }
+// Whether a rating or a note may be sent: only once the skeleton on show is the selected session's. While a
+// switch loads, S.key already names the new session and S.sk and S.turn are still the old one's.
+const trCanAct = (S) => !!S && !!S.sk && typeof S.key === 'string' && !!S.key && S.skKey === S.key;
+// Pressing the rating a turn already has takes it back.
+const trNextRating = (cur, pressed) => (cur === pressed ? null : pressed);
+// The body of a Good/Bad press, or null when nothing may be sent.
+function trRateBody(S, cur, pressed) {
+  if (!trCanAct(S) || (pressed !== 'good' && pressed !== 'bad')) return null;
+  return { key: S.key, turn: S.turn, rating: trNextRating(cur, pressed) };
+}
+// The line under a verdict: its explanation, why a judge's is missing, or a failing code check's evidence.
+function trEvalWhy(r, contentOff) {
+  if (!r) return null;
+  if (r.explanation) return { text: r.explanation, quiet: false };
+  if (r.kind === 'judge')
+    return { text: contentOff ? 'hidden while content viewing is off' : 'no explanation', quiet: true };
+  if (r.tone !== 'pass' && Array.isArray(r.evidence) && r.evidence.length)
+    return { text: r.evidence.join(' · '), quiet: false };
+  return null;
+}
+// After a note is saved: the draft goes only if it is still the text that was sent, and the field is refilled
+// only if the owner has not typed since.
+const trNoteSaved = ({ draft, sent, value }) => ({ dropDraft: draft === sent, refill: value === sent });
+// The keys the session list still has to ask markers for. A key on its way is not asked for twice; a key whose
+// rating changed while on its way is asked for again once that (older) answer is in.
+function trMarkQueue() {
+  const queue = new Set();
+  const flight = new Set();
+  const again = new Set();
+  return {
+    want(keys, has) {
+      for (const k of keys || []) if (typeof k === 'string' && k && !has(k) && !flight.has(k)) queue.add(k);
+    },
+    take(n) {
+      const batch = [...queue].slice(0, n);
+      for (const k of batch) {
+        queue.delete(k);
+        flight.add(k);
+      }
+      return batch;
+    },
+    // Ends a batch; returns the keys queued again, whose answer in this batch is stale.
+    done(batch) {
+      const re = [];
+      for (const k of batch) {
+        flight.delete(k);
+        if (again.delete(k)) {
+          queue.add(k);
+          re.push(k);
+        }
+      }
+      return re;
+    },
+    refresh(k) {
+      if (flight.has(k)) again.add(k);
+      else queue.add(k);
+    },
+    get size() {
+      return queue.size;
+    },
+  };
+}
 // A session row's marker from its counts of good and bad turns: a bad one wins, since it asks for a look.
 function trFeedbackMark(m) {
   const n = (v) => (Number.isInteger(v) && v > 0 ? v : 0);
@@ -479,11 +541,11 @@ function viewTrace() {
         <div class="tr-notebar"><span class="tr-muted" id="tr-note-state"></span><span class="tr-muted" id="tr-note-count">0 / 2000</span><button type="button" class="tr-btn" id="tr-note-save" disabled>Save note</button></div>
       </div>
       <div class="tr-acts">
-        <span class="tr-grp" id="tr-rate"><button type="button" class="tr-btn" data-trate="good" aria-pressed="false" title="Good turn (g)">👍 <span class="tr-bl">Good</span></button><button type="button" class="tr-btn" data-trate="bad" aria-pressed="false" title="Bad turn (b)">👎 <span class="tr-bl">Bad</span></button><button type="button" class="tr-btn ghost" id="tr-addnote" title="Note for this turn (n)">✎ <span class="tr-bl" id="tr-addnote-l">Add note</span></button></span>
+        <span class="tr-grp" id="tr-rate"><button type="button" class="tr-btn" data-trate="good" aria-pressed="false" aria-label="Good (g)" title="Good turn (g)">👍 <span class="tr-bl">Good</span></button><button type="button" class="tr-btn" data-trate="bad" aria-pressed="false" aria-label="Bad (b)" title="Bad turn (b)">👎 <span class="tr-bl">Bad</span></button><button type="button" class="tr-btn ghost" id="tr-addnote" title="Note for this turn (n)">✎ <span class="tr-bl" id="tr-addnote-l">Add note</span></button></span>
         <span class="tr-muted tr-dinfo" id="tr-dinfo"></span>
         <button type="button" class="tr-btn ghost" id="tr-more" hidden>Load next 64 KB</button>
         <span class="tr-spacer"></span>
-        <button type="button" class="tr-btn ghost" id="tr-judge-run" title="Queue every finished turn of this session for the judge">⚖ <span class="tr-bl">Judge this session</span></button>
+        <button type="button" class="tr-btn ghost" id="tr-judge-run" aria-label="Judge this session" title="Queue every finished turn of this session for the judge">⚖ <span class="tr-bl">Judge this session</span></button>
         <button type="button" class="tr-btn ghost" hidden data-sub="4">⤓ Add to dataset</button><button type="button" class="tr-btn ghost" hidden data-sub="4">↻ Replay turn</button><button type="button" class="tr-btn warn" hidden data-sub="3">⏸ Pause agent</button>
       </div>
     </section>
@@ -560,6 +622,7 @@ function mountTrace() {
     titles: new Map(), // key -> title read on demand (null: none)
     key: null,
     sk: null,
+    skKey: null, // the session S.sk belongs to; S.key moves first on a switch
     turn: 0,
     sel: null,
     tab: 'output',
@@ -771,19 +834,24 @@ function mountTrace() {
     const el = $$('.tr-sess', list).find((x) => x.dataset.tkey === key);
     if (el) markRow(el);
   };
-  const markQueue = new Set();
+  const marks = trMarkQueue();
   let markBusy = false;
   function wantMarks(keys) {
-    for (const k of keys) if (typeof k === 'string' && k && !S.marks.has(k)) markQueue.add(k);
+    marks.want(keys, (k) => S.marks.has(k));
+    pumpMarks();
+  }
+  // A rating or note changed for a session that is not on show: ask for its counts again and repaint its row.
+  function refreshMark(key) {
+    S.marks.delete(key);
+    marks.refresh(key);
     pumpMarks();
   }
   async function pumpMarks() {
     if (markBusy) return;
     markBusy = true;
     try {
-      while (S.alive && markQueue.size) {
-        const batch = [...markQueue].slice(0, 50);
-        batch.forEach((k) => markQueue.delete(k));
+      while (S.alive && marks.size) {
+        const batch = marks.take(50);
         let got = {};
         try {
           const r = await trApi(`/api/feedback/sessions?keys=${batch.map(encodeURIComponent).join(',')}`);
@@ -791,8 +859,10 @@ function mountTrace() {
         } catch {
           /* an older server or a hiccup: those rows go without a marker */
         }
+        const stale = new Set(marks.done(batch));
         if (!S.alive) return;
-        for (const k of batch) if (!S.marks.has(k)) S.marks.set(k, Object.hasOwn(got, k) ? got[k] : null);
+        for (const k of batch)
+          if (!stale.has(k) && !S.marks.has(k)) S.marks.set(k, Object.hasOwn(got, k) ? got[k] : null);
         batch.forEach(paintMark);
       }
     } finally {
@@ -854,10 +924,13 @@ function mountTrace() {
     S.evKey = null;
     S.evAll = null;
     S.evErr = '';
-    S.turnEv = [];
     S.fbKey = null;
     S.fb = [];
     S.runPending = false;
+    clearEvalBadges();
+    paintRate();
+    $('#tr-note').disabled = true; // the old session's note stays on show until the new one loads
+    $('#tr-note-save').disabled = true;
     paintJudge();
     loadSkeleton(turn);
     loadEvals();
@@ -867,6 +940,7 @@ function mountTrace() {
   /* ---- one turn: tree, map and detail ---- */
   function clearTurn(msg) {
     S.sk = null;
+    S.skKey = null;
     S.rows = [];
     S.nodes = [];
     rowsBox.replaceChildren();
@@ -896,6 +970,7 @@ function mountTrace() {
       if (!S.alive || my !== S.req) return;
       const n = Array.isArray(sk.turns) ? sk.turns.length : 0;
       S.sk = sk;
+      S.skKey = key;
       S.turn = Number.isInteger(turn) ? Math.max(0, Math.min(n - 1, turn)) : Math.max(0, n - 1);
       S.cursor = undefined;
       S.collapsed = new Set();
@@ -1357,7 +1432,9 @@ function mountTrace() {
   }
 
   function info(msg) {
-    $('#tr-dinfo').textContent = msg || '';
+    const el = $('#tr-dinfo');
+    el.textContent = msg || '';
+    el.title = msg || ''; // the row gives the text one line; the tooltip has all of it
   }
   async function loadContent(id, offset = 0) {
     const my = ++S.creq;
@@ -1472,9 +1549,9 @@ function mountTrace() {
   }
   // New verdicts (or the evaluator list) arrived: the header line, the badges and an open Evals tab follow.
   function paintEvalBits() {
+    if (!trCanAct(S)) return; // the next skeleton paints them from what has arrived by then
     S.turnEv = turnRes();
     paintTurnEval();
-    if (!S.sk) return;
     const sig = evSig();
     if (sig !== S.evSig) {
       S.evSig = sig;
@@ -1484,6 +1561,20 @@ function mountTrace() {
     const s = S.sel && S.spans.get(S.sel);
     if (s) $('#tr-dbadges').innerHTML = trBadgeHtml([...trBadges(s), ...spanEvalBadges(s, S.turnEv, S.evs)]);
     if (S.tab === 'evals' && !$('#tr-evals').hidden) paintEvals();
+  }
+  // A session switch: the old session's eval badges go at once, before the new tree arrives.
+  function clearEvalBadges() {
+    S.turnEv = [];
+    paintTurnEval();
+    if (!S.sk) return;
+    const sig = evSig();
+    if (sig !== S.evSig) {
+      S.evSig = sig;
+      paintRows();
+      paintMap();
+    }
+    const s = S.sel && S.spans.get(S.sel);
+    $('#tr-dbadges').innerHTML = s ? trBadgeHtml(trBadges(s)) : '';
   }
   // "8/10 pass" next to the turn's name; it opens the Evals tab.
   function paintTurnEval() {
@@ -1554,16 +1645,12 @@ function mountTrace() {
       }
       top.append(score, meta);
       row.append(top);
-      let why = null;
-      if (r.explanation) {
-        why = mk('div', 'tr-evx');
-        why.textContent = r.explanation;
-      } else if (r.kind === 'judge' && S.contentOff) {
-        why = mk('div', 'tr-evx tr-quiet', 'hidden while content viewing is off');
-      } else if (r.tone !== 'pass' && r.evidence.length) {
-        why = mk('div', 'tr-evx', r.evidence.join(' · '));
+      const why = trEvalWhy(r, S.contentOff);
+      if (why) {
+        const line = mk('div', why.quiet ? 'tr-evx tr-quiet' : 'tr-evx');
+        line.textContent = why.text; // an explanation is model text: never markup (S1)
+        row.append(line);
       }
-      if (why) row.append(why);
       box.append(row);
     }
     box.scrollTop = keep;
@@ -1673,29 +1760,31 @@ function mountTrace() {
     paintRate();
   }
   function paintRate() {
-    const f = S.sk ? fbFor(S.turn) : null;
+    const f = trCanAct(S) ? fbFor(S.turn) : null;
     for (const b of $$('[data-trate]', app)) {
       const on = !!f && f.rating === b.dataset.trate;
       b.classList.toggle('on', on);
       b.setAttribute('aria-pressed', String(on));
-      b.disabled = !S.sk || S.rating;
+      b.disabled = !trCanAct(S) || S.rating;
     }
-    $('#tr-addnote').disabled = !S.sk;
-    $('#tr-addnote-l').textContent = f && f.note ? 'Edit note' : 'Add note';
+    $('#tr-addnote').disabled = !trCanAct(S);
+    const noteLabel = f && f.note ? 'Edit note' : 'Add note';
+    $('#tr-addnote-l').textContent = noteLabel;
+    $('#tr-addnote').setAttribute('aria-label', `${noteLabel} (n)`); // the word may give way to the icon
   }
   // A second press of the same rating takes it back; the note stays either way.
   async function rate(rating) {
-    const key = S.key;
-    const turn = S.turn;
-    if (!S.sk || S.rating) return;
-    const cur = fbFor(turn);
+    if (S.rating) return;
+    const cur = fbFor(S.turn);
+    const body = trRateBody(S, cur ? cur.rating : null, rating);
+    if (!body) return;
+    const { key, turn } = body;
     S.rating = true;
     paintRate();
     try {
-      const next = cur && cur.rating === rating ? null : rating;
-      const r = await trApi('/api/feedback', postJson({ key, turn, rating: next }));
+      const r = await trApi('/api/feedback', postJson(body));
       if (!S.alive) return;
-      if (key !== S.key) S.marks.delete(key);
+      if (key !== S.key) refreshMark(key);
       else if (S.fbKey === key) putFeedback(turn, r);
       else loadFeedback();
     } catch (e) {
@@ -1714,7 +1803,7 @@ function mountTrace() {
     const ta = $('#tr-note');
     const draft = S.drafts.get(turnKey());
     ta.value = draft ?? savedNote();
-    ta.disabled = !S.sk;
+    ta.disabled = !trCanAct(S);
     paintNoteBar();
   }
   function paintNoteBar(msg) {
@@ -1722,30 +1811,34 @@ function mountTrace() {
     const saved = savedNote();
     const dirty = ta.value !== saved;
     $('#tr-note-count').textContent = `${ta.value.length} / 2000`;
-    $('#tr-note-save').disabled = !S.sk || !dirty || S.savingNote;
+    $('#tr-note-save').disabled = !trCanAct(S) || !dirty || S.savingNote;
     const f = fbFor(S.turn);
     const idle = saved ? `Saved ${trTime(f.updatedAt)}` : 'Stays on this machine, never sent to a judge';
     $('#tr-note-state').textContent = msg || (dirty ? 'Not saved' : idle);
   }
   function openNote() {
-    if (!S.sk) return;
+    if (!trCanAct(S)) return;
     S.tab = 'notes';
     paintDetail();
     $('#tr-note').focus();
   }
   async function saveNote() {
+    if (!trCanAct(S) || S.savingNote) return;
     const key = S.key;
     const turn = S.turn;
     const note = $('#tr-note').value.slice(0, 2000);
-    if (!S.sk || S.savingNote) return;
     S.savingNote = true;
     paintNoteBar('Saving…');
     let err = '';
+    let refill = true;
     try {
       const r = await trApi('/api/feedback', postJson({ key, turn, note }));
       if (!S.alive) return;
-      S.drafts.delete(`${key}|${turn}`);
-      if (key !== S.key) S.marks.delete(key);
+      const k = `${key}|${turn}`;
+      const after = trNoteSaved({ draft: S.drafts.get(k), sent: note, value: $('#tr-note').value });
+      if (after.dropDraft) S.drafts.delete(k);
+      refill = after.refill;
+      if (key !== S.key) refreshMark(key);
       else if (S.fbKey === key) putFeedback(turn, r);
       else loadFeedback();
     } catch (e) {
@@ -1755,7 +1848,8 @@ function mountTrace() {
     }
     if (!S.alive || key !== S.key || turn !== S.turn || $('#tr-notes').hidden) return;
     if (err) paintNoteBar(err);
-    else paintNotes();
+    else if (refill) paintNotes();
+    else paintNoteBar(); // typed on while saving: the field keeps what is there now
   }
 
   /* ---- live tail ---- */
@@ -1911,6 +2005,7 @@ function mountTrace() {
   // The note: a draft per turn until saved; Cmd/Ctrl+Enter saves.
   const noteBox = $('#tr-note');
   noteBox.addEventListener('input', () => {
+    if (!trCanAct(S)) return;
     if (noteBox.value === savedNote()) S.drafts.delete(turnKey());
     else S.drafts.set(turnKey(), noteBox.value);
     paintNoteBar();
@@ -2098,4 +2193,10 @@ if (typeof module !== 'undefined')
     spanEvalBadges,
     trJudgeBanner,
     trFeedbackMark,
+    trCanAct,
+    trNextRating,
+    trRateBody,
+    trEvalWhy,
+    trNoteSaved,
+    trMarkQueue,
   };

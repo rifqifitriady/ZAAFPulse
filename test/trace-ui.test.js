@@ -26,6 +26,12 @@ const {
   spanEvalBadges,
   trJudgeBanner,
   trFeedbackMark,
+  trCanAct,
+  trNextRating,
+  trRateBody,
+  trEvalWhy,
+  trNoteSaved,
+  trMarkQueue,
 } = require('../public/traceview.js');
 const { EVALUATORS } = require('../lib/evals/registry');
 
@@ -578,6 +584,91 @@ test('the eval code builds no HTML from an explanation, a note, a label or a tit
     for (const m of unescaped(line).matchAll(/\$\{([^{}]*)\}/g))
       assert.doesNotMatch(m[1], /\.(explanation|note|label|title)\b/, `unescaped in markup: ${m[0]}`);
   // The eval pane and the note are filled with textContent and value only.
-  assert.match(src, /\.textContent = r\.explanation/);
+  assert.match(src, /return \{ text: r\.explanation, quiet: false \}/);
+  assert.match(src, /line\.textContent = why\.text;/);
   assert.doesNotMatch(src, /innerHTML[^;\n]*\b(evRows|evalRows|noteText)\b/);
+});
+
+// ---- review fixes: one action line, ratings pinned to the session on show ----
+test('the action row stays on one line: the info text gives way, the buttons do not wrap', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
+  const acts = /\n\.tr-acts \{([^}]*)\}/.exec(css);
+  assert.ok(acts, 'a .tr-acts rule');
+  assert.match(acts[1], /flex-wrap: nowrap;/);
+  const info = /\n\.tr-dinfo \{([^}]*)\}/.exec(css);
+  assert.match(info[1], /flex: 1 1 0;/);
+  assert.match(info[1], /min-width: 0;/);
+  assert.match(info[1], /text-overflow: ellipsis;/);
+  assert.match(info[1], /white-space: nowrap;/);
+  // With "Load next 64 KB" in a narrow row, Edit note and Judge keep their icons only.
+  const compact = /\.tr-acts:has\(#tr-more:not\(\[hidden\]\)\) :is\(#tr-addnote, #tr-judge-run\) \.tr-bl \{/;
+  assert.match(css, compact);
+  const src = fs.readFileSync(SRC, 'utf8');
+  for (const name of ['Good (g)', 'Bad (b)', 'Judge this session'])
+    assert.match(src, new RegExp(`aria-label="${name.replace(/[()]/g, '\\$&')}"`), `${name} keeps a name as an icon`);
+});
+
+test('trCanAct: only once the skeleton on show belongs to the selected session', () => {
+  assert.equal(trCanAct({ key: 'A', skKey: 'A', sk: {} }), true);
+  assert.equal(trCanAct({ key: 'B', skKey: 'A', sk: {} }), false, 'a switch to B is still loading');
+  assert.equal(trCanAct({ key: 'A', skKey: 'A', sk: null }), false, 'no skeleton');
+  assert.equal(trCanAct({ key: null, skKey: null, sk: {} }), false);
+  assert.equal(trCanAct(null), false);
+});
+
+test('trNextRating: the same rating again takes it back, another one replaces it', () => {
+  assert.equal(trNextRating(null, 'good'), 'good');
+  assert.equal(trNextRating('good', 'good'), null);
+  assert.equal(trNextRating('bad', 'bad'), null);
+  assert.equal(trNextRating('good', 'bad'), 'bad');
+  assert.equal(trNextRating(undefined, 'bad'), 'bad');
+});
+
+test('trRateBody: a rating names the session and turn on show, and a key switch in flight blocks it', () => {
+  const S = { key: 'A', skKey: 'A', sk: { turns: [{}, {}, {}] }, turn: 2 };
+  assert.deepEqual(trRateBody(S, null, 'good'), { key: 'A', turn: 2, rating: 'good' });
+  assert.deepEqual(trRateBody(S, 'good', 'good'), { key: 'A', turn: 2, rating: null });
+  // The list selected B: S.key moved, the tree and S.turn are still A's.
+  S.key = 'B';
+  assert.equal(trRateBody(S, null, 'good'), null, 'nothing is sent for B with A\'s turn');
+  S.skKey = 'B';
+  assert.deepEqual(trRateBody(S, null, 'bad'), { key: 'B', turn: 2, rating: 'bad' });
+  assert.equal(trRateBody(S, null, 'meh'), null);
+});
+
+test('trEvalWhy: the explanation, a hidden one, a missing one, or the evidence of a failing code check', () => {
+  const judge = { kind: 'judge', tone: 'fail', explanation: null, evidence: [] };
+  const said = trEvalWhy({ ...judge, explanation: 'Claims a test.' }, false);
+  assert.deepEqual(said, { text: 'Claims a test.', quiet: false });
+  assert.deepEqual(trEvalWhy(judge, true), { text: 'hidden while content viewing is off', quiet: true });
+  assert.deepEqual(trEvalWhy(judge, false), { text: 'no explanation', quiet: true });
+  const code = { kind: 'code', tone: 'fail', explanation: null, evidence: ['Bash: Anthropic API key'] };
+  assert.deepEqual(trEvalWhy(code, true), { text: 'Bash: Anthropic API key', quiet: false });
+  assert.equal(trEvalWhy({ ...code, tone: 'pass' }, false), null, 'a passing code check says nothing');
+  assert.equal(trEvalWhy({ ...code, evidence: [] }, false), null);
+});
+
+test('trNoteSaved: a draft typed after the save stays, and the field is only refilled when nothing changed', () => {
+  assert.deepEqual(trNoteSaved({ draft: 'abc', sent: 'abc', value: 'abc' }), { dropDraft: true, refill: true });
+  // Typed on while the save was on its way.
+  assert.deepEqual(trNoteSaved({ draft: 'abcd', sent: 'abc', value: 'abcd' }), { dropDraft: false, refill: false });
+  assert.deepEqual(trNoteSaved({ draft: undefined, sent: 'abc', value: 'abc' }), { dropDraft: false, refill: true });
+});
+
+test('trMarkQueue: a key in flight is not asked twice; a refresh during the flight asks again after it', () => {
+  const q = trMarkQueue();
+  const none = () => false;
+  q.want(['a', 'b', '', null], none);
+  const first = q.take(50);
+  assert.deepEqual(first, ['a', 'b']);
+  q.want(['a', 'b', 'c'], none); // a repaint while a and b are on their way
+  assert.deepEqual(q.take(50), ['c']);
+  q.refresh('a'); // a rating changed for a, still in flight
+  assert.deepEqual(q.done(first), ['a'], 'a goes again: the answer in flight is older than the change');
+  assert.deepEqual(q.take(50), ['a']);
+  q.want(['b'], (k) => k === 'b');
+  assert.equal(q.size, 0, 'a key with a marker is not asked for');
+  q.refresh('b');
+  assert.deepEqual(q.take(1), ['b'], 'a refresh outside a flight just queues');
+  assert.equal(q.take(50).length, 0);
 });
