@@ -155,6 +155,18 @@ test('trace api: demo sessions, a session with spans, titles, filters and conten
     // Live: demo sessions never grow.
     assert.deepEqual((await c.call(`/api/trace/live?key=${claude.key}`)).json, { changed: false });
 
+    // Find: links from other pages know a session id, not its key.
+    const found = await c.call('/api/trace/find?source=claude&sid=demo-claude-1');
+    assert.equal(found.status, 200);
+    assert.deepEqual(found.json, { key: claude.key });
+    assert.equal((await c.call('/api/trace/find?source=codex&sid=demo-claude-1')).status, 404);
+    assert.equal((await c.call('/api/trace/find?source=claude&sid=nope')).json.error, 'unknown session');
+    assert.equal((await c.call('/api/trace/find?source=claude')).status, 400);
+    assert.equal((await c.call('/api/trace/find?sid=demo-claude-1')).status, 400);
+    assert.equal((await c.call(`/api/trace/find?source=claude&sid=${'x'.repeat(513)}`)).status, 400);
+    assert.equal((await c.call(`/api/trace/find?source=${'x'.repeat(513)}&sid=a`)).status, 400);
+    assert.equal((await c.call('/api/trace/find', { method: 'POST', body: {}, extra: JSON_HEADERS })).status, 405);
+
     // A long filter or cursor is refused, not passed on.
     const long = 'x'.repeat(513);
     for (const p of [`sessions?q=${long}`, `sessions?flags=${long}`, `live?key=${claude.key}&cursor=${long}`])

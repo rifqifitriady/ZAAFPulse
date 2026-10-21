@@ -533,14 +533,16 @@ const handler = async (req, res) => {
       const route = url.pathname.slice('/api/trace/'.length);
       const q = url.searchParams;
       const post = route === 'reveal';
-      if (!['sources', 'sessions', 'session', 'title', 'content', 'reveal', 'live'].includes(route))
+      if (!['sources', 'sessions', 'session', 'title', 'content', 'reveal', 'live', 'find'].includes(route))
         return send(res, 404, { error: 'unknown route' });
       if (req.method !== (post ? 'POST' : 'GET')) return send(res, 405, { error: 'method not allowed' });
-      // Nothing a client sends for a filter or a cursor is longer than this.
-      if (['cursor', 'q', 'flags'].some((k) => (q.get(k) || '').length > 512))
+      // Nothing a client sends for a filter, a cursor or a session id is longer than this.
+      if (['cursor', 'q', 'flags', 'source', 'sid'].some((k) => (q.get(k) || '').length > 512))
         return send(res, 400, { error: 'query value too long' });
       try {
         if (route === 'sources') return send(res, 200, trace.sources());
+        // A link from the Sessions or AI Office page: the session id it already holds, turned into a key.
+        if (route === 'find') return send(res, 200, { key: trace.keyFor(q.get('source'), q.get('sid')) });
         if (route === 'sessions') {
           const days = parseInt(q.get('range'), 10);
           const range = Number.isNaN(days) ? 7 : Math.min(30, Math.max(1, days));
