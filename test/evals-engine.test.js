@@ -76,11 +76,18 @@ function rig({ settings = {}, resolved = LOCAL, entries = [], demo, demoData } =
       if (st.priceThrows) throw new Error('price table broke');
       return (resolved.kind === 'external' || resolved.kind === 'claude-cli') && st.priced ? st.price : null;
     },
-    call: async (resolved, { system, user, schema }) => {
-      calls.push({ resolved, system, user });
+    call: async (resolved, { system, user, schema, signal }) => {
+      calls.push({ resolved, system, user, signal });
       if (st.failures > 0) {
         st.failures--;
+        if (st.failErr) throw st.failErr();
         throw Object.assign(new Error('Ollama is not reachable'), { status: st.failStatus });
+      }
+      if (st.hang) {
+        st.hang = false;
+        await new Promise((_, rej) =>
+          signal.addEventListener('abort', () => rej(Object.assign(new Error('cancelled'), { status: 0 }))),
+        );
       }
       inflight++;
       maxInflight = Math.max(maxInflight, inflight);
@@ -1337,11 +1344,18 @@ test('a tick job for a newly enabled evaluator leaves the verdicts another model
 });
 
 // ---- the Claude Code judge: external, so the preview gate, the masking and both caps apply ----
-const CLI = { ok: true, kind: 'claude-cli', model: 'haiku', provider: 'claude-code' };
+const CLI = {
+  ok: true,
+  kind: 'claude-cli',
+  model: 'haiku',
+  provider: 'claude-code',
+  destination: 'Anthropic, through your Claude login',
+  confirm: 'claude-code@0123456789',
+};
 const cliRig = (over = {}) =>
   rig({
     resolved: CLI,
-    settings: { provider: 'claude-code', externalConfirmed: 'claude-code', costCapUSD: 1, ...over },
+    settings: { provider: 'claude-code', externalConfirmed: CLI.confirm, costCapUSD: 1, ...over },
   });
 
 test('claude-code: nothing is sent before its own preview is confirmed', async () => {
@@ -1353,7 +1367,7 @@ test('claude-code: nothing is sent before its own preview is confirmed', async (
   await r.settle();
   assert.equal(r.calls.length, 0);
   assert.equal(r.mats.length, 0, 'not even read');
-  const s = await r.engine.status();
+  let s = await r.engine.status();
   assert.equal(s.judge.reason, 'Confirm the preview before sending to claude-code');
   assert.equal(s.judge.confirm, 'claude-code');
   r.st.settings.externalConfirmed = 'openrouter';
@@ -1361,10 +1375,21 @@ test('claude-code: nothing is sent before its own preview is confirmed', async (
   assert.equal(r.calls.length, 0, "another provider's confirmation does not count");
   r.st.settings.externalConfirmed = 'claude-code';
   await r.engine.drain();
+  assert.equal(r.calls.length, 0, 'the bare provider id confirms no destination');
+  // A preview of another destination (an API key added, a base URL set since) asks for a new one.
+  r.st.settings.externalConfirmed = 'claude-code@ffffffffff';
+  await r.engine.drain();
+  assert.equal(r.calls.length, 0);
+  s = await r.engine.status();
+  assert.equal(s.judge.reason, 'The Claude Code destination changed; preview again');
+  assert.equal(s.judge.confirm, 'claude-code');
+  r.st.settings.externalConfirmed = CLI.confirm;
+  await r.engine.drain();
   assert.equal(r.calls.length, 2);
   const st = await r.engine.status();
   assert.equal(st.judge.kind, 'claude-cli');
   assert.equal(st.judge.ok, true);
+  assert.equal(st.judge.destination, 'Anthropic, through your Claude login');
 });
 
 test('claude-code: the cost cap counts the reported total_cost_usd, and the estimate when there is none', async () => {
@@ -1468,7 +1493,8 @@ test('claude-code end to end: no call before the preview, then exactly the previ
     evaluators: only('relevance'),
     costCapUSD: 1,
   };
-  const models = createModels({ settings: () => settings, claude: createClaude({ env, home: dir, systemDirs: [] }) });
+  const claude = createClaude({ env, home: dir, systemDirs: [] });
+  const models = createModels({ settings: () => settings, claude });
   const material = {
     prompt: 'Mail ana@example.com about /Users/ana/notes.txt',
     answer: 'Sent to ana@example.com from 10.1.2.3',
@@ -1503,7 +1529,7 @@ test('claude-code end to end: no call before the preview, then exactly the previ
   assert.equal(runs().length, 0, 'not confirmed: the CLI was never started');
   assert.equal((await engine.status()).judge.confirm, 'claude-code');
 
-  settings.externalConfirmed = 'claude-code';
+  settings.externalConfirmed = claude.destination().token;
   await engine.drain();
   const sent = runs();
   assert.equal(sent.length, 2);
@@ -1519,4 +1545,77 @@ test('claude-code end to end: no call before the preview, then exactly the previ
   const stored = createEvalStore({ file: path.join(dir, 'evals.jsonl') }).all();
   assert.equal(stored.length, 2);
   assert.ok(stored.every((x) => x.label === 'relevant' && x.judge.used === 'claude-haiku-5-5'));
+});
+
+test('claude-code: a login that is gone backs the judge off with its own reason', async () => {
+  const r = cliRig();
+  r.st.failures = 99;
+  r.st.failErr = () =>
+    Object.assign(new Error('Claude Code is not signed in'), {
+      status: 401,
+      backoff: true,
+      reason: 'Claude Code is not signed in',
+    });
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(1), T0 + 5 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  for (let i = 0; i < 4; i++) {
+    await r.engine.tick();
+    await r.settle();
+  }
+  assert.equal(r.calls.length, 3, 'tried, then left alone rather than refused job by job');
+  const s = await r.engine.status();
+  assert.match(s.judge.reason, /^Claude Code is not signed in, retrying in \d+ min$/);
+  assert.equal(s.queue, 1, 'the job waits; it is not dropped');
+});
+
+test('a running call is cancelled when the provider is switched, and by stop()', async () => {
+  const r = cliRig();
+  r.st.hang = true;
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(1), T0 + 5 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.calls.length, 1);
+  assert.equal(r.calls[0].signal.aborted, false);
+  // The owner picks a local model: the call to Claude Code stops, and the job is judged by the new one.
+  r.st.settings.provider = 'auto';
+  r.st.resolved = LOCAL;
+  r.engine.kick();
+  await r.engine.drain();
+  assert.equal(r.calls[0].signal.aborted, true);
+  assert.equal(r.calls.length, 2);
+  assert.equal(r.calls[1].resolved.kind, 'ollama');
+  assert.equal(r.store.all().length, 1);
+
+  const q = cliRig();
+  q.st.hang = true;
+  await q.arm();
+  q.st.entries.push(entry('s', turnsAfter(1), T0 + 5 * MIN));
+  q.clock.t = T0 + 20 * MIN;
+  await q.engine.tick();
+  await q.settle();
+  q.engine.stop();
+  await q.settle();
+  assert.equal(q.calls[0].signal.aborted, true);
+  await q.engine.tick();
+  await q.settle();
+  assert.equal(q.calls.length, 1, 'a stopped engine starts nothing new');
+});
+
+test("the judge's own Claude Code sessions (run in its temp folder) are never judged", async () => {
+  const r = rig();
+  await r.arm();
+  const times = turnsAfter(2);
+  const own = entry('own', times, T0 + 5 * MIN);
+  own.result.sessions.own.project = path.join(os.tmpdir(), 'zaafpulse-judge-Ab12Cd');
+  const encoded = entry('enc', times, T0 + 5 * MIN);
+  encoded.result.sessions.enc.project = '-private-var-folders-x-T-zaafpulse-judge-Zz9';
+  const mine = entry('mine', times, T0 + 5 * MIN);
+  mine.result.sessions.mine.project = '/Users/me/work/zaafpulse-judge-notes-app/sub';
+  r.st.entries.push(own, encoded, mine);
+  r.clock.t = T0 + 20 * MIN;
+  const { queued } = await r.engine.tick();
+  assert.equal(queued, 2, 'only the session that is not the judge');
 });

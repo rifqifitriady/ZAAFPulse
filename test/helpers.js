@@ -82,6 +82,10 @@ const log = (rec) =>
 if (args[0] === '--version') {
   log({ version: true, file: __filename });
   if (mode === 'noversion') process.exit(1);
+  if (mode === 'plainversion') {
+    process.stdout.write('2.1.0\n');
+    process.exit(0);
+  }
   process.stdout.write((process.env.FAKE_CLAUDE_VERSION || '2.1.302') + ' (Claude Code)\n');
   process.exit(0);
 }
@@ -113,16 +117,39 @@ process.stdin.on('end', () => {
     num_turns: 2,
   };
   const out = (j) => process.stdout.write(JSON.stringify(j));
-  if (mode === 'ok' || mode === 'noversion') out({ ...base, result: JSON.stringify(verdict), structured_output: verdict });
+  // A helper that inherits stdout and stderr keeps the pipes open after this process is gone.
+  const helper = () => {
+    const h = require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 8000)'], {
+      stdio: ['ignore', 'inherit', 'inherit'],
+    });
+    h.unref(); // this process may exit; the helper stays, holding the pipes
+    log({ helper: h.pid });
+  };
+  const answer = { ...base, result: JSON.stringify(verdict), structured_output: verdict };
+  if (mode === 'ok' || mode === 'noversion' || mode === 'plainversion') out(answer);
   else if (mode === 'result') out({ ...base, result: JSON.stringify(verdict) });
   else if (mode === 'nocost') out({ ...base, total_cost_usd: undefined, structured_output: verdict });
   else if (mode === 'error') {
-    out({ ...base, is_error: true, result: 'Invalid login for someone@example.com in /Users/someone/.claude · run /login' });
+    out({ ...base, is_error: true, result: 'Failed for someone@example.com in /Users/someone/.claude/x.json' });
     process.exitCode = 1;
   } else if (mode === 'limit') {
     out({ ...base, is_error: true, result: 'Claude AI usage limit reached' });
     process.exitCode = 1;
   } else if (mode === 'maxturns') out({ ...base, subtype: 'error_max_turns' });
+  else if (mode === 'signedout') {
+    out({ ...base, is_error: true, api_error_status: 401, result: 'OAuth token has expired' });
+    process.exitCode = 1;
+  } else if (mode === 'orphan') {
+    helper();
+    setInterval(() => {}, 1000);
+  } else if (mode === 'orphan-answer') {
+    helper();
+    out(answer);
+  } else if (mode === 'echo-env') {
+    const names = (process.env.FAKE_CLAUDE_ECHO || '').split(',').filter(Boolean);
+    log({ echo: Object.fromEntries(names.map((n) => [n, process.env[n] ?? null])) });
+    out({ ...base, structured_output: verdict });
+  }
   else if (mode === 'crash') {
     process.stderr.write('boom in /Users/someone/secret/file.js\n');
     process.exit(3);
@@ -145,6 +172,9 @@ function fakeClaude(dir, name = process.platform === 'win32' ? 'claude.js' : 'cl
   const shebang = name.endsWith('.js') ? '' : `#!${node}\n`;
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(file, shebang + FAKE_CLAUDE, { mode: 0o755 });
+  // Discovery refuses a binary that others can write, whatever the umask of the machine running the tests.
+  fs.chmodSync(dir, 0o755);
+  fs.chmodSync(file, 0o755);
   return file;
 }
 

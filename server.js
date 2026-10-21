@@ -310,7 +310,7 @@ const evalApi = createEvalApi({
   feedback: evalFeedback,
   gateway,
   contentOff,
-  claudeAvailable: () => claudeCli.available(),
+  claude: claudeCli,
   settings: {
     get: () => rawConfig().evals,
     save: (evals) => {
@@ -986,6 +986,7 @@ server.listen(PORT, HOST, () => {
 for (const sig of ['SIGTERM', 'SIGINT'])
   process.on(sig, () => {
     try {
+      evalEngine.stop(); // a running judge call is cancelled, and its working folder removed
       gateway.flush();
     } finally {
       // Queued spans get up to 2 seconds to reach the OTLP endpoint.
