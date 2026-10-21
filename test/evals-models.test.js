@@ -281,3 +281,147 @@ test('call: a slow model times out', async () => {
     await t.close();
   }
 });
+
+// Review fixes: the judge goes only to the provider the owner selected.
+const cloud = (extra = {}) => ({
+  judge: {
+    providers: () => [
+      { id: 'cloud', label: 'Cloud', models: [] },
+      { id: 'openai', label: 'OpenAI', models: [] },
+    ],
+    aliased: (n) => n === 'fast' || n === 'cloud/shortcut',
+    complete: async () => ({ text: '{}', usage: {} }),
+    ...extra,
+  },
+});
+const pickCloud = async (model, gateway = cloud()) => {
+  const t = await rig({ gateway, settings: { model, provider: 'cloud' } });
+  const r = await t.m.resolve();
+  return { t, r };
+};
+
+test('external: an id with its own slash is routed through the selected provider', async () => {
+  const seen = [];
+  const gateway = cloud({
+    providers: () => [{ id: 'cloud', label: 'Cloud', models: [] }],
+    complete: async (a) => {
+      seen.push(a.model);
+      return { text: '{}', usage: {} };
+    },
+  });
+  for (const [model, want] of [
+    ['meta-llama/llama-3.1-70b', 'cloud/meta-llama/llama-3.1-70b'],
+    ['openai/gpt-4o', 'cloud/openai/gpt-4o'], // openai is not a configured provider here
+    ['cloud/big-1', 'cloud/big-1'],
+    ['big-1', 'cloud/big-1'],
+  ]) {
+    const { t, r } = await pickCloud(model, gateway);
+    try {
+      assert.equal(r.ok, true, model);
+      await t.m.call(r, { system: 's', user: 'u', schema: SCHEMA });
+      assert.equal(seen.at(-1), want);
+    } finally {
+      await t.close();
+    }
+  }
+});
+
+test('external: route, alias and other-provider names are refused', async () => {
+  for (const model of ['router/smart', 'fast', 'cloud/shortcut', 'openai/gpt-4o']) {
+    const { t, r } = await pickCloud(model);
+    try {
+      assert.deepEqual(r, { ok: false, waiting: true, reason: 'model is not from the selected provider' }, model);
+    } finally {
+      await t.close();
+    }
+  }
+  // call() re-checks, so a hand-built resolution cannot slip a route through
+  const { t } = await pickCloud('big-1');
+  try {
+    await assert.rejects(
+      t.m.call(
+        { ok: true, kind: 'external', model: 'router/smart', provider: 'cloud' },
+        { system: 's', user: 'u', schema: SCHEMA },
+      ),
+      (e) => e.status === 0 && /selected provider/.test(e.message),
+    );
+  } finally {
+    await t.close();
+  }
+});
+
+test('external: a selected provider that is unavailable or has no model waits, with no local fallback', async () => {
+  for (const settings of [
+    { model: 'x', provider: 'ghost' },
+    { model: '', provider: 'cloud' },
+  ]) {
+    const t = await rig({ gateway: cloud(), ollama: { 'GET /api/tags': tags('qwen3:8b') }, settings });
+    try {
+      assert.deepEqual(await t.m.resolve(), { ok: false, waiting: true, reason: 'selected provider unavailable' });
+      assert.equal(t.o.requests.length, 0);
+    } finally {
+      await t.close();
+    }
+  }
+});
+
+test('external: the timeout aborts the request, not only the wait', async () => {
+  let signal;
+  const gateway = cloud({
+    complete: ({ signal: s }) => {
+      signal = s;
+      return new Promise((_, rej) => s.addEventListener('abort', () => rej(new Error('aborted upstream'))));
+    },
+  });
+  const m = createModels({
+    settings: () => ({ model: 'big-1', provider: 'cloud' }),
+    gateway,
+    ollamaUrl: 'http://127.0.0.1:9',
+    lmstudioUrl: 'http://127.0.0.1:9',
+    callMs: 50,
+  });
+  const r = await m.resolve();
+  await assert.rejects(m.call(r, { system: 's', user: 'u', schema: SCHEMA }), (e) => {
+    assert.equal(e.status, 0);
+    assert.match(e.message, /timed out/);
+    return true;
+  });
+  assert.equal(signal.aborted, true);
+});
+
+test('resolve: overlapping calls share one probe', async () => {
+  const t = await rig({ ollama: { 'GET /api/tags': tags('qwen3:8b') } });
+  try {
+    const [a, b] = await Promise.all([t.m.resolve(), t.m.resolve()]);
+    assert.equal(a, b);
+    assert.equal(t.o.requests.length, 1);
+  } finally {
+    await t.close();
+  }
+});
+
+test('resolve: rerank models are skipped like embedding models', async () => {
+  const t = await rig({ ollama: { 'GET /api/tags': tags('bge-reranker-v2', 'qwen3-rerank:4b', 'phi4:14b') } });
+  try {
+    assert.equal((await t.m.resolve()).model, 'phi4:14b');
+  } finally {
+    await t.close();
+  }
+});
+
+test('call: a failed response has its body cancelled', async () => {
+  let cancelled = 0;
+  const fetchImpl = async () => ({
+    ok: false,
+    status: 503,
+    body: { cancel: async () => void cancelled++ },
+  });
+  const m = createModels({
+    settings: () => ({ model: 'x', provider: 'ollama' }),
+    gateway: { judge: { providers: () => [] } },
+    fetchImpl,
+  });
+  const r = await m.resolve();
+  await assert.rejects(m.call(r, { system: 's', user: 'u', schema: SCHEMA }), (e) => e.status === 503);
+  assert.equal(cancelled, 1);
+});

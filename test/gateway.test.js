@@ -186,6 +186,61 @@ test('judge: lists routable providers without secrets, completes with no tools a
   }
 });
 
+test('judge: providers() leaves out disabled and unapproved providers and aliases are detectable', async () => {
+  const base = { preset: 'custom', baseUrl: 'http://127.0.0.1:9', enabled: true, tier: 'external', approved: true };
+  const gw = {
+    providers: [
+      { ...base, id: 'on', models: ['a'], aliases: { fast: 'on/a' } },
+      { ...base, id: 'off', models: ['b'], enabled: false },
+      { ...base, id: 'new', models: ['c'], approved: false },
+      { ...base, id: 'mine', preset: 'vllm', models: ['d'], tier: 'private', approved: undefined },
+    ],
+  };
+  const gateway = createGateway({
+    dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'acc-gw-')),
+    getConfig: () => ({ gateway: gw }),
+    writeGatewayConfig: () => {},
+    secrets: secretsFor(),
+    resolveSecret: () => undefined,
+    getPricing: () => PRICING,
+    getIntegrations: () => ({ listTools: async () => [], callTool: async () => ({}) }),
+  });
+  assert.deepEqual(gateway.judge.providers().map((p) => p.id), ['on', 'mine']);
+  assert.deepEqual(gateway.judge.providers()[0], { id: 'on', label: 'on', models: ['a'] });
+  assert.equal(gateway.judge.aliased('fast'), true);
+  assert.equal(gateway.judge.aliased('on/a'), false);
+});
+
+test('judge: an aborted signal cancels the upstream request and no other target is tried', async () => {
+  let hits = 0;
+  const t = await setup(() => {
+    hits++;
+    return new Promise(() => {}); // never answers
+  });
+  try {
+    const ctl = new AbortController();
+    setTimeout(() => ctl.abort(), 50);
+    const messages = [{ role: 'user', content: 'x' }];
+    await assert.rejects(t.gateway.judge.complete({ model: 'fake/llama-9', messages, signal: ctl.signal }));
+    assert.equal(hits, 1);
+  } finally {
+    await t.close();
+  }
+});
+
+test('judge: list-of-parts content is reduced to its text, anything else to an empty string', async () => {
+  let reply = [{ type: 'text', text: 'ab' }, { type: 'image' }, { type: 'text', text: 'cd' }];
+  const t = await setup(() => ({ body: completion(reply) }));
+  try {
+    const ask = () => t.gateway.judge.complete({ model: 'fake/llama-9', messages: [{ role: 'user', content: 'x' }] });
+    assert.equal((await ask()).text, 'abcd');
+    reply = null;
+    assert.equal((await ask()).text, '');
+  } finally {
+    await t.close();
+  }
+});
+
 test('agents: tool loop over integration tools, sessions and agent models', async () => {
   let n = 0;
   const t = await setup((r) => {
