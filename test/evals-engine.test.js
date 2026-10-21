@@ -60,6 +60,7 @@ function rig({ settings = {}, resolved = LOCAL, entries = [], demo, demoData } =
     busy: 0,
     settingsCalls: 0,
     priceThrows: false,
+    usageIn: 10, // the input tokens a reply reports; 0 is a provider that sent no usage block
   };
   const calls = [];
   const mats = [];
@@ -85,7 +86,7 @@ function rig({ settings = {}, resolved = LOCAL, entries = [], demo, demoData } =
       const label = schema.properties.label.enum[0];
       const text = st.text ? st.text() : JSON.stringify({ label, explanation: 'fine' });
       const cost = st.costs ? st.costs.shift() : st.cost;
-      return { text, usage: { input: 10, output: 5, cost } };
+      return { text, usage: { input: st.usageIn, output: st.usageIn ? 5 : 0, cost } };
     },
   };
   const trace = {
@@ -657,7 +658,9 @@ test('a negative cost cannot lower the total and an unknown one is counted by it
   await r.engine.tick();
   await r.settle();
   assert.equal(r.calls.length, 1);
-  assert.equal((await r.engine.status()).today.cost, 0);
+  // Below what the input alone costs, so the estimate is counted: never less, never negative.
+  const neg = (await r.engine.status()).today.cost;
+  assert.ok(neg > 0 && neg < 1, `estimated cost counted, got ${neg}`);
 
   const n = extRig({ costCapUSD: 10 });
   n.st.price = { input: 100, output: 0 };
@@ -1223,4 +1226,37 @@ test('latestFinishedTurn: a later turn finishes the one before; the last one nee
   // Not in the index (a gateway run): the registry's last turn.
   assert.equal(await r.engine.latestFinishedTurn('gateway', 'run:1'), 0);
   await assert.rejects(r.engine.latestFinishedTurn('', 'x'), { status: 400 });
+});
+
+// Final review: a provider that sends no usage block is reported as cost 0 by the gateway; the cap must still count.
+test('an external reply with no usage, or a cost below its input estimate, is charged the estimate', async () => {
+  const material = { prompt: 'SECRET-PROMPT-TEXT', answer: 'a', tools: [], available: [] };
+  const built = buildPrompt(R.get('faithfulness'), material);
+  const tokens = (built.system.length + built.user.length) / 4;
+  const perCall = 0.03; // USD, from the input alone
+  for (const usageIn of [0, 10]) {
+    const r = extRig({ costCapUSD: 0.05 });
+    r.st.price = { input: (perCall * 1e6) / tokens, output: 0 };
+    r.st.cost = 0; // what the gateway reports when the upstream sent no usage
+    r.st.usageIn = usageIn;
+    await r.arm();
+    r.st.entries.push(entry('s', turnsAfter(4), T0 + 7 * MIN));
+    r.clock.t = T0 + 20 * MIN;
+    await r.engine.tick();
+    await r.settle();
+    assert.equal(r.calls.length, 1, `input ${usageIn}: the second call would pass the cap`);
+    const s = await r.engine.status();
+    assert.ok(Math.abs(s.today.cost - perCall) < 1e-9, `charged ${s.today.cost}`);
+    assert.equal(s.paused, 'cost cap');
+  }
+  // A reported cost above the estimate is what counts.
+  const hi = extRig({ costCapUSD: 10 });
+  hi.st.price = { input: (perCall * 1e6) / tokens, output: 0 };
+  hi.st.cost = 0.5;
+  await hi.arm();
+  hi.st.entries.push(entry('s', turnsAfter(1), T0 + 5 * MIN));
+  hi.clock.t = T0 + 20 * MIN;
+  await hi.engine.tick();
+  await hi.settle();
+  assert.ok(Math.abs((await hi.engine.status()).today.cost - 0.5) < 1e-9);
 });
