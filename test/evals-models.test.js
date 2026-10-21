@@ -463,7 +463,8 @@ test('priced and cost: an external model without a list price is unpriced and it
 });
 
 // Final review: Ollama 0.12+ lists cloud models in /api/tags; a request to one is forwarded to ollama.com.
-const CLOUD_REASON = 'Ollama cloud models send text off this machine; choose an external provider in the gateway instead';
+const CLOUD_REASON =
+  'Ollama cloud models send text off this machine; choose an external provider in the gateway instead';
 const remote = (name, model = name.replace(/-?cloud$/, '')) => ({
   name,
   model: name,
@@ -556,6 +557,83 @@ test('call: Ollama gets a context window sized for the prompt, and no thinking',
       assert.equal(body.think, false);
       assert.equal(body.options.temperature, 0);
     }
+  } finally {
+    await t.close();
+  }
+});
+
+// Final review: a provider whose id is "router" would turn "smart" into "router/smart", which the gateway serves as
+// a route whose targets may be other providers.
+test('external: a final name that is a configured route is refused, also for a provider called router', async () => {
+  const gateway = (routed) =>
+    cloud({
+      providers: () => [{ id: 'router', label: 'Router', models: [] }],
+      ...(routed ? { routed } : {}),
+    });
+  const routes = (n) => n === 'router/smart';
+  for (const model of ['smart', 'router/smart']) {
+    const t = await rig({ gateway: gateway(routes), settings: { model, provider: 'router' } });
+    try {
+      const want = { ok: false, waiting: true, reason: 'model is not from the selected provider' };
+      assert.deepEqual(await t.m.resolve(), want, model);
+    } finally {
+      await t.close();
+    }
+  }
+  const seen = [];
+  const ok = await rig({
+    gateway: cloud({
+      providers: () => [{ id: 'router', label: 'Router', models: [] }],
+      routed: routes,
+      complete: async (a) => (seen.push(a.model), { text: '{}', usage: {} }),
+    }),
+    settings: { model: 'big-1', provider: 'router' },
+  });
+  try {
+    const r = await ok.m.resolve();
+    assert.equal(r.ok, true);
+    await ok.m.call(r, { system: 's', user: 'u', schema: SCHEMA });
+    assert.deepEqual(seen, ['router/big-1']);
+  } finally {
+    await ok.close();
+  }
+  // A gateway that cannot say which routes exist: every router/... name is refused.
+  const blind = await rig({ gateway: gateway(null), settings: { model: 'big-1', provider: 'router' } });
+  try {
+    assert.equal((await blind.m.resolve()).ok, false);
+  } finally {
+    await blind.close();
+  }
+});
+
+// Final review: the ranked pick should not load a 70B model when a light one is there.
+test('resolve: the auto-pick prefers at most 14B, and a larger model only when nothing lighter is listed', async () => {
+  const sized = (...pairs) => ({
+    body: { models: pairs.map(([name, size]) => ({ name, details: size ? { parameter_size: size } : {} })) },
+  });
+  for (const [list, want] of [
+    [sized(['llama3.3:70b', '70.6B'], ['qwen3:8b', '8.2B']), 'qwen3:8b'],
+    [sized(['qwen3:32b', '32.8B'], ['qwen3:8b', '8.2B']), 'qwen3:8b'],
+    [sized(['qwen3:235b', '235.1B'], ['mistral:7b', '7.2B']), 'mistral:7b'],
+    [sized(['qwen3:latest', '30.5B'], ['llama3.2:latest', '3.2B']), 'llama3.2:latest'], // the size from details
+    [sized(['qwen3:30b-a3b'], ['gemma3:4b']), 'gemma3:4b'], // no details: the size in the name
+    [sized(['llama3.3:70b', '70.6B'], ['phi4:14b', '14.7B']), 'llama3.3:70b'], // nothing at most 14B: rank decides
+    [sized(['qwen2.5:14b', '14.8B'], ['qwen2.5:0.5b', '494.03M']), 'qwen2.5:0.5b'],
+  ]) {
+    const t = await rig({ ollama: { 'GET /api/tags': list } });
+    try {
+      assert.equal((await t.m.resolve()).model, want, JSON.stringify(list.body.models.map((m) => m.name)));
+    } finally {
+      await t.close();
+    }
+  }
+  // A name the owner typed is still used whatever its size.
+  const t = await rig({
+    ollama: { 'GET /api/tags': sized(['llama3.3:70b', '70.6B'], ['qwen3:8b', '8.2B']) },
+    settings: { provider: 'auto', model: 'llama3.3:70b' },
+  });
+  try {
+    assert.equal((await t.m.resolve()).model, 'llama3.3:70b');
   } finally {
     await t.close();
   }

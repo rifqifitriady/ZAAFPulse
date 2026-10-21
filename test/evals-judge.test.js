@@ -365,3 +365,15 @@ test('an output that could not be read says so inside its wrapper, apart from an
   const empty = J.buildPrompt(R.get('faithfulness'), material({ tools: [{ ...tools[0], output: '', unavailable: false }, tools[1]] }));
   assert.notEqual(tagOf(empty), tag, 'the tag follows what is sent');
 });
+
+// Final review: the trace has no list of the tools an agent could call, only the ones the turn used.
+test('tool_selection is told it sees the other tools used in the turn, not the tools that were available', () => {
+  const e = R.get('tool_selection');
+  const p = J.buildPrompt(e, material({ available: ['Grep', 'Edit'] }));
+  assert.doesNotMatch(p.system + p.user, /\bavailable\b/i);
+  assert.match(p.system, /OTHER TOOLS USED in this turn/);
+  assert.match(p.user, /OTHER TOOLS USED in this turn/);
+  assert.match(p.user, /kind="tools-used"/);
+  assert.ok(e.version >= 2, 'the template changed, so its results are a new version');
+  assert.doesNotMatch(e.describe, /\bavailable\b/i);
+});
