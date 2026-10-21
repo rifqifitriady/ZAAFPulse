@@ -388,6 +388,42 @@ function spawnSprite(a) {
 
 let ofLast = 0;
 let ofTip = '';
+// Callouts are limited so a crowd cannot bury the scene. Idle subagents get none of their own (they are
+// summed up in one lounge callout instead); the rest are ranked: needs you, working, thinking, then idle
+// sessions and guests, then anything else. One slot stays free for the lounge summary.
+const CALLOUT_MAX = 14;
+function calloutAgents(agents, max = CALLOUT_MAX) {
+  const rank = (a) =>
+    a.state === 'approval' || a.state === 'waiting'
+      ? 0
+      : a.state === 'working'
+        ? 1
+        : a.state === 'thinking'
+          ? 2
+          : a.kind === 'subagent'
+            ? 4
+            : 3;
+  const hidden = agents.filter((a) => a.kind === 'subagent' && a.state === 'idle');
+  const room = hidden.length ? max - 1 : max;
+  const shown = agents
+    .filter((a) => !hidden.includes(a))
+    .map((a, i) => ({ a, i }))
+    .sort((p, q) => rank(p.a) - rank(q.a) || (q.a.lastTs || 0) - (p.a.lastTs || 0) || p.i - q.i)
+    .slice(0, Math.max(0, room))
+    .map((x) => x.a);
+  return { shown, hidden };
+}
+// The page heading and the legend are HTML laid over the canvas; callouts keep clear of both.
+function overlayBoxes(canvas) {
+  const c = canvas.getBoundingClientRect();
+  return ['.stage-tl', '.stage-legend']
+    .map((sel) => canvas.parentElement.querySelector(sel))
+    .filter(Boolean)
+    .map((el) => el.getBoundingClientRect())
+    .filter((r) => r.width > 0 && r.height > 0)
+    .map((r) => ({ x: r.left - c.left - 4, y: r.top - c.top - 4, w: r.width + 8, h: r.height + 8 }));
+}
+
 function drawOffice(g) {
   const { P, ctx, still, t } = g;
   const dt = Math.min(0.1, ofLast ? t - ofLast : 0);
@@ -597,16 +633,23 @@ function drawOffice(g) {
     }
   ctx.restore();
 
-  // Name and activity callouts
-  g.labels(
-    agents
-      .filter((a) => heads[a.id])
-      .map((a) => ({
-        at: [heads[a.id][0], heads[a.id][1] - 10],
-        text: `${agentName(a)} · ${a.kind === 'guest' ? `${a.cpu.toFixed(1)}% CPU` : doing(a)}`,
-        color: STATE_COLOR[a.state],
-      })),
-  );
+  // Name and activity callouts: a capped, prioritised set, with idle subagents folded into one lounge summary
+  const { shown, hidden } = calloutAgents(agents.filter((a) => heads[a.id]));
+  const callouts = shown.map((a) => ({
+    at: [heads[a.id][0], heads[a.id][1] - 10],
+    text: `${agentName(a)} · ${a.kind === 'guest' ? `${a.cpu.toFixed(1)}% CPU` : doing(a)}`,
+    color: STATE_COLOR[a.state],
+  }));
+  if (hidden.length) {
+    const lounge = SLOTS.lounge[3];
+    const q = P(lounge.x, 0.8, lounge.z);
+    callouts.push({
+      at: [q[0], q[1] - 10],
+      text: `Lounge · ${hidden.length} idle subagent${hidden.length > 1 ? 's' : ''}`,
+      color: STATE_COLOR.idle,
+    });
+  }
+  g.labels(callouts, { avoid: overlayBoxes(ctx.canvas) });
 
   // Hover a character for details
   const p = g.pointer;
