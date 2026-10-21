@@ -21,7 +21,13 @@ const {
   trOffNote,
   trStartCollapsed,
   trNameParts,
+  evalRows,
+  turnEvalSummary,
+  spanEvalBadges,
+  trJudgeBanner,
+  trFeedbackMark,
 } = require('../public/traceview.js');
+const { EVALUATORS } = require('../lib/evals/registry');
 
 const SRC = path.join(__dirname, '..', 'public', 'traceview.js');
 const claudeSpans = () => traceDemo(Date.UTC(2026, 9, 20, 12)).skeletons['demo-claude-1'].spans;
@@ -364,4 +370,214 @@ test('trNameParts: a tool call splits into its operation and its tool name; othe
   assert.deepEqual(trNameParts(null), ['', '']);
   const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
   assert.match(css, /@container trtree \(max-width: 400px\) \{\s*\.tr-row \.tr-op \{\s*display: none;/);
+});
+
+// ---- local evals in the explorer ----
+// The evaluator list as GET /api/evals/evaluators gives it to the page.
+const EVS = EVALUATORS.map(({ id, kind, scope, title, labels, pass }) => ({ id, kind, scope, title, labels, pass }));
+const res = (evaluator, label, extra = {}) => {
+  const e = EVALUATORS.find((x) => x.id === evaluator);
+  return {
+    evaluator,
+    kind: e ? e.kind : 'judge',
+    scope: e ? e.scope : 'turn',
+    turn: e && e.scope === 'session' ? null : 0,
+    label,
+    score: null,
+    pass: !!e && label === e.pass,
+    explanation: null,
+    judge: e && e.kind === 'judge' ? { kind: 'ollama', model: 'qwen3:8b', provider: 'ollama' } : null,
+    trimmed: false,
+    evidence: [],
+    ts: 1,
+    ...extra,
+  };
+};
+
+test('evalRows: the pass label is pass, the last label is fail, anything between is mid', () => {
+  const rows = evalRows(
+    [
+      res('task_completion', 'complete'),
+      res('tool_selection', 'questionable'),
+      res('relevance', 'off-topic'),
+      res('secret_leak', 'leaked'),
+      res('prompt_injection', 'local'),
+      res('faithfulness', 'faithful'),
+    ],
+    EVS,
+  );
+  const tone = Object.fromEntries(rows.map((r) => [r.id, r.tone]));
+  assert.deepEqual(tone, {
+    task_completion: 'pass',
+    tool_selection: 'mid',
+    relevance: 'fail',
+    secret_leak: 'fail',
+    prompt_injection: 'mid',
+    faithfulness: 'pass',
+  });
+  // Failing first, then the middle ones, then the passes; each group in the registry's order.
+  assert.deepEqual(
+    rows.map((r) => r.id),
+    ['secret_leak', 'relevance', 'prompt_injection', 'tool_selection', 'faithfulness', 'task_completion'],
+  );
+  const leak = rows.find((r) => r.id === 'secret_leak');
+  assert.equal(leak.title, 'Secret leak');
+  assert.equal(leak.label, 'leaked');
+  assert.equal(leak.model, 'code', 'a code evaluator has no model');
+  assert.equal(rows.find((r) => r.id === 'faithfulness').model, 'qwen3:8b');
+});
+
+test('evalRows: session verdicts after the turn ones, explanation and trimming kept, odd input tolerated', () => {
+  const rows = evalRows(
+    [
+      res('user_frustration', 'some', { explanation: 'Two corrections.' }),
+      res('faithfulness', 'unfaithful', { explanation: 'Claims a test that never ran.', trimmed: true, score: 0 }),
+      res('made_up', 'odd', { pass: false }),
+      null,
+      { evaluator: 42 },
+      res('relevance', 'relevant', { explanation: null }),
+    ],
+    EVS,
+  );
+  assert.deepEqual(
+    rows.map((r) => r.id),
+    ['faithfulness', 'made_up', 'relevance', 'user_frustration'],
+  );
+  const f = rows[0];
+  assert.equal(f.explanation, 'Claims a test that never ran.');
+  assert.equal(f.trimmed, true);
+  assert.equal(f.score, 0);
+  assert.equal(rows[1].title, 'made_up', 'an evaluator the page does not know shows its id');
+  assert.equal(rows[1].tone, 'fail');
+  assert.equal(rows[2].explanation, null, 'content off: the page says it is hidden');
+  assert.equal(rows[3].scope, 'session');
+  assert.equal(rows[3].tone, 'mid');
+  assert.deepEqual(evalRows(null, null), []);
+  assert.equal(evalRows([res('secret_leak', 'leaked')], null)[0].tone, 'fail', 'without the list: pass or fail');
+  // Own keys only: an evaluator id from a log is never a prototype lookup.
+  assert.equal(evalRows([res('constructor', 'x')], EVS)[0].title, 'constructor');
+});
+
+test('turnEvalSummary: how many verdicts, how many pass, which fail', () => {
+  const sum = turnEvalSummary([
+    res('secret_leak', 'leaked'),
+    res('tool_loop', 'none'),
+    res('faithfulness', 'faithful'),
+    res('task_completion', 'partial'),
+    res('relevance', 'relevant'),
+    null,
+  ]);
+  assert.deepEqual(sum, { judged: 5, passed: 3, failing: ['secret_leak', 'task_completion'] });
+  assert.deepEqual(turnEvalSummary([]), { judged: 0, passed: 0, failing: [] });
+  assert.deepEqual(turnEvalSummary(undefined), { judged: 0, passed: 0, failing: [] });
+});
+
+test('spanEvalBadges: a tool span gets the failing label of a code verdict that names its tool', () => {
+  const results = [
+    res('secret_leak', 'leaked', { evidence: [{ tool: 'Bash', label: 'Anthropic API key' }] }),
+    res('tool_loop', 'loop', { evidence: [{ tool: 'Read', label: 'same file read 4 times' }] }),
+    res('prompt_injection', 'local', { evidence: [{ tool: 'Bash', label: 'ignore previous' }] }),
+    res('risky_command', 'safe', { evidence: [{ tool: 'Bash', label: 'rm' }] }),
+    res('non_existent_target', 'hallucinated', { evidence: [{ tool: null, label: 'missing file' }] }),
+    res('faithfulness', 'unfaithful', { evidence: [{ tool: 'Bash', label: 'x' }] }),
+  ];
+  const bash = { id: 'a', kind: 'tool', name: 'execute_tool Bash', tool: { name: 'Bash' } };
+  const b = spanEvalBadges(bash, results, EVS);
+  assert.deepEqual(
+    b.map((x) => [x.label, x.tone]),
+    [
+      ['leaked', 'bad'],
+      ['local', 'warn'],
+    ],
+    'failing code verdicts only: a pass, a judge verdict and a null tool add nothing',
+  );
+  assert.match(b[0].title, /Secret leak/);
+  assert.deepEqual(
+    spanEvalBadges({ kind: 'tool', tool: { name: 'Read' } }, results, EVS).map((x) => x.label),
+    ['loop'],
+  );
+  // The same works for a map node, which carries the tool the same way.
+  assert.deepEqual(
+    spanEvalBadges({ kind: 'tool', label: 'execute_tool · Read', tool: { name: 'Read' }, count: 3 }, results).map(
+      (x) => x.label,
+    ),
+    ['loop'],
+  );
+  assert.deepEqual(spanEvalBadges({ kind: 'chat', tool: { name: 'Bash' } }, results), [], 'not a tool span');
+  assert.deepEqual(spanEvalBadges({ kind: 'tool', tool: null }, results), []);
+  assert.deepEqual(spanEvalBadges({ kind: 'tool', tool: { name: 'Grep' } }, results), []);
+  assert.deepEqual(spanEvalBadges(null, results), []);
+  assert.deepEqual(spanEvalBadges(bash, null), []);
+  // Two pieces of evidence for one tool give one badge.
+  const twice = [res('secret_leak', 'leaked', { evidence: [{ tool: 'Bash' }, { tool: 'Bash' }] })];
+  assert.equal(spanEvalBadges(bash, twice).length, 1);
+});
+
+test('trNavKey: g, b and n rate the turn and open the note, never while typing or with a modifier', () => {
+  const body = { closest: () => null };
+  const key = (k, target, extra = {}) => trNavKey({ key: k, target, ...extra }, [body]);
+  const row = el(true);
+  assert.equal(key('g', row), 'good');
+  assert.equal(key('b', row), 'bad');
+  assert.equal(key('n', body), 'note');
+  assert.equal(key('g', el(false)), null, 'outside the explorer');
+  for (const sel of ['input', 'textarea', 'select']) {
+    for (const k of ['g', 'b', 'n']) assert.equal(key(k, el(true, sel)), null, `${k} in ${sel}`);
+  }
+  for (const mod of ['shiftKey', 'metaKey', 'ctrlKey', 'altKey'])
+    assert.equal(key('b', row, { [mod]: true }), null, mod);
+  // On a tab the letters still work (only the arrows belong to the tabs).
+  assert.equal(key('g', el(true, '[role="tab"]')), 'good');
+});
+
+test('trJudgeBanner: a slim line when the judge waits or is paused, nothing when it runs', () => {
+  const ok = { judge: { ok: true, waiting: false, reason: null }, paused: null, queue: 0 };
+  assert.equal(trJudgeBanner(ok), null);
+  assert.equal(trJudgeBanner(null), null);
+  const waiting = (reason) => trJudgeBanner({ judge: { ok: false, waiting: true, reason } });
+  const none = waiting('Install or start Ollama, or choose a provider');
+  assert.equal(none.text, 'Judge waiting: install or start Ollama, or choose a provider in');
+  assert.equal(none.waiting, true);
+  const confirm = waiting('Confirm the preview before sending to openrouter');
+  assert.equal(confirm.text, 'Judge waiting: confirm the preview before sending to openrouter ·');
+  const back = waiting('Judge provider unavailable, retrying in 4 min');
+  assert.match(back.text, /^Judge waiting: judge provider unavailable, retrying in 4 min/);
+  const capped = trJudgeBanner({ ...ok, paused: 'daily cap' });
+  assert.match(capped.text, /^Judging paused: daily cap reached, resumes tomorrow/);
+  assert.match(trJudgeBanner({ ...ok, paused: 'cost cap' }).text, /^Judging paused: cost cap reached/);
+  const off = trJudgeBanner({ ...ok, paused: 'judge off' });
+  assert.match(off.text, /^Judging is off/);
+  assert.equal(off.waiting, true, 'nothing would judge a session now');
+  assert.equal(capped.waiting, false, 'a capped run still queues for tomorrow');
+  // A reason is shown as text, and a long one is cut.
+  const long = trJudgeBanner({ judge: { waiting: true, reason: 'x'.repeat(500) } });
+  assert.ok(long.text.length < 200);
+});
+
+test('trFeedbackMark: thumbs down wins over thumbs up, nothing without a rating', () => {
+  assert.equal(trFeedbackMark({ good: 2, bad: 0 }).mark, '👍');
+  assert.equal(trFeedbackMark({ good: 1, bad: 1 }).mark, '👎');
+  assert.equal(trFeedbackMark({ good: 1, bad: 1 }).title, 'Your feedback: 1 good, 1 bad');
+  assert.equal(trFeedbackMark({ good: 0, bad: 0 }), null);
+  assert.equal(trFeedbackMark(null), null);
+});
+
+test('the eval code builds no HTML from an explanation, a note, a label or a title (S1)', () => {
+  const src = fs.readFileSync(SRC, 'utf8');
+  // Every innerHTML assignment, with each esc(...) call taken out: what is left may not name such a value.
+  const sets = [...src.matchAll(/\binnerHTML\s*\+?=\s*([\s\S]*?);\s*\n/g)].map((m) => m[1]);
+  const unescaped = (s) => s.replace(/\besc\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)/g, 'ESC');
+  for (const rhs of sets)
+    assert.doesNotMatch(
+      unescaped(rhs),
+      /\b(explanation|note|label|title)\b/,
+      `innerHTML built from: ${rhs.slice(0, 80)}`,
+    );
+  // In a line of markup, such a value is always inside esc().
+  for (const line of src.split('\n').filter((l) => /<[a-z]/i.test(l)))
+    for (const m of unescaped(line).matchAll(/\$\{([^{}]*)\}/g))
+      assert.doesNotMatch(m[1], /\.(explanation|note|label|title)\b/, `unescaped in markup: ${m[0]}`);
+  // The eval pane and the note are filled with textContent and value only.
+  assert.match(src, /\.textContent = r\.explanation/);
+  assert.doesNotMatch(src, /innerHTML[^;\n]*\b(evRows|evalRows|noteText)\b/);
 });

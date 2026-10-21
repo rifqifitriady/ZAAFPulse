@@ -256,6 +256,59 @@ test('evals api: feedback round trip, limits and JSON-only writes', async () => 
   }
 });
 
+test('evals api: the evaluator list for the page, and feedback markers for many sessions at once', async () => {
+  const s = await startServer({ DEMO: '1', ZAAFPULSE_AUTH: 'none' });
+  const c = client(s.base);
+  try {
+    const ev = await c.call('/api/evals/evaluators');
+    assert.equal(ev.status, 200);
+    const list = ev.json.evaluators;
+    const R = require('../lib/evals/registry');
+    assert.deepEqual(
+      list.map((e) => e.id),
+      R.EVALUATORS.map((e) => e.id),
+    );
+    for (const e of list) {
+      assert.deepEqual(Object.keys(e).sort(), ['id', 'kind', 'labels', 'pass', 'scope', 'title']);
+      assert.equal(e.pass, e.labels[0]);
+    }
+    assert.equal(list.find((e) => e.id === 'user_frustration').scope, 'session');
+    assert.doesNotMatch(ev.text, /describe|template|system/i, 'titles and labels only, no judge text');
+    assert.equal((await c.post('/api/evals/evaluators', {})).status, 405);
+
+    // The demo has a good turn on Claude and a bad one on Codex; Kiro has none.
+    const claude = await keyOf(c, 'claude');
+    const codex = await keyOf(c, 'codex');
+    const kiro = await keyOf(c, 'kiro');
+    const marks = await c.call(`/api/feedback/sessions?keys=${[claude, codex, kiro].join(',')}`);
+    assert.equal(marks.status, 200);
+    assert.deepEqual(marks.json.sessions, { [claude]: { good: 1, bad: 0 }, [codex]: { good: 0, bad: 1 } });
+    // A note without a rating is no marker; a rating is.
+    await c.post('/api/feedback', { key: kiro, turn: 0, note: 'just a note' });
+    assert.equal(Object.hasOwn((await c.call(`/api/feedback/sessions?keys=${kiro}`)).json.sessions, kiro), false);
+    await c.post('/api/feedback', { key: kiro, turn: 0, rating: 'good' });
+    const rated = (await c.call(`/api/feedback/sessions?keys=${kiro}`)).json.sessions;
+    assert.deepEqual(rated, { [kiro]: { good: 1, bad: 0 } });
+    // A key that is not (or no longer) listed is left out, not an error: the list may be older than the index.
+    const forged = `claude.${'0'.repeat(32)}`;
+    const mixed = await c.call(`/api/feedback/sessions?keys=${claude},${forged},not-a-key`);
+    assert.equal(mixed.status, 200);
+    assert.deepEqual(Object.keys(mixed.json.sessions), [claude]);
+    assert.deepEqual((await c.call('/api/feedback/sessions?keys=')).json.sessions, {});
+    // At most 50 keys, each one bounded.
+    const many = Array.from({ length: 51 }, (_, i) => `k${i}`).join(',');
+    assert.equal((await c.call(`/api/feedback/sessions?keys=${many}`)).status, 400);
+    assert.equal((await c.call(`/api/feedback/sessions?keys=${Array(50).fill(claude).join(',')}`)).status, 200);
+    assert.equal((await c.call(`/api/feedback/sessions?keys=${'x'.repeat(513)}`)).status, 400);
+    assert.equal((await c.call('/api/feedback/sessions')).status, 400, 'keys are required');
+    assert.equal((await c.post('/api/feedback/sessions', {})).status, 405);
+    assert.equal((await c.call('/api/feedback/nope')).status, 404);
+    noPaths(c.bodies);
+  } finally {
+    await s.stop();
+  }
+});
+
 test('evals api: demo settings are validated, kept in memory and never reach a file', async () => {
   const data = tmp('zp-evals-api-demo-');
   const s = await startServer({ DEMO: '1', ZAAFPULSE_AUTH: 'none' }, { data });
