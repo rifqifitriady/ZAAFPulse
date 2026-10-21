@@ -523,6 +523,45 @@ test('discovery: a binary that cannot be started any more is looked for again at
   assert.equal(await t.claude.find(), null, 'not the cached answer from before');
 });
 
+test('discovery: a script run through node that is gone is looked for again, not started', async () => {
+  // As on Windows, where the fake (and an npm .cmd's cli.js) runs as `node <script>`: node itself still starts.
+  const t = rig('ok', { ZAAFPULSE_CLAUDE_BIN: '' });
+  const script = fakeClaude(tmp('zp-claude-js-'), 'claude.js');
+  const c = createClaude({ env: { ...t.env, ZAAFPULSE_CLAUDE_BIN: script }, home: tmp(), systemDirs: [] });
+  const bin = await c.find();
+  assert.deepEqual(bin.args, [script], 'mapped to node');
+  const versions = () => readLog(t.log).filter((r) => r.version).length;
+  const before = versions();
+  fs.rmSync(script);
+  await assert.rejects(c.run(bin, { system: 's', user: 'u', schema: SCHEMA }), (e) => {
+    assert.equal(e.status, 0);
+    assert.equal(e.message, 'Claude Code could not start');
+    return true;
+  });
+  assert.equal(t.runs().length, 0, 'nothing was started');
+  assert.equal(await c.find(), null, 'searched again: the script is gone');
+  assert.equal(versions(), before, 'and no --version of a missing file');
+});
+
+test('call: node failing to load the mapped script clears the cached answer', async () => {
+  const t = rig();
+  const c = createClaude({ env: t.env, home: tmp(), systemDirs: [] });
+  assert.ok(await c.find());
+  const versions = () => readLog(t.log).filter((r) => r.version).length;
+  const before = versions();
+  // A script that is there when it is checked but that node cannot load (it went between the check and the start).
+  const broken = path.join(tmp('zp-claude-broken-'), 'cli.js');
+  fs.writeFileSync(broken, "require('./part-that-is-gone');\n");
+  const bin = { file: process.execPath, args: [broken] };
+  await assert.rejects(c.run(bin, { system: 's', user: 'u', schema: SCHEMA }), (e) => {
+    assert.equal(e.status, 0);
+    assert.equal(e.message, 'Claude Code could not start');
+    return true;
+  });
+  assert.ok(await c.find(), 'still found: the named binary is fine');
+  assert.equal(versions(), before + 1, 'looked for again instead of the cached answer');
+});
+
 test('call: an answer that says the login is gone backs off as "not signed in"', async () => {
   await assert.rejects(judge(rig('signedout')), (e) => {
     assert.equal(e.status, 401);
@@ -569,12 +608,14 @@ test('stopAll: a folder the OS still holds while the CLI runs is removed once th
   const p = t.claude.run(bin, { system: 's', user: 'u', schema: SCHEMA });
   for (let i = 0; i < 150 && !t.runs().length; i++) await sleep(20);
   const [run] = t.runs();
-  t.claude.stopAll();
+  // Whether the folder is still held when the call settles depends on the OS (Windows may release it at once);
+  // what counts is the outcome: no throw, and once the CLI has exited the folder is gone.
+  assert.doesNotThrow(() => t.claude.stopAll());
   await assert.rejects(p, (e) => e.status === 0);
-  assert.equal(fs.existsSync(run.cwd), true, 'still held when the call settled');
-  for (let i = 0; i < 100 && fs.existsSync(run.cwd); i++) await sleep(30);
-  assert.equal(fs.existsSync(run.cwd), false, 'removed after the exit');
-  assert.equal(tries[tries.length - 1], false);
+  for (let i = 0; i < 100 && (alive(run.pid) || fs.existsSync(run.cwd)); i++) await sleep(30);
+  assert.equal(alive(run.pid), false);
+  assert.equal(fs.existsSync(run.cwd), false, 'removed once the CLI has exited');
+  assert.equal(tries[tries.length - 1], false, 'the last try found it free');
 });
 
 test('cleanup: on Windows the folder is removed with retries, elsewhere at once', () => {
