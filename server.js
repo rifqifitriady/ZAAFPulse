@@ -541,7 +541,7 @@ const handler = async (req, res) => {
       const route = url.pathname.slice('/api/trace/'.length);
       const q = url.searchParams;
       const post = route === 'reveal';
-      if (!['sources', 'sessions', 'session', 'title', 'content', 'reveal', 'live', 'find'].includes(route))
+      if (!['sources', 'settings', 'sessions', 'session', 'title', 'content', 'reveal', 'live', 'find'].includes(route))
         return send(res, 404, { error: 'unknown route' });
       if (req.method !== (post ? 'POST' : 'GET')) return send(res, 405, { error: 'method not allowed' });
       // Nothing a client sends for a filter, a cursor or a session id is longer than this.
@@ -549,6 +549,7 @@ const handler = async (req, res) => {
         return send(res, 400, { error: 'query value too long' });
       try {
         if (route === 'sources') return send(res, 200, trace.sources());
+        if (route === 'settings') return send(res, 200, trace.settings());
         // A link from the Sessions or AI Office page: the session id it already holds, turned into a key.
         if (route === 'find') return send(res, 200, { key: trace.keyFor(q.get('source'), q.get('sid')) });
         if (route === 'sessions') {

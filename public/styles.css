@@ -5599,6 +5599,11 @@ a.trace-link:focus-visible b {
   color: var(--tr-amber);
   font-size: 12px;
 }
+.tr-notice.tr-off {
+  border-color: rgba(77, 232, 255, 0.35);
+  background: rgba(77, 232, 255, 0.06);
+  color: var(--h-text-2);
+}
 .tr-notice .tr-btn {
   margin-left: auto;
   height: 26px;
@@ -6159,8 +6164,9 @@ svg.tr-wires {
     grid-template-columns: minmax(0, 1fr) 100px 56px;
   }
 }
-/* Under 1100 px of room the halves stack: the explorer fills a screen, the map follows below it. */
-@container trace (max-width: 1100px) {
+/* Under 1100 px of window the halves stack: the explorer fills a screen, the map follows below it. The
+   window, not the deck: a 1280-1440 px laptop keeps the halves side by side with the sidebar open. */
+@media (max-width: 1100px) {
   .trace-app.holo-deck {
     grid-template-columns: minmax(0, 1fr);
     height: auto;

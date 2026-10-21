@@ -5,7 +5,21 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { traceDemo } = require('../lib/demo');
-const { treeRows, mapNodes, textNodes, textFragment, fmtDur, trIsLive, trLivePlan } = require('../public/traceview.js');
+const {
+  treeRows,
+  mapNodes,
+  textNodes,
+  textFragment,
+  fmtDur,
+  trIsLive,
+  trLivePlan,
+  trNavKey,
+  trPrimary,
+  trColor,
+  trSrc,
+  trBadges,
+  trOffNote,
+} = require('../public/traceview.js');
 
 const SRC = path.join(__dirname, '..', 'public', 'traceview.js');
 const claudeSpans = () => traceDemo(Date.UTC(2026, 9, 20, 12)).skeletons['demo-claude-1'].spans;
@@ -248,4 +262,76 @@ test('trLivePlan: a changed file is always adopted; only a new shape repaints', 
   assert.deepEqual(trLivePlan(cur, { changed: false, cursor: 'x' }), { adopt: false, repaint: false });
   assert.deepEqual(trLivePlan(cur, { changed: true }), { adopt: false, repaint: false });
   assert.deepEqual(trLivePlan(null, { changed: true, skeleton: cur }), { adopt: false, repaint: false });
+});
+
+// A stand-in for an element: `closest` answers for the selectors listed (and #tr-app when inside the explorer).
+const el = (inApp, ...matches) => ({ closest: (sel) => (sel === '#tr-app' ? inApp : sel.split(',').some((x) => matches.includes(x.trim()))) || null });
+test('trNavKey: j/k and the arrows only inside the explorer or on the page, never with Shift, not on tabs or range buttons', () => {
+  const body = { closest: () => null };
+  const page = [body];
+  const key = (k, target, extra = {}) => trNavKey({ key: k, target, ...extra }, page);
+  const row = el(true);
+  assert.equal(key('j', row), 'down');
+  assert.equal(key('k', row), 'up');
+  assert.equal(key('ArrowLeft', row), 'prev');
+  assert.equal(key('ArrowRight', body), 'next', 'focus on the page itself');
+  // Outside the explorer (the sidebar, the top bar) nothing moves.
+  assert.equal(key('j', el(false)), null);
+  assert.equal(key('ArrowRight', el(false)), null);
+  // Shift and the other modifiers are left alone.
+  for (const mod of ['shiftKey', 'metaKey', 'ctrlKey', 'altKey']) assert.equal(key('j', row, { [mod]: true }), null, mod);
+  assert.equal(key('ArrowLeft', row, { shiftKey: true }), null);
+  // Arrows keep their meaning on tabs, the range buttons, the chip row and the splitter; j/k still move there.
+  for (const sel of ['[role="tab"]', '.tr-seg', '.tr-chips', '#tr-split']) {
+    assert.equal(key('ArrowLeft', el(true, sel)), null, sel);
+    assert.equal(key('j', el(true, sel)), 'down', sel);
+  }
+  // Never while typing.
+  assert.equal(key('j', el(true, 'input')), null);
+  assert.equal(key('Enter', row), null);
+  assert.equal(trNavKey(null, page), null);
+});
+
+test('trPrimary: the splitter drags with the main button only', () => {
+  assert.equal(trPrimary({ button: 0 }), true);
+  assert.equal(trPrimary({ button: 2 }), false, 'right click');
+  assert.equal(trPrimary({ button: 1 }), false, 'middle click');
+  assert.equal(trPrimary(null), false);
+});
+
+test('lookups by a value from a log use own keys only', () => {
+  for (const kind of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+    assert.equal(trColor({ kind, status: 'ok' }), '#8f98cc', kind);
+    const [abbr, color] = trSrc(kind);
+    assert.equal(typeof abbr, 'string', kind);
+    assert.equal(color, '#8f98cc', kind);
+  }
+  const b = trBadges({ status: 'error', signals: ['constructor', 'toString'] });
+  assert.deepEqual(b.map((x) => x.label), ['error', 'toString']);
+  assert.ok(b.every((x) => typeof x.label === 'string'));
+  assert.equal(trColor({ kind: 'tool', status: 'ok' }), '#ffb547');
+  assert.deepEqual(trSrc('codex').slice(0, 2), ['CX', '#10a37f']);
+});
+
+test('trIsLive: sources that never change through live are not polled', () => {
+  const now = 10 * 3600e3;
+  const sk = (source, status = 'ok') => ({ session: { source, end: now - 60e3 }, turns: [], spans: [{ id: 'a', start: 1, end: now - 60e3, status }] });
+  for (const src of ['gateway', 'kiro', 'gemini', 'antigravity']) {
+    assert.equal(trIsLive(sk(src), now), false, src);
+    assert.equal(trIsLive(sk(src, 'running'), now), false, `${src} running`);
+  }
+  for (const src of ['claude', 'codex']) assert.equal(trIsLive(sk(src), now), true, src);
+});
+
+test('trOffNote: an up-front notice when content is off (S10)', () => {
+  assert.match(trOffNote({ content: false }), /Content viewing is off/);
+  assert.equal(trOffNote({ content: true }), '');
+  assert.equal(trOffNote(null), '');
+});
+
+test('the halves stack by window width at 1100 px, not by the deck width', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
+  assert.doesNotMatch(css, /@container trace \(max-width: 1100px\)/);
+  const m = /@media \(max-width: 1100px\) \{\s*\.trace-app\.holo-deck \{\s*grid-template-columns: minmax\(0, 1fr\);/.exec(css);
+  assert.ok(m, 'the stacking rule is a viewport media query');
 });

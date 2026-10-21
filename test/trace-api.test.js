@@ -132,6 +132,7 @@ test('trace api: demo sessions, a session with spans, titles, filters and conten
   const s = await startServer({ DEMO: '1', ZAAFPULSE_AUTH: 'none' });
   const c = client(s.base);
   try {
+    assert.deepEqual((await c.call('/api/trace/settings')).json, { content: true });
     const src = await c.call('/api/trace/sources');
     assert.equal(src.status, 200);
     assert.deepEqual(
@@ -272,6 +273,8 @@ test('trace api: with ZAAFPULSE_CONTENT=off content is refused and titles are hi
   const s = await startServer({ DEMO: '1', ZAAFPULSE_AUTH: 'none', ZAAFPULSE_CONTENT: 'off' });
   const c = client(s.base);
   try {
+    // The page learns it up front (S10), before any text is asked for.
+    assert.deepEqual((await c.call('/api/trace/settings')).json, { content: false });
     const rows = (await c.call('/api/trace/sessions')).json.sessions;
     for (const src of ['claude', 'codex', 'kiro']) {
       const row = rows.find((r) => r.source === src);
