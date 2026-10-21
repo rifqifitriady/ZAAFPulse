@@ -1,4 +1,5 @@
 const test = require('node:test');
+const { after } = test;
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
@@ -6,7 +7,15 @@ const path = require('path');
 const { createEvalStore, createFeedbackStore } = require('../lib/evals/store');
 const { targetKey, resultKey } = require('../lib/evals/registry');
 
-const tmp = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'evals-store-')), 'data', 'x.jsonl');
+const dirs = [];
+const tmp = () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'evals-store-'));
+  dirs.push(d);
+  return path.join(d, 'data', 'x.jsonl');
+};
+after(() => {
+  for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+});
 const lines = (f) => fs.readFileSync(f, 'utf8').split('\n').filter(Boolean);
 const T = (turn = 1, session = 's1', source = 'claude') => ({ source, session, turn, span: null });
 const R = (target, evaluator, label, model = 'qwen3', extra = {}) => ({
@@ -67,7 +76,7 @@ test('eval results survive a reload and keep the newest line', () => {
 
 test('eval compaction keeps one line per key and survives a reload', () => {
   const file = tmp();
-  const store = createEvalStore({ file, maxBytes: 600 });
+  const store = createEvalStore({ file, maxBytes: 1500 });
   for (let i = 0; i < 12; i++) store.put(R(T(i % 3), 'relevance', i % 2 ? 'relevant' : 'partly'));
   assert.equal(store.all().length, 3);
   // The cap fired along the way, so the file holds far fewer lines than the 12 writes.
@@ -90,6 +99,9 @@ test('a corrupt line is skipped and counted', () => {
   const b = createEvalStore({ file });
   assert.equal(b.all().length, 1);
   assert.equal(b.stats().bad, 2);
+  // Loading compacts once, so the next open no longer sees the bad lines.
+  assert.equal(lines(file).length, 1);
+  assert.equal(createEvalStore({ file }).stats().bad, 0);
   const f = tmp();
   fs.mkdirSync(path.dirname(f), { recursive: true });
   fs.writeFileSync(f, '{"id":"a","target":{"source":"claude","session":"s"},"note":"n","rating":"good"}\noops\n');
@@ -184,4 +196,95 @@ test('feedback rejects a long note, a bad rating and a missing target with statu
     () => store.set({ rating: 'good' }),
     (e) => e.status === 400,
   );
+});
+
+test('feedback: undefined keeps the old value, only an explicit null or empty note clears', () => {
+  const store = createFeedbackStore({ file: tmp() });
+  const t = T();
+  store.set({ target: t, rating: 'good', note: 'keep me' });
+  assert.equal(store.set({ target: t, rating: 'bad' }).note, 'keep me');
+  assert.equal(store.set({ target: t, note: 'new note' }).rating, 'bad');
+  assert.equal(store.set({ target: t, note: '' }).rating, 'bad');
+  assert.equal(store.get(targetKey(t)).note, '');
+  // Rating only, then a note-only call with an empty note: the record stays.
+  assert.ok(store.set({ target: t, note: '' }));
+  assert.equal(store.get(targetKey(t)).rating, 'bad');
+  // An explicit null rating with the note already empty deletes.
+  assert.equal(store.set({ target: t, rating: null }), null);
+  assert.equal(store.get(targetKey(t)), null);
+  // A fresh target with nothing to keep and nothing given is also a no-op.
+  assert.equal(store.set({ target: T(7) }), null);
+});
+
+test('feedback: an explicit null rating plus an empty note deletes', () => {
+  const store = createFeedbackStore({ file: tmp() });
+  store.set({ target: T(), rating: 'good', note: 'x' });
+  assert.equal(store.set({ target: T(), rating: null, note: '' }), null);
+  assert.equal(store.all().length, 0);
+});
+
+test('eval store stays under maxBytes with unique keys, dropping the oldest results', () => {
+  const file = tmp();
+  const store = createEvalStore({ file, maxBytes: 3000 });
+  for (let i = 0; i < 40; i++) {
+    store.put(R(T(i), 'relevance', 'relevant', 'qwen3', { ts: 1000 + i }));
+    assert.ok(fs.statSync(file).size <= 3000, `size after put ${i}`);
+  }
+  const kept = store.all();
+  assert.ok(kept.length < 40 && kept.length > 1);
+  assert.ok(store.get(resultKey(T(39), 'relevance', 1, 'qwen3')), 'newest survives');
+  assert.equal(store.get(resultKey(T(0), 'relevance', 1, 'qwen3')), null, 'oldest dropped');
+  const oldestKept = Math.min(...kept.map((r) => r.ts));
+  assert.equal(kept.length, 1000 + 40 - oldestKept);
+  assert.equal(createEvalStore({ file }).all().length, kept.length);
+});
+
+test('a torn last line is not glued to the next row', () => {
+  const file = tmp();
+  const a = createEvalStore({ file });
+  a.put(R(T(1), 'relevance', 'relevant'));
+  fs.appendFileSync(file, '{"id":"torn","tar');
+  const b = createEvalStore({ file });
+  assert.equal(b.all().length, 1);
+  b.put(R(T(2), 'relevance', 'partly'));
+  for (const l of lines(file)) assert.doesNotThrow(() => JSON.parse(l));
+  assert.equal(createEvalStore({ file }).all().length, 2);
+  // Same for feedback, including the compaction on load.
+  const ff = tmp();
+  const fb = createFeedbackStore({ file: ff });
+  fb.set({ target: T(1), rating: 'good' });
+  fs.appendFileSync(ff, '{"id":"torn","tar');
+  const fb2 = createFeedbackStore({ file: ff });
+  assert.equal(fb2.all().length, 1);
+  assert.equal(fb2.stats().bad, 1);
+  fb2.set({ target: T(2), rating: 'bad' });
+  for (const l of lines(ff)) assert.doesNotThrow(() => JSON.parse(l));
+  assert.equal(createFeedbackStore({ file: ff }).all().length, 2);
+});
+
+test('an existing loose file is tightened to 0600 and a stale tmp does not leak its mode', { skip: process.platform === 'win32' }, () => {
+  const file = tmp();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, '', { mode: 0o644 });
+  fs.chmodSync(file, 0o644);
+  const store = createEvalStore({ file });
+  store.put(R(T(), 'relevance', 'relevant'));
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  fs.writeFileSync(`${file}.tmp`, 'stale', { mode: 0o644 });
+  fs.chmodSync(`${file}.tmp`, 0o644);
+  store.compact();
+  assert.equal(fs.existsSync(`${file}.tmp`), false);
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+});
+
+test('a failing compaction inside put is logged once and does not throw', (t) => {
+  const file = tmp();
+  const warn = t.mock.method(console, 'warn', () => {});
+  const store = createEvalStore({ file, maxBytes: 400 });
+  store.put(R(T(0), 'relevance', 'relevant'));
+  fs.mkdirSync(`${file}.tmp`); // a directory in the way makes every rewrite fail
+  for (let i = 1; i < 5; i++) assert.doesNotThrow(() => store.put(R(T(i), 'relevance', 'relevant')));
+  assert.equal(warn.mock.callCount(), 1);
+  assert.equal(store.all().length, 5);
+  assert.equal(lines(file).length, 5);
 });
