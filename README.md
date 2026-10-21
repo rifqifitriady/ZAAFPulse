@@ -444,7 +444,7 @@ Or use **Endpoint → MCP server** in the dashboard: it shows where the server i
 
 | Type | Platforms | Tools |
 |---|---|---|
-| `acc` (always on) | this dashboard | `usage_summary`, `quality`, `live_apps`, `integrations_status` |
+| `acc` (always on) | this dashboard | `usage_summary`, `quality`, `live_apps`, `trace_sessions` (session metadata only, no text), `integrations_status` |
 | `dynatrace` | Dynatrace SaaS and Managed | problems, entities, metrics, logs, security problems, DQL (SaaS) |
 | `arize` | Arize Phoenix and Arize AX | projects, spans, traces, datasets, experiments, monitors (AX) |
 | `n8n` | n8n | workflows, executions; run allowlisted webhooks and (de)activate workflows when writes are on |
@@ -549,6 +549,20 @@ Every run has a budget (tokens, model calls, time, optional cost) scaled by effo
 Workflow approval gates fail closed: a run pauses before the gated step until someone approves (the note reaches the next agent) or rejects, an unclear A2A reply never counts as approval, nobody deciding within 72 hours rejects the run, and a step whose agent is missing fails the run rather than being skipped.
 
 A new key is shown once and masked (`zp_Q7m_k••••••••••••T4vX`) as soon as it is copied, after 60 seconds or when you leave the page. Every request is logged with key, model, agent, tokens, cost (list prices), latency and time to first token, never prompt text. Keys, agents, sessions, memory, runs and knowledge bases live in `.data/` (git-ignored); provider, route, second-brain and tool settings live in `config.json`.
+
+## Trace & Session Explorer
+
+The **Trace explorer** page shows what one AI session did: its turns, model calls, tool calls and subagents as a tree of spans with a timeline, a map of the same turn, and the text of any span on request. It reads Claude Code, Codex, the Agent Gateway, Kiro, Gemini CLI and Antigravity, each as deep as that tool's own logs allow (Claude Code and Codex in full; Antigravity at conversation level, which needs Node 22.12 or newer).
+
+<img alt="Trace explorer: sessions from Claude Code, Codex and Kiro on the left, the span tree of one turn with a failed Bash call and a masked secret, and the session map on the right" src="docs/assets/screen-trace.jpg">
+
+- **Text is read on demand and never copied.** The index holds counts, ids and byte offsets. Opening a span reads only its byte range from the original log, in 64 KB pages, and shows it as plain text.
+- **Secrets are masked.** **show** reveals one value at a time and nothing is stored. Text is read only from `~/.claude/projects` and `~/.codex/sessions`.
+- **`ZAAFPULSE_CONTENT=off` turns text off.** In server mode text is off unless you set `ZAAFPULSE_CONTENT=on`.
+- **Fast on large logs.** A 310 MB session shows its last turn in about 5 ms (about 21 ms in a worker thread), and one content page takes about 1 ms ([numbers](docs/performance.md#trace-explorer-showing-one-session-of-a-huge-log)).
+- **Keyboard:** `j` and `k` move between spans, `←` and `→` change turn, `Enter` opens the text.
+
+What each source shows, privacy, the `/api/trace/*` routes and troubleshooting: **[docs/explorer.md](docs/explorer.md)**.
 
 ## OpenTelemetry export
 
@@ -687,6 +701,8 @@ lib/auth.js            dashboard sign-in: local one-time-code sign-in (default),
 lib/service.js         background service: LaunchAgent, systemd, Startup folder or Task Scheduler
 lib/audit.js           tool-call log (.cache/mcp-audit.jsonl)
 lib/local.js           dashboard data for the acc connector
+lib/trace/             Trace explorer: adapters for Claude Code, Codex, the gateway, Kiro, Gemini CLI and Antigravity, on-demand
+                       masked text reading (content.js), and the registry with opaque keys, a cache and a worker (index.js)
 lib/claude.js          Claude Code log parser (usage + signals)
 lib/codex.js           Codex log parser (usage + signals), skips the history a fork copies
 lib/signals.js         non-existent-target, injection, secret, risky-command and correction detectors; relevance and
@@ -734,6 +750,7 @@ docs/integrations.md   per-platform setup and MCP client registration
 docs/otel.md           OpenTelemetry export: spans, attributes, backends
 docs/quality-metrics.md how the quality and safety detectors are measured
 docs/performance.md    indexing speed: method and numbers
+docs/explorer.md       Trace explorer: sources, privacy, keyboard, API, troubleshooting
 docs/release-hardening.md tag ruleset and immutable releases
 docs/assets/           README banner, diagrams, screenshots and GIFs
 ```
@@ -764,6 +781,7 @@ Apart from the sign-in routes in the first row, every `/api` route needs a signe
 | `GET /api/openrouter?section=models\|providers\|rankings\|account` | OpenRouter data, cached (models 12 h, providers 24 h, rankings 6 h) |
 | `GET /api/openrouter/endpoints?ids=…` | providers serving up to 40 models, with uptime and per-provider prices |
 | `GET /api/prices` · `POST /api/prices` | live price catalog (when synced), sync status, your pinned prices; `refresh`, `toggle`, `set`, `unpin`, `remove` |
+| `GET /api/trace/sources` · `sessions` · `title` · `session` · `content` · `live` · `find` · `POST /api/trace/reveal` | the Trace explorer: sessions of every source, one turn as spans, and their text on request, masked; see [docs/explorer.md](docs/explorer.md#http-api) |
 | `POST /api/rescan` | re-index changed log files now |
 | `GET /api/integrations` | integration health, client registration and recent MCP tool calls |
 | `POST /api/integrations/test` | fresh health check of one integration (`{ "id": "..." }`) |
@@ -787,7 +805,7 @@ Everything is editable in **Settings** and saved to `config.json`:
 | Price auto-update (`pricingSync.enabled`) | on; fetches the public price list at startup and every 12 hours (toggle in Settings) |
 | OpenTelemetry export (`otel`) | off; set in `config.json` only ([docs/otel.md](docs/otel.md)) |
 
-Environment variables: `PORT` / `ZAAFPULSE_PORT` (default `4777`), `ZAAFPULSE_HOST`, `ZAAFPULSE_DATA`, `ZAAFPULSE_AUTH` (`local` by default on 127.0.0.1, `1` for password, `none` to turn sign-in off), `ZAAFPULSE_INDEX_WORKERS` (worker threads for the first index; `0` turns them off), the server-mode settings in [docs/install.md](docs/install.md), the standard `OTEL_*` variables ([docs/otel.md](docs/otel.md)), and `DEMO=1` for synthetic data. Demo mode never writes `config.json`, the Keychain or your coding tools, and fetches nothing: model calls are answered by a scripted model inside the process, and gateway data lives in a temporary folder. It uses the cached price list if one exists.
+Environment variables: `PORT` / `ZAAFPULSE_PORT` (default `4777`), `ZAAFPULSE_HOST`, `ZAAFPULSE_DATA`, `ZAAFPULSE_AUTH` (`local` by default on 127.0.0.1, `1` for password, `none` to turn sign-in off), `ZAAFPULSE_INDEX_WORKERS` (worker threads for the first index; `0` turns them off), `ZAAFPULSE_CONTENT` (`off` hides transcript text in the Trace explorer; in server mode it is off unless `on`), the server-mode settings in [docs/install.md](docs/install.md), the standard `OTEL_*` variables ([docs/otel.md](docs/otel.md)), and `DEMO=1` for synthetic data. Demo mode never writes `config.json`, the Keychain or your coding tools, and fetches nothing: model calls are answered by a scripted model inside the process, and gateway data lives in a temporary folder. It uses the cached price list if one exists.
 </details>
 
 ## Contributing
