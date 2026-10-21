@@ -547,7 +547,9 @@ test('call: Ollama gets a context window sized for the prompt, and no thinking',
     const r = await t.m.resolve();
     for (const [size, want] of [
       [10, 8192], // the floor
-      [60000, Math.ceil(60003 / 3) + 1024], // sized for the prompt
+      [20000, 8192], // 7,692 tokens still fit the smallest bucket
+      [30000, 16384],
+      [60000, 32768], // 21,025 tokens: the next bucket up
       [400000, 32768], // the ceiling
     ]) {
       await t.m.call(r, { system: 'SYS', user: 'u'.repeat(size), schema: SCHEMA });
@@ -636,5 +638,69 @@ test('resolve: the auto-pick prefers at most 14B, and a larger model only when n
     assert.equal((await t.m.resolve()).model, 'llama3.3:70b');
   } finally {
     await t.close();
+  }
+});
+
+// Re-review: a num_ctx that differs per call makes Ollama reload the runner, so it comes in three sizes only.
+test('call: num_ctx is rounded up to 8192, 16384 or 32768 for any prompt size', async () => {
+  const seen = new Set();
+  const m = createModels({
+    settings: () => ({ provider: 'ollama', model: 'qwen3:8b' }),
+    gateway: { judge: { providers: () => [] } },
+    fetchImpl: async (url, init) => {
+      if (init && init.method === 'POST') seen.add(JSON.parse(init.body).options.num_ctx);
+      return { ok: true, json: async () => ({ models: [], message: { content: '{}' } }) };
+    },
+  });
+  const r = await m.resolve();
+  for (let size = 0; size <= 200000; size += 1777) {
+    await m.call(r, { system: 'S', user: 'u'.repeat(size), schema: SCHEMA });
+  }
+  assert.deepEqual([...seen].sort((a, b) => a - b), [8192, 16384, 32768]);
+});
+
+// Re-review: an Ollama that refuses the think field gets the call again without it, and keeps that for the model.
+test('call: an Ollama that refuses "think" is asked again without it, once per model', async () => {
+  const bodies = [];
+  const t = await rig({
+    ollama: {
+      'GET /api/tags': tags('qwen3:8b'),
+      'POST /api/chat': (r) => {
+        bodies.push(r.body);
+        if ('think' in r.body) return { status: 400, body: { error: `"${r.body.model}" does not support thinking` } };
+        return { body: { message: { content: '{"label":"ok"}' } } };
+      },
+    },
+  });
+  try {
+    const r = await t.m.resolve();
+    assert.equal((await t.m.call(r, { system: 's', user: 'u', schema: SCHEMA })).text, '{"label":"ok"}');
+    assert.deepEqual(bodies.map((b) => 'think' in b), [true, false]);
+    await t.m.call(r, { system: 's', user: 'u', schema: SCHEMA });
+    assert.equal(bodies.length, 3, 'remembered: no second refused call');
+    assert.equal('think' in bodies[2], false);
+    // Another model still gets think: false first.
+    await t.m.call({ ...r, model: 'llama3.1:8b' }, { system: 's', user: 'u', schema: SCHEMA });
+    assert.equal(bodies[3].think, false);
+  } finally {
+    await t.close();
+  }
+  // A 400 about something else is not retried and keeps its short message.
+  const other = await rig({
+    ollama: {
+      'GET /api/tags': tags('qwen3:8b'),
+      'POST /api/chat': { status: 400, body: { error: 'invalid format schema' } },
+    },
+  });
+  try {
+    const r = await other.m.resolve();
+    await assert.rejects(other.m.call(r, { system: 's', user: 'u', schema: SCHEMA }), (e) => {
+      assert.equal(e.status, 400);
+      assert.equal(e.message, 'Ollama returned 400');
+      return true;
+    });
+    assert.equal(other.o.requests.filter((x) => x.method === 'POST').length, 1);
+  } finally {
+    await other.close();
   }
 });

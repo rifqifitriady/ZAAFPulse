@@ -79,8 +79,9 @@ the model is asked for JSON in the shape of the evaluator's schema.
 
 - **Ollama context window.** Ollama's default context (2,048 or 4,096 tokens) is smaller than the judge's input,
   and Ollama drops the start of the context, where the instructions are, without saying so. Each call therefore
-  sets `num_ctx` from the prompt size (about 3 characters a token, plus 1,024 for the answer), at least 8,192 and at
-  most 32,768 tokens, and sends `think: false` so a thinking model answers directly.
+  sets `num_ctx` from the prompt size (about 3 characters a token, plus 1,024 for the answer), rounded up to 8,192,
+  16,384 or 32,768 tokens so Ollama does not load the model again for every new size, and sends `think: false` so a
+  thinking model answers directly.
 - **LM Studio context window.** LM Studio takes no context size per request: the loaded model's context length
   applies. Load the judge model with a context of **at least 8k tokens** (8,192), or the start of the prompt is cut.
   ZAAFPulse cannot read the loaded context length from the OpenAI-compatible `/v1/models` it asks, so it does not
@@ -174,14 +175,17 @@ replaced, in both the system and the user message:
 
 | Found | Replaced by |
 |---|---|
-| email addresses | `‹email›` |
-| IPv4 and IPv6 addresses (not `127.0.0.1`, `0.0.0.0` or `::1`) | `‹ip›` |
-| phone numbers: 9 to 15 digits with a leading `+`, or in groups split by spaces, dots or dashes | `‹phone›` |
+| email addresses (not image names such as `icon@2x.png`) | `‹email›` |
+| IPv4 and IPv6 addresses (not `127.0.0.1`, `0.0.0.0` or `::1`, and not right after a letter, an `@` or a single `/`) | `‹ip›` |
+| phone numbers: 9 to 15 digits with a leading `+`, or with an area code in brackets, or in groups split by dashes | `‹phone›` |
 | the user name in `/Users/<name>/`, `/home/<name>/` and `C:\Users\<name>\` (any case) | `‹user›` |
 
-The patterns are conservative, so version numbers, ports, hashes, dates, times and long plain numbers (ids,
-timestamps) are kept. A phone number written without separators or `+`, or a name in free text, is not caught.
-A local judge reads the text with secrets masked only, since it never leaves the machine.
+The patterns are conservative. Kept as they are: ports, hashes, dates, times, long plain numbers (ids,
+timestamps), numbers grouped only by dots or spaces (`11.927.074.289`, `1080 1080 24`), and versions right after a
+letter, an `@` or a slash (`v1.2.3.4`, `openjdk@21/21.0.12.1`). A bare four-part version such as `26.2.4.2` looks
+like an IPv4 address and is masked as `‹ip›`. Not caught: a phone number without a `+` that uses only spaces or
+dots, or none at all, and a name in free text. A local judge reads the text with secrets masked only, since it
+never leaves the machine.
 
 1. Choose the provider and a model. The model must have a price in the gateway (see the cost cap above).
 2. Open the **preview**. It shows the exact masked text that would be sent for the latest finished turn of a session,
@@ -326,6 +330,8 @@ results written by the CLI show there after a restart.
 - **The evaluator rates include sessions `acc_evals` cannot name.** They count every stored result in the range;
   only `failures` is limited to sessions this process lists.
 - **A clock moved back by more than a day** gives the day counters a fresh start.
+- **`think: false` depends on your Ollama version.** Check `think: false` on your Ollama version; ZAAFPulse retries
+  without it if refused, and then keeps leaving it out for that model until the dashboard restarts.
 - **A quiet last turn can be judged mid-flight.** The last turn of a session counts as finished after 2 quiet
   minutes. An agent that is still working but writes nothing for that long (a long build, a slow tool) has its turn
   judged on what it had so far, and the automatic pass does not judge it again. Use **Judge this session** to judge
