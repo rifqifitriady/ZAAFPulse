@@ -211,6 +211,7 @@ test('call: external goes through gateway.judge.complete and returns its usage a
   const gateway = {
     judge: {
       providers: () => [{ id: 'cloud', label: 'Cloud', models: ['big-1'] }],
+      hasPrice: () => true,
       complete: async (a) => {
         seen.push(a);
         return { text: '{"label":"ok"}', usage: { input: 30, output: 8, cost: 0.002 } };
@@ -424,4 +425,34 @@ test('call: a failed response has its body cancelled', async () => {
   const r = await m.resolve();
   await assert.rejects(m.call(r, { system: 's', user: 'u', schema: SCHEMA }), (e) => e.status === 503);
   assert.equal(cancelled, 1);
+});
+
+test('priced and cost: an external model without a list price is unpriced and its cost is null, never 0', async () => {
+  const prices = { 'cloud/big-1': { input: 3, output: 15 } };
+  const gateway = cloud({
+    hasPrice: (n) => !!prices[n],
+    priceOf: (n) => prices[n] || null,
+    complete: async () => ({ text: '{}', usage: { input: 10, output: 5, cost: 0 } }), // the gateway says 0 for unpriced
+  });
+  const known = await pickCloud('big-1', gateway);
+  const unknown = await pickCloud('mystery-9', gateway);
+  try {
+    assert.equal(known.t.m.priced(known.r), true);
+    assert.deepEqual(known.t.m.priceOf(known.r), { input: 3, output: 15 });
+    assert.equal(unknown.t.m.priced(unknown.r), false);
+    assert.equal(unknown.t.m.priceOf(unknown.r), null);
+    assert.equal((await unknown.t.m.call(unknown.r, { system: 's', user: 'u', schema: SCHEMA })).usage.cost, null);
+    assert.equal((await known.t.m.call(known.r, { system: 's', user: 'u', schema: SCHEMA })).usage.cost, 0);
+    // A gateway that cannot say is unpriced, and local models are always free.
+    assert.equal(known.t.m.priced({ ok: true, kind: 'ollama', model: 'm', provider: 'ollama' }), true);
+    const blind = await pickCloud('big-1', cloud());
+    try {
+      assert.equal(blind.t.m.priced(blind.r), false);
+    } finally {
+      await blind.t.close();
+    }
+  } finally {
+    await known.t.close();
+    await unknown.t.close();
+  }
 });

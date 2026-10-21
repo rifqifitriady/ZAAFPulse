@@ -174,6 +174,10 @@ test('judge: lists routable providers without secrets, completes with no tools a
     assert.equal(r.usage.input, 1000);
     assert.equal(r.usage.output, 500);
     assert.ok(r.usage.cost > 0);
+    assert.equal(t.gateway.judge.hasPrice('fake/llama-9'), true);
+    assert.equal(t.gateway.judge.hasPrice('fake/no-such-model-xyz'), false);
+    assert.ok(t.gateway.judge.priceOf('fake/llama-9').input > 0);
+    assert.equal(t.gateway.judge.priceOf('fake/no-such-model-xyz'), null);
     const sent = t.upstream.requests.find((q) => q.path === '/chat/completions').body;
     assert.equal('tools' in sent, false);
     assert.equal('tool_choice' in sent, false);
