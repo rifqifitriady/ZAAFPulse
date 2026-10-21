@@ -91,6 +91,22 @@ test('claude roots: ZAAFPULSE_CLAUDE_DIRS first, then CLAUDE_CONFIG_DIR, then th
   assert.deepEqual(claude.roots({}, home), [j(home, '.config', 'claude', 'projects'), j(home, '.claude', 'projects')]);
 });
 
+test('roots: a default ~/.claude/projects that is a link to a folder in the home is read', (t) => {
+  if (process.platform === 'win32') return t.skip('symlinks need privileges on Windows');
+  const home = tmp('zp-roots-');
+  const f = put(j(home, 'claude-logs', '-p', 's1.jsonl'));
+  fs.mkdirSync(j(home, '.claude'));
+  fs.symlinkSync(j(home, 'claude-logs'), j(home, '.claude', 'projects'), 'dir'); // ~/.claude/projects -> ~/claude-logs
+  const info = claude.rootInfo({}, home);
+  assert.deepEqual(info, [
+    { path: j(home, '.config', 'claude', 'projects') },
+    { path: j(home, '.claude', 'projects') },
+  ]);
+  assert.deepEqual(claude.listFiles({}, home), [j(home, '.claude', 'projects', '-p', 's1.jsonl')]);
+  assert.equal(fs.realpathSync(claude.listFiles({}, home)[0]), fs.realpathSync(f));
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 test('roots: a folder that is a link to the home folder is as broad as the home folder', (t) => {
   if (process.platform === 'win32') return t.skip('symlinks need privileges on Windows');
   const home = tmp('zp-roots-');
@@ -450,6 +466,9 @@ test('docs: one CLAUDE_CONFIG_DIR folder, the list in ZAAFPULSE_CLAUDE_DIRS, and
   assert.doesNotMatch(install, /export CLAUDE_CONFIG_DIR=[^\n]*,/, 'no comma list for Claude Code’s own variable');
   assert.match(install, /\| `ZAAFPULSE_CLAUDE_DIRS` \|/);
   assert.match(install, /one folder only; use ZAAFPULSE_CLAUDE_DIRS for several/);
+  assert.doesNotMatch(install, /`zaafpulse register`/, 'the command is register-mcp');
+  assert.match(install, /`zaafpulse register-mcp` reads its `\.claude\.json` there/);
+  assert.match(install, /SIGHUP[\s\S]{0,200}nohup/, 'a closed terminal stops the server');
   const readme = doc('README.md');
   assert.doesNotMatch(readme, /each folder in `CLAUDE_CONFIG_DIR` \(comma-separated/);
   assert.match(readme, /`ZAAFPULSE_CLAUDE_DIRS`[^\n]*when it is set; otherwise from `\$CLAUDE_CONFIG_DIR\/projects`/);

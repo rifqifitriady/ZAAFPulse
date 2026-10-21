@@ -1613,7 +1613,7 @@ test("the judge's own Claude Code sessions (run in its temp folder) are never ju
   const own = entry('own', times, T0 + 5 * MIN);
   own.result.sessions.own.project = path.join(os.tmpdir(), 'zaafpulse-judge-Ab12Cd');
   const encoded = entry('enc', times, T0 + 5 * MIN);
-  encoded.result.sessions.enc.project = '-private-var-folders-x-T-zaafpulse-judge-Zz9';
+  encoded.result.sessions.enc.project = '-private-var-folders-x-T-zaafpulse-judge-Zz9Yx8';
   const mine = entry('mine', times, T0 + 5 * MIN);
   mine.result.sessions.mine.project = '/Users/me/work/zaafpulse-judge-notes-app/sub';
   r.st.entries.push(own, encoded, mine);
@@ -1639,8 +1639,11 @@ test("the judge's own sessions are skipped also when the project comes from the 
   const mine = entry('mine', times, T0 + 5 * MIN);
   // A project of the owner's whose decoded name only starts like the judge's folder is still judged.
   mine.result.sessions.mine.project = '/Users/me/work/zaafpulse/judge/notes/app';
-  r.st.entries.push(own, mine);
+  // The judge's folder always ends in mkdtemp's six letters or digits: zaafpulse/judge-ui is a real project.
+  const ui = entry('ui', times, T0 + 5 * MIN);
+  ui.result.sessions.ui.project = '/Users/me/work/zaafpulse/judge-ui';
+  r.st.entries.push(own, mine, ui);
   r.clock.t = T0 + 20 * MIN;
   const { queued } = await r.engine.tick();
-  assert.equal(queued, 2, 'only the session that is not the judge');
+  assert.equal(queued, 4, 'only the sessions that are not the judge');
 });

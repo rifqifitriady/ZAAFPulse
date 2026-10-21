@@ -583,12 +583,14 @@ test('cleanup: on Windows the folder is removed with retries, elsewhere at once'
 });
 
 test('test rig: a child with its own env still gets what Windows needs to start', () => {
-  const saved = {};
-  for (const k of ['SystemRoot', 'PATHEXT', 'TEMP', 'TMP']) saved[k] = process.env[k];
+  // TEMP and TMP keep their real values: os.tmpdir() reads them, and the rig makes its folders there.
+  const saved = { SystemRoot: process.env.SystemRoot, PATHEXT: process.env.PATHEXT };
   try {
-    Object.assign(process.env, { SystemRoot: 'C:\\Windows', PATHEXT: '.COM;.EXE', TEMP: 'C:\\T', TMP: 'C:\\T' });
+    Object.assign(process.env, { SystemRoot: 'C:\\Windows', PATHEXT: '.COM;.EXE' });
     const { env } = rig();
     for (const k of ['SystemRoot', 'PATHEXT', 'TEMP', 'TMP']) assert.equal(env[k], process.env[k], k);
+    const present = ['PATHEXT', 'SystemRoot', 'SYSTEMROOT', 'TEMP', 'TMP'].filter((k) => process.env[k] !== undefined);
+    assert.deepEqual(Object.keys(winEnv()).sort(), present.sort());
   } finally {
     for (const [k, v] of Object.entries(saved))
       if (v === undefined) delete process.env[k];
