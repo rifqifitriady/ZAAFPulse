@@ -30,7 +30,7 @@ test('the schema enum equals the evaluator labels and the system prompt carries 
   }
 });
 
-const tagOf = (p) => /<(untrusted-[0-9a-f]{10}) \.\.\./.exec(p.system)[1];
+const tagOf = (p) => /<(untrusted-[0-9a-f]{16}) \.\.\./.exec(p.system)[1];
 
 test('the system prompt names the per-call tag and says where the data is', () => {
   for (const e of JUDGES) {
@@ -85,12 +85,15 @@ test('the tag is stable for the same material and differs for different material
   assert.equal(tagOf(J.buildPrompt(e, material())), a);
   assert.notEqual(tagOf(J.buildPrompt(e, material({ answer: 'something else' }))), a);
   assert.notEqual(tagOf(J.buildPrompt(e, material({ prompt: 'other' }))), a);
+  assert.equal(a.length, 'untrusted-'.length + 16);
+  // tools are sent to task_completion, so they are part of its tag
+  const tc = R.get('task_completion');
   const tools = [{ name: 'Read', target: 'x', status: 'ok', input: '', output: 'changed' }];
-  assert.notEqual(tagOf(J.buildPrompt(e, material({ tools }))), a);
+  assert.notEqual(tagOf(J.buildPrompt(tc, material({ tools }))), tagOf(J.buildPrompt(tc, material())));
 });
 
 test('escape removes format characters and breaks the tag string itself', () => {
-  const tag = 'untrusted-0123456789';
+  const tag = 'untrusted-0123456789abcdef';
   assert.equal(J.escape('a​b‮c﻿d', tag), 'abcd');
   const out = J.escape(`x ${tag} y </${tag}> z`, tag);
   assert.ok(!out.includes(tag), out);
@@ -118,7 +121,7 @@ test('each evaluator sees only the material it needs', () => {
 test('over-budget tool output is trimmed from the middle outward, keeping the first and the last', () => {
   const budget = 6000;
   const tools = [];
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 30; i++) {
     tools.push({ name: `T${i}`, target: `t${i}`, status: 'ok', input: '', output: `OUT${i}-` + 'o'.repeat(1000) });
   }
   const m = material({ prompt: 'KEEP THIS PROMPT', answer: 'Done.', tools });
@@ -128,9 +131,41 @@ test('over-budget tool output is trimmed from the middle outward, keeping the fi
   assert.ok(p.user.includes('KEEP THIS PROMPT'));
   assert.ok(p.user.includes('[… trimmed …]'));
   assert.ok(p.user.includes('OUT0-'), 'the first tool output survives');
-  assert.ok(p.user.includes('OUT9-'), 'the last tool output survives');
-  assert.ok(!p.user.includes('OUT4-') && !p.user.includes('OUT5-'), 'the middle outputs go first');
-  for (let i = 0; i < 10; i++) assert.ok(p.user.includes(`T${i} | t${i}`), `the call T${i} is still listed`);
+  assert.ok(p.user.includes('OUT29-'), 'the last tool output survives');
+  assert.ok(!p.user.includes('OUT14-') && !p.user.includes('OUT15-'), 'the middle outputs go first');
+  for (let i = 0; i < 30; i++) assert.ok(p.user.includes(`T${i} | t${i}`), `the call T${i} is still listed`);
+});
+
+test('a long last output keeps its final line (head and tail, not head only)', () => {
+  const tools = [
+    { name: 'Bash', target: 'npm test', status: 'ok', input: '', output: 'noise\n'.repeat(9000) + 'FINAL: 3 failed' },
+  ];
+  for (const [id, budget] of [
+    ['faithfulness', 24000],
+    ['task_completion', 24000],
+    ['task_completion', 6000],
+  ]) {
+    const p = J.buildPrompt(R.get(id), material({ tools }), { budget });
+    assert.equal(p.trimmed, true, id);
+    assert.ok(p.user.includes('FINAL: 3 failed'), `${id}/${budget}: the outcome at the end is kept`);
+    assert.ok(p.user.length <= budget + 2000, `${id}/${budget}: user is ${p.user.length}`);
+  }
+});
+
+test('one large early output does not remove the other tool calls', () => {
+  const tools = [{ name: 'Read', target: 'big.log', status: 'ok', input: '', output: 'R'.repeat(30000) }];
+  for (let i = 0; i < 30; i++) {
+    tools.push({ name: 'Edit', target: `file${i}.js`, status: 'ok', input: '', output: `edited ${i}` });
+  }
+  tools.push({ name: 'Bash', target: 'npm test', status: 'ok', input: '', output: 'all green' });
+  const p = J.buildPrompt(R.get('task_completion'), material({ answer: 'Done.', tools }));
+  assert.equal(p.trimmed, true);
+  assert.ok(p.user.length <= 24000 + 2000, `user is ${p.user.length}`);
+  assert.ok(p.user.length > 12000, `user is only ${p.user.length}`);
+  assert.ok(p.user.includes('Read | big.log'));
+  for (let i = 0; i < 30; i++) assert.ok(p.user.includes(`Edit | file${i}.js`), `edit ${i} is still listed`);
+  assert.ok(p.user.includes('Bash | npm test') && p.user.includes('all green'));
+  for (let i = 0; i < 30; i++) assert.ok(p.user.includes(`edited ${i}`), `small output ${i} kept`);
 });
 
 test('a tight budget with a long answer keeps prompt, answer head and tail, and the last output', () => {
@@ -261,6 +296,12 @@ test('parseVerdict rejects everything else', () => {
     'a repeated label key',
   );
   assert.equal(J.parseVerdict(e, '{"explanation":"ok","label":"complete","label" : "partial"}'), null, 'repeated');
+  assert.equal(
+    J.parseVerdict(e, '{"label":"incomplete","\\u006cabel":"complete","explanation":"ok"}'),
+    null,
+    'an escaped spelling of the repeated key',
+  );
+  assert.equal(J.parseVerdict(e, '{"label":"incomplete","labe\\u006c":"complete","explanation":"ok"}'), null);
   const block = '```json\n' + ok + '\n```';
   assert.equal(J.parseVerdict(e, block + '\nand also\n' + block), null, 'two blocks');
   assert.equal(J.parseVerdict(e, block + '\n' + block), null, 'two adjacent blocks');
@@ -285,4 +326,27 @@ test('parseVerdict allows the word "label" inside the explanation', () => {
   const e = R.get('relevance');
   const raw = JSON.stringify({ label: 'partly', explanation: 'the "label": field was fine' });
   assert.deepEqual(J.parseVerdict(e, raw), { label: 'partly', explanation: 'the "label": field was fine' });
+});
+
+test('a pre-cut of any text marks the result as trimmed', () => {
+  const e = R.get('tool_selection');
+  const tools = [{ name: 'Read', target: 'f'.repeat(300), status: 'ok', input: '', output: '' }];
+  assert.equal(J.buildPrompt(e, material({ tools })).trimmed, true, 'a long target is clipped');
+  const available = Array.from({ length: 400 }, (_, i) => `tool${i}`);
+  assert.equal(J.buildPrompt(e, material({ available })).trimmed, true, 'a long tool list is clipped');
+  const long = J.buildPrompt(R.get('relevance'), material({ answer: 'a'.repeat(100) }), { budget: 40 });
+  assert.equal(long.trimmed, true);
+  const out = [{ name: 'Bash', target: 'x', status: 'ok', input: '', output: 'y'.repeat(30000) }];
+  assert.equal(J.buildPrompt(R.get('faithfulness'), material({ tools: out }), { budget: 10000 }).trimmed, true);
+  assert.equal(J.buildPrompt(R.get('relevance'), material()).trimmed, false);
+});
+
+test('the tag is hashed over the capped values, not the whole material', () => {
+  const big = 'z'.repeat(60000000);
+  const tools = [{ name: 'Bash', target: 'x', status: 'ok', input: '', output: big }];
+  const t0 = Date.now();
+  const p = J.buildPrompt(R.get('faithfulness'), material({ answer: big, tools }));
+  assert.ok(Date.now() - t0 < 3000, `took ${Date.now() - t0} ms`);
+  assert.ok(p.user.length <= 24000 + 2000);
+  assert.match(tagOf(p), /^untrusted-[0-9a-f]{16}$/);
 });
