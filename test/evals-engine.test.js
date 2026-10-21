@@ -1260,3 +1260,74 @@ test('an external reply with no usage, or a cost below its input estimate, is ch
   await hi.settle();
   assert.ok(Math.abs((await hi.engine.status()).today.cost - 0.5) < 1e-9);
 });
+
+// Final review: a model change is not a reason to judge every turn since "since" again; the owner asks for that.
+test('a model change does not re-judge what any model judged; a new turn and an explicit request do', async () => {
+  const r = rig();
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(2), T0 + 4 * MIN));
+  r.clock.t = T0 + 10 * MIN;
+  assert.equal((await r.engine.tick()).queued, 2);
+  await r.settle();
+  assert.equal(r.calls.length, 2);
+
+  r.st.resolved = { ...LOCAL, model: 'llama3.1:8b' };
+  assert.equal((await r.engine.tick()).queued, 0, 'the same turns, another model: nothing new');
+  r.clock.t += MIN; // the session is looked at again, still nothing to do
+  r.st.entries[0] = entry('s', turnsAfter(2), T0 + 4 * MIN + 1);
+  assert.equal((await r.engine.tick()).queued, 0);
+  await r.settle();
+  assert.equal(r.calls.length, 2);
+
+  // A turn that is genuinely new is judged by the new model.
+  r.st.entries[0] = entry('s', turnsAfter(3), T0 + 11 * MIN);
+  r.clock.t = T0 + 20 * MIN;
+  assert.equal((await r.engine.tick()).queued, 1);
+  await r.settle();
+  assert.equal(r.calls.length, 3);
+  assert.equal(r.calls.at(-1).resolved.model, 'llama3.1:8b');
+
+  // "Judge this session" re-judges the older turns with the new model; the one it judged already is kept.
+  assert.equal((await r.engine.enqueueSession('claude', 's')).queued, 2);
+  await r.settle();
+  assert.equal(r.calls.length, 5);
+  assert.deepEqual(
+    r.store.all().filter((x) => x.judge.model === 'llama3.1:8b').map((x) => x.target.turn).sort(),
+    [0, 1, 2],
+  );
+});
+
+test('a tick job for a newly enabled evaluator leaves the verdicts another model gave alone', async () => {
+  const r = rig();
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(2), T0 + 4 * MIN));
+  r.clock.t = T0 + 10 * MIN;
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.calls.length, 2);
+  r.st.resolved = { ...LOCAL, model: 'llama3.1:8b' };
+  r.st.settings.evaluators = only('faithfulness', 'relevance');
+  assert.equal((await r.engine.tick()).queued, 2);
+  await r.settle();
+  assert.equal(r.calls.length, 4, 'relevance for two turns, no second faithfulness');
+  const fresh = r.store.all().filter((x) => x.judge.model === 'llama3.1:8b');
+  assert.deepEqual([...new Set(fresh.map((x) => x.evaluator))], ['relevance']);
+
+  // A tick job still queued when the owner asks for the session becomes his request: judged per model.
+  const q = rig();
+  await q.arm();
+  q.st.entries.push(entry('s', turnsAfter(2), T0 + 4 * MIN));
+  q.clock.t = T0 + 10 * MIN;
+  await q.engine.tick();
+  await q.settle();
+  q.st.resolved = { ...LOCAL, model: 'llama3.1:8b' };
+  q.st.settings.evaluators = only('faithfulness', 'relevance');
+  q.st.settings.dailyCap = 2; // reached: the jobs stay queued
+  assert.equal((await q.engine.tick()).queued, 2);
+  await q.engine.enqueueSession('claude', 's');
+  q.st.settings.dailyCap = 500;
+  q.engine.kick();
+  await q.settle();
+  const asked = q.store.all().filter((x) => x.judge.model === 'llama3.1:8b');
+  assert.equal(asked.length, 4, 'both evaluators for both turns');
+});

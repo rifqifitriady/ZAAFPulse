@@ -307,3 +307,20 @@ test('a read-only eval store reads, but never writes, compacts or changes a mode
   assert.deepEqual(createEvalStore({ file: none, readOnly: true }).all(), []);
   assert.equal(fs.existsSync(path.dirname(none)), false);
 });
+
+test('latest: the newest result of any model for a target and evaluator version, also after a reload', () => {
+  const file = tmp();
+  const store = createEvalStore({ file });
+  const t = T();
+  store.put(R(t, 'relevance', 'partly', 'qwen3', { ts: 1000 }));
+  store.put(R(t, 'relevance', 'relevant', 'llama3.1', { ts: 2000 }));
+  store.put(R(t, 'relevance', 'off-topic', 'qwen3', { ts: 1500, version: 2 }));
+  assert.equal(store.latest(t, 'relevance', 1).judge.model, 'llama3.1');
+  assert.equal(store.latest(t, 'relevance', 2).label, 'off-topic');
+  assert.equal(store.latest(t, 'faithfulness', 1), null);
+  assert.equal(store.latest(T(2), 'relevance', 1), null);
+  const again = createEvalStore({ file });
+  assert.equal(again.latest(t, 'relevance', 1).label, 'relevant');
+  again.compact();
+  assert.equal(again.latest(t, 'relevance', 1).label, 'relevant');
+});
