@@ -1175,3 +1175,89 @@ test('material: demo mode serves the synthetic turn through the same content pat
   assert.equal(await t.material('kiro', 'demo-kiro-1', 0), null);
   assert.equal((await t.materialSession('claude', 'demo-claude-1')).material.prompts.length, 1);
 });
+
+// ---- judge material: unreadable text is reported, and long turns keep both ends ----
+
+// Fails the last `n` reads of a log range (as a vanished file would), after a counting run.
+async function failLastReads(t, n, run) {
+  let calls = 0;
+  const real = fs.createReadStream;
+  const count = test.mock.method(fs, 'createReadStream', (...a) => (calls++, real(...a)));
+  await run();
+  const total = calls;
+  count.mock.restore();
+  calls = 0;
+  const gone = test.mock.method(fs, 'createReadStream', (...a) => (++calls > total - n ? real(path.join(os.tmpdir(), 'zp-gone', 'x.jsonl')) : real(...a)));
+  try {
+    return await run();
+  } finally {
+    gone.mock.restore();
+  }
+}
+const twoTools = () =>
+  tmpClaude([
+    U('s9', '00', 'list both'),
+    A('s9', '01', 'm1', [
+      { type: 'tool_use', id: 'tu1', name: 'Read', input: { file_path: 'a' } },
+      { type: 'tool_use', id: 'tu2', name: 'Bash', input: { command: 'ls' } },
+    ]),
+    U('s9', '02', [
+      { type: 'tool_result', tool_use_id: 'tu1', content: 'first out' },
+      { type: 'tool_result', tool_use_id: 'tu2', content: 'second out' },
+    ]),
+    A('s9', '03', 'm2', [{ type: 'text', text: 'done' }]),
+  ]);
+
+test('material: one tool output that cannot be read is marked unavailable, not empty', async () => {
+  const { root, file } = twoTools();
+  const e = await tmpEntry(file);
+  const t = createTrace({ indexer: { entries: () => [e] }, light: [], roots: [root], listTtlMs: 0 });
+  const m = await failLastReads(t, 1, () => t.material('claude', 's9', 0));
+  assert.equal(m.material.tools[0].output, 'first out');
+  assert.ok(!('unavailable' in m.material.tools[0]));
+  assert.deepEqual([m.material.tools[1].output, m.material.tools[1].unavailable], [null, true]);
+  assert.equal(m.material.prompt, 'list both');
+});
+
+test('material: when the prompt, or every tool output, cannot be read, it fails instead of judging empty text', async () => {
+  const { root, file } = twoTools();
+  const e = await tmpEntry(file);
+  const t = createTrace({ indexer: { entries: () => [e] }, light: [], roots: [root], listTtlMs: 0 });
+  await assert.rejects(failLastReads(t, 2, () => t.material('claude', 's9', 0)), (er) => er.status === 404);
+  await assert.rejects(failLastReads(t, 4, () => t.material('claude', 's9', 0)), (er) => er.status === 404, 'prompt, answer and outputs');
+  const m = await t.material('claude', 's9', 0);
+  assert.equal(m.material.tools.length, 2, 'unharmed once the reads work again');
+});
+
+test('material and materialSession reject with 404 when the session file is deleted after listing', async () => {
+  const { root, file } = twoTools();
+  const e = await tmpEntry(file);
+  const t = createTrace({ indexer: { entries: () => [e] }, light: [], roots: [root], listTtlMs: 60000 });
+  t.sessions({});
+  fs.unlinkSync(file);
+  await assert.rejects(t.material('claude', 's9', 0), (er) => er.status === 404 && !/zp-reg/.test(er.message));
+  await assert.rejects(t.materialSession('claude', 's9'), (er) => er.status === 404 && !/zp-reg/.test(er.message));
+});
+
+test('materialSession: when every prompt is unreadable it fails instead of returning no prompts', async () => {
+  const { root, file } = twoTools();
+  const e = await tmpEntry(file);
+  const t = createTrace({ indexer: { entries: () => [e] }, light: [], roots: [root], listTtlMs: 0 });
+  await assert.rejects(failLastReads(t, 1, () => t.materialSession('claude', 's9')), (er) => er.status === 404);
+});
+
+test('material: a turn of 300 calls keeps the first 50 and the last 150, and available covers every call', async () => {
+  const uses = Array.from({ length: 300 }, (_, i) => ({ type: 'tool_use', id: `tu${i}`, name: i === 250 ? 'LateTool' : i === 299 ? 'FinalTool' : 'Bash', input: { command: `c${i}` } }));
+  const results = uses.map((u, i) => ({ type: 'tool_result', tool_use_id: u.id, content: `out${i}` }));
+  const { root, file } = tmpClaude([U('s9', '00', 'many'), A('s9', '01', 'm1', uses), U('s9', '02', results), A('s9', '03', 'm2', [{ type: 'text', text: 'done' }])]);
+  const e = await tmpEntry(file);
+  const t = createTrace({ indexer: { entries: () => [e] }, light: [], roots: [root] });
+  const { material: m } = await t.material('claude', 's9', 0);
+  assert.equal(m.tools.length, 200);
+  assert.equal(m.tools[0].output, 'out0');
+  assert.equal(m.tools[49].output, 'out49');
+  assert.equal(m.tools[50].output, 'out150', 'the middle is what is left out');
+  assert.equal(m.tools[199].output, 'out299');
+  assert.equal(m.tools[199].name, 'FinalTool');
+  assert.ok(m.available.includes('LateTool') && m.available.includes('FinalTool') && m.available.includes('Bash'));
+});

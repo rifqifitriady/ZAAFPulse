@@ -350,3 +350,18 @@ test('the tag is hashed over the capped values, not the whole material', () => {
   assert.ok(p.user.length <= 24000 + 2000);
   assert.match(tagOf(p), /^untrusted-[0-9a-f]{16}$/);
 });
+
+test('an output that could not be read says so inside its wrapper, apart from an empty output', () => {
+  const tools = [
+    { name: 'Read', target: 'gone.js', status: 'ok', output: null, unavailable: true },
+    { name: 'Bash', target: 'true', status: 'ok', output: '' },
+  ];
+  const p = J.buildPrompt(R.get('faithfulness'), material({ tools }));
+  const tag = tagOf(p);
+  const pieces = p.user.match(new RegExp(`<${tag} kind="tool">[\\s\\S]*?</${tag}>`, 'g'));
+  assert.equal(pieces.length, 2);
+  assert.match(pieces[0], /Read \| gone\.js \| ok\n\[output unavailable\]\n/);
+  assert.ok(!pieces[1].includes('[output unavailable]'), 'an empty output is not an unavailable one');
+  const empty = J.buildPrompt(R.get('faithfulness'), material({ tools: [{ ...tools[0], output: '', unavailable: false }, tools[1]] }));
+  assert.notEqual(tagOf(empty), tag, 'the tag follows what is sent');
+});
