@@ -255,7 +255,9 @@ with your Claude account. No API key is needed, and nothing is set up in the gat
   second fence), no MCP servers (`--strict-mcp-config`), no slash commands, no settings files
   (`--setting-sources ""`), the judge's system prompt instead of Claude Code's, and the answer forced to the
   evaluator's JSON schema (`--json-schema`). It writes no session (`--no-session-persistence`), and in case one is
-  ever written, a session whose folder is the judge's own (`zaafpulse-judge-…`) is never judged. It runs in a new
+  ever written, a session whose folder is the judge's own (`zaafpulse-judge-…`, also in the dash-encoded and
+  decoded forms of the log folder name) is never judged. The call is not listed as a running Claude Code on the Live
+  page either: it is known by that folder in its command line or as its working folder, or by its pid. It runs in a new
   empty temporary folder, which is removed after the call, so no project `CLAUDE.md` is picked up; a `CLAUDE.md` in a
   folder above it was checked to have no effect. Whether `--setting-sources ""` also keeps out your user-level
   `~/.claude/CLAUDE.md` (or `$CLAUDE_CONFIG_DIR/CLAUDE.md`) has not been checked against a signed-in CLI; the judge's own

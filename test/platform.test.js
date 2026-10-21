@@ -165,6 +165,51 @@ test('processes: Linux /proc, meminfo and Windows CIM rows become the same app l
   );
 });
 
+test('processes: the judge\'s own Claude Code calls are not a running app', () => {
+  const judgeDir = path.join(os.tmpdir(), 'zaafpulse-judge-Ab12Cd');
+  const row = (pid, args, extra = {}) => ({ pid, cpu: 1, rssKB: 1024, upSec: 5, args, ...extra });
+  const rows = [
+    row(21, '/home/u/.local/bin/claude --resume'), // the owner's session
+    row(22, '/home/u/.local/bin/claude -p --output-format json', { cwd: judgeDir }), // the judge, by its folder
+    row(23, `/home/u/.local/bin/claude -p --add-dir ${judgeDir}`), // the judge's folder in argv
+    row(24, '/home/u/.local/bin/claude -p --output-format json'), // a judge call this process started
+  ];
+  const apps = processes.groupApps(rows, { skip: new Set([24]) });
+  assert.deepEqual(
+    apps.map((a) => [a.id, a.processes]),
+    [['claude', 1]],
+  );
+  // Linux: the working folder comes from /proc/<pid>/cwd.
+  if (process.platform !== 'win32') {
+    const root = tmp('zp-proc-');
+    fs.writeFileSync(path.join(root, 'uptime'), '1000.00 900.00');
+    const mk = (pid, cmd, cwd) => {
+      const d = path.join(root, String(pid));
+      fs.mkdirSync(d);
+      fs.writeFileSync(path.join(d, 'cmdline'), cmd.split(' ').join('\0'));
+      fs.writeFileSync(path.join(d, 'stat'), `${pid} (x) S ${'0 '.repeat(10)}100 0 0 0 0 0 0 0 100 0`);
+      fs.writeFileSync(path.join(d, 'status'), 'VmRSS:\t1024 kB\n');
+      fs.symlinkSync(cwd, path.join(d, 'cwd'));
+    };
+    fs.mkdirSync(judgeDir, { recursive: true });
+    mk(31, '/home/u/.local/bin/claude -p', judgeDir);
+    mk(32, '/home/u/.local/bin/claude --resume', os.tmpdir());
+    const linux = processes.procRows(root, 100);
+    assert.equal(linux.find((r) => r.pid === 31).cwd, judgeDir);
+    assert.deepEqual(
+      processes.groupApps(linux).map((a) => [a.id, a.processes]),
+      [['claude', 1]],
+    );
+    fs.rmSync(judgeDir, { recursive: true, force: true });
+  }
+  // macOS: lsof's field output gives each process's working folder.
+  const out = `p41\nfcwd\nn${judgeDir}\np42\nfcwd\nn/Users/u/work\n`;
+  assert.deepEqual([...processes.parseLsofCwd(out)], [
+    [41, judgeDir],
+    [42, '/Users/u/work'],
+  ]);
+});
+
 test('service: the log folder variables are carried into the unit, plist and Windows launcher', () => {
   const env = service.settings({
     CLAUDE_CONFIG_DIR: '/home/me/work-claude',
