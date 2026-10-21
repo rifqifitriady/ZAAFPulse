@@ -122,6 +122,27 @@ test('keyFor finds the key of a listed session by source and id, and refuses the
     assert.throws(() => t.keyFor(src, sid), (e) => e.status === 400, `${src} ${sid}`);
 });
 
+test('demo: links from the demo Sessions and AI Office pages open the synthetic trace of their tool', async () => {
+  const { buildResults } = require('../lib/demo');
+  const t = createTrace({ demo: true, listTtlMs: 0 });
+  const rows = t.sessions({});
+  const keyOf = (src) => rows.find((r) => r.source === src).key;
+  // The ids the demo Sessions page links with.
+  const ids = buildResults().flatMap((r) => Object.keys(r.sessions));
+  const claudeId = ids.find((id) => id.startsWith('claude-'));
+  const codexId = ids.find((id) => id.startsWith('codex-'));
+  assert.ok(claudeId && codexId);
+  assert.equal(t.keyFor('claude', claudeId), keyOf('claude'));
+  assert.equal(t.keyFor('codex', codexId), keyOf('codex'));
+  assert.equal(t.keyFor('claude', 'demo-2'), keyOf('claude'), 'an AI Office agent');
+  // Still only those shapes, and only under their own source.
+  for (const [src, sid] of [['codex', claudeId], ['kiro', 'demo-1'], ['claude', 'claude-1-2'], ['claude', '../claude-1-2-x']])
+    assert.throws(() => t.keyFor(src, sid), (e) => e.status === 404, `${src} ${sid}`);
+  // Outside demo mode nothing is mapped.
+  const real = await make();
+  assert.throws(() => real.keyFor('claude', claudeId), (e) => e.status === 404);
+});
+
 test('keyFor sees a file-backed session the listing just picked up', async () => {
   const t = await make();
   assert.equal(t.keyFor('claude', 's1'), t.sessions({}).find((r) => r.source === 'claude').key);
@@ -540,6 +561,18 @@ test('a worker that exits, throws or hangs falls back to the main thread', async
     assert.equal(t.stats().fallbacks, 1, name);
     assert.equal((await t.content(sk.spans.find((s) => s.kind === 'turn').text, {})).text, 'fix the login redirect', name);
   }
+});
+
+test('the worker decision counts the subagent files of the session, not only the main log', async () => {
+  const ix = await fakeIndexer();
+  const main = ix.entries().find((e) => !e.file.includes('subagents'));
+  // The main log alone is not over the bar; with its subagent file it is.
+  const t = await make({ indexer: ix, workerMinBytes: main.size });
+  await t.session(t.sessions({})[0].key, { turn: 0 });
+  assert.equal(t.stats().workers, 1);
+  const small = await make({ indexer: ix, workerMinBytes: ix.entries().reduce((a, e) => a + e.size, 0) });
+  await small.session(small.sessions({})[0].key, { turn: 0 });
+  assert.equal(small.stats().workers, 0);
 });
 
 test('a small file never starts a worker', async () => {

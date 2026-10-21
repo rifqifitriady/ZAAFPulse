@@ -25,9 +25,9 @@ const freePort = () =>
     s.listen(port, '127.0.0.1', () => s.close(() => resolve(port)));
   });
 // Starts server.js on a free port of the range; tries again when another test took the port first.
-async function startServer(env, { data = tmp('zp-trace-api-') } = {}) {
+async function startServer(env, { data = tmp('zp-trace-api-'), ports = freePort } = {}) {
   for (let attempt = 0; attempt < 6; attempt++) {
-    const port = await freePort();
+    const port = await ports();
     const child = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
       env: {
         ...process.env,
@@ -45,13 +45,17 @@ async function startServer(env, { data = tmp('zp-trace-api-') } = {}) {
     let exited = false;
     child.on('exit', () => (exited = true));
     const base = `http://127.0.0.1:${port}`;
-    // Waits for the process to be gone before its folder is removed.
-    const stop = async () => {
+    const kill = async () => {
       if (!exited) {
         const gone = new Promise((r) => child.once('exit', r));
         child.kill();
         await gone;
       }
+    };
+    // Waits for the process to be gone before its folder is removed. A retry only kills: the folder holds what
+    // the test seeded (a log, gateway keys), so it must outlive a lost port race.
+    const stop = async () => {
+      await kill();
       fs.rmSync(data, { recursive: true, force: true });
     };
     for (let i = 0; i < 80 && !exited; i++) {
@@ -64,10 +68,34 @@ async function startServer(env, { data = tmp('zp-trace-api-') } = {}) {
         await new Promise((r) => setTimeout(r, 150));
       }
     }
-    await stop();
+    await kill();
   }
+  fs.rmSync(data, { recursive: true, force: true });
   throw new Error('could not start server.js on a free port');
 }
+
+// The retry after a lost port race must not delete what the test seeded in the data folder.
+test('startServer: a retry after a taken port keeps the seeded data folder', async () => {
+  const data = tmp('zp-trace-api-retry-');
+  const seeded = path.join(data, 'seeded.txt');
+  fs.writeFileSync(seeded, 'x');
+  const taken = net.createServer();
+  await new Promise((r) => taken.listen(0, '127.0.0.1', r));
+  let calls = 0;
+  const ports = async () => (calls++ === 0 ? taken.address().port : freePort());
+  try {
+    const s = await startServer({ DEMO: '1', ZAAFPULSE_AUTH: 'none' }, { data, ports });
+    try {
+      assert.ok(calls >= 2, 'the first port was taken, so it tried again');
+      assert.ok(fs.existsSync(seeded), 'the seeded file is still there');
+    } finally {
+      await s.stop();
+    }
+    assert.equal(fs.existsSync(data), false, 'stop removes the folder');
+  } finally {
+    taken.close();
+  }
+});
 
 // A client that keeps every JSON body it receives, so one scan at the end covers all of them.
 function client(base, headers = {}) {

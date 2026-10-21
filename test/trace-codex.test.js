@@ -345,3 +345,24 @@ test('codex: per-request token_count lines keep one measured chat per request an
   assert.deepEqual(chats.map((c) => c.usage.output), [10, 15, 15]);
   assert.deepEqual(validate(sk.spans), []);
 });
+
+test('codex: a tool name and a file name are masked and capped; a line over the read limit is a 413', async () => {
+  const key = ['sk', 'ant', 'Ab3dE7gH1jK5mN9pQ2sT4vX6zC8'].join('-'); // built here so no key sits in the repo
+  const long = 'x'.repeat(200);
+  const { file } = tmpLog([
+    L('00.000', 'session_meta', { id: 'mk' }),
+    L('00.500', 'event_msg', { type: 'task_started' }),
+    L('01.000', 'response_item', { type: 'function_call', name: `tool.${key}.${long}`, call_id: 'a', arguments: JSON.stringify({ path: `/w/${key}.${long}.txt` }) }),
+    L('02.000', 'response_item', { type: 'custom_tool_call', name: 'apply_patch', call_id: 'b', input: `*** Begin Patch\n*** Update File: src/${key}.${long}.js\n*** End Patch` }),
+  ]);
+  const e = await entryOf(file);
+  const tools = (await adapter.skeleton(e, 'mk', { entries: [e] })).spans.filter((s) => s.kind === 'tool');
+  assert.equal(tools.length, 2);
+  for (const v of tools.flatMap((t) => [t.name, t.tool.name, t.tool.target])) {
+    assert.ok(!v.includes(key), v.slice(0, 40));
+    assert.ok(v.replace(/^execute_tool /, '').length <= 80, `capped: ${v.length}`);
+  }
+  const big = tmpLog([L('00.000', 'session_meta', { id: 'bg' }), L('00.500', 'event_msg', { type: 'task_started' }), L('01.000', 'response_item', { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'y'.repeat(17 * 1024 * 1024) }] })]);
+  const be = await entryOf(big.file);
+  await assert.rejects(adapter.skeleton(be, 'bg', { entries: [be] }), (er) => er.status === 413);
+});

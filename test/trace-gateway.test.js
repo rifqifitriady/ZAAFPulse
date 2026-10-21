@@ -221,3 +221,23 @@ test('long session ids and model names are clipped to 80 characters', () => {
   assert.equal(rows[0].id, 'req:' + 's'.repeat(80));
   assert.equal(rows[0].title, '1 request · ' + 'x'.repeat(80));
 });
+
+test('gateway model, provider and span names are masked and capped like a title', async () => {
+  const key = ['sk', 'ant', 'Ab3dE7gH1jK5mN9pQ2sT4vX6zC8'].join('-'); // built here so no key sits in the repo
+  const model = `m.${key}.${'x'.repeat(200)}`;
+  const r2 = { ...run, id: 'r2', trace: run.trace.map((s) => (s.attrs['gen_ai.request.model'] ? { ...s, name: `chat ${model}`, attrs: { ...s.attrs, 'gen_ai.request.model': model } } : s)) };
+  const gg = {
+    runs: () => [r2],
+    run: (id) => (id === 'r2' ? r2 : null),
+    requests: () => [{ ts: 2000, keyId: 'k1', provider: `p.${key}`, model, sessionId: 'conv-2', kind: 'chat', status: 200, ms: 300, input: 10, output: 4, cost: 0.001 }],
+  };
+  const a = createGatewayAdapter(gg);
+  const rows = a.sessions();
+  const spans = [...(await a.skeleton(null, 'run:r2')).spans, ...(await a.skeleton(null, 'req:conv-2')).spans];
+  const shown = [...rows.map((r) => r.title), ...spans.flatMap((s) => [s.name, s.model, s.provider])].filter((v) => typeof v === 'string');
+  assert.ok(shown.some((v) => v.includes('hidden')), 'the key was found and masked');
+  for (const v of shown) {
+    assert.ok(!v.includes(key), v.slice(0, 40));
+    assert.ok(v.length <= 100, `capped: ${v.length}`);
+  }
+});
