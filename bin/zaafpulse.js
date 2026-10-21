@@ -229,7 +229,11 @@ const commands = {
       let total = 0;
       let newest = 0;
       const lines = [];
-      for (const root of mod.roots(env, home)) {
+      for (const { path: root, ignored } of mod.rootInfo(env, home)) {
+        if (ignored) {
+          lines.push(`    ${logs.tilde(root, home)}  ignored: ${ignored}`);
+          continue;
+        }
         const files = logs.walkJsonl(root, depth);
         for (const f of files) {
           try {

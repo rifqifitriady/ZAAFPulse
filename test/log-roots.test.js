@@ -41,8 +41,8 @@ test('claude roots: XDG_CONFIG_HOME replaces ~/.config, a relative one is ignore
 test('claude roots: CLAUDE_CONFIG_DIR lists several folders, expands ~, and is the only source', () => {
   const home = abs('h', 'me');
   const a = abs('a', 'one');
-  const got = claude.roots({ CLAUDE_CONFIG_DIR: `${a}, ~/second ,, ~`, XDG_CONFIG_HOME: abs('x') }, home);
-  assert.deepEqual(got, [j(a, 'projects'), j(home, 'second', 'projects'), j(home, 'projects')]);
+  const got = claude.roots({ CLAUDE_CONFIG_DIR: `${a}, ~/second ,, ~/Documents`, XDG_CONFIG_HOME: abs('x') }, home);
+  assert.deepEqual(got, [j(a, 'projects'), j(home, 'second', 'projects'), j(home, 'Documents', 'projects')]);
 });
 
 test('claude roots: repeated folders are listed once', () => {
@@ -52,6 +52,79 @@ test('claude roots: repeated folders are listed once', () => {
   // XDG_CONFIG_HOME=~ makes ~/claude/projects, which differs; ~/.config as XDG folder must not repeat itself
   assert.deepEqual(claude.roots({ XDG_CONFIG_HOME: j(home, '.config') }, home), claude.roots({}, home));
   assert.deepEqual(claude.roots({ XDG_CONFIG_HOME: home }, home).length, 2);
+});
+
+test('claude roots: a root at the top of a drive or directly in the home folder is ignored as too broad', () => {
+  const home = abs('h', 'me');
+  const info = claude.rootInfo({ CLAUDE_CONFIG_DIR: `${abs()},~,${home},~/Documents,${abs('ok')}` }, home);
+  assert.deepEqual(info, [
+    { path: abs('projects'), ignored: 'too broad' },
+    { path: j(home, 'projects'), ignored: 'too broad' },
+    { path: j(home, 'projects'), ignored: 'too broad' },
+    { path: j(home, 'Documents', 'projects') }, // a folder inside the home is fine: ~/Documents/projects
+    { path: abs('ok', 'projects') },
+  ]);
+  assert.deepEqual(claude.roots({ CLAUDE_CONFIG_DIR: `${abs()},~` }, home), [], 'nothing is read from them');
+  assert.deepEqual(codex.rootInfo({ CODEX_HOME: abs() }, home), [{ path: abs('sessions'), ignored: 'too broad' }]);
+  assert.deepEqual(codex.roots({ CODEX_HOME: home }, home), []);
+});
+
+test('roots: a relative CLAUDE_CONFIG_DIR or CODEX_HOME is ignored, never resolved against the working folder', () => {
+  const home = abs('h', 'me');
+  assert.deepEqual(claude.rootInfo({ CLAUDE_CONFIG_DIR: `rel/dir,${abs('ok')}` }, home), [
+    { path: 'rel/dir', ignored: 'not absolute' },
+    { path: abs('ok', 'projects') },
+  ]);
+  assert.deepEqual(claude.roots({ CLAUDE_CONFIG_DIR: '../x' }, home), []);
+  assert.deepEqual(codex.rootInfo({ CODEX_HOME: 'cx' }, home), [{ path: 'cx', ignored: 'not absolute' }]);
+  assert.deepEqual(codex.roots({ CODEX_HOME: 'cx' }, home), []);
+  assert.deepEqual(codex.listFiles({ CODEX_HOME: 'cx' }, home), []);
+});
+
+test('ignored roots are listed by describeRoots with their reason and hold no files', () => {
+  const home = abs('h', 'me');
+  const info = claude.rootInfo({ CLAUDE_CONFIG_DIR: `~,rel` }, home);
+  assert.deepEqual(describeRoots({ claude: info }, { [j(home, 'projects', 'x.jsonl')]: { source: 'claude' } }, home), [
+    { tool: 'claude', path: '~/projects', exists: false, files: 0, ignored: 'too broad' },
+    { tool: 'claude', path: 'rel', exists: false, files: 0, ignored: 'not absolute' },
+  ]);
+});
+
+test('roots: a root that is a link to an earlier root is listed once, and its files are not counted twice', (t) => {
+  if (process.platform === 'win32') return t.skip('symlinks need privileges on Windows');
+  const home = tmp('zp-roots-');
+  const a = put(j(home, '.claude', 'projects', '-p', 's1.jsonl'));
+  fs.mkdirSync(j(home, '.config'), { recursive: true });
+  fs.symlinkSync(j(home, '.claude'), j(home, '.config', 'claude')); // ~/.config/claude -> ~/.claude
+  assert.deepEqual(claude.roots({}, home), [j(home, '.config', 'claude', 'projects')], 'the first spelling is kept');
+  const b = j(home, '.config', 'claude', 'projects', '-p', 's1.jsonl');
+  assert.deepEqual(claude.listFiles({}, home), [b]);
+  assert.equal(fs.realpathSync(a), fs.realpathSync(b));
+  // Separate roots (CLAUDE_CONFIG_DIR) reaching the same files through a link do not double-list them either.
+  const env = { CLAUDE_CONFIG_DIR: `${j(home, '.claude')},${j(home, 'alias')}` };
+  fs.mkdirSync(j(home, 'alias'));
+  fs.symlinkSync(j(home, '.claude', 'projects'), j(home, 'alias', 'projects'), 'dir');
+  assert.equal(claude.listFiles(env, home).length, 1);
+});
+
+test('installed apps: Claude Code counts as installed when any resolved log folder exists', () => {
+  const processes = require('../lib/processes');
+  const home = tmp('zp-roots-');
+  put(j(home, 'work', 'projects', '-p', 's.jsonl'));
+  const saved = { ...process.env };
+  try {
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    process.env.CLAUDE_CONFIG_DIR = j(home, 'work');
+    delete process.env.CODEX_HOME;
+    const got = processes.installed();
+    assert.ok(got.includes('claude'));
+    assert.ok(!got.includes('codex'));
+  } finally {
+    for (const k of ['HOME', 'USERPROFILE', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME'])
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+  }
 });
 
 test('codex roots: CODEX_HOME/sessions when set, else ~/.codex/sessions', () => {
@@ -97,6 +170,20 @@ test('codex listFiles reads CODEX_HOME/sessions', () => {
   const f = put(j(home, 'cx', 'sessions', '2026', '10', '21', 'rollout-1.jsonl'));
   assert.deepEqual(codex.listFiles({ CODEX_HOME: j(home, 'cx') }, home), [f]);
   assert.deepEqual(codex.listFiles({}, home), []);
+});
+
+test('trace content serves only .jsonl files, even inside a root', async () => {
+  const home = tmp('zp-roots-');
+  const log = put(j(home, '.claude', 'projects', 'p', 's.jsonl'));
+  const other = put(j(home, '.claude', 'projects', 'p', 'notes.txt'), 'private notes\n');
+  const c = createContent({ roots: claude.roots({}, home) });
+  assert.ok((await c.read({ f: log, s: 0, e: 5, k: 'raw' })).text);
+  await assert.rejects(c.read({ f: other, s: 0, e: 5, k: 'raw' }), { status: 403, message: /not a log file/ });
+  if (process.platform !== 'win32') {
+    const link = j(home, '.claude', 'projects', 'p', 'link.jsonl');
+    fs.symlinkSync(other, link);
+    await assert.rejects(c.read({ f: link, s: 0, e: 5, k: 'raw' }), { status: 403 });
+  }
 });
 
 test('trace content reads from every resolved root and refuses everything else with 403', async () => {
@@ -155,6 +242,11 @@ test('emptyLogsNote: shows the first index instead of zeros, and nothing once th
   assert.equal(emptyLogsNote(undefined, IDLE, 0), '', 'no diagnostics loaded');
   const found = [{ tool: 'claude', path: '~/.claude/projects', exists: true, files: 3 }];
   assert.equal(emptyLogsNote(found, IDLE, 0), '', 'logs exist; the range is only quiet');
+});
+
+test('emptyLogsNote: an ignored folder says why', () => {
+  const t = emptyLogsNote([{ tool: 'claude', path: '~/projects', exists: false, files: 0, ignored: 'too broad' }], IDLE, 0);
+  assert.match(t, /~\/projects \(ignored: too broad\)/);
 });
 
 test('emptyLogsNote: output is plain text built from the given values (the page escapes it)', () => {
@@ -264,5 +356,29 @@ test('doctor lists the roots, counts and the data folder from a temp HOME and ex
   assert.match(r.stdout, /Data folder/);
   assert.match(r.stdout, /not (running|answering)/i);
   assert.doesNotMatch(r.stdout, /SECRET-TRANSCRIPT-TEXT/);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('doctor shows ignored folders with the reason and does not read them', () => {
+  const home = tmp('zp-roots-doc-');
+  put(j(home, 'projects', 'x', 's.jsonl')); // ~/projects would be read if CLAUDE_CONFIG_DIR=~ were accepted
+  const r = spawnSync(process.execPath, [j(ROOT, 'bin', 'zaafpulse.js'), 'doctor'], {
+    encoding: 'utf8',
+    timeout: 30000,
+    env: {
+      ...process.env,
+      HOME: home,
+      USERPROFILE: home,
+      ZAAFPULSE_DATA: j(home, 'data'),
+      ZAAFPULSE_PORT: '9',
+      CLAUDE_CONFIG_DIR: `${home},relative/dir`,
+      CODEX_HOME: '',
+      XDG_CONFIG_HOME: '',
+    },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /~\/projects\s+ignored: too broad/);
+  assert.match(r.stdout, /relative\/dir\s+ignored: not absolute/);
+  assert.match(r.stdout, /Claude Code\s+no logs found/);
   fs.rmSync(home, { recursive: true, force: true });
 });

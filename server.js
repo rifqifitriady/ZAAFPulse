@@ -165,7 +165,8 @@ const indexer = DEMO
 // The folders the logs are read from (also the only ones the trace explorer may read text from), as the owner's
 // dashboard shows them: ~ paths, whether each exists, and how many files the indexer holds from it.
 const LOG_ROOTS = { claude: require('./lib/claude').ROOTS, codex: require('./lib/codex').ROOTS };
-const logRoots = () => describeRoots(LOG_ROOTS, indexer.files, os.homedir());
+const LOG_ROOT_INFO = { claude: require('./lib/claude').rootInfo(), codex: require('./lib/codex').rootInfo() };
+const logRoots = () => describeRoots(LOG_ROOT_INFO, indexer.files, os.homedir());
 const memo = new Map();
 
 // Integrations are rebuilt whenever config.json changes on disk (they are edited in the file).

@@ -210,6 +210,7 @@ const state = {
   range: store.get('range', '30'),
   metric: store.get('metric', 'cost'),
   toolFilter: 'all',
+  logNote: '', // the Overview's empty-state note as last drawn
   search: '',
   data: null,
   live: null,
