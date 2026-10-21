@@ -288,3 +288,22 @@ test('a failing compaction inside put is logged once and does not throw', (t) =>
   assert.equal(store.all().length, 5);
   assert.equal(lines(file).length, 5);
 });
+
+test('a read-only eval store reads, but never writes, compacts or changes a mode', () => {
+  const file = tmp();
+  createEvalStore({ file }).put(R(T(0), 'relevance', 'relevant'));
+  fs.appendFileSync(file, 'not json\n');
+  fs.chmodSync(file, 0o644);
+  const before = fs.readFileSync(file, 'utf8');
+  const store = createEvalStore({ file, readOnly: true });
+  assert.equal(store.all().length, 1);
+  assert.equal(store.stats().bad, 1);
+  assert.throws(() => store.put(R(T(1), 'relevance', 'relevant')), /read-only/);
+  assert.throws(() => store.compact(), /read-only/);
+  assert.equal(fs.readFileSync(file, 'utf8'), before, 'the bad line is still there');
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o644);
+  // A folder that does not exist is simply empty, and is not created.
+  const none = path.join(path.dirname(file), 'absent', 'evals.jsonl');
+  assert.deepEqual(createEvalStore({ file: none, readOnly: true }).all(), []);
+  assert.equal(fs.existsSync(path.dirname(none)), false);
+});

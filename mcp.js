@@ -32,7 +32,7 @@ try {
 const secrets = createSecrets();
 // Tool-call spans, as in server.js: off unless config.json has "otel": { "enabled": true }. Its log goes to stderr.
 otel.init({ getConfig: () => config, secrets, version, log });
-const local = createLocal({ cacheDir: CACHE_DIR, config });
+const local = createLocal({ cacheDir: CACHE_DIR, config, dataDir: DIR });
 const integrations = createIntegrations({
   config,
   secrets,
