@@ -6,6 +6,7 @@ const { createModels, externalSystem } = require('../lib/evals/models');
 const SCHEMA = { type: 'object', properties: { label: { type: 'string' } }, required: ['label'] };
 const tags = (...names) => ({ body: { models: names.map((name) => ({ name })) } });
 const ids = (...names) => ({ body: { data: names.map((id) => ({ id })) } });
+const WAIT = 'Install or start Ollama, or choose a provider';
 
 // Fake Ollama + LM Studio on random ports; "down" is a port that was open and then closed (never 11434/1234).
 async function rig({ ollama, lmstudio, settings = { model: '', provider: 'auto' }, gateway, now } = {}) {
@@ -82,14 +83,15 @@ test('resolve: LM Studio when Ollama is not running; nothing found means wait', 
   }
 });
 
-test('resolve: a configured local model needs no probe, and a listed configured name is preferred', async () => {
+test('resolve: a configured local model is used as given, and a listed configured name is preferred', async () => {
   const t = await rig({
     ollama: { 'GET /api/tags': tags('qwen3:8b', 'mistral:7b') },
     settings: { model: 'my-tuned', provider: 'ollama' },
   });
   try {
+    // Not listed, still used: the one probe only looks for a cloud model under that name.
     assert.deepEqual(await t.m.resolve(), { ok: true, kind: 'ollama', model: 'my-tuned', provider: 'ollama' });
-    assert.equal(t.o.requests.length, 0);
+    assert.deepEqual(t.o.requests.map((r) => r.path), ['/api/tags']);
     t.state.settings = { model: 'mistral:7b', provider: 'auto' };
     assert.equal((await t.m.resolve()).model, 'mistral:7b');
   } finally {
@@ -424,8 +426,9 @@ test('call: a failed response has its body cancelled', async () => {
     fetchImpl,
   });
   const r = await m.resolve();
+  const probed = cancelled; // the cloud-model lookup of a named Ollama model got a 503 too
   await assert.rejects(m.call(r, { system: 's', user: 'u', schema: SCHEMA }), (e) => e.status === 503);
-  assert.equal(cancelled, 1);
+  assert.equal(cancelled - probed, 1);
 });
 
 test('priced and cost: an external model without a list price is unpriced and its cost is null, never 0', async () => {
@@ -455,5 +458,76 @@ test('priced and cost: an external model without a list price is unpriced and it
   } finally {
     await known.t.close();
     await unknown.t.close();
+  }
+});
+
+// Final review: Ollama 0.12+ lists cloud models in /api/tags; a request to one is forwarded to ollama.com.
+const CLOUD_REASON = 'Ollama cloud models send text off this machine; choose an external provider in the gateway instead';
+const remote = (name, model = name.replace(/-?cloud$/, '')) => ({
+  name,
+  model: name,
+  remote_host: 'https://ollama.com:443',
+  remote_model: model,
+});
+
+test('cloud: an Ollama cloud model is never auto-picked; the local one is', async () => {
+  const t = await rig({
+    ollama: {
+      'GET /api/tags': {
+        body: {
+          models: [
+            remote('qwen3-coder:480b-cloud'),
+            { name: 'qwen3:8b', model: 'qwen3:8b', remote_host: 'https://ollama.com:443' }, // remote, local-looking name
+            { name: 'glm-4.6:cloud' }, // the name alone says cloud
+            { name: 'llama3.1:8b' },
+          ],
+        },
+      },
+    },
+  });
+  try {
+    assert.deepEqual(await t.m.resolve(), { ok: true, kind: 'ollama', model: 'llama3.1:8b', provider: 'ollama' });
+  } finally {
+    await t.close();
+  }
+});
+
+test('cloud: an Ollama that lists only cloud models means wait', async () => {
+  const t = await rig({
+    ollama: { 'GET /api/tags': { body: { models: [remote('gpt-oss:120b-cloud'), { name: 'qwen3:cloud' }] } } },
+  });
+  try {
+    assert.deepEqual(await t.m.resolve(), { ok: false, waiting: true, reason: WAIT });
+  } finally {
+    await t.close();
+  }
+});
+
+test('cloud: a cloud model named in the settings is refused, and call() refuses one too', async () => {
+  const t = await rig({
+    ollama: {
+      'GET /api/tags': { body: { models: [remote('mine', 'gpt-oss:120b'), { name: 'qwen3:8b' }] } },
+      'POST /api/chat': () => assert.fail('a cloud model was called'),
+    },
+  });
+  try {
+    for (const settings of [
+      { provider: 'ollama', model: 'gpt-oss:120b-cloud' },
+      { provider: 'ollama', model: 'GLM-4.6:Cloud' },
+      { provider: 'auto', model: 'deepseek-v3.1:671b-cloud' },
+      { provider: 'ollama', model: 'mine' }, // listed with a remote host under a local-looking name
+    ]) {
+      t.state.settings = settings;
+      assert.deepEqual(await t.m.resolve(), { ok: false, waiting: true, reason: CLOUD_REASON }, settings.model);
+    }
+    const handMade = { ok: true, kind: 'ollama', model: 'kimi-k2:1t-cloud', provider: 'ollama' };
+    await assert.rejects(t.m.call(handMade, { system: 's', user: 'u', schema: SCHEMA }), (e) => {
+      assert.equal(e.status, 0);
+      assert.equal(e.message, CLOUD_REASON);
+      return true;
+    });
+    assert.equal(t.o.requests.filter((r) => r.method === 'POST').length, 0);
+  } finally {
+    await t.close();
   }
 });
