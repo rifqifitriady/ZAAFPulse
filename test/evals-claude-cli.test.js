@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createClaude, childEnv } = require('../lib/evals/claude-cli');
+const { createClaude, childEnv, destinationOf } = require('../lib/evals/claude-cli');
 const { fakeClaude } = require('./helpers');
 
 const POSIX = process.platform !== 'win32';
@@ -31,6 +31,8 @@ const FLAGS = [
   'json',
   '--tools',
   '',
+  '--disallowedTools',
+  'mcp__*',
   '--strict-mcp-config',
   '--no-session-persistence',
   '--disable-slash-commands',
@@ -257,4 +259,153 @@ test('call: the child gets the owner environment, without the dashboard settings
   const env = { HOME: '/h', PATH: '/bin', CLAUDECODE: '1', ZAAFPULSE_AUTH: 'x', CLAUDE_CONFIG_DIR: '/a/one,/a/two' };
   assert.deepEqual(childEnv(env), { HOME: '/h', PATH: '/bin', CLAUDE_CONFIG_DIR: '/a/one' });
   assert.deepEqual(childEnv({ CLAUDE_CONFIG_DIR: '/a/only' }), { CLAUDE_CONFIG_DIR: '/a/only' });
+});
+
+// ---- review fixes ----
+test('call: a helper that keeps the pipes open cannot hold the call past its timeout', { skip: !POSIX }, async () => {
+  const t = rig('orphan');
+  const started = Date.now();
+  const timedOut = (e) => e.status === 0 && /timed out/.test(e.message);
+  await assert.rejects(judge(t, { timeoutMs: 300, graceMs: 300 }), timedOut);
+  const took = Date.now() - started;
+  assert.ok(took < 3000, `settled after ${took} ms`);
+  const recs = readLog(t.log);
+  const run = recs.find((r) => r.argv);
+  const helper = recs.find((r) => r.helper);
+  assert.equal(alive(run.pid), false);
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(alive(helper.helper), false, 'the whole process group is stopped');
+  assert.equal(fs.existsSync(run.cwd), false);
+});
+
+test('call: an answer is read once the CLI exits, even while a helper holds the pipes', { skip: !POSIX }, async () => {
+  const t = rig('orphan-answer');
+  const started = Date.now();
+  const r = await judge(t, { timeoutMs: 20000 });
+  assert.ok(Date.now() - started < 5000);
+  assert.deepEqual(JSON.parse(r.text), { label: 'relevant', explanation: 'fake verdict' });
+  const helper = readLog(t.log).find((x) => x.helper);
+  await new Promise((res) => setTimeout(res, 100));
+  assert.equal(alive(helper.helper), false);
+  assert.equal(fs.existsSync(t.runs()[0].cwd), false);
+});
+
+test('destination: where the text goes and who pays, from the environment the CLI gets', () => {
+  const d = (env) => destinationOf(env);
+  assert.deepEqual(
+    { to: d({}).to, billing: d({}).billing, text: d({}).text },
+    { to: 'Anthropic', billing: 'your Claude login', text: 'Anthropic, through your Claude login' },
+  );
+  const url = 'https://' + ['user', 'pw'].join(':') + '@gw.example.com:8443/v1';
+  assert.equal(d({ ANTHROPIC_BASE_URL: url }).to, 'gw.example.com:8443 (ANTHROPIC_BASE_URL)');
+  assert.equal(d({ ANTHROPIC_BASE_URL: 'not a url' }).to, 'a custom address (ANTHROPIC_BASE_URL)');
+  assert.equal(d({ CLAUDE_CODE_USE_BEDROCK: '1' }).to, 'AWS Bedrock');
+  assert.equal(d({ CLAUDE_CODE_USE_VERTEX: 'true' }).to, 'Google Vertex AI');
+  assert.equal(d({ CLAUDE_CODE_USE_BEDROCK: '0' }).to, 'Anthropic', '0 is off');
+  const key = ['sk', 'test', 'x'].join('-');
+  assert.equal(d({ ANTHROPIC_API_KEY: key }).billing, 'API billing');
+  assert.equal(d({ ANTHROPIC_AUTH_TOKEN: key }).text, 'Anthropic, with API billing');
+  assert.equal(d({ ZAAFPULSE_X: '1', ANTHROPIC_API_KEY: '' }).billing, 'your Claude login');
+  // A confirmation token per destination and billing; never the key or the URL itself.
+  const tokens = [{}, { ANTHROPIC_API_KEY: key }, { CLAUDE_CODE_USE_BEDROCK: '1' }, { ANTHROPIC_BASE_URL: url }].map(
+    (e) => d(e).token,
+  );
+  assert.ok(tokens.every((x) => /^claude-code@[0-9a-f]{10}$/.test(x)));
+  assert.equal(new Set(tokens).size, 4);
+  assert.equal(d({}).token, d({ HOME: '/elsewhere' }).token, 'stable for the same destination');
+  assert.deepEqual(createClaude({ env: { ANTHROPIC_API_KEY: key } }).destination(), d({ ANTHROPIC_API_KEY: key }));
+});
+
+test('call: session and IDE variables of a parent Claude Code or VS Code never reach the child', async () => {
+  const names = [
+    'CLAUDECODE',
+    'CLAUDE_CODE_SSE_PORT',
+    'CLAUDE_CODE_ENTRYPOINT',
+    'CLAUDE_CODE_IDE_HOST_OVERRIDE',
+    'CLAUDE_CODE_SESSION_ID',
+    'CLAUDE_CODE_MESSAGING_TOKEN',
+    'CLAUDE_CODE_PLUGIN_DIRS',
+    'VSCODE_IPC_HOOK',
+    'VSCODE_GIT_IPC_HANDLE',
+    'CLAUDE_CODE_USE_BEDROCK',
+    'ANTHROPIC_BASE_URL',
+  ];
+  const extra = Object.fromEntries(names.map((n) => [n, 'x']));
+  const t = rig('echo-env', { ...extra, FAKE_CLAUDE_ECHO: names.join(',') });
+  await judge(t);
+  const echo = readLog(t.log).find((r) => r.echo).echo;
+  for (const n of names.slice(0, -2)) assert.equal(echo[n], null, n);
+  assert.equal(echo.CLAUDE_CODE_USE_BEDROCK, 'x', 'what picks the destination is kept');
+  assert.equal(echo.ANTHROPIC_BASE_URL, 'x');
+});
+
+test('discovery: --version must say "(Claude Code)"', async () => {
+  assert.equal(await rig('plainversion').claude.find(), null);
+});
+
+test('discovery: in the single-file build a script runs through a real node, or is skipped', async () => {
+  const t = rig();
+  const sea = { home: tmp(), systemDirs: [], nodeDirs: [], isSea: () => true };
+  const none = createClaude({ env: { ...t.env, PATH: '' }, ...sea });
+  const script = fakeClaude(tmp('zp-claude-js-'), 'claude.js');
+  const noNode = createClaude({
+    env: { ZAAFPULSE_CLAUDE_BIN: script, PATH: '' },
+    home: tmp(),
+    systemDirs: [],
+    nodeDirs: [],
+    isSea: () => true,
+  });
+  assert.equal(await noNode.find(), null, 'no node: the script cannot run');
+  if (POSIX) {
+    // A POSIX executable is started as it is, never through process.execPath.
+    assert.equal((await none.find()).file, t.bin);
+    const nodeDir = tmp('zp-claude-node-');
+    fs.symlinkSync(process.execPath, path.join(nodeDir, 'node'));
+    const withNode = createClaude({
+      env: { ZAAFPULSE_CLAUDE_BIN: script, PATH: nodeDir },
+      home: tmp(),
+      systemDirs: [],
+      nodeDirs: [],
+      isSea: () => true,
+    });
+    const bin = await withNode.find();
+    assert.equal(bin.file, path.join(nodeDir, 'node'));
+    assert.deepEqual(bin.args, [script]);
+  }
+});
+
+test('discovery: only absolute PATH entries, and no binary that others can write', { skip: !POSIX }, async () => {
+  const dir = tmp('zp-claude-rel-');
+  fakeClaude(dir);
+  const rel = path.relative(process.cwd(), dir);
+  assert.equal(await createClaude({ env: { PATH: rel }, home: tmp(), systemDirs: [] }).find(), null);
+  assert.ok(await createClaude({ env: { PATH: dir }, home: tmp(), systemDirs: [] }).find());
+
+  const loose = tmp('zp-claude-loose-');
+  const f = fakeClaude(loose);
+  fs.chmodSync(f, 0o775);
+  const onPath = () => createClaude({ env: { PATH: loose }, home: tmp(), systemDirs: [] }).find();
+  assert.equal(await onPath(), null, 'group-writable');
+  assert.equal(await createClaude({ env: { ZAAFPULSE_CLAUDE_BIN: f } }).find(), null, 'also when named');
+  fs.chmodSync(f, 0o755);
+  fs.chmodSync(loose, 0o777);
+  assert.equal(await onPath(), null, 'open folder');
+  fs.chmodSync(loose, 0o755);
+});
+
+test('discovery: a binary that cannot be started any more is looked for again at once', async () => {
+  const t = rig();
+  const bin = await t.claude.find();
+  fs.rmSync(path.dirname(t.bin), { recursive: true, force: true });
+  await assert.rejects(t.claude.run(bin, { system: 's', user: 'u', schema: SCHEMA }), (e) => e.status === 0);
+  assert.equal(await t.claude.find(), null, 'not the cached answer from before');
+});
+
+test('call: an answer that says the login is gone backs off as "not signed in"', async () => {
+  await assert.rejects(judge(rig('signedout')), (e) => {
+    assert.equal(e.status, 401);
+    assert.equal(e.backoff, true);
+    assert.equal(e.message, 'Claude Code is not signed in');
+    return true;
+  });
 });

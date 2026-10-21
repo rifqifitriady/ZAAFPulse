@@ -5,7 +5,7 @@ const os = require('os');
 const path = require('path');
 const { fakeServer, fakeClaude } = require('./helpers');
 const { createModels, externalSystem, externalPayload } = require('../lib/evals/models');
-const { createClaude } = require('../lib/evals/claude-cli');
+const { createClaude, destinationOf } = require('../lib/evals/claude-cli');
 
 const SCHEMA = { type: 'object', properties: { label: { type: 'string' } }, required: ['label'] };
 const tags = (...names) => ({ body: { models: names.map((name) => ({ name })) } });
@@ -743,7 +743,9 @@ test('claude-code: chosen only by name, as an alias or "default", and waiting wh
     }
   };
   try {
-    const on = { ok: true, kind: 'claude-cli', provider: 'claude-code' };
+    // Where the text goes rides along, with the token its preview confirms.
+    const here = destinationOf({});
+    const on = { ok: true, kind: 'claude-cli', provider: 'claude-code', destination: here.text, confirm: here.token };
     assert.deepEqual(await pick({ provider: 'claude-code', model: '' }), { ...on, model: 'default' });
     assert.deepEqual(await pick({ provider: 'claude-code', model: 'haiku' }), { ...on, model: 'haiku' });
     assert.deepEqual(await pick({ provider: 'claude-code', model: 'claude-sonnet-5-5' }), {
@@ -845,6 +847,22 @@ test('claude-code: an error from the CLI keeps its status', async () => {
   try {
     const r = await t.m.resolve();
     await assert.rejects(t.m.call(r, { system: 's', user: 'u', schema: SCHEMA }), (e) => e.status === 429);
+  } finally {
+    await t.close();
+    c.done();
+  }
+});
+
+test('claude-code: the signal of the caller cancels a running call', async () => {
+  const c = claudeRig('hang');
+  const t = await rig({ settings: { provider: 'claude-code', model: 'haiku' }, claude: c.claude });
+  try {
+    const r = await t.m.resolve();
+    const ctl = new AbortController();
+    const p = t.m.call(r, { system: 's', user: 'u', schema: SCHEMA, signal: ctl.signal });
+    for (let i = 0; i < 100 && !c.runs().length; i++) await new Promise((res) => setTimeout(res, 20));
+    ctl.abort();
+    await assert.rejects(p, (e) => e.status === 0 && /cancelled/.test(e.message));
   } finally {
     await t.close();
     c.done();

@@ -128,10 +128,13 @@ function evalsStatusLine(st) {
   if (st.paused === 'daily cap' || st.paused === 'cost cap')
     return { text: `Paused: ${st.paused} reached, resumes tomorrow · ${today}`, tone: 'warn' };
   if (str(st.paused, 60)) return { text: `Paused: ${str(st.paused, 60)} · ${today}`, tone: 'warn' };
+  const dest = str(j.destination, 160);
   const who =
     j.kind === 'external'
       ? `External (${str(j.provider, 60) || 'provider'})`
-      : EV_KIND[j.kind] || str(j.kind, 40) || 'Judge';
+      : j.kind === 'claude-cli' && dest
+        ? `Claude Code (to ${dest})`
+        : EV_KIND[j.kind] || str(j.kind, 40) || 'Judge';
   return { text: `${who} · ${str(j.model, 120) || 'default model'} · ${today}`, tone: 'good' };
 }
 
@@ -147,7 +150,14 @@ function evalsProviderOptions(providers) {
     if (!p || typeof p.id !== 'string' || out.some((o) => o.id === p.id)) continue;
     if (p.kind === 'claude-cli' && p.id === EV_CLAUDE) {
       const label = 'Claude Code (your Claude login) · sends masked text to Anthropic';
-      out.push({ id: p.id, label, external: true, available: p.available === true });
+      out.push({
+        id: p.id,
+        label,
+        external: true,
+        available: p.available === null ? null : p.available === true,
+        destination: typeof p.destination === 'string' ? p.destination.slice(0, 160) : null,
+        confirm: typeof p.confirm === 'string' ? p.confirm : null,
+      });
     } else if (p.kind === 'external') {
       out.push({ id: p.id, label: `External: ${p.id} (sends masked text)`, external: true });
     }
@@ -159,9 +169,10 @@ function evalsProviderOptions(providers) {
 function evalsProviderHint(opt) {
   if (!opt || !opt.external) return 'Nothing leaves this machine. Auto tries Ollama, then LM Studio.';
   if (opt.id === EV_CLAUDE) {
+    if (opt.available === null) return 'Checking for Claude Code on this machine…';
+    const where = opt.destination || 'Anthropic, through your Claude login';
     return opt.available
-      ? 'Claude Code found. Masked turn text goes to Anthropic through your Claude login, within your plan limits ' +
-          'or API billing. Save it, then preview what will be sent.'
+      ? `Claude Code found. Masked turn text goes to ${where}. Save it, then preview what will be sent.`
       : 'Claude Code not found on this machine: install it, or set ZAAFPULSE_CLAUDE_BIN. It is looked for again ' +
           'every 5 minutes.';
   }
@@ -200,13 +211,19 @@ function evalsPatch(cur, next) {
   return patch;
 }
 
-// Where the saved provider stands: a local one needs nothing, an external one needs its preview first.
+// Where the saved provider stands: a local one needs nothing, an external one needs its preview first. Claude Code
+// is confirmed for one destination (its `confirm` token); a confirmation of another one reads "changed".
 function evalsConfirm(settings, providers) {
   const s = evIsObj(settings) ? settings : {};
   const list = Array.isArray(providers) ? providers : [];
-  const ext = list.some((p) => p && (p.kind === 'external' || p.external === true) && p.id === s.provider);
-  if (!ext) return 'local';
-  return s.externalConfirmed === s.provider ? 'confirmed' : 'unconfirmed';
+  const p = list.find((x) => x && (x.kind === 'external' || x.external === true) && x.id === s.provider);
+  if (!p) return 'local';
+  const done = typeof s.externalConfirmed === 'string' ? s.externalConfirmed : '';
+  if (p.kind === 'claude-cli') {
+    if (p.confirm && done === p.confirm) return 'confirmed';
+    return done.startsWith(`${p.id}@`) ? 'changed' : 'unconfirmed';
+  }
+  return done === s.provider ? 'confirmed' : 'unconfirmed';
 }
 
 // The newest Claude or Codex session (the list is newest first): the ones whose turns the judge reads.
@@ -366,6 +383,7 @@ function evalsFormHtml(cur, evaluators) {
         <button type="button" class="btn ghost" id="ev-preview-btn">Preview what will be sent</button></div>
       <div class="ev-pre-err" id="ev-pre-err" role="status" hidden></div>
       <div class="ev-preview" id="ev-preview" hidden>
+        <div class="ev-pre-head" id="ev-pre-dest-row" hidden>Sent to <small id="ev-pre-dest"></small></div>
         <div class="ev-pre-head">System <small>as the provider receives it</small></div><pre class="ev-pre" id="ev-pre-system" tabindex="0"></pre>
         <div class="ev-pre-head">User <small>masked turn text</small></div><pre class="ev-pre" id="ev-pre-user" tabindex="0"></pre>
       </div>
@@ -450,7 +468,9 @@ async function mountEvalsSettings() {
         ? 'Save this provider first, then preview what will be sent'
         : st === 'confirmed'
           ? 'Confirmed: masked text may go to this provider'
-          : 'Not confirmed: preview what will be sent';
+          : st === 'changed'
+            ? 'The Claude Code destination changed; preview again'
+            : 'Not confirmed: preview what will be sent';
     btn.disabled = unsaved;
     btn.textContent = st === 'confirmed' ? 'Preview again' : 'Preview what will be sent';
   }
@@ -484,8 +504,13 @@ async function mountEvalsSettings() {
       if (!form.isConnected) return;
       $('#ev-pre-system').textContent = typeof r.system === 'string' ? r.system : '';
       $('#ev-pre-user').textContent = typeof r.user === 'string' ? r.user : '';
+      // Claude Code says where the text goes; shown as text, like the rest of the preview.
+      const dest = typeof r.destination === 'string' ? r.destination : '';
+      $('#ev-pre-dest').textContent = dest;
+      $('#ev-pre-dest-row').hidden = !dest;
       $('#ev-preview').hidden = false;
-      S.cur = { ...S.cur, externalConfirmed: provider };
+      const opt = evalsProviderOptions(S.cur.providers).find((o) => o.id === provider);
+      S.cur = { ...S.cur, externalConfirmed: (opt && opt.confirm) || provider };
       refreshStatus();
     } catch (e) {
       if (!form.isConnected) return;

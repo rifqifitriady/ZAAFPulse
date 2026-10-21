@@ -10,6 +10,8 @@ const net = require('net');
 const path = require('path');
 const { spawn } = require('child_process');
 const { createGateway } = require('../lib/gateway');
+const { createEvalApi } = require('../lib/evals/api');
+const { destinationOf } = require('../lib/evals/claude-cli');
 const { fakeServer, secretsFor, NO_JUDGE_PORTS, fakeClaude } = require('./helpers');
 
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
@@ -679,6 +681,8 @@ test('evals api: Claude Code is a provider of its own, previewed like an externa
     { data },
   );
   const c = client(s.base);
+  // The server's own environment decides where Claude Code sends the text.
+  const dest = destinationOf({ ...process.env });
   try {
     const cur = (await c.call('/api/evals/settings')).json;
     const cc = cur.providers.filter((p) => p.id === 'claude-code');
@@ -689,6 +693,8 @@ test('evals api: Claude Code is a provider of its own, previewed like an externa
         kind: 'claude-cli',
         external: true,
         available: true,
+        destination: dest.text,
+        confirm: dest.token,
         models: ['haiku', 'sonnet', 'opus'],
       },
     ]);
@@ -715,9 +721,11 @@ test('evals api: Claude Code is a provider of its own, previewed like an externa
     c.bodies.pop();
     assert.equal(p.status, 200);
     assert.match(p.json.system, /Answer with JSON only, matching this schema: \{/);
+    assert.equal(p.json.destination, dest.text, 'the preview says where the text goes');
     assert.doesNotMatch(p.text, /ant-api03|abcdefghijklmnop/, 'the key is masked');
     now = (await c.call('/api/evals/settings')).json;
-    assert.equal(now.externalConfirmed, 'claude-code');
+    assert.equal(now.externalConfirmed, dest.token, 'the confirmation names that destination');
+    assert.equal((await c.call('/api/evals/status')).json.judge.destination, dest.text);
     // History is not judged on its own, so the preview alone starts nothing.
     const lines = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n') : [];
     assert.deepEqual(lines.filter((l) => l && !l.includes('"version"')), []);
@@ -750,6 +758,33 @@ test('evals api: Claude Code is a provider of its own, previewed like an externa
   } finally {
     await s2.stop();
   }
+});
+
+test('evals api: a slow Claude Code search answers "checking" instead of holding the settings', async () => {
+  const api = createEvalApi({
+    trace: {},
+    engine: { kick() {} },
+    feedback: {},
+    gateway: null,
+    settings: { get: () => ({}), save() {} },
+    claude: { available: () => new Promise(() => {}), destination: () => destinationOf({}) },
+    claudeWaitMs: 50,
+  });
+  const started = Date.now();
+  const r = await api.route({ method: 'GET', path: '/api/evals/settings', query: new URLSearchParams() });
+  assert.ok(Date.now() - started < 1000);
+  assert.equal(r.status, 200);
+  assert.equal(r.body.providers.find((p) => p.id === 'claude-code').available, null);
+  // A broken finder is "not found", never an error page.
+  const broken = createEvalApi({
+    trace: {},
+    engine: { kick() {} },
+    feedback: {},
+    settings: { get: () => ({}), save() {} },
+    claude: { available: () => Promise.reject(new Error('boom')), destination: () => destinationOf({}) },
+  });
+  const b = await broken.route({ method: 'GET', path: '/api/evals/settings', query: new URLSearchParams() });
+  assert.equal(b.body.providers.find((p) => p.id === 'claude-code').available, false);
 });
 
 test('test helpers: every spawned server.js that is not a demo gets the closed judge ports', () => {

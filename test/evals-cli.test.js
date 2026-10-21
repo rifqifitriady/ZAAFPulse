@@ -5,6 +5,7 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { fakeServer, NO_JUDGE_PORTS, fakeClaude } = require('./helpers');
+const { destinationOf } = require('../lib/evals/claude-cli');
 
 const BIN = path.join(__dirname, '..', 'bin', 'zaafpulse.js');
 const FIXTURE = path.join(__dirname, 'fixtures', 'trace', 'claude', 'proj', 's1.jsonl');
@@ -242,8 +243,15 @@ test('eval with Claude Code: refused until its preview was confirmed, then judge
   const other = { provider: 'claude-code', model: 'haiku', externalConfirmed: 'openrouter' };
   assert.equal((await runCli(args, { ...rig({ evals: other }), env })).code, 2);
   assert.equal(runs().length, 0);
+  // Confirmed for another destination (the environment changed since the preview): refused as well.
+  const moved = { provider: 'claude-code', model: 'haiku', externalConfirmed: 'claude-code@ffffffffff' };
+  const was = await runCli(args, { ...rig({ evals: moved }), env });
+  assert.equal(was.code, 2);
+  assert.match(was.err, /The Claude Code destination changed; preview again in Settings → Evals/);
+  assert.equal(runs().length, 0);
 
-  const ok = { evals: { provider: 'claude-code', model: 'haiku', externalConfirmed: 'claude-code' } };
+  const token = destinationOf({ ...process.env }).token;
+  const ok = { evals: { provider: 'claude-code', model: 'haiku', externalConfirmed: token } };
   const res = await runCli(args, { ...rig(ok), env });
   assert.equal(res.code, 0, res.err);
   const rows = JSON.parse(res.out);
