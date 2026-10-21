@@ -787,6 +787,17 @@ test('evals api: a slow Claude Code search answers "checking" instead of holding
   assert.equal(b.body.providers.find((p) => p.id === 'claude-code').available, false);
 });
 
+test('server: SIGHUP (a closed terminal) shuts down the way SIGTERM does', { skip: process.platform === 'win32' }, async () => {
+  const s = await startServer({ ZAAFPULSE_AUTH: 'none' });
+  try {
+    const gone = new Promise((resolve) => s.child.once('exit', (code, signal) => resolve({ code, signal })));
+    s.child.kill('SIGHUP');
+    assert.deepEqual(await gone, { code: 0, signal: null }, 'its own handler ran: the judge stopped, the log flushed');
+  } finally {
+    await s.stop();
+  }
+});
+
 test('test helpers: every spawned server.js that is not a demo gets the closed judge ports', () => {
   // A spawn of server.js outside demo mode would otherwise probe 11434 and 1234 on the machine running the tests.
   for (const f of fs.readdirSync(__dirname).filter((x) => x.endsWith('.test.js'))) {

@@ -982,8 +982,8 @@ server.listen(PORT, HOST, () => {
       });
 });
 
-// Sessions are written within a second; flush them when launchd or Ctrl-C stops the server.
-for (const sig of ['SIGTERM', 'SIGINT'])
+// Sessions are written within a second; flush them when launchd, Ctrl-C or a closed terminal stops the server.
+for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP'])
   process.on(sig, () => {
     try {
       evalEngine.stop(); // a running judge call is cancelled, and its working folder removed

@@ -6,8 +6,8 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createClaude, childEnv, destinationOf } = require('../lib/evals/claude-cli');
-const { fakeClaude } = require('./helpers');
+const { createClaude, childEnv, destinationOf, removeOpts } = require('../lib/evals/claude-cli');
+const { fakeClaude, winEnv } = require('./helpers');
 
 const POSIX = process.platform !== 'win32';
 const dirs = [];
@@ -52,6 +52,7 @@ const readLog = (f) =>
         .filter(Boolean)
         .map((l) => JSON.parse(l))
     : [];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const alive = (pid) => {
   try {
     process.kill(pid, 0);
@@ -62,10 +63,11 @@ const alive = (pid) => {
 };
 
 // A fake claude named by ZAAFPULSE_CLAUDE_BIN, a log outside its working folder, and an empty PATH and HOME.
-function rig(mode = 'ok', extra = {}) {
+function rig(mode = 'ok', extra = {}, opts = {}) {
   const bin = fakeClaude(tmp('zp-claude-bin-'));
   const log = path.join(tmp('zp-claude-log-'), 'runs.jsonl');
   const env = {
+    ...winEnv(),
     PATH: process.env.PATH,
     ZAAFPULSE_CLAUDE_BIN: bin,
     ZAAFPULSE_ADMIN_PASSWORD: 'not-for-the-child',
@@ -74,7 +76,7 @@ function rig(mode = 'ok', extra = {}) {
     FAKE_CLAUDE_LOG: log,
     ...extra,
   };
-  const claude = createClaude({ env, home: tmp('zp-claude-home-'), systemDirs: [] });
+  const claude = createClaude({ env, home: tmp('zp-claude-home-'), systemDirs: [], ...opts });
   return { bin, log, env, claude, runs: () => readLog(log).filter((r) => !r.version) };
 }
 const judge = (t, opts = {}) =>
@@ -543,10 +545,66 @@ test('stopAll: a running call is killed and its folder removed at once', async (
   for (let i = 0; i < 150 && !t.runs().length; i++) await new Promise((r) => setTimeout(r, 20));
   const [run] = t.runs();
   t.claude.stopAll();
-  assert.equal(fs.existsSync(run.cwd), false, 'removed before stopAll returns');
+  // Windows lets a working folder go only once its process has exited: there it is gone after the exit.
+  if (POSIX) assert.equal(fs.existsSync(run.cwd), false, 'removed before stopAll returns');
   await assert.rejects(p, (e) => e.status === 0);
-  await new Promise((r) => setTimeout(r, 100));
+  for (let i = 0; i < 100 && (alive(run.pid) || fs.existsSync(run.cwd)); i++) await sleep(50);
   assert.equal(alive(run.pid), false);
+  assert.equal(fs.existsSync(run.cwd), false);
+});
+
+test('stopAll: a folder the OS still holds while the CLI runs is removed once the CLI has exited', async () => {
+  // As on Windows: the folder cannot be removed while the process that has it as its working folder is alive.
+  let t = null;
+  const tries = [];
+  const removeDir = (d) => {
+    const run = t && t.runs()[0];
+    const busy = !!run && alive(run.pid);
+    tries.push(busy);
+    if (busy) throw Object.assign(new Error('resource busy'), { code: 'EBUSY' });
+    fs.rmSync(d, { recursive: true, force: true });
+  };
+  t = rig('hang', {}, { removeDir });
+  const bin = await t.claude.find();
+  const p = t.claude.run(bin, { system: 's', user: 'u', schema: SCHEMA });
+  for (let i = 0; i < 150 && !t.runs().length; i++) await sleep(20);
+  const [run] = t.runs();
+  t.claude.stopAll();
+  await assert.rejects(p, (e) => e.status === 0);
+  assert.equal(fs.existsSync(run.cwd), true, 'still held when the call settled');
+  for (let i = 0; i < 100 && fs.existsSync(run.cwd); i++) await sleep(30);
+  assert.equal(fs.existsSync(run.cwd), false, 'removed after the exit');
+  assert.equal(tries[tries.length - 1], false);
+});
+
+test('cleanup: on Windows the folder is removed with retries, elsewhere at once', () => {
+  assert.deepEqual(removeOpts('win32'), { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  assert.deepEqual(removeOpts('darwin'), { recursive: true, force: true });
+});
+
+test('test rig: a child with its own env still gets what Windows needs to start', () => {
+  const saved = {};
+  for (const k of ['SystemRoot', 'PATHEXT', 'TEMP', 'TMP']) saved[k] = process.env[k];
+  try {
+    Object.assign(process.env, { SystemRoot: 'C:\\Windows', PATHEXT: '.COM;.EXE', TEMP: 'C:\\T', TMP: 'C:\\T' });
+    const { env } = rig();
+    for (const k of ['SystemRoot', 'PATHEXT', 'TEMP', 'TMP']) assert.equal(env[k], process.env[k], k);
+  } finally {
+    for (const [k, v] of Object.entries(saved))
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+  }
+});
+
+test('discovery: a --version that ignores SIGTERM is killed at the time limit', { skip: !POSIX }, async () => {
+  const t = rig('stubborn-version', {}, { versionMs: 300 });
+  const started = Date.now();
+  assert.equal(await t.claude.find(), null);
+  assert.ok(Date.now() - started < 3000, `settled in ${Date.now() - started} ms`);
+  const v = readLog(t.log).find((r) => r.version && r.pid);
+  assert.ok(v, 'the fake was started');
+  for (let i = 0; i < 40 && alive(v.pid); i++) await sleep(25);
+  assert.equal(alive(v.pid), false, 'SIGKILL, not a SIGTERM it ignores');
 });
 
 test('destination: a Foundry resource without a base URL is its Azure host, shown and fingerprinted', () => {

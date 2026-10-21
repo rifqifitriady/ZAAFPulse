@@ -79,7 +79,13 @@ const args = process.argv.slice(2);
 const mode = process.env.FAKE_CLAUDE_MODE || 'ok';
 const log = (rec) =>
   process.env.FAKE_CLAUDE_LOG && fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify(rec) + '\n');
-if (args[0] === '--version') {
+// A --version that ignores SIGTERM and takes its time: only SIGKILL ends it.
+const versionHang = args[0] === '--version' && mode === 'stubborn-version';
+if (versionHang) {
+  process.on('SIGTERM', () => {});
+  log({ version: true, file: __filename, pid: process.pid });
+  setTimeout(() => process.exit(0), 8000);
+} else if (args[0] === '--version') {
   log({ version: true, file: __filename });
   if (mode === 'noversion') process.exit(1);
   if (mode === 'plainversion') {
@@ -93,6 +99,7 @@ let input = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (c) => (input += c));
 process.stdin.on('end', () => {
+  if (versionHang) return;
   log({
     argv: args,
     cwd: process.cwd(),
@@ -178,4 +185,9 @@ function fakeClaude(dir, name = process.platform === 'win32' ? 'claude.js' : 'cl
   return file;
 }
 
-module.exports = { fakeServer, secretsFor, NO_JUDGE_PORTS, fakeClaude };
+// What a child process needs on Windows to start at all (SystemRoot), find programs (PATHEXT) and a temp folder (TEMP,
+// TMP), for tests that hand a child an env of their own instead of process.env. Only the names that are set.
+const WIN_ENV = ['SystemRoot', 'SYSTEMROOT', 'PATHEXT', 'TEMP', 'TMP'];
+const winEnv = () => Object.fromEntries(WIN_ENV.filter((k) => process.env[k] !== undefined).map((k) => [k, process.env[k]]));
+
+module.exports = { fakeServer, secretsFor, NO_JUDGE_PORTS, fakeClaude, winEnv };

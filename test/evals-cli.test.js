@@ -266,3 +266,48 @@ test('eval with Claude Code: refused until its preview was confirmed, then judge
   assert.match(missing.err, /Claude Code not found/);
   fs.rmSync(bin, { recursive: true, force: true });
 });
+
+test('eval with Claude Code: Ctrl-C, SIGTERM or SIGHUP kills the running call, removes its folder, exits 130', {
+  skip: process.platform === 'win32',
+}, async () => {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'evals-cli-claude-sig-'));
+  const log = path.join(bin, 'runs.jsonl');
+  const env = { ZAAFPULSE_CLAUDE_BIN: fakeClaude(bin), FAKE_CLAUDE_LOG: log, FAKE_CLAUDE_MODE: 'hang' };
+  const runs = () =>
+    fs.existsSync(log)
+      ? fs
+          .readFileSync(log, 'utf8')
+          .split('\n')
+          .filter((l) => l && !l.includes('"version"'))
+          .map((l) => JSON.parse(l))
+      : [];
+  const alive = (pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const token = destinationOf({ ...process.env }).token;
+  const ok = { evals: { provider: 'claude-code', model: 'haiku', externalConfirmed: token } };
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+    const r = rig(ok);
+    const child = spawn(process.execPath, [BIN, 'eval', '--judge', '--session', 's1', '--json'], {
+      env: { ...process.env, HOME: r.home, USERPROFILE: r.home, ZAAFPULSE_DATA: r.data, ...NO_JUDGE_PORTS, ...env },
+      stdio: 'ignore',
+    });
+    const done = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
+    const before = runs().length;
+    for (let i = 0; i < 200 && runs().length === before; i++) await new Promise((x) => setTimeout(x, 25));
+    const run = runs()[before];
+    assert.ok(run, `${sig}: the judge call started`);
+    child.kill(sig);
+    assert.deepEqual(await done, { code: 130, signal: null }, sig);
+    // The CLI leads its own process group, so the signal alone never reached it: the handler stopped it.
+    for (let i = 0; i < 40 && alive(run.pid); i++) await new Promise((x) => setTimeout(x, 25));
+    assert.equal(alive(run.pid), false, `${sig}: the call was killed`);
+    assert.equal(fs.existsSync(run.cwd), false, `${sig}: its folder was removed`);
+  }
+  fs.rmSync(bin, { recursive: true, force: true });
+});

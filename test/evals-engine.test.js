@@ -10,7 +10,7 @@ const R = require('../lib/evals/registry');
 const { buildPrompt } = require('../lib/evals/judge');
 const { createModels, externalPayload } = require('../lib/evals/models');
 const { createClaude } = require('../lib/evals/claude-cli');
-const { fakeClaude } = require('./helpers');
+const { fakeClaude, winEnv } = require('./helpers');
 
 const dirs = [];
 after(() => {
@@ -1477,7 +1477,7 @@ test('claude-code end to end: no call before the preview, then exactly the previ
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-engine-claude-'));
   dirs.push(dir);
   const log = path.join(dir, 'runs.jsonl');
-  const env = { ZAAFPULSE_CLAUDE_BIN: fakeClaude(path.join(dir, 'bin')), FAKE_CLAUDE_LOG: log };
+  const env = { ...winEnv(), ZAAFPULSE_CLAUDE_BIN: fakeClaude(path.join(dir, 'bin')), FAKE_CLAUDE_LOG: log };
   const runs = () =>
     fs.existsSync(log)
       ? fs
