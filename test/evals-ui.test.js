@@ -16,6 +16,7 @@ const {
   evalsConfirm,
   previewKey,
   previewError,
+  evalsProviderHint,
 } = require('../public/evalsview');
 
 const SRC = path.join(__dirname, '..', 'public', 'evalsview.js');
@@ -294,4 +295,98 @@ test('evalsview.js builds no HTML from preview text, reasons, explanations or me
   assert.match(src, /\.textContent\s*=\s*[^;\n]*\bsystem\b/);
   assert.match(src, /\.textContent\s*=\s*[^;\n]*\buser\b/);
   assert.doesNotMatch(src, /outerHTML|document\.write/);
+});
+
+// The providers list as GET /api/evals/settings sends it with Claude Code in it.
+const WITH_CLAUDE = (available) => [
+  { id: 'auto', kind: 'auto', models: [] },
+  { id: 'ollama', kind: 'local', models: [] },
+  { id: 'lmstudio', kind: 'local', models: [] },
+  {
+    id: 'claude-code',
+    label: 'Claude Code (your Claude login)',
+    kind: 'claude-cli',
+    external: true,
+    available,
+    destination: 'gw.example.com (ANTHROPIC_BASE_URL), with API billing',
+    confirm: 'claude-code@0123456789',
+    models: ['haiku', 'sonnet', 'opus'],
+  },
+  { id: 'openai', kind: 'external', external: true, models: ['gpt-6.1'] },
+];
+
+test('Claude Code: an option of its own that says where the text goes, with its models', () => {
+  const opts = evalsProviderOptions(WITH_CLAUDE(true));
+  assert.deepEqual(
+    opts.map((o) => [o.id, o.label, o.external]),
+    [
+      ['auto', 'Auto (local first)', false],
+      ['ollama', 'Ollama', false],
+      ['lmstudio', 'LM Studio', false],
+      [
+        'claude-code',
+        'Claude Code · sends masked text to gw.example.com (ANTHROPIC_BASE_URL), with API billing',
+        true,
+      ],
+      ['openai', 'External: openai (sends masked text)', true],
+    ],
+  );
+  assert.equal(opts.find((o) => o.id === 'claude-code').available, true);
+  // Without a destination from the server, the label stays neutral.
+  const bare = WITH_CLAUDE(true).map((p) => (p.id === 'claude-code' ? { ...p, destination: null } : p));
+  const plain = evalsProviderOptions(bare).find((o) => o.id === 'claude-code').label;
+  assert.equal(plain, 'Claude Code · sends masked text off this machine');
+  assert.equal(opts.find((o) => o.id === 'claude-code').destination, WITH_CLAUDE(true)[3].destination);
+  assert.equal(evalsProviderOptions(WITH_CLAUDE(false)).find((o) => o.id === 'claude-code').available, false);
+  assert.deepEqual(evalsModelList(WITH_CLAUDE(true), 'claude-code'), ['haiku', 'sonnet', 'opus']);
+  assert.deepEqual(evalsModelList(WITH_CLAUDE(true), 'auto'), [], 'Auto lists local models only');
+  // The same save, preview, confirm steps as a gateway provider.
+  assert.equal(evalsConfirm({ provider: 'claude-code', externalConfirmed: null }, WITH_CLAUDE(true)), 'unconfirmed');
+  const other = { provider: 'claude-code', externalConfirmed: 'openai' };
+  assert.equal(evalsConfirm(other, WITH_CLAUDE(true)), 'unconfirmed');
+  // Confirmed for the destination it showed; a confirmation of another destination asks for a new preview.
+  const was = (externalConfirmed) => evalsConfirm({ provider: 'claude-code', externalConfirmed }, WITH_CLAUDE(true));
+  assert.equal(was('claude-code@0123456789'), 'confirmed');
+  assert.equal(was('claude-code'), 'unconfirmed');
+  assert.equal(was('claude-code@ffffffffff'), 'changed');
+});
+
+test('Claude Code: not checked until it is picked; picking it asks the server to look', () => {
+  const list = WITH_CLAUDE(null).map((p) => (p.id === 'claude-code' ? { ...p, checked: false } : p));
+  const opt = evalsProviderOptions(list).find((o) => o.id === 'claude-code');
+  assert.equal(opt.available, null);
+  assert.equal(opt.checked, false);
+  assert.match(evalsProviderHint(opt), /^Claude Code not checked yet/);
+  // Still looking (the server's search took too long): "checking".
+  assert.equal(evalsProviderOptions(WITH_CLAUDE(null)).find((o) => o.id === 'claude-code').checked, true);
+  const src = fs.readFileSync(SRC, 'utf8');
+  assert.match(src, /trApi\('\/api\/evals\/settings\?refresh=1'\)/, 'the page refreshes the list when it is picked');
+});
+
+test('Claude Code: the hint says whether it was found, and the status line names it', () => {
+  const opt = (available) => evalsProviderOptions(WITH_CLAUDE(available)).find((o) => o.id === 'claude-code');
+  assert.equal(
+    evalsProviderHint(opt(true)),
+    'Claude Code found. Masked turn text goes to gw.example.com (ANTHROPIC_BASE_URL), with API billing. ' +
+      'Save it, then preview what will be sent.',
+  );
+  assert.match(evalsProviderHint(opt(null)), /^Checking for Claude Code/);
+  assert.equal(opt(null).available, null);
+  assert.match(evalsProviderHint(opt(false)), /^Claude Code not found on this machine: install it, or set ZAAFPULSE_/);
+  assert.match(evalsProviderHint({ id: 'openai', external: true }), /^Masked turn text goes to this provider/);
+  assert.match(evalsProviderHint({ id: 'auto', external: false }), /^Nothing leaves this machine/);
+  const line = evalsStatusLine({
+    judge: {
+      ok: true,
+      kind: 'claude-cli',
+      model: 'haiku',
+      provider: 'claude-code',
+      destination: 'Anthropic, through your Claude login',
+      waiting: false,
+    },
+    today: { count: 2, cost: 0.0011 },
+  });
+  assert.equal(line.tone, 'good');
+  const want = /^Claude Code \(to Anthropic, through your Claude login\) · haiku · 2 judged today · \$0\.0011/;
+  assert.match(line.text, want);
 });

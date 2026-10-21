@@ -30,6 +30,7 @@ const { createTrace, contentDefaultOff } = require('./lib/trace');
 const { createEvalEngine } = require('./lib/evals/engine');
 const { createEvalStore, createFeedbackStore } = require('./lib/evals/store');
 const { createModels } = require('./lib/evals/models');
+const { createClaude } = require('./lib/evals/claude-cli');
 const { createEvalApi } = require('./lib/evals/api');
 const { createPriceSync } = require('./lib/price-sync');
 const { createOpenRouter } = require('./lib/openrouter');
@@ -37,6 +38,7 @@ const { createIntegrations } = require('./lib/integrations');
 const { createSecrets } = require('./lib/secrets');
 const { createAudit } = require('./lib/audit');
 const { createLocal } = require('./lib/local');
+const { describeRoots } = require('./lib/logroots');
 const register = require('./scripts/register-mcp');
 const platform = require('./lib/platform');
 const { createAuth, isLoopback, originAllowed } = require('./lib/auth');
@@ -161,6 +163,11 @@ const indexer = DEMO
       refresh: async () => {},
     }
   : new Indexer([require('./lib/claude'), require('./lib/codex')], path.join(DIR, '.cache', 'index.json'));
+// The folders the logs are read from (also the only ones the trace explorer may read text from), as the owner's
+// dashboard shows them: ~ paths, whether each exists, and how many files the indexer holds from it.
+const LOG_ROOTS = { claude: require('./lib/claude').ROOTS, codex: require('./lib/codex').ROOTS };
+const LOG_ROOT_INFO = { claude: require('./lib/claude').rootInfo(), codex: require('./lib/codex').rootInfo() };
+const logRoots = () => describeRoots(LOG_ROOT_INFO, indexer.files, os.homedir());
 const memo = new Map();
 
 // Integrations are rebuilt whenever config.json changes on disk (they are edited in the file).
@@ -261,7 +268,7 @@ const trace = createTrace({
     : {
         indexer,
         gateway,
-        roots: [require('./lib/claude').ROOT, require('./lib/codex').ROOT],
+        roots: [...LOG_ROOTS.claude, ...LOG_ROOTS.codex],
       }),
 });
 
@@ -278,12 +285,15 @@ if (DEMO)
       rating: f.rating,
       note: f.note,
     });
+// One finder for the Claude Code CLI, shared by the judge and the settings page (which says whether it was found).
+const claudeCli = createClaude(DEMO ? { env: { ZAAFPULSE_CLAUDE_BIN: path.join(demoDir, 'no-claude') } } : {});
 const evalEngine = createEvalEngine({
   trace,
   indexer,
   models: createModels({
     settings: () => evalApi.settings(),
     gateway,
+    claude: claudeCli,
     ...(DEMO ? { fetchImpl: () => Promise.reject(new Error('demo mode makes no calls')) } : {}),
   }),
   store: createEvalStore({ file: path.join(evalDir, 'evals.jsonl') }),
@@ -300,6 +310,7 @@ const evalApi = createEvalApi({
   feedback: evalFeedback,
   gateway,
   contentOff,
+  claude: claudeCli,
   settings: {
     get: () => rawConfig().evals,
     save: (evals) => {
@@ -565,6 +576,8 @@ const handler = async (req, res) => {
       return send(res, 200, {
         ...(DEMO ? { ...demo.live(), demoReady } : await processes.snapshot()),
         index: indexer.state,
+        // Where the logs are read from, for the Overview's empty state. The owner's own dashboard only (~ paths).
+        ...(DEMO ? {} : { logRoots: logRoots() }),
       });
     }
     if (url.pathname === '/api/insights') {
@@ -969,10 +982,11 @@ server.listen(PORT, HOST, () => {
       });
 });
 
-// Sessions are written within a second; flush them when launchd or Ctrl-C stops the server.
-for (const sig of ['SIGTERM', 'SIGINT'])
+// Sessions are written within a second; flush them when launchd, Ctrl-C or a closed terminal stops the server.
+for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP'])
   process.on(sig, () => {
     try {
+      evalEngine.stop(); // a running judge call is cancelled, and its working folder removed
       gateway.flush();
     } finally {
       // Queued spans get up to 2 seconds to reach the OTLP endpoint.

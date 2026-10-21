@@ -14,8 +14,8 @@ does not read them again.
 
 | Source | Where it reads | Spans | Cost and tokens | Text on request |
 |---|---|---|---|---|
-| **Claude Code** | the log index of `~/.claude/projects` | session, turn, model call, tool call, subagent (with its own tree) | yes | prompts, replies, tool inputs and outputs, including tool output Claude Code saved to a file |
-| **Codex** | the log index of `~/.codex/sessions` | session, turn, model call, tool call | yes | prompts, replies, tool inputs and outputs |
+| **Claude Code** | the log index of every Claude Code log folder (`~/.claude/projects` by default; see [Where the logs are read from](install.md#where-the-logs-are-read-from)) | session, turn, model call, tool call, subagent (with its own tree) | yes | prompts, replies, tool inputs and outputs, including tool output Claude Code saved to a file |
+| **Codex** | the log index of `~/.codex/sessions`, or `$CODEX_HOME/sessions` | session, turn, model call, tool call | yes | prompts, replies, tool inputs and outputs |
 | **Agent Gateway** | this gateway's own request log and collaboration runs | plain requests: metadata only (one session per conversation). Collaboration runs: the full span tree | yes | collaboration run steps and answers only; the gateway never stores request text |
 | **Kiro** | `~/.kiro/sessions/<workspace>/<session>/` | tool calls | none: Kiro stores no usage | no |
 | **Gemini CLI** | `~/.gemini/tmp/<project>/chats/*.json` | one model call per Gemini message, its tool calls | tokens, when the chat file has them | no |
@@ -62,9 +62,13 @@ Office pages open the synthetic session of their tool.
 - **Secrets are masked by default.** The whole field is scanned with the same detectors as the Quality page, so
   a secret that crosses a page boundary is still hidden. **show** reveals one masked value at a time, over
   `POST /api/trace/reveal`. A revealed value is kept only in the open page: the server does not store it, and **hide** masks it again.
-- **Only the agent log folders are read.** Text is read from `~/.claude/projects` and `~/.codex/sessions`
-  and nowhere else. A path is resolved first (links included), then checked to sit inside those folders, and a
-  byte range is checked against the file size. The data folder with your keys and `config.json` is never a
+- **Only the agent log folders are read.** Text is read from the Claude Code and Codex log folders the dashboard
+  resolved when it started (`~/.claude/projects` and `~/.codex/sessions` by default; `ZAAFPULSE_CLAUDE_DIRS`,
+  `CLAUDE_CONFIG_DIR`, `XDG_CONFIG_HOME` and `CODEX_HOME` move them, see [Where the logs are read from](install.md#where-the-logs-are-read-from)) and nowhere else. A path is resolved
+  first (links included), then checked to sit inside those folders, and a byte range is checked against the file
+  size. Only `.jsonl` log files are served from there; any other file in those folders is refused with 403 "not a
+  log file". Tool output that Claude Code saved to a file of its own is read through the span's `savedOutput`
+  reference, never as a path from the client. The data folder with your keys and `config.json` is never a
   source.
 - **The API never sees a path.** Sessions and text are addressed by opaque ids that are made per process. A
   client cannot pass a file name.
@@ -174,8 +178,6 @@ reads nothing under your home folder.
 
 Not done in this version, on purpose:
 
-- `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are not honoured: logs are read from `~/.claude/projects` and
-  `~/.codex/sessions` only, as in the rest of ZAAFPulse.
 - There is no link from a span to the Logs page.
 - Lines a parser could not read (shown as **unreadable line** spans) do not count in a source's error badge.
 - The fixtures cover no compacted Claude Code session and no interrupted Claude Code turn.
