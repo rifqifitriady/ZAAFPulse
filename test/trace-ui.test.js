@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { traceDemo } = require('../lib/demo');
-const { treeRows, mapNodes, textNodes, textFragment, fmtDur, trIsLive } = require('../public/traceview.js');
+const { treeRows, mapNodes, textNodes, textFragment, fmtDur, trIsLive, trLivePlan } = require('../public/traceview.js');
 
 const SRC = path.join(__dirname, '..', 'public', 'traceview.js');
 const claudeSpans = () => traceDemo(Date.UTC(2026, 9, 20, 12)).skeletons['demo-claude-1'].spans;
@@ -236,4 +236,16 @@ test('trIsLive: poll while the last span runs or the session ended under 10 minu
   assert.equal(trIsLive(sk(now - 2 * 3600e3), now), false);
   assert.equal(trIsLive(sk(now - 2 * 3600e3, 'running'), now), true);
   assert.equal(trIsLive(null, now), false);
+});
+
+test('trLivePlan: a changed file is always adopted; only a new shape repaints', () => {
+  const sk = (n, end, ids = 'a') => ({ session: {}, turns: [{ index: 0 }], spans: Array.from({ length: n }, (_, i) => ({ id: `s${i}`, text: `ci_${ids}${i}`, start: i, end, status: 'ok' })) });
+  const cur = sk(3, 10, 'a');
+  // Lines that make no span (attachment, mode, ...) grew the file: same shape, new content ids.
+  assert.deepEqual(trLivePlan(cur, { changed: true, skeleton: sk(3, 10, 'b') }), { adopt: true, repaint: false });
+  assert.deepEqual(trLivePlan(cur, { changed: true, skeleton: sk(4, 12, 'b') }), { adopt: true, repaint: true });
+  assert.deepEqual(trLivePlan(cur, { changed: true, skeleton: sk(3, 11, 'b') }), { adopt: true, repaint: true });
+  assert.deepEqual(trLivePlan(cur, { changed: false, cursor: 'x' }), { adopt: false, repaint: false });
+  assert.deepEqual(trLivePlan(cur, { changed: true }), { adopt: false, repaint: false });
+  assert.deepEqual(trLivePlan(null, { changed: true, skeleton: cur }), { adopt: false, repaint: false });
 });

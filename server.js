@@ -177,6 +177,7 @@ function getIntegrations() {
       indexer,
       // These tools also answer gateway API keys on /mcp: no transcript-derived title may leave there.
       contentOff: true,
+      demo: DEMO, // the demo trace sessions only: the stand-in indexer has no entries, and HOME is not read
     });
     const registry = createIntegrations({ config, secrets: createSecrets(), audit, local });
     local.integrationsStatus = () => registry.status();

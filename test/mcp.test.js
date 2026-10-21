@@ -216,3 +216,32 @@ test('local.traceSessions: titles follow contentOff, and limit is clamped to 200
   assert.equal((await big.traceSessions({ limit: 500 })).length, 200);
   assert.equal((await big.traceSessions({ limit: 120 })).length, 120);
 });
+
+// DEMO=1: the server hands createLocal a stand-in indexer with no entries(). The tool must list the synthetic
+// sessions only, and never the Kiro, Gemini or Antigravity logs under HOME. Run in a child so HOME is its own.
+test('local.traceSessions in demo mode lists only the synthetic sessions and reads nothing under HOME', async () => {
+  const env = traceHome(); // a real Claude log and two Kiro sessions the demo must not show
+  const script = `
+    const { createLocal } = require(${JSON.stringify(path.join(__dirname, '..', 'lib', 'local'))});
+    const indexer = { version: 1, state: {}, results: () => [], refresh: async () => {} }; // as server.js in DEMO
+    const local = createLocal({ cacheDir: process.env.HOME, indexer, contentOff: true, demo: true });
+    local.traceSessions({}).then((r) => process.stdout.write(JSON.stringify(r)), (e) => {
+      process.stdout.write(JSON.stringify({ error: String(e && e.message) }));
+    });`;
+  const out = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['-e', script], {
+      env: { ...process.env, ...env },
+      stdio: ['ignore', 'pipe', 'inherit'],
+    });
+    let buf = '';
+    child.stdout.on('data', (d) => (buf += d));
+    child.on('error', reject);
+    child.on('exit', () => resolve(buf));
+  });
+  const rows = JSON.parse(out);
+  assert.ok(Array.isArray(rows), out);
+  assert.deepEqual(rows.map((r) => r.source).sort(), ['claude', 'codex', 'kiro']);
+  // The synthetic Kiro session, not the two from HOME.
+  assert.equal(rows.filter((r) => r.source === 'kiro').length, 1);
+  assert.equal(rows.find((r) => r.source === 'claude').turns, 1, 'the demo Claude session, not the fixture with two turns');
+});

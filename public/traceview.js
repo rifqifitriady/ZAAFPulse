@@ -254,6 +254,21 @@ function trIsLive(sk, now = Date.now()) {
   return Number.isFinite(end) && now - end < 10 * 60000;
 }
 
+// What the tree and the map are drawn from: a skeleton with the same shape needs no repaint.
+const trShape = (sk) => {
+  const spans = (sk && Array.isArray(sk.spans) && sk.spans) || [];
+  const last = spans[spans.length - 1];
+  const turns = (sk && Array.isArray(sk.turns) && sk.turns.length) || 0;
+  return `${turns}|${spans.length}|${last && last.end}|${last && last.status}`;
+};
+// What a live poll does with its answer. A changed file is always adopted: the server keeps the content ids
+// of its newest live skeletons only, so an older one stops reading text after a couple of growths, even when
+// the file grew by lines that make no span. Only a new shape repaints the tree and the map.
+function trLivePlan(cur, r) {
+  if (!cur || !r || !r.changed || !r.skeleton) return { adopt: false, repaint: false };
+  return { adopt: true, repaint: trShape(r.skeleton) !== trShape(cur) };
+}
+
 /* ---------- view ---------- */
 const TR_SRC = {
   claude: ['CC', '#d97757', 'Claude Code', 'Claude'],
@@ -1156,10 +1171,12 @@ function mountTrace() {
     clearTimeout(S.poll);
     if (S.alive && S.sk && trIsLive(S.sk)) S.poll = later(pollLive, 5000);
   }
-  const shape = (sk) => {
-    const last = sk.spans[sk.spans.length - 1];
-    return `${sk.turns.length}|${sk.spans.length}|${last && last.end}|${last && last.status}`;
-  };
+  // The text on show stays, but later reads (next page, "show") go through the id of the adopted skeleton.
+  function rebindText(s) {
+    const on = $('[data-ttab].on', app);
+    const id = on && textsOf(s)[on.dataset.ttab];
+    if (id && txt.dataset.cid) txt.dataset.cid = id;
+  }
   async function pollLive() {
     const key = S.key;
     if (!S.sk || document.hidden) return schedulePoll();
@@ -1169,20 +1186,24 @@ function mountTrace() {
       );
       if (!S.alive || key !== S.key || !S.sk) return;
       if (r.cursor) S.cursor = r.cursor;
-      if (r.changed && r.skeleton && shape(r.skeleton) !== shape(S.sk)) {
+      const plan = trLivePlan(S.sk, r);
+      if (plan.adopt) {
         const onLast = S.turn >= S.sk.turns.length - 1;
         if (onLast) {
           const prev = S.sel && S.spans.get(S.sel);
           S.sk = r.skeleton;
           S.turn = Math.max(0, r.skeleton.turns.length - 1);
-          paintSkeleton();
+          if (plan.repaint) paintSkeleton();
+          else S.spans = new Map(r.skeleton.spans.map((s) => [s.id, s]));
           const now = S.sel && S.spans.get(S.sel);
           if (!now) pickSelection();
           else {
-            select(S.sel, { scroll: 'none' });
+            if (plan.repaint) select(S.sel, { scroll: 'none' });
             if (!prev || prev.end !== now.end || prev.status !== now.status) paintDetail();
+            else rebindText(now);
           }
-        } else {
+        } else if (r.skeleton.turns.length !== S.sk.turns.length) {
+          // An earlier turn stays as it is (its ids live in its own cache slot); only the stepper learns of the new turn.
           S.sk = { ...S.sk, turns: r.skeleton.turns };
           $('#tr-step').textContent = `${S.turn + 1} / ${S.sk.turns.length}`;
           $('#tr-next').disabled = false;
@@ -1413,4 +1434,4 @@ function mountTrace() {
 }
 
 if (typeof module !== 'undefined')
-  module.exports = { treeRows, mapNodes, textNodes, textFragment, fmtDur, trIsLive, trLabel, trBadges };
+  module.exports = { treeRows, mapNodes, textNodes, textFragment, fmtDur, trIsLive, trLabel, trBadges, trShape, trLivePlan };

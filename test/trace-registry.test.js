@@ -616,6 +616,33 @@ test('each live size gets its own cache slot; only the two newest per session ar
   assert.ok((await t.content(turnId(c), {})).text);
 });
 
+test('live: lines that make no span still give new content ids, and only the two newest growths keep theirs', async () => {
+  const { root, file } = tmpClaude([U('s9', '00', 'first'), A('s9', '01', 'm1', [{ type: 'text', text: 'one' }])]);
+  const e = await tmpEntry(file);
+  const t = createTrace({ indexer: { entries: () => [e] }, light: [], roots: [root], listTtlMs: 0 });
+  const key = t.sessions({})[0].key;
+  const answerOf = (r) => r.skeleton.spans.find((s) => s.kind === 'answer');
+  const a = await t.live(key);
+  fs.appendFileSync(file, JSON.stringify(A('s9', '05', 'm2', [{ type: 'text', text: 'two' }])) + '\n');
+  const b = await t.live(key, a.cursor); // a new span: the client repaints and holds b
+  // Real transcripts grow mostly by lines like these, which create no span.
+  const quiet = (n) => JSON.stringify({ type: 'attachment', sessionId: 's9', timestamp: `2026-10-20T10:00:0${n}.000Z`, attachment: { n } }) + '\n';
+  fs.appendFileSync(file, quiet(6));
+  const c = await t.live(key, b.cursor);
+  fs.appendFileSync(file, quiet(7));
+  const d = await t.live(key, c.cursor);
+  for (const r of [c, d]) {
+    assert.equal(r.changed, true);
+    assert.equal(r.skeleton.spans.length, b.skeleton.spans.length, 'same shape');
+  }
+  // Span ids are stable, so a selection survives adopting the new skeleton...
+  assert.deepEqual(d.skeleton.spans.map((s) => s.id), b.skeleton.spans.map((s) => s.id));
+  // ...but the content ids of a skeleton two growths old are gone: the client must adopt every change.
+  await assert.rejects(t.content(answerOf(b).text, {}), /unknown content/);
+  assert.equal((await t.content(answerOf(c).text, {})).text, 'two');
+  assert.equal((await t.content(answerOf(d).text, {})).text, 'two');
+});
+
 test('live growth slots do not push other sessions out of the cache', async () => {
   const { root, file } = tmpClaude([U('s9', '00', 'first'), A('s9', '01', 'm1', [{ type: 'text', text: 'one' }])]);
   const e = await tmpEntry(file);
