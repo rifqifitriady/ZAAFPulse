@@ -272,15 +272,18 @@ function storedFixture() {
   ]);
   // The run as runs.json holds it, at the time its spans were stored.
   const sr = { ...run, createdAt: R0, updatedAt: R0 + 5000 };
-  // A request the store already holds (inside its window): not listed again from the usage log.
+  // A request whose trace the store holds is not listed again from the usage log; the others are.
   const g2 = {
     ...g,
     runs: () => [sr],
     run: (id) => (id === 'r1' ? sr : null),
     requests: () => [
       ...g.requests(),
-      { ts: R0 + 20000, keyId: 'k1', provider: 'p', model: 'm', sessionId: 'conv-2', kind: 'chat', status: 200, ms: 300 },
-      { ts: R0 + 3600000 * 2, keyId: 'k1', provider: 'p', model: 'm', sessionId: 'conv-late', kind: 'chat', status: 200, ms: 300 }, // after the window
+      { ts: R0 + 20000, keyId: 'k1', provider: 'p', model: 'm', sessionId: 'conv-2', kind: 'chat', status: 200, ms: 300, traceId: TQ },
+      // In the same time span, but not stored: unsampled (no trace id), or its spans were lost (buffer, write error).
+      { ts: R0 + 20100, keyId: 'k1', provider: 'p', model: 'm', sessionId: 'conv-unsampled', kind: 'chat', status: 200, ms: 300 },
+      { ts: R0 + 20200, keyId: 'k1', provider: 'p', model: 'm', sessionId: 'conv-lost', kind: 'chat', status: 200, ms: 300, traceId: 'd'.repeat(32) },
+      { ts: R0 + 3600000 * 2, keyId: 'k1', provider: 'p', model: 'm', sessionId: 'conv-late', kind: 'chat', status: 200, ms: 300 },
     ],
   };
   return { store, g2 };
@@ -290,7 +293,7 @@ test('stored traces are listed once: a run keeps its run: row, requests the stor
   const { store, g2 } = storedFixture();
   const rows = createGatewayAdapter(g2, store).sessions();
   // The run's trace is stored, but the run keeps its own id (evals, feedback and links use it): no trace: row for it.
-  assert.deepEqual(rows.map((r) => r.id).sort(), ['req:conv-1', 'req:conv-late', 'run:r1', `trace:${TQ}`]);
+  assert.deepEqual(rows.map((r) => r.id).sort(), ['req:conv-1', 'req:conv-late', 'req:conv-lost', 'req:conv-unsampled', 'run:r1', `trace:${TQ}`]);
   const own = rows.find((x) => x.id === 'run:r1');
   assert.equal(own.title, 'vote run · completed · 2 steps');
   assert.equal(own.start, R0);
@@ -365,7 +368,7 @@ test('registry: stored gateway rows are found by agent, model or tool', () => {
   const t = createTrace({ gateway: g2, traceStore: store, light: [] });
   const titles = (q) => t.sessions({ q, range: 30 }).map((r) => r.title);
   assert.deepEqual(titles('web'), ['vote run · completed · 2 steps']); // the run's row, by its stored trace's tags
-  assert.equal(titles('m').length, 3); // the two stored traces and the late request
+  assert.equal(titles('m').length, 5); // the run and the stored request, and three requests the store does not hold
   assert.deepEqual(titles('no-such-agent'), []);
 
 });

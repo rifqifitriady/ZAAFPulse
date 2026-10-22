@@ -24,7 +24,7 @@ const sp = (t, s, p = null, st = 1000, d = 10, a = {}) => ({
 });
 const NOON = () => Date.UTC(2026, 9, 22, 12);
 
-test('store: appended spans read back by trace; summaries, runs and the covered window are kept', () => {
+test('store: appended spans read back by trace; summaries and runs are kept', () => {
   const dir = tmp();
   const store = createTraceStore({ dir, now: NOON });
   const B = NOON() * 1000 - 3600e6; // an hour ago, in microseconds
@@ -40,7 +40,6 @@ test('store: appended spans read back by trace; summaries, runs and the covered 
   assert.equal(store.getSummary(T1).spans, 2);
   assert.equal(store.byRun('run_1').traceId, T1);
   assert.equal(store.byRun('run_2'), null);
-  assert.deepEqual(store.covered(), { from: B + 1000, to: B + 5010 });
   const file = path.join(dir, '2026-10-22.ndjson');
   assert.ok(fs.existsSync(file));
   if (process.platform !== 'win32') {
@@ -122,18 +121,3 @@ test('store: retention deletes whole segments by age, then by size, never today'
   assert.ok(small.getSummary(T3));
 });
 
-test('store: the covered window uses only gateway traces with believable times', () => {
-  const store = createTraceStore({ dir: tmp(), now: NOON });
-  const B = NOON() * 1000 - 3600e6;
-  store.writeSpans([
-    sp(T1, 'a'.repeat(16), null, B, 100),
-    { ...sp(T2, 'b'.repeat(16), null, B - 1e6, 10), src: 'remote' }, // the OTLP return channel: not ours
-    sp(T3, 'c'.repeat(16), null, 1000, 10), // a gateway trace stamped in 1970
-    sp('4'.repeat(32), 'd'.repeat(16), null, B + 1e6, 10),
-    sp('5'.repeat(32), 'e'.repeat(16), null, B + 2e6, (NOON() + 7 * 86400000) * 1000), // ends far in the future
-  ]);
-  assert.deepEqual(store.covered(), { from: B, to: B + 1e6 + 10 });
-  const empty = createTraceStore({ dir: tmp(), now: NOON });
-  empty.writeSpans([{ ...sp(T2, 'b'.repeat(16), null, B, 10), src: 'remote' }]);
-  assert.equal(empty.covered(), null);
-});

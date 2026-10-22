@@ -72,6 +72,25 @@ test('sink: a gateway request is traced for the sink, continues traceparent, and
   }
 });
 
+test('sink: a usage entry carries the trace id of its sampled request while spans are recorded, and only then', async () => {
+  let on = true;
+  otel.init({ getConfig: () => ({}), env: {}, refreshMs: 0, log: () => {}, sink: { enabled: () => on, add: () => {} } });
+  try {
+    const recorded = [];
+    const u = otel.wrapUsage({ record: (e) => (recorded.push(e), e) });
+    const T = 'a'.repeat(32);
+    const parent = (traceId, sampled) => ({ traceId, spanId: 'b'.repeat(16), sampled });
+    otel.within(parent(T, true), () => u.record(usage()));
+    otel.within(parent('c'.repeat(32), false), () => u.record(usage())); // not sampled: never stored
+    u.record(usage()); // no request in progress
+    on = false;
+    otel.within(parent(T, true), () => u.record(usage())); // tracing off
+    assert.deepEqual(recorded.map((e) => e.traceId), [T, undefined, undefined, undefined]);
+  } finally {
+    await otel.reset();
+  }
+});
+
 test('sink: a sink that throws never breaks the hooks', () => {
   for (const sink of [
     { enabled: () => { throw new Error('boom'); }, add: () => {} },

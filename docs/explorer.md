@@ -34,8 +34,10 @@ Notes per source:
 - **Agent Gateway** traces from the local trace store show as gateway sessions. A collaboration run keeps its
   own row (the one evals, feedback and links use): when the store holds its trace, its tree comes from the store,
   completed from `runs.json` with the agent and tool spans that are stored only when the run ends, so a run that
-  is still going (or stopped half-way) shows its real tree. Requests and runs from before the store's window still
-  come from the request log and `runs.json`. Everything is metadata only.
+  is still going (or stopped half-way) shows its real tree. A request whose trace the store holds is listed once,
+  from the store; every other request (from before the upgrade, not sampled by the caller's `traceparent`, lost
+  to a full buffer or a failed write, or made while tracing was off) still comes from the request log. Everything
+  is metadata only.
 - **Agent Gateway** requests are metadata only. Titles hold the pattern, state, model and counts, never a task
   or a prompt, so they stay visible even when content is off.
 - **Kiro** stores tool calls and their results but no usage and no user message. A turn starts at a user
