@@ -18,7 +18,7 @@ No extra software is needed: ZAAFPulse writes OTLP itself (binary protobuf by de
 | `plan`, `judge` | INTERNAL | the planner and the vote judge |
 | `execute_tool {integration tool}` | CLIENT | every call to an integration tool (Dynatrace, n8n, MCP servers …), from agents, the MCP server or the dashboard |
 
-A collaboration run's spans sit in the same trace as the request that started it. Model calls inside a run appear once, as the gateway's `chat` spans (with `gen_ai.agent.id`), so tokens and cost are never counted twice. The reply of `/v1/collaborate` and `/v1/runs/:id` carries `otel: { traceId, spanId, sampled }`, the trace the run belongs to.
+A collaboration run's spans sit in the same trace as the request that started it. Model calls inside a run appear once, as the gateway's `chat` spans (with `gen_ai.agent.id`), so tokens and cost are never counted twice. Replies do not carry the run's trace id: it lets its holder send spans into that trace (see [Spans coming back](#spans-coming-back)), so it stays on the server.
 
 ### Attributes
 
@@ -147,7 +147,8 @@ JSON (`content-type: application/json`) to `http://127.0.0.1:<port>/v1/traces`. 
   `error.type` and `mcp.method.name`. Everything else is dropped, so no prompt or reply text is stored under any
   convention's keys (OpenTelemetry GenAI, OpenInference, OpenLLMetry), and no `zaafpulse.*` attribute comes from
   outside. Numbers that are not finite are dropped too.
-- A resource whose `service.name` is `zaafpulse` is refused, so pointing the OTLP export back at this server is
+- A resource whose `service.name` is the one ZAAFPulse's own export uses (`otel.serviceName` or
+  `OTEL_SERVICE_NAME`, default `zaafpulse`) is refused, so pointing the OTLP export back at this server is
   ignored.
 - Returned spans add no tokens or cost to a trace's totals, and never replace one of ZAAFPulse's own spans.
 

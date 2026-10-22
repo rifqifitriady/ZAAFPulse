@@ -212,6 +212,9 @@ Arguments: `key`, `view`, and `turn` and `span` where needed. A turn that is not
 is an error; a turn past the last one is not (Claude Code and Codex then read their last turn). A large view is cut to fit the MCP result, and then says `truncated: true`. It never returns text,
 content ids, tool targets or paths.
 
+The gateway's `/mcp` endpoint exposes the `acc_*` tools, `acc_trace_sessions` and `acc_trace_get` included, to
+any gateway API key with the `mcp` scope.
+
 ## Troubleshooting
 
 | You see | Why and what to do |
