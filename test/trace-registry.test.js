@@ -1261,3 +1261,143 @@ test('material: a turn of 300 calls keeps the first 50 and the last 150, and ava
   assert.equal(m.tools[199].name, 'FinalTool');
   assert.ok(m.available.includes('LateTool') && m.available.includes('FinalTool') && m.available.includes('Bash'));
 });
+
+// ---- dataset example (server-side only: the API decides whether a viewer may add it) ----
+
+test('example: the Claude turn as prompt, tool results, answer and model, with its source', async () => {
+  const t = await make();
+  const key = t.keyFor('claude', 's1');
+  const ex = await t.example(key, 0);
+  assert.deepEqual(ex.input.messages[0], { role: 'user', text: 'fix the login redirect' });
+  assert.equal(ex.output.text, 'Changed the redirect.');
+  assert.deepEqual(ex.source, { source: 'claude', session: 's1', turn: 0, span: null });
+  assert.equal(ex.input.system, null);
+  assert.ok(ex.input.tools.some((x) => x.name === 'Agent' && x.description === ''));
+  assert.ok(ex.input.messages.length > 1);
+  for (const m of ex.input.messages.slice(1)) {
+    assert.equal(m.role, 'tool');
+    assert.equal(typeof m.name, 'string');
+  }
+  assert.equal(ex.input.messages[1].text, 'found src/auth.js');
+  assert.equal(typeof ex.output.model, 'string');
+  assert.equal((await t.example(key, 1)).input.messages[0].text, 'now run the tests');
+});
+
+test('example: a secret in the prompt or a tool output comes back masked', async () => {
+  const k = secret();
+  const { root, file } = tmpClaude([
+    U('s9', '00', `deploy with ${k}`),
+    A('s9', '01', 'm1', [{ type: 'tool_use', id: 'tu1', name: 'Bash', input: { command: `echo ${k}` } }]),
+    U('s9', '02', [{ type: 'tool_result', tool_use_id: 'tu1', content: `KEY=${k}\nrest` }]),
+    A('s9', '03', 'm2', [{ type: 'text', text: `done ${k}` }]),
+  ]);
+  const e = await tmpEntry(file);
+  const t = createTrace({ indexer: { entries: () => [e] }, light: [], roots: [root] });
+  const ex = await t.example(t.keyFor('claude', 's9'), 0);
+  assert.ok(!JSON.stringify(ex).includes(k), 'no live secret anywhere in the example');
+  assert.match(ex.input.messages[0].text, /hidden/);
+  assert.match(ex.input.messages[1].text, /KEY=.*hidden.*\nrest/);
+  assert.equal(ex.input.messages[1].name, 'Bash');
+  assert.match(ex.output.text, /hidden/);
+});
+
+test('example: a long answer keeps its head and tail, a long tool output is cut to 8000, only the last ten stay', async () => {
+  const { MARK } = require('../lib/evals/judge');
+  const answer = Array.from({ length: 7000 }, (_, i) => String(i % 10).repeat(9) + '|').join('');
+  const lines = [U('s8', '00', 'go')];
+  for (let i = 0; i < 12; i++) {
+    const ts = String(1 + i * 2).padStart(2, '0');
+    const ts2 = String(2 + i * 2).padStart(2, '0');
+    lines.push(A('s8', ts, `m${i}`, [{ type: 'tool_use', id: `tu${i}`, name: i % 2 ? 'Read' : 'Bash', input: { n: i } }]));
+    lines.push(U('s8', ts2, [{ type: 'tool_result', tool_use_id: `tu${i}`, content: i === 11 ? 'x'.repeat(20000) : `out ${i}` }]));
+  }
+  lines.push(A('s8', '50', 'mz', [{ type: 'text', text: answer }]));
+  const { root, file } = tmpClaude(lines, 's8');
+  const e = await tmpEntry(file);
+  const t = createTrace({ indexer: { entries: () => [e] }, light: [], roots: [root] });
+  const ex = await t.example(t.keyFor('claude', 's8'), 0);
+  assert.equal(answer.length, 70000);
+  assert.ok(ex.output.text.length <= 65536 + MARK.length + 2);
+  assert.ok(ex.output.text.includes(MARK));
+  assert.ok(ex.output.text.endsWith(answer.slice(-100)));
+  assert.ok(ex.output.text.startsWith(answer.slice(0, 100)));
+  const tool = ex.input.messages.slice(1);
+  assert.deepEqual(tool.map((m) => m.text).slice(0, 9), ['out 2', 'out 3', 'out 4', 'out 5', 'out 6', 'out 7', 'out 8', 'out 9', 'out 10']);
+  assert.equal(tool.length, 10, 'the last ten results, in call order');
+  assert.ok(tool[9].text.length <= 8000 + MARK.length + 2 && tool[9].text.includes(MARK));
+  assert.deepEqual(ex.input.tools.map((x) => x.name).sort(), ['Bash', 'Read']);
+});
+
+test('example: a sealed span id is kept raw in the source and maps back; a span of another turn is refused', async () => {
+  const t = await make();
+  const key = t.keyFor('claude', 's1');
+  const sealed = (await t.session(key, { turn: 0 })).spans.find((s) => s.kind === 'tool' || s.kind === 'agent').id;
+  const ex = await t.example(key, 0, sealed);
+  assert.equal(typeof ex.source.span, 'string');
+  assert.notEqual(ex.source.span, sealed, 'the raw id, not the one the client holds');
+  assert.equal(t.sealSpan(ex.source.span), sealed);
+  assert.deepEqual(await t.example(key, 0, sealed).then((x) => x.input), (await t.example(key, 0)).input, 'content is the same');
+  const other = (await t.session(key, { turn: 1 })).spans.find((s) => s.kind === 'answer').id;
+  await assert.rejects(t.example(key, 0, other), (e) => e.status === 400 && /span is not in this turn/.test(e.message));
+  await assert.rejects(t.example(key, 0, 'nope'), (e) => e.status === 400);
+  assert.equal(t.sealSpan(''), null);
+  assert.equal(t.sealSpan(undefined), null);
+});
+
+test('example: a light source or a gateway request group is null, a forged key 404, a bad turn 400, a turn past the end null', async () => {
+  const reqs = [{ ts: 1000, keyId: 'k', provider: 'p', model: 'm', sessionId: 'c1', kind: 'chat', status: 200, ms: 5, input: 1, output: 1, cost: 0 }];
+  const t = await make({ light: [fakeLight('kiro', 1)], gateway: { runs: () => [], run: () => null, requests: () => reqs } });
+  assert.equal(await t.example(t.keyFor('kiro', 'kiro-0'), 0), null);
+  assert.equal(await t.example(t.keyFor('gateway', 'req:c1'), 0), null);
+  await assert.rejects(t.example('claude.' + '0'.repeat(32), 0), (e) => e.status === 404);
+  await assert.rejects(t.example('nope', 0), (e) => e.status === 404);
+  const key = t.keyFor('claude', 's1');
+  for (const bad of [-1, 'x', 1.5, undefined, null]) await assert.rejects(t.example(key, bad), (e) => e.status === 400 && /bad turn/.test(e.message), String(bad));
+  assert.equal(await t.example(key, 99), null);
+  assert.deepEqual([t.stats().cached, t.stats().contentIds], [0, 0], 'the raw skeleton is not left in the client cache');
+});
+
+test('example: a gateway run uses its masked task as the prompt, has no tool messages, and demo mode works', async () => {
+  const k = secret();
+  const T0 = 1700000000000;
+  const run = {
+    id: 'r1',
+    pattern: 'vote',
+    state: 'completed',
+    createdAt: T0,
+    updatedAt: T0 + 5000,
+    task: `ship it with ${k}`,
+    answer: 'final answer',
+    steps: [{ n: 1, agent: 'a', model: 'm', text: 'step a text', status: 'done' }],
+    trace: [
+      { id: 'x0', parent: null, name: 'invoke_workflow vote', start: 0, end: 5000, status: 'ok', attrs: {} },
+      { id: 'x1', parent: 'x0', name: 'invoke_agent a', start: 100, end: 3000, status: 'ok', attrs: {} },
+      { id: 'x2', parent: 'x1', name: 'chat m', start: 200, end: 2000, status: 'ok', attrs: { 'zp.agent': 'a', 'gen_ai.request.model': 'm' } },
+    ],
+  };
+  const t = await make({ gateway: { runs: () => [run], run: (id) => (id === 'r1' ? run : null), requests: () => [] } });
+  const ex = await t.example(t.keyFor('gateway', 'run:r1'), 0);
+  assert.match(ex.input.messages[0].text, /^ship it with .*hidden/);
+  assert.equal(ex.input.messages.length, 1, 'no tool messages');
+  assert.ok(!JSON.stringify(ex).includes(k));
+  assert.equal(ex.output.text, 'final answer');
+  assert.equal(ex.output.model, 'm');
+  assert.deepEqual(ex.source, { source: 'gateway', session: 'run:r1', turn: 0, span: null });
+  const d = createTrace({ demo: true, listTtlMs: 0 });
+  const dx = await d.example(d.keyFor('claude', 'demo-claude-1'), 0);
+  assert.match(dx.input.messages[0].text, /^fix auth redirect/);
+  assert.match(dx.output.text, /^Fixed:/);
+  assert.ok(dx.input.tools.some((x) => x.name === 'Agent'));
+  assert.ok(!JSON.stringify(dx).includes('sk-ant-api03'));
+});
+
+test('example: a text that fits the field comes back whole even when it needs two pages', async () => {
+  const { MARK } = require('../lib/evals/judge');
+  const answer = Array.from({ length: 5000 }, (_, i) => String(i % 10).repeat(9) + '|').join('');
+  const { root, file } = tmpClaude([U('s7', '00', 'go'), A('s7', '01', 'm1', [{ type: 'text', text: answer }])], 's7');
+  const e = await tmpEntry(file);
+  const t = createTrace({ indexer: { entries: () => [e] }, light: [], roots: [root] });
+  const ex = await t.example(t.keyFor('claude', 's7'), 0);
+  assert.equal(ex.output.text, answer);
+  assert.ok(!ex.output.text.includes(MARK));
+});
