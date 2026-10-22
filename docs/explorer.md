@@ -31,9 +31,11 @@ Notes per source:
 - **Codex** logs often carry a single `token_count` for the whole file instead of one per request. Every model
   call still shows as a chat span (a run of output up to the next tool result), and the calls nothing measured
   have no tokens and no cost; the one `token_count` is counted once, on the call it follows.
-- **Agent Gateway** traces from the local trace store show as gateway sessions. A collaboration run shows once,
-  as its stored trace, even while it runs. Requests and runs from before the store's window still come from the
-  request log and `runs.json`. Everything is metadata only.
+- **Agent Gateway** traces from the local trace store show as gateway sessions. A collaboration run keeps its
+  own row (the one evals, feedback and links use): when the store holds its trace, its tree comes from the store,
+  completed from `runs.json` with the agent and tool spans that are stored only when the run ends, so a run that
+  is still going (or stopped half-way) shows its real tree. Requests and runs from before the store's window still
+  come from the request log and `runs.json`. Everything is metadata only.
 - **Agent Gateway** requests are metadata only. Titles hold the pattern, state, model and counts, never a task
   or a prompt, so they stay visible even when content is off.
 - **Kiro** stores tool calls and their results but no usage and no user message. A turn starts at a user
