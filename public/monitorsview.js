@@ -97,8 +97,13 @@ function monMeasure(rule, value, threshold) {
   return `${fv(v)} ${join} ${ft(t)}`;
 }
 
-/** One alert as lines of text: rule title, the change, value against threshold, session, trace link and time. */
-function alertLine(a, rules) {
+// Why agent control is off, from /api/monitors/status agents.reason, as the end of a sentence.
+const MON_OFF = { server: 'agent control is off on this server', docker: 'agent control is off in Docker' };
+const monOffText = (reason) => (reason === 'docker' ? MON_OFF.docker : MON_OFF.server);
+
+/** One alert as lines of text: rule title, the change, value against threshold, session, trace link and time.
+ *  `agents` is the status's agents block: while control is off, "no candidate" is worded as that. */
+function alertLine(a, rules, agents) {
   if (!a || typeof a !== 'object') return null;
   const base = {
     id: typeof a.id === 'string' ? a.id : null,
@@ -111,8 +116,16 @@ function alertLine(a, rules) {
   let line;
   if (a.action !== undefined) {
     // An automatic pause: it has a code and no state change of its own.
+    // With control off the engine finds no process and records `none`; that is not "nothing was running".
+    const off = a.code === 'none' && agents && agents.available === false;
     const why =
-      a.ok !== true && typeof a.code === 'string' && Object.hasOwn(MON_PAUSE_WHY, a.code) ? MON_PAUSE_WHY[a.code] : '';
+      a.ok === true
+        ? ''
+        : off
+          ? monOffText(agents.reason)
+          : typeof a.code === 'string' && Object.hasOwn(MON_PAUSE_WHY, a.code)
+            ? MON_PAUSE_WHY[a.code]
+            : '';
     const change =
       a.ok === true ? 'Paused the agent' : why ? `Could not pause the agent: ${why}` : 'Could not pause the agent';
     line = { ...base, kind: 'pause', tone: a.ok === true ? 'warn' : 'bad', change };
@@ -216,7 +229,10 @@ function monParamValue(k, raw) {
 }
 
 // Why there is nothing to pause, resume or stop, in the owner's words; '' when there is something.
-function monAgentNote({ available, pause, reason, candidates } = {}) {
+// `off` is the status's agents.reason ('server' or 'docker'); `reason` is the candidates' own ('not-indexed', …).
+function monAgentNote({ available, off, pause, reason, candidates } = {}) {
+  if (available === false && off === 'docker')
+    return 'Agent control is off in Docker: a container cannot see or signal the agent processes on your machine. Run the dashboard on the same machine as the agent to pause, resume or stop it.';
   if (available === false)
     return 'Agent control is off on this server: it runs in server mode or uses password sign-in. Pause, resume and stop work on a dashboard on the same machine as the agent.';
   if (pause === false)
@@ -305,6 +321,7 @@ function monLoadStatus(force = false) {
     });
   return MON.statusReq;
 }
+const monOffReason = () => (MON.status && MON.status.agents ? MON.status.agents.reason : null);
 const monAgentsOff = () => !!(MON.status && MON.status.agents && MON.status.agents.available === false);
 const monNoPause = () => !!(MON.status && MON.status.agents && MON.status.agents.pause === false);
 const monPausedList = () => pausedWithRule(MON.status && MON.status.paused, MON.alerts);
@@ -448,7 +465,8 @@ function monBannersHtml() {
 const MONITOR_DRILLS = {
   alerts() {
     const read = monLastRead();
-    const lines = MON.alerts.map((a) => alertLine(a, MON.rules)).filter(Boolean);
+    const agents = MON.status && MON.status.agents;
+    const lines = MON.alerts.map((a) => alertLine(a, MON.rules, agents)).filter(Boolean);
     const unread = unreadCount(MON.alerts, read);
     const rows = lines.map((l) => monAlertRow(l, monNum(l.ts) && l.ts > read)).join('');
     const counts = MON.status && MON.status.counts;
@@ -603,7 +621,7 @@ function monAgentHtml(t, mode) {
   const full = mode === 'full';
   const note = (txt, cls = '') => `<p class="mon-note ${esc(cls)}">${esc(txt)}</p>`;
   if (t.loading) return full ? note('Looking for the agent process…') : '';
-  if (t.off) return note(monAgentNote({ available: false }), 'off');
+  if (t.off) return note(monAgentNote({ available: false, off: monOffReason() }), 'off');
   if (t.error) return note(t.error, 'bad');
   const why = monAgentNote({ available: true, pause: t.canPause, reason: t.reason, candidates: t.cands.length });
   if (!t.cands.length) return full || !t.canPause ? note(why, 'off') : '';
@@ -904,7 +922,7 @@ async function mountMonitorsSettings() {
       );
       parts.push(st.lastAggregate ? `last check ${ago(st.lastAggregate)}` : 'not checked yet');
       if (st.agents && st.agents.available === false)
-        parts.push('agent control is off on this server, so no rule pauses an agent');
+        parts.push(`${monOffText(st.agents.reason)}, so no rule pauses an agent`);
       else if (st.agents && st.agents.pause === false) parts.push('Windows has no pause, so no rule pauses an agent');
     }
     msg.textContent = parts.join(' · ');

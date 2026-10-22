@@ -96,6 +96,27 @@ test('alertLine: an automatic pause is its own kind of line, worded from its cod
   assert.equal(alertLine({ ...pause, ok: false, code: 'weird<b>' }, RULES).change, 'Could not pause the agent');
 });
 
+test('alertLine: "no candidate" while agent control is off says why, not "no matching process"', () => {
+  const none = { ...change(), action: 'pause', ok: false, code: 'none' };
+  delete none.state;
+  delete none.previous;
+  const docker = alertLine(none, RULES, { available: false, pause: true, reason: 'docker' });
+  assert.equal(docker.change, 'Could not pause the agent: agent control is off in Docker');
+  const server = alertLine(none, RULES, { available: false, pause: true, reason: 'server' });
+  assert.equal(server.change, 'Could not pause the agent: agent control is off on this server');
+  assert.match(alertLine(none, RULES, { available: true, pause: true, reason: null }).change, /no matching process/);
+  assert.match(alertLine(none, RULES).change, /no matching process/, 'without a status, the code as it is');
+  // Other codes keep their own words; an off server changes only "none".
+  assert.match(
+    alertLine({ ...none, code: 'several' }, RULES, { available: false, reason: 'docker' }).change,
+    /several/,
+  );
+  assert.equal(
+    alertLine({ ...none, ok: true, code: 'paused' }, RULES, { available: false }).change,
+    'Paused the agent',
+  );
+});
+
 test('alertLine: odd input gives text, never markup or a foreign link', () => {
   const l = alertLine(
     change({ title: 'a\u0000b<img src=x>'.repeat(30), sessionKey: 'javascript:alert(1)', ruleTitle: '<b>x</b>' }),
@@ -181,6 +202,9 @@ test('monParamValue: form text to a rule parameter', () => {
 
 test('monAgentNote: why there is no control, worded for the owner', () => {
   assert.match(monAgentNote({ available: false }), /server mode|password/);
+  assert.match(monAgentNote({ available: false, off: 'server' }), /server mode|password/);
+  assert.match(monAgentNote({ available: false, off: 'docker' }), /Docker/);
+  assert.doesNotMatch(monAgentNote({ available: false, off: 'docker' }), /server mode/);
   assert.match(monAgentNote({ available: true, pause: false }), /Windows/);
   assert.match(monAgentNote({ available: true, pause: true, reason: 'not-indexed' }), /index/);
   assert.match(monAgentNote({ available: true, pause: true, reason: 'unsupported' }), /Claude Code and Codex/);

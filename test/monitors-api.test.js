@@ -34,6 +34,7 @@ const noPaths = (bodies) => {
 
 function setup({
   agentsOff = false,
+  inDocker = false, // never the machine's own answer, so a test run in a container behaves the same
   notifyOff = false,
   demo = null,
   platform = 'darwin',
@@ -132,6 +133,7 @@ function setup({
     checkHeaders: parseHeaders,
     demo,
     agentsOff,
+    inDocker,
     notifyOff,
     home: HOME,
     platform,
@@ -467,7 +469,7 @@ test('monitor api: candidates and agent actions', async () => {
   assert.deepEqual(status.body.paused, [
     { pid: 4242, startTime: 1000, app: 'claude', by: 'owner', since: 1, sessionKey: KEY },
   ]);
-  assert.deepEqual(status.body.agents, { available: true, pause: true });
+  assert.deepEqual(status.body.agents, { available: true, pause: true, reason: null });
   s.done();
 });
 
@@ -518,7 +520,11 @@ test('monitor api: server mode refuses agent routes; demo answers without the co
   assert.equal(off.state.settings('cost_burn').autoPause, false, 'nothing was saved');
   assert.equal((await off.post('/api/monitors/cost_burn', { autoPause: false })).status, 200);
   assert.equal((await off.post('/api/monitors/cost_burn', { enabled: true })).status, 200);
-  assert.equal((await off.call('/api/monitors/status')).body.agents.available, false);
+  assert.deepEqual((await off.call('/api/monitors/status')).body.agents, {
+    available: false,
+    pause: true,
+    reason: 'server',
+  });
   off.done();
 
   const demo = setup({
@@ -535,6 +541,53 @@ test('monitor api: server mode refuses agent routes; demo answers without the co
     assert.equal(r.body.demo, true);
   }
   assert.equal(demo.calls.length, 0, 'no signal in demo mode');
+  demo.done();
+});
+
+test('monitor api: in Docker agent control is off like server mode, with its own reason', async () => {
+  const on = setup();
+  assert.deepEqual((await on.call('/api/monitors/status')).body.agents, { available: true, pause: true, reason: null });
+  on.done();
+
+  let looks = 0;
+  const box = setup({
+    inDocker: () => {
+      looks++;
+      return true;
+    },
+  });
+  assert.deepEqual((await box.call('/api/monitors/status')).body.agents, {
+    available: false,
+    pause: true,
+    reason: 'docker',
+  });
+  assert.ok(looks > 0, 'the injected detector is asked');
+  const listed = (await box.call('/api/monitors')).body.rules;
+  assert.ok(
+    listed.every((x) => x.mayAutoPause === false),
+    'no rule may pause an agent in Docker',
+  );
+  const refused = await box.post('/api/monitors/cost_burn', { autoPause: true });
+  assert.equal(refused.status, 409);
+  assert.deepEqual(refused.body, { error: 'agent control is off in Docker' });
+  assert.equal(box.state.settings('cost_burn').autoPause, false, 'nothing was saved');
+  const cands = await box.call(`/api/agents/candidates?key=${KEY}`);
+  assert.equal(cands.status, 403);
+  assert.deepEqual(cands.body, { error: 'agent control is off in Docker' });
+  for (const a of ['pause', 'resume', 'stop']) {
+    const r = await box.post(`/api/agents/${a}`, { key: KEY, pid: 4242, startTime: 1000, confirm: true });
+    assert.equal(r.status, 403, a);
+    assert.deepEqual(r.body, { error: 'agent control is off in Docker' });
+  }
+  assert.equal(box.calls.length, 0, 'the control module was never asked');
+  box.done();
+
+  // Server mode wins as the reason; a demo in a container still shows its seeded agent.
+  const both = setup({ agentsOff: true, inDocker: true });
+  assert.equal((await both.call('/api/monitors/status')).body.agents.reason, 'server');
+  both.done();
+  const demo = setup({ inDocker: true, demo: { candidates: () => [], paused: [] } });
+  assert.equal((await demo.call('/api/monitors/status')).body.agents.available, true);
   demo.done();
 });
 
