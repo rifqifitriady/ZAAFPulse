@@ -111,20 +111,123 @@ test('a process still alive after the grace period gets SIGTERM, never SIGKILL',
 });
 
 test('no SIGTERM when the pid was reused by another process during the grace period', async () => {
-  let up = 600;
+  // The first read (the check before SIGINT) shows the old process; every later read shows a new one on its pid.
+  let reads = 0;
   const k = fakeKill();
-  const { ctl } = control({ processes: fakeTable(() => [row(4242, CLAUDE_ARGS, { upSec: up })]), killer: k });
-  const target = { pid: 4242, startTime: startOf(600) };
-  const p = ctl.stop(target, { by: 'owner' });
-  up = 0; // the old process ended and a new one took its pid
-  const out = await p;
+  const { ctl } = control({
+    processes: fakeTable(() => [row(4242, CLAUDE_ARGS, { upSec: reads++ === 0 ? 600 : 0 })]),
+    killer: k,
+  });
+  const out = await ctl.stop({ pid: 4242, startTime: startOf(600) }, { by: 'owner' });
+  assert.ok(reads >= 2);
   assert.equal(out.signal, 'SIGINT');
+  assert.equal(out.exited, true);
   assert.deepEqual(k.sent(), [[4242, 'SIGINT']]);
 });
 
+test('stop does not hang on a fixed clock: the grace wait runs on the injected sleep, then SIGTERM', async () => {
+  const fixed = Date.now();
+  const slept = [];
+  const k = fakeKill();
+  const { ctl } = control({
+    processes: fakeTable([row(4242, CLAUDE_ARGS)]),
+    killer: k,
+    now: () => fixed,
+    graceMs: 50,
+    pollMs: 20,
+    sleep: (ms) => (slept.push(ms), Promise.resolve()),
+  });
+  const out = await ctl.stop({ pid: 4242, startTime: startOf(600) }, { by: 'owner' });
+  assert.equal(out.signal, 'SIGTERM');
+  assert.deepEqual(slept, [20, 20, 10]);
+  assert.deepEqual(k.sent(), [
+    [4242, 'SIGINT'],
+    [4242, 'SIGTERM'],
+  ]);
+});
+
+test('ESRCH on SIGTERM means the process ended meanwhile: the stop succeeds with exited true', async () => {
+  const calls = [];
+  const kill = (pid, signal) => {
+    calls.push([pid, signal]);
+    if (signal === 'SIGTERM') throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+    return true;
+  };
+  const { ctl, audit } = control({ processes: fakeTable([row(4242, CLAUDE_ARGS)]), kill });
+  const out = await ctl.stop({ pid: 4242, startTime: startOf(600) }, { by: 'owner' });
+  assert.deepEqual([out.ok, out.signal, out.exited], [true, 'SIGINT', true]);
+  assert.deepEqual(
+    calls.filter(([, s]) => s !== 0),
+    [
+      [4242, 'SIGINT'],
+      [4242, 'SIGTERM'],
+    ],
+  );
+  const last = audit.entries.at(-1);
+  assert.deepEqual([last.signal, last.ok], ['SIGTERM', false]);
+});
+
+test('if the process table cannot be read after the grace period, exited is null and no SIGTERM is sent', async () => {
+  let reads = 0;
+  const k = fakeKill();
+  const processes = {
+    rows: async () => {
+      if (reads++ > 0) throw new Error('ps failed');
+      return [row(4242, CLAUDE_ARGS)];
+    },
+  };
+  const { ctl } = control({ processes, killer: k });
+  const out = await ctl.stop({ pid: 4242, startTime: startOf(600) }, { by: 'owner' });
+  assert.deepEqual([out.ok, out.signal, out.exited], [true, 'SIGINT', null]);
+  assert.deepEqual(k.sent(), [[4242, 'SIGINT']]);
+});
+
+test('409 and no signal when the process table cannot be read before a signal', async () => {
+  const k = fakeKill();
+  const processes = {
+    rows: async () => {
+      throw new Error('ps failed');
+    },
+  };
+  const { ctl, audit } = control({ processes, killer: k });
+  const target = { pid: 4242, startTime: startOf(600) };
+  for (const action of ['pause', 'resume', 'stop']) await rejects(ctl[action](target, { by: 'owner' }), 409);
+  assert.deepEqual(k.calls, []);
+  assert.deepEqual(
+    audit.entries.map((e) => [e.action, e.ok, e.status]),
+    [
+      ['pause', false, 409],
+      ['resume', false, 409],
+      ['stop', false, 409],
+    ],
+  );
+});
+
+test('by must be exactly owner or rule: anything else is a 400 with no signal; the audit never says owner by default', async () => {
+  const k = fakeKill();
+  const { ctl, audit } = control({ processes: fakeTable([row(4242, CLAUDE_ARGS)]), killer: k });
+  const target = { pid: 4242, startTime: startOf(600) };
+  const bads = [{ by: 'Rule' }, { by: 'admin' }, { by: '' }, { by: 7 }, {}, { sessionId: 's1' }];
+  for (const meta of bads) {
+    await rejects(ctl.pause(target, meta), 400);
+    await rejects(ctl.resume(target, meta), 400);
+    await rejects(ctl.stop(target, meta), 400);
+  }
+  await rejects(ctl.pause(target, null), 400);
+  await rejects(ctl.pause(target), 400);
+  assert.deepEqual(k.calls, []);
+  assert.ok(audit.entries.every((e) => e.ok === false && e.status === 400));
+  // Text is kept as given (short); a non-text or missing value is null. Never 'owner' by default.
+  assert.deepEqual(
+    bads.map((_, i) => audit.entries[i * 3].by),
+    ['Rule', 'admin', '', null, null, null],
+  );
+  assert.deepEqual(await ctl.paused(), []);
+});
+
 test('stopping a paused agent continues it so the pending SIGINT is handled', async () => {
-  const k = fakeKill({ exitOn: 'SIGINT' });
-  const { ctl } = control({ processes: fakeTable([row(4242, CLAUDE_ARGS)]), killer: k });
+  const k = fakeKill({ exitOn: 'SIGCONT' });
+  const { ctl, audit } = control({ processes: fakeTable([row(4242, CLAUDE_ARGS)]), killer: k });
   const target = { pid: 4242, startTime: startOf(600) };
   await ctl.pause(target, { by: 'owner' });
   await ctl.stop(target, { by: 'owner' });
@@ -133,6 +236,14 @@ test('stopping a paused agent continues it so the pending SIGINT is handled', as
     [4242, 'SIGINT'],
     [4242, 'SIGCONT'],
   ]);
+  // The SIGCONT is audited too, as a resume noted as part of the stop, in the usual audit shape.
+  const cont = audit.entries.find((e) => e.signal === 'SIGCONT');
+  assert.deepEqual([cont.action, cont.ok, cont.by, cont.pid, cont.app], ['resume', true, 'owner', 4242, 'claude']);
+  assert.ok(cont.note);
+  assert.deepEqual(
+    audit.entries.map((e) => e.signal),
+    ['SIGSTOP', 'SIGINT', 'SIGCONT'],
+  );
 });
 
 test('refusals: gone, wrong start time, not an agent, ZAAFPulse itself, bad target; each one audited', async () => {
