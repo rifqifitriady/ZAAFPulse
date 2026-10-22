@@ -124,3 +124,62 @@ test('propagation: an integration tool gets the traceparent of its own execute_t
     await otel.reset();
   }
 });
+
+function remoteOrch(fetchImpl) {
+  return createOrchestrator({
+    agents: { enabled: () => [], get: () => null },
+    memory: { recall: () => [] },
+    integrations: null,
+    llm: async () => ({}),
+    getDefaults: () => ({ model: 'x' }),
+    fetchImpl,
+  });
+}
+const FAR = { id: 'far', name: 'Far', remoteUrl: 'http://127.0.0.1:9/a2a', tools: [] };
+
+for (const [label, reply] of [
+  ['a null body', null],
+  ['a null part', { result: { message: { parts: [null] } } }],
+]) {
+  test(`propagation: the client span still ends, as an error, on a malformed reply (${label})`, async () => {
+    const got = recording();
+    try {
+      const orch = remoteOrch(async () => ({ json: async () => reply }));
+      await assert.rejects(orch.runAgent(FAR, 'ping', {}));
+      const client = got.find((s) => s.name === 'a2a far');
+      const agent = got.find((s) => s.name === 'invoke_agent far');
+      assert.ok(client, 'the a2a span was recorded');
+      assert.equal(client.status.code, 2);
+      assert.equal(client.parentSpanId, agent.spanId);
+    } finally {
+      await otel.reset();
+    }
+  });
+}
+
+test('propagation: the -32601 retry sends the same traceparent on both attempts', async () => {
+  const got = recording();
+  const seen = [];
+  try {
+    const orch = remoteOrch(async (url, init) => {
+      seen.push({ tp: init.headers.traceparent, method: JSON.parse(init.body).method });
+      return {
+        json: async () =>
+          seen.length === 1
+            ? { error: { code: -32601, message: 'method not found' } }
+            : { result: { message: { parts: [{ text: 'pong' }] } } },
+      };
+    });
+    const r = await orch.runAgent(FAR, 'ping', {});
+    assert.equal(r.text, 'pong');
+    assert.deepEqual(
+      seen.map((s) => s.method),
+      ['SendMessage', 'message/send'],
+    );
+    const client = got.find((s) => s.name === 'a2a far');
+    assert.equal(seen[0].tp, `00-${client.traceId}-${client.spanId}-01`);
+    assert.equal(seen[1].tp, seen[0].tp);
+  } finally {
+    await otel.reset();
+  }
+});
