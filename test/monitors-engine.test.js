@@ -952,7 +952,11 @@ test('server: a demo server runs the monitors and answers their status', async (
     }
     assert.equal(typeof st.lastAggregate, 'number', 'the aggregate pass ran after the index refresh');
     assert.equal(typeof st.lastLive, 'number', 'the live pass ran');
-    assert.deepEqual(st.paused, []);
+    // Only the seeded demo pause is listed: demo mode never pauses a real agent.
+    assert.deepEqual(
+      st.paused.map((p) => [p.pid, p.app, p.by]),
+      [[48213, 'claude', 'rule']],
+    );
     assert.deepEqual(Object.keys(st.counts).sort(), ['no_data', 'ok', 'snoozed', 'triggered']);
     assert.equal(typeof st.enabled, 'boolean');
     // Demo mode keeps its monitor files in the throwaway folder, never in the data folder.
