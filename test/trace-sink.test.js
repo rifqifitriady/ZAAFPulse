@@ -176,3 +176,30 @@ test('sink: only a tool called from inside a tool span is marked nested', () => 
   assert.equal(by('execute_tool under_agent').attributes['zaafpulse.tool.nested'], undefined);
   assert.equal(by('execute_tool direct').attributes['zaafpulse.tool.nested'], undefined);
 });
+
+test('sink: within() and the span book never throw a tracing failure into a run, and run fn once', () => {
+  const { o } = setup();
+  const broken = { get traceId() { throw new Error('tracing broke'); } };
+  let calls = 0;
+  assert.equal(o.within(broken, () => (calls++, 'ran')), 'ran');
+  assert.equal(calls, 1);
+  // The run's own error still reaches the run, from a single call.
+  assert.throws(() => o.within({ traceId: 'a'.repeat(32), spanId: 'b'.repeat(16) }, () => {
+    calls++;
+    throw new Error('the run failed');
+  }), /the run failed/);
+  assert.equal(calls, 2);
+  const book = o.spanBook();
+  const hostile = new Proxy({}, { ownKeys() { throw new Error('tracing broke'); } });
+  const sp = book.span('invoke_agent a', hostile);
+  assert.equal(sp.id, null);
+  assert.doesNotThrow(() => sp.end({}, new Error('x')));
+  const ok = book.span('invoke_agent b', {});
+  assert.equal(book.within(ok.id, () => (calls++, 'in')), 'in');
+  assert.equal(calls, 3);
+  assert.throws(() => book.within(ok.id, () => { calls++; throw new Error('the run failed'); }), /the run failed/);
+  assert.equal(calls, 4);
+  assert.equal(book.within(null, () => 'plain'), 'plain');
+  assert.equal(book.traceCtx(null), undefined);
+  ok.end();
+});
