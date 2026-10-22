@@ -5,7 +5,7 @@ const os = require('os');
 const path = require('path');
 const { EventEmitter } = require('events');
 const { spawn: realSpawn, spawnSync } = require('child_process');
-const { createAgentControl, detectDocker } = require('../lib/agents/control');
+const { createAgentControl, detectDocker, isAgentBinary, sameProcess } = require('../lib/agents/control');
 
 const POSIX = process.platform !== 'win32';
 const CLAUDE_ARGS = '/home/u/.local/bin/claude --resume';
@@ -306,7 +306,7 @@ test('server mode and Docker refuse every action and list no candidates', async 
     await rejects(ctl.pause(target, { by: 'owner' }), 403);
     await rejects(ctl.resume(target, { by: 'owner' }), 403);
     await rejects(ctl.stop(target, { by: 'owner' }), 403);
-    assert.deepEqual(await ctl.candidates({ cwd: os.tmpdir(), firstTs: Date.now() }), []);
+    assert.deepEqual(await ctl.candidates({ cwd: os.tmpdir(), firstTs: Date.now(), source: 'claude' }), []);
     assert.deepEqual(k.sent(), []);
     assert.equal(audit.entries.length, 3);
   }
@@ -396,32 +396,129 @@ test('candidates: one, many or none, by real working folder and a start before t
     row(14, CLAUDE_ARGS, { cwd: other, upSec: 600 }), // another folder
     row(15, CLAUDE_ARGS, { upSec: 600 }), // cwd unknown
     row(16, CLAUDE_ARGS, { cwd: work, upSec: 600 }), // ended since the table was read
+    row(17, CLAUDE_ARGS, { cwd: work, upSec: 900 }),
   ];
   const k = fakeKill({ gone: new Set([16]) });
   const { ctl } = control({ processes: fakeTable(rows), killer: k });
-  const many = await ctl.candidates({ cwd: work, firstTs: first });
+  const many = await ctl.candidates({ cwd: work, firstTs: first, source: 'claude' });
   assert.deepEqual(
     many.map((c) => [c.pid, c.app]),
     [
       [10, 'claude'],
-      [11, 'codex'],
+      [17, 'claude'],
     ],
+  );
+  const codex = await ctl.candidates({ cwd: work, firstTs: first, source: 'codex' });
+  assert.deepEqual(
+    codex.map((c) => [c.pid, c.app]),
+    [[11, 'codex']],
   );
   assert.deepEqual(Object.keys(many[0]).sort(), ['app', 'command', 'cwd', 'pid', 'startTime']);
   assert.equal(many[0].command, CLAUDE_ARGS);
   assert.ok(Math.abs(many[0].startTime - (Date.now() - 600e3)) <= 2000);
-  const one = await ctl.candidates({ cwd: other, firstTs: new Date(first).toISOString() });
+  const one = await ctl.candidates({ cwd: other, firstTs: new Date(first).toISOString(), source: 'claude' });
   assert.deepEqual(
     one.map((c) => c.pid),
     [14],
   );
-  assert.deepEqual(await ctl.candidates({ cwd: tmp('zp-agent-none-'), firstTs: first }), []);
-  assert.deepEqual(await ctl.candidates({ cwd: work, firstTs: 'not a date' }), []);
+  assert.deepEqual(await ctl.candidates({ cwd: tmp('zp-agent-none-'), firstTs: first, source: 'claude' }), []);
+  assert.deepEqual(await ctl.candidates({ cwd: work, firstTs: 'not a date', source: 'claude' }), []);
+  assert.deepEqual(await ctl.candidates({ cwd: work, firstTs: first }), [], 'no source, no candidate');
+  assert.deepEqual(await ctl.candidates({ cwd: work, firstTs: first, source: 'kiro' }), []);
   assert.deepEqual(await ctl.candidates({}), []);
   assert.deepEqual(k.sent(), []);
   t.after(() => {
     for (const d of [work, other]) fs.rmSync(d, { recursive: true, force: true });
   });
+});
+
+test('candidates: only the session app, run from its own binary, never a path that merely says codex', async (t) => {
+  const work = tmp('zp-agent-own-');
+  t.after(() => fs.rmSync(work, { recursive: true, force: true }));
+  const first = Date.now() - 60e3;
+  const rows = [
+    row(20, 'node /home/u/code/codex-clone/node_modules/.bin/vite --port 5173', { cwd: work }), // a dev server
+    row(21, 'tail -f /home/u/code/codex.log', { cwd: work }),
+    row(22, '/usr/bin/vim /home/u/notes/codex', { cwd: work }),
+    row(23, CLAUDE_ARGS, { cwd: work }),
+  ];
+  const { ctl, k } = control({ processes: fakeTable(rows) });
+  // The stray processes count as Codex on the live page (lib/processes' broad pattern), but never as a candidate.
+  assert.deepEqual(await ctl.candidates({ cwd: work, firstTs: first, source: 'codex' }), []);
+  // A Claude Code session gets its Claude Code process, and no Codex one.
+  const claude = await ctl.candidates({ cwd: work, firstTs: first, source: 'claude' });
+  assert.deepEqual(
+    claude.map((c) => [c.pid, c.app]),
+    [[23, 'claude']],
+  );
+  rows.push(row(24, 'node /usr/local/lib/node_modules/@openai/codex/bin/codex.js', { cwd: work }));
+  const codex = await ctl.candidates({ cwd: work, firstTs: first, source: 'codex' });
+  assert.deepEqual(
+    codex.map((c) => [c.pid, c.app]),
+    [[24, 'codex']],
+  );
+  assert.deepEqual(
+    (await ctl.candidates({ cwd: work, firstTs: first, source: 'claude' })).map((c) => c.pid),
+    [23],
+    'a Codex process is never a candidate of a Claude Code session',
+  );
+  assert.deepEqual(k.sent(), []);
+});
+
+test('isAgentBinary: the program or the script node runs, by name', () => {
+  const yes = [
+    ['claude', 'claude --resume'],
+    ['claude', '/home/u/.local/bin/claude'],
+    ['claude', '/x/extensions/anthropic.claude-code-2.1.0/resources/native-binary/claude --output-format stream-json'],
+    ['claude', 'node /usr/local/bin/claude -c'],
+    ['claude', 'node --no-warnings /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js'],
+    ['claude', '"C:\\Users\\u\\.local\\bin\\claude.exe" --resume'],
+    ['codex', 'codex'],
+    ['codex', '/opt/homebrew/bin/codex exec "fix it"'],
+    ['codex', '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex app-server'],
+    ['codex', '/x/node_modules/@openai/codex/vendor/aarch64-apple-darwin/codex/codex'],
+    ['codex', '/opt/homebrew/Caskroom/codex/0.5.0/codex-aarch64-apple-darwin'],
+    ['codex', 'node /x/node_modules/@openai/codex/bin/codex.js'],
+  ];
+  const no = [
+    ['codex', 'node /home/u/code/codex-clone/node_modules/.bin/vite'],
+    ['codex', 'tail -f codex.log'],
+    ['codex', '/usr/bin/vim /home/u/codex'],
+    ['codex', '/home/u/codex/bin/server --codex'],
+    ['codex', 'claude'],
+    ['claude', '/usr/local/bin/codex'],
+    ['claude', 'node /home/u/code/claude-code-clone/server.js'],
+    ['claude', '/usr/bin/vim /home/u/claude'],
+    ['claude', 'node'],
+    ['kiro', 'kiro-cli'],
+    ['claude', ''],
+  ];
+  for (const [source, args] of yes) assert.equal(isAgentBinary(source, args), true, `${source}: ${args}`);
+  for (const [source, args] of no) assert.equal(isAgentBinary(source, args), false, `${source}: ${args}`);
+});
+
+test('a start time read a second apart is the same process: every reply names it with the first one', async (t) => {
+  // ps reports the age in whole seconds, so the start time computed from it moves with the sub-second phase of the
+  // clock: 600.4 s and 600.6 s after the start of the epoch, with an age of 599 s, give 1 s and 2 s.
+  const work = tmp('zp-agent-start-');
+  t.after(() => fs.rmSync(work, { recursive: true, force: true }));
+  let reads = 0;
+  const table = { rows: async () => (reads++, [row(30, CLAUDE_ARGS, { cwd: work, upSec: 599 })]) };
+  const { ctl } = control({ processes: table, now: () => 600_400 + 200 * (reads % 2) });
+  const first = 10_000;
+  const [a] = await ctl.candidates({ cwd: work, firstTs: first, source: 'claude' });
+  const [b] = await ctl.candidates({ cwd: work, firstTs: first, source: 'claude' });
+  assert.equal(reads, 2);
+  assert.equal(a.startTime, 1000);
+  assert.equal(b.startTime, a.startTime, 'the second read is 2000 before it is kept stable');
+  await ctl.pause({ pid: 30, startTime: a.startTime }, { by: 'owner' });
+  const [p] = await ctl.paused();
+  assert.equal(p.startTime, a.startTime);
+  const [c] = await ctl.candidates({ cwd: work, firstTs: first, source: 'claude' });
+  assert.equal(c.startTime, a.startTime);
+  assert.ok(sameProcess(p, { pid: 30, startTime: a.startTime + 1000 }));
+  assert.ok(!sameProcess(p, { pid: 30, startTime: a.startTime + 3000 }));
+  assert.ok(!sameProcess(p, { pid: 31, startTime: a.startTime }));
 });
 
 test('paused(): after a restart, agents the OS reports as stopped are listed again; gone ones are dropped', async () => {
