@@ -547,26 +547,117 @@ test('engine: a resolved episode clears the mark, so the next trigger pauses aga
   }
 });
 
-test('engine: a snooze leaves no stale mark; the episode after it may pause, the snoozed one does not', async () => {
+// Ticks both passes at T0 + each minute in `mins`, with the session spending $9 just before when `burn` is set.
+async function tickAt(e, mins, burn) {
+  for (const m of mins) {
+    e.clock.t = T0 + m * MIN;
+    if (burn) e.data.results[0].events.push(usage(e.clock.t - 30e3, 's1', 9));
+    await e.monitors.tickAggregate();
+    await e.monitors.tickLive();
+  }
+}
+
+test('engine: a trigger that lasts through a snooze is the same episode; an agent the owner resumed stays running', async () => {
   const e = burning();
   try {
-    await e.monitors.tickAggregate();
-    await e.monitors.tickLive();
+    await tickAt(e, [0], false);
+    assert.equal(e.calls.pause.length, 1);
+    // The owner resumes the agent (outside the engine) and snoozes the rule; the session keeps spending.
+    e.state.snooze('cost_burn', null, 60 * MIN);
+    await tickAt(e, [5, 30, 59], true);
+    assert.equal(e.calls.pause.length, 1, 'nothing while snoozed');
+    // The snooze ends with the session still burning: the alert comes back, the agent is not paused again.
+    await tickAt(e, [61, 62], true);
+    assert.ok(ruleAlerts(e.sent, 'cost_burn').length >= 2, 'alerted again after the snooze');
+    assert.equal(e.calls.pause.length, 1, 'no re-pause');
+    // Also after a restart.
+    e.restart();
+    await tickAt(e, [95], true);
+    assert.equal(e.calls.pause.length, 1);
+  } finally {
+    e.cleanup();
+  }
+});
+
+test('engine: a rule that resolved during a snooze pauses again on its next trigger', async () => {
+  const e = burning();
+  try {
+    await tickAt(e, [0], false);
     assert.equal(e.calls.pause.length, 1);
     e.state.snooze('cost_burn', null, 60 * MIN);
-    for (const dt of [5, 30, 59]) {
-      e.clock.t = T0 + dt * MIN;
-      e.data.results[0].events.push(usage(e.clock.t - 30e3, 's1', 9));
-      await e.monitors.tickAggregate();
-      await e.monitors.tickLive();
-    }
-    assert.equal(e.calls.pause.length, 1, 'nothing while snoozed');
-    // The snooze ends with the session still burning: a new episode starts, and it is acted on.
-    e.clock.t = T0 + 61 * MIN;
-    e.data.results[0].events.push(usage(e.clock.t - 30e3, 's1', 9));
-    await e.monitors.tickAggregate();
-    await e.monitors.tickLive();
+    // No spend: ok from minute 15, held past the 5-minute resolution hold while snoozed.
+    await tickAt(e, [15, 21], false);
+    // After the snooze, a new burn: a new episode.
+    await tickAt(e, [61], true);
     assert.equal(e.calls.pause.length, 2);
+  } finally {
+    e.cleanup();
+  }
+});
+
+test('engine: a rule that resolves after a snooze ended (no alert open) also ends the episode', async () => {
+  const e = burning();
+  try {
+    await tickAt(e, [0], false);
+    e.state.snooze('cost_burn', null, 30 * MIN);
+    await tickAt(e, [10, 29], true); // still burning while snoozed
+    // The snooze ends while the session is quiet (ok, so no alert opens), and stays quiet past the hold.
+    await tickAt(e, [45, 51], false);
+    assert.equal(e.calls.pause.length, 1);
+    await tickAt(e, [60], true);
+    assert.equal(e.calls.pause.length, 2, 'the trigger after a real resolution is a new episode');
+  } finally {
+    e.cleanup();
+  }
+});
+
+test('engine: an unreadable process list is reported once and tried again; the retry pauses', async () => {
+  let n = 0;
+  const one = [{ pid: 4242, startTime: T0 - 2 * 60 * MIN, app: 'claude' }];
+  const e = burning({
+    candidates: () => {
+      n++;
+      if (n <= 2) throw new Error('ps failed');
+      return one;
+    },
+  });
+  try {
+    await tickAt(e, [0], false);
+    e.clock.t += 5000;
+    await e.monitors.tickLive();
+    assert.equal(e.calls.pause.length, 0);
+    const failed = outcomes(e.sent);
+    assert.equal(failed.length, 1, 'reported once over two failed tries');
+    assert.equal(failed[0].alert.code, 'unreadable');
+    e.clock.t += 5000;
+    await e.monitors.tickLive();
+    assert.equal(e.calls.candidates.length, 3);
+    assert.equal(e.calls.pause.length, 1, 'paused on the retry');
+    assert.deepEqual(
+      outcomes(e.sent).map((o) => o.alert.code),
+      ['unreadable', 'paused'],
+    );
+  } finally {
+    e.cleanup();
+  }
+});
+
+test('engine: a session not indexed yet is reported once and paused once it is indexed', async () => {
+  const e = burning();
+  const sessions = e.data.results[0].sessions;
+  e.data.results[0].sessions = {};
+  try {
+    await tickAt(e, [0], false);
+    e.clock.t += 5000;
+    await e.monitors.tickLive();
+    assert.equal(e.calls.candidates.length, 0);
+    assert.deepEqual(
+      outcomes(e.sent).map((o) => o.alert.code),
+      ['not-indexed'],
+    );
+    e.data.results[0].sessions = sessions;
+    await tickAt(e, [1], true);
+    assert.equal(e.calls.pause.length, 1);
   } finally {
     e.cleanup();
   }
