@@ -173,3 +173,35 @@ test('recorder: ingest never throws, keeps only well-formed records, strips cont
   assert.deepEqual(store.spans[0].a, { keep: 1 });
   assert.equal(store.spans[0].err.includes(key), false);
 });
+
+test('recorder: ingest rebuilds each record from the named fields only', () => {
+  const store = memStore();
+  const rec = createRecorder({ store, flushMs: 0 });
+  const good = { t: T, s: '1'.repeat(16), p: null, n: 'x', k: 'server', st: 1, d: 1, ok: true, src: 'r', svc: 'f' };
+  const long = 'y'.repeat(2000);
+  const attrs = { n: 1, b: true, s: long, o: { x: 1 }, l: [1], z: null, ['k'.repeat(101)]: 1 };
+  const many = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`k${i}`, i]));
+  const input = [
+    { ...good, prompt: 'secret text', extra: 1, err: null, a: 'text' },
+    { ...good, a: [1, 2] },
+    { ...good, a: attrs, k: 'weird', n: 'n'.repeat(300), src: undefined },
+    { ...good, a: many },
+    { ...good, p: 'nope' },
+    { ...good, d: -1 },
+    { ...good, st: NaN },
+  ];
+  assert.equal(rec.ingest(input), 4);
+  assert.equal(rec.stats().dropped, 3);
+  rec.flush();
+  const [a, b, c, d] = store.spans;
+  assert.deepEqual(Object.keys(a), ['t', 's', 'p', 'n', 'k', 'st', 'd', 'ok', 'src', 'svc', 'a']);
+  assert.equal('err' in a, false);
+  assert.deepEqual(a.a, {});
+  assert.deepEqual(b.a, {});
+  assert.deepEqual(Object.keys(c.a), ['n', 'b', 's']);
+  assert.equal(c.a.s.length, 1000);
+  assert.equal(c.k, 'internal');
+  assert.equal(c.n.length, 200);
+  assert.equal(c.src, 'remote');
+  assert.equal(Object.keys(d.a).length, 64);
+});
