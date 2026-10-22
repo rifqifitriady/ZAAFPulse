@@ -91,6 +91,14 @@ With content off, the page says so above the tree from the start.
 | `ZAAFPULSE_CONTENT=on` | Text is allowed, also in server mode. |
 | not set | Text is allowed when ZAAFPulse listens on loopback. In **server mode** (a non-loopback host) text is **off**, because other people may sign in. |
 
+## Saving turns to a dataset
+
+**⤓ Add to dataset** (in the detail panel) copies a turn into a [dataset](datasets.md): its prompt, the last 10 tool
+results and the answer, masked. Ctrl/⌘-click (or Space) picks several turns in the tree, and the button then adds all
+of them. **↻ Replay turn** adds the turn and opens the Playground's Dataset mode on it. The copy is kept in
+`.data/datasets/`, so it is the one place transcript text is stored, and only because you saved it. With content
+viewing off the buttons are refused. See [docs/datasets.md](datasets.md).
+
 ## Keyboard
 
 | Key | Does |
