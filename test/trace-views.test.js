@@ -38,7 +38,8 @@ test('views: topology, critical path, errors and one span, without text or conte
   assert.equal(one.tool.target, undefined);
   for (const v of [topo, cp, err, one]) assert.doesNotMatch(JSON.stringify(v), /"target"|"npm"/);
   const project = (await demoRow()).project;
-  if (project) for (const v of [topo, cp, err, one]) assert.ok(!JSON.stringify(v).includes(project));
+  assert.ok(project, 'the demo row has a project');
+  for (const v of [topo, cp, err, one]) assert.ok(!JSON.stringify(v).includes(project));
   for (const v of [topo, cp, err, one]) assert.doesNotMatch(JSON.stringify(v), /ci_[0-9a-f]{16}|FAIL src|apiKey|"text"|"result"/);
   assert.throws(() => traceView(sk, 'span', 'nope'), /unknown span/);
   assert.throws(() => traceView(sk, 'everything'), /view must be/);
@@ -69,6 +70,27 @@ test('views: a huge topology and failed list stay under the MCP result cap and s
   assert.equal(JSON.parse(asMcp(err)).truncated, true);
   assert.equal(traceView({ spans: spans.slice(0, 3) }, 'errors').truncated, false);
 });
+
+const bytesOf = (v) => Buffer.byteLength(asMcp(v));
+
+for (const [label, mk] of [
+  ['short names', (i) => `s${i}`],
+  ['non-ASCII names', (i) => `ツール${i}`.repeat(4)],
+]) {
+  test(`views: ${label} are measured in bytes as the MCP result is serialized`, () => {
+    const spans = Array.from({ length: 3000 }, (_, i) => ({
+      id: `span-${i}`, parent: 'span-0', kind: 'tool', name: mk(i), start: 0, end: 1, status: 'error', error: null,
+    }));
+    for (const [view, key] of [['errors', 'failed'], ['topology', 'spans']]) {
+      const v = traceView({ spans }, view);
+      assert.ok(bytesOf(v) <= 51200, `${view} is ${bytesOf(v)} bytes`);
+      assert.ok(bytesOf(v) <= 45000, `${view} leaves room under the cap: ${bytesOf(v)} bytes`);
+      const back = JSON.parse(asMcp(v));
+      assert.equal(back.truncated, true);
+      assert.ok(back[key].length > 0 && back[key].length < 3000);
+    }
+  });
+}
 
 test('local.traceGet rejects a bad turn and an unknown key without a path', async () => {
   const indexer = { version: 1, state: {}, results: () => [], refresh: async () => {} };
