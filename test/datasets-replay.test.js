@@ -391,3 +391,35 @@ test('a call that does not answer is aborted at the timeout and the run goes on'
   );
   assert.equal(rec.status, 'done');
 });
+
+test('a cancel during a call lets that call finish, records it and makes no further call', async () => {
+  const replay = fakeReplay({ tiers: TIERS });
+  const ctl = new AbortController();
+  let aborted = false;
+  replay.complete = (req) =>
+    new Promise((resolve) => {
+      replay.sent.push(req);
+      req.signal.addEventListener('abort', () => {
+        aborted = true;
+      });
+      ctl.abort(); // the owner presses stop while the call is running
+      setTimeout(() => resolve({ text: 'done anyway', toolCalls: [], usage: { input: 1, output: 1, cost: 0.1 } }), 30);
+    });
+  const rec = await createReplayRunner({ replay, judge: noJudge }).run({
+    id: 'exp_0000000000000009',
+    dataset: META,
+    examples: [example(1), example(2)],
+    models: ['local/qwen3'],
+    evaluators: ['secret_leak'],
+    signal: ctl.signal,
+  });
+  assert.equal(aborted, false, 'the call in flight was not aborted');
+  assert.equal(replay.sent.length, 1);
+  assert.equal(rec.perExample.length, 1);
+  assert.equal(rec.perExample[0].error, null);
+  assert.equal(rec.perExample[0].output.text, 'done anyway');
+  assert.equal(rec.perExample[0].labels.secret_leak.label, 'clean');
+  assert.equal(rec.status, 'stopped');
+  assert.equal(rec.stopped, 'cancelled');
+  assert.ok(Math.abs(rec.usage.cost - 0.1) < 1e-9);
+});
