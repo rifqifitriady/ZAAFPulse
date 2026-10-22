@@ -30,3 +30,39 @@ test('deps: agents to models, tools, agents and remote services, with counts, fa
   assert.ok(d.nodes.some((n) => n.id === 'tool:web' && n.kind === 'tool' && n.label === 'web' && n.count === 2));
   assert.deepEqual(dependencies(store, { from: NOW + 3600000, to: NOW + 7200000 }), { nodes: [], edges: [] });
 });
+
+const mk = () => createTraceStore({ dir: fs.mkdtempSync(path.join(os.tmpdir(), 'zp-deps-')) });
+const win = { from: NOW - 60000, to: NOW + 60000 };
+
+test('deps: a secret in a model name reaches neither a node id, a label nor an edge', () => {
+  const secret = 'ghp_' + 'aB3dE5fG7hJ9kL2mN4pQ6rS8tU0vW1xYz'.padEnd(36, 'Q'); // varied enough to count as a live key
+  const store = mk();
+  store.writeSpans([
+    rec('1'.repeat(16), null, 'invoke_agent sales', 'internal', { 'gen_ai.operation.name': 'invoke_agent', 'gen_ai.agent.id': 'sales' }),
+    rec('3'.repeat(16), '1'.repeat(16), `chat ${secret}`, 'client', { 'gen_ai.operation.name': 'chat', 'gen_ai.request.model': secret }),
+  ]);
+  const d = dependencies(store, win);
+  assert.ok(d.edges.length === 1 && d.nodes.length === 2);
+  assert.ok(!JSON.stringify(d).includes(secret));
+  assert.ok(d.nodes.every((n) => n.id === `${n.kind}:${n.label}`));
+});
+
+test('deps: a remote call counts once however many spans the remote service sent back', () => {
+  const store = mk();
+  store.writeSpans([
+    rec('1'.repeat(16), null, 'invoke_agent sales', 'internal', { 'gen_ai.operation.name': 'invoke_agent', 'gen_ai.agent.id': 'sales' }),
+    rec('6'.repeat(16), '1'.repeat(16), 'a2a far', 'client', { 'rpc.system': 'a2a', 'server.address': 'far:9' }),
+    rec('7'.repeat(16), '6'.repeat(16), 'handle', 'server', {}, true, 'far-agent'),
+    rec('8'.repeat(16), '7'.repeat(16), 'inner1', 'internal', {}, true, 'far-agent'),
+    rec('9'.repeat(16), '7'.repeat(16), 'inner2', 'internal', {}, true, 'far-agent'),
+  ]);
+  const d = dependencies(store, win);
+  assert.equal(d.edges.find((e) => e.from === 'remote:far:9' && e.to === 'service:far-agent').count, 1);
+  assert.equal(d.nodes.find((n) => n.id === 'service:far-agent').count, 1);
+});
+
+test('deps: an operation attribute without the name prefix falls back to the kind, not a sliced name', () => {
+  const store = mk();
+  store.writeSpans([rec('1'.repeat(16), null, 'planner', 'internal', { 'gen_ai.operation.name': 'invoke_agent' })]);
+  assert.deepEqual(dependencies(store, win).nodes.map((n) => n.id), ['agent:agent']);
+});
