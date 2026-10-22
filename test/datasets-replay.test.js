@@ -87,6 +87,9 @@ async function gatewayWith(handler) {
         models: ['gpt-6.1'],
         aliases: { best: 'gpt-6.1' },
       },
+      // Not usable: disabled, and external without approval.
+      { id: 'off', preset: 'custom', tier: 'private', enabled: false, baseUrl: upstream.url, models: ['m'] },
+      { id: 'new', preset: 'custom', tier: 'external', approved: false, baseUrl: upstream.url, models: ['n'] },
     ],
     routes: [{ name: 'router/fast', targets: ['local/qwen3'], strategy: 'fallback' }],
   };
@@ -110,10 +113,13 @@ test('replay accessor: tiers, refused names and local-first model order', async 
     assert.equal(r.tierOf('openai/gpt-6.1'), 'external');
     assert.equal(r.tierOf('local/glm-4.6:cloud'), 'external');
     for (const name of ['router/fast', 'best', 'nope/x', 'qwen3']) assert.equal(r.tierOf(name), null, name);
+    assert.equal(r.tierOf('off/m'), null, 'a disabled provider');
+    assert.equal(r.tierOf('new/n'), null, 'an unapproved external provider');
     const names = r.models().map((m) => m.name);
     assert.ok(names.indexOf('lms/phi') >= 0 && names.indexOf('lms/phi') < names.indexOf('local/qwen3'), names);
     assert.ok(names.indexOf('local/qwen3') < names.indexOf('openai/gpt-6.1'), names);
     assert.ok(!names.some((n) => n.includes('nomic-embed-text')), names);
+    assert.ok(!names.includes('off/m') && !names.includes('new/n'), names);
     const lms = r.models().find((m) => m.name === 'lms/phi');
     assert.deepEqual(lms, { name: 'lms/phi', provider: 'lms', label: 'LM Studio', tier: 'private', priced: true });
     assert.equal(r.priced('openai/gpt-6.1'), true);
