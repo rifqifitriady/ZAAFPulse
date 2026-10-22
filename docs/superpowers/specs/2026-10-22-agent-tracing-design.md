@@ -203,7 +203,8 @@ All three are optional; these are the defaults.
 | Item | Budget |
 |---|---|
 | Sink overhead per span | under 0.1 ms (convert and buffer) |
-| Trace index memory | about 400 bytes per trace: 100,000 traces ≈ 40 MB |
+| Trace index memory | about 800 bytes per trace (measured): 100,000 traces ≈ 80 MB. 500 MB of segments can hold several hundred thousand traces, so the index, not the segments, is what to watch at the size limit |
+| Snapshot and listing | the index snapshot is rewritten only when the store changed since the last one; the gateway's stored rows are rebuilt only when the store's generation changed |
 | Open a stored trace of 5,000 spans | under 300 ms, analysis included |
 | Analysis of a 5,000-span explorer skeleton | under 100 ms, cached with the skeleton |
 | Index rebuild from 500 MB of segments | under 30 s, at startup only |
