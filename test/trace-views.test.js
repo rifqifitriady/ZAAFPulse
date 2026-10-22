@@ -71,6 +71,20 @@ test('views: a huge topology and failed list stay under the MCP result cap and s
   assert.equal(traceView({ spans: spans.slice(0, 3) }, 'errors').truncated, false);
 });
 
+test('views: a long sequential critical path fits the MCP result, and its total covers every section', () => {
+  const name = 'chat '.padEnd(80, 'm');
+  const spans = Array.from({ length: 3000 }, (_, i) => ({ id: `s${i}`, parent: i ? 's0' : null, kind: 'chat', name, start: i * 10, end: i * 10 + 7, status: 'ok' }));
+  const criticalPath = spans.map((s) => ({ spanId: s.id, start: s.start, end: s.end }));
+  const cp = traceView({ spans, analysis: { criticalPath } }, 'critical_path');
+  assert.ok(Buffer.byteLength(asMcp(cp)) <= 45000, `${Buffer.byteLength(asMcp(cp))} bytes`);
+  assert.equal(cp.truncated, true);
+  assert.ok(cp.sections.length > 0 && cp.sections.length < 3000);
+  assert.equal(cp.totalMs, 3000 * 7, 'the total of all sections, not only the ones shown');
+  const short = traceView({ spans: spans.slice(0, 3), analysis: { criticalPath: criticalPath.slice(0, 3) } }, 'critical_path');
+  assert.equal(short.truncated, false);
+  assert.equal(short.sections.length, 3);
+});
+
 const bytesOf = (v) => Buffer.byteLength(asMcp(v));
 
 for (const [label, mk] of [
