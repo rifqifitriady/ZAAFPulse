@@ -32,6 +32,11 @@ const { createEvalStore, createFeedbackStore } = require('./lib/evals/store');
 const { createModels } = require('./lib/evals/models');
 const { createClaude } = require('./lib/evals/claude-cli');
 const { createEvalApi } = require('./lib/evals/api');
+const { createDatasetStore } = require('./lib/datasets/store');
+const { createExperimentStore } = require('./lib/datasets/experiments');
+const { createReplayRunner } = require('./lib/datasets/replay');
+const { createDatasetApi } = require('./lib/datasets/api');
+const { createAutoAdd } = require('./lib/datasets/auto');
 const { createMonitorState } = require('./lib/monitors/state');
 const { createChannels, checkWebhookUrl, parseHeaders } = require('./lib/monitors/channels');
 const { createMonitorApi } = require('./lib/monitors/api');
@@ -291,6 +296,9 @@ if (DEMO)
       rating: f.rating,
       note: f.note,
     });
+// Datasets and experiment records: before the engine, whose judge results can feed auto-add (wired below).
+const datasets = createDatasetStore({ dir: path.join(evalDir, 'datasets') });
+const experiments = createExperimentStore({ file: path.join(evalDir, 'experiments.jsonl') });
 // One finder for the Claude Code CLI, shared by the judge and the settings page (which says whether it was found).
 const claudeCli = createClaude(DEMO ? { env: { ZAAFPULSE_CLAUDE_BIN: path.join(demoDir, 'no-claude') } } : {});
 const evalEngine = createEvalEngine({
@@ -309,6 +317,7 @@ const evalEngine = createEvalEngine({
   log: (m) => console.error(m),
   demo: DEMO,
   demoData: evalDemo || {},
+  onResult: (r) => datasetAuto.onResult(r),
 });
 const evalApi = createEvalApi({
   trace,
@@ -330,12 +339,56 @@ const evalApi = createEvalApi({
       rawCache = { mtime: fs.statSync(CONFIG_FILE).mtimeMs, value: raw };
     },
   },
+  onFeedback: (f) => datasetAuto.onFeedback(f),
 });
 // A judging pass after each index refresh. It is only queued here: a failure must not break the refresh.
 const evalTick = () =>
   Promise.resolve()
     .then(() => evalEngine.tick())
     .catch(() => console.error('evals: the judging pass failed'));
+
+// Datasets of saved turns, text-only replay against gateway models, and experiments. Settings live in config.json
+// under "datasets" (demo: in memory). Replay goes through the gateway; judge calls share the eval engine's lane.
+const datasetApi = createDatasetApi({
+  datasets,
+  experiments,
+  runner: createReplayRunner({
+    replay: gateway.replay,
+    judge: (id, m, o) => evalEngine.judgeMaterial(id, m, o),
+  }),
+  replay: gateway.replay,
+  trace,
+  contentOff,
+  settings: {
+    get: () => rawConfig().datasets,
+    save: (next) => {
+      if (DEMO) {
+        rawCache.value = { ...rawCache.value, datasets: next };
+        return;
+      }
+      const raw = { ...rawConfig(), datasets: next };
+      fs.writeFileSync(`${CONFIG_FILE}.tmp`, JSON.stringify(raw, null, 2));
+      fs.renameSync(`${CONFIG_FILE}.tmp`, CONFIG_FILE);
+      rawCache = { mtime: fs.statSync(CONFIG_FILE).mtimeMs, value: raw };
+    },
+  },
+});
+const datasetAuto = createAutoAdd({
+  datasets,
+  trace,
+  settings: () => datasetApi.settings().autoAdd,
+  contentOff,
+  log: (m) => console.error(m),
+});
+// Demo: synthetic datasets and experiment records in the throwaway folder (the store masks the fake key).
+if (DEMO) {
+  const seed = demo.datasetsDemo();
+  for (const d of seed.datasets) {
+    datasets.create({ name: d.name, slug: d.slug });
+    datasets.add(d.slug, d.examples, { strict: true });
+  }
+  for (const r of seed.experiments) experiments.append(r);
+}
 
 // Monitors: rules on the aggregate data after each index refresh and on the live office every 5 s, alerts to the
 // desktop and an optional webhook, and an automatic pause where the owner turned it on. States, settings and alerts
@@ -601,12 +654,12 @@ function traceError(res, e) {
 // A query value that must be a whole number >= 0 (an offset or turn): undefined when absent, NaN when bad.
 const wholeParam = (v) => (v == null || v === '' ? undefined : /^\d{1,15}$/.test(v) ? Number(v) : NaN);
 
-function readBody(req) {
+function readBody(req, max = 1e6) {
   return new Promise((resolve, reject) => {
     let data = '';
     req.on('data', (c) => {
       data += c;
-      if (data.length > 1e6) {
+      if (data.length > max) {
         req.destroy();
         reject(new Error('too large'));
       }
@@ -828,6 +881,17 @@ const handler = async (req, res) => {
         readBody: () => readBody(req),
       });
       if (hit) return send(res, hit.status, hit.body);
+    }
+    // Datasets and experiments: behind the same sign-in; trace turns are named by key, no path or session id out.
+    {
+      const hit = await datasetApi.route({
+        method: req.method,
+        path: url.pathname,
+        query: url.searchParams,
+        contentType: req.headers['content-type'],
+        readBody: (max) => readBody(req, max),
+      });
+      if (hit) return send(res, hit.status, hit.body, hit.type || 'application/json');
     }
     // Monitors, alerts and agent control, behind the same sign-in. A session is named by its trace key; no raw session
     // id or path leaves here.

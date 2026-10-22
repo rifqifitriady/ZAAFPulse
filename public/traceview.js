@@ -420,6 +420,25 @@ function trRateBody(S, cur, pressed) {
   if (!trCanAct(S) || (pressed !== 'good' && pressed !== 'bad')) return null;
   return { key: S.key, turn: S.turn, rating: trNextRating(cur, pressed) };
 }
+// Datasets: the turns picked with Ctrl/Cmd-click or Space, by session key and turn. A new list each time; at most
+// 50 (one POST /api/datasets/:slug/examples takes 50 items).
+const TR_SEL_MAX = 50;
+function trSelToggle(sel, item) {
+  const list = Array.isArray(sel) ? sel : [];
+  const key = item && item.key;
+  const turn = item && item.turn;
+  if (typeof key !== 'string' || !key || !Number.isInteger(turn) || turn < 0) return list.slice();
+  const rest = list.filter((x) => !(x.key === key && x.turn === turn));
+  if (rest.length < list.length) return rest;
+  return list.length >= TR_SEL_MAX ? list.slice() : [...list, { key, turn }];
+}
+// What "Add to dataset" sends: the picked turns, else the turn on show with its selected span; null while the
+// skeleton on show is not the selected session's.
+function trAddBody(sel, S) {
+  if (Array.isArray(sel) && sel.length) return { items: sel.map(({ key, turn }) => ({ key, turn })) };
+  if (!trCanAct(S)) return null;
+  return { items: [{ key: S.key, turn: S.turn, span: typeof S.sel === 'string' ? S.sel : null }] };
+}
 // The line under a verdict: its explanation, why a judge's is missing, or a failing code check's evidence.
 function trEvalWhy(r, contentOff) {
   if (!r) return null;
@@ -674,6 +693,8 @@ function mountTrace() {
   const list = $('#tr-list');
   const txt = $('#tr-txt');
   const body = $('#tr-body');
+  // Datasets (datasetview.js): Ctrl/Cmd-click or Space picks turns; "Add to dataset" and "Replay turn".
+  const ds = typeof dsTraceMount === 'function' ? dsTraceMount(app, S, rowsBox) : null;
 
   // The deck fills the window under the dashboard's own top bar.
   const fit = () => {
@@ -1140,6 +1161,7 @@ function mountTrace() {
     const pad = (n) => (n > 0 ? `<div class="tr-pad" style="height:${n * TR_ROW_H}px"></div>` : '');
     rowsBox.innerHTML = pad(from) + slice.join('') + pad(rows.length - to);
     fillPreviews();
+    if (ds) ds.paint();
   }
 
   function nodeParts(n, i) {
@@ -2168,7 +2190,8 @@ function mountTrace() {
       if (!S.alive) return;
     }
     const first = shownSessions()[0];
-    if (key) selectSession(key);
+    const linkTurn = /^\d{1,6}$/.test(params.get('turn') || '') ? Number(params.get('turn')) : undefined;
+    if (key) selectSession(key, linkTurn);
     else if (first) selectSession(first.key);
     else clearTurn('No sessions in this range.');
     if (missing) notice(missing); // after the selection, which clears the notice
@@ -2205,4 +2228,6 @@ if (typeof module !== 'undefined')
     trEvalWhy,
     trNoteSaved,
     trMarkQueue,
+    trSelToggle,
+    trAddBody,
   };
