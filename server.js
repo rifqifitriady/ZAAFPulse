@@ -506,6 +506,17 @@ const MIME = {
   '.svg': 'image/svg+xml',
 };
 
+// Any of these on a request means it came through a proxy, even when the proxy runs on this machine.
+const TRACE_PROXY_HEADERS = [
+  'x-forwarded-for',
+  'x-forwarded-host',
+  'x-forwarded-proto',
+  'x-forwarded-port',
+  'forwarded',
+  'x-real-ip',
+  'via',
+];
+
 const handler = async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   // Reject requests addressed to other names (DNS rebinding / cross-origin writes).
@@ -563,11 +574,16 @@ const handler = async (req, res) => {
 
   try {
     // OTLP/HTTP JSON return channel (lib/trace/otlp.js): spans back from remote agents and MCP servers for traces
-    // this ZAAFPulse started. From this machine only; bodies over 1 MB are cut off by readBody.
+    // this ZAAFPulse sent out. From this machine only; bodies over 1 MB are cut off by readBody. A reverse proxy on
+    // this host connects from loopback too, so a forwarding header or a public Host name is refused as well.
     if (url.pathname === '/v1/traces' && req.method === 'POST') {
-      if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress))
+      if (
+        !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress) ||
+        !isLoopback(host) ||
+        TRACE_PROXY_HEADERS.some((h) => req.headers[h] !== undefined)
+      )
         return send(res, 403, { error: 'the trace return channel accepts calls from this machine only' });
-      if (!/^application\/json/.test(req.headers['content-type'] || ''))
+      if (!/^application\/json\s*(;|$)/i.test(req.headers['content-type'] || ''))
         return send(res, 415, { error: 'send OTLP as JSON (content-type: application/json)' });
       let body;
       try {

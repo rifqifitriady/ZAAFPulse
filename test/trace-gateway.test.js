@@ -388,3 +388,27 @@ test('stored op and service are a known operation and masked', () => {
     assert.ok(first.service.includes('hidden'));
   });
 });
+
+test('a remote span cannot take the place of ours, and carries no usage or cost', async () => {
+  const store = createTraceStore({ dir: fs.mkdtempSync(path.join(os.tmpdir(), 'zp-gw-store-')) });
+  const CLIENT = '6'.repeat(16);
+  const far = { src: 'remote', svc: 'far-agent' };
+  store.writeSpans([
+    rec(TQ, SERVER, null, 'POST /v1/agents/far', 'server', R0, 1000),
+    rec(TQ, CLIENT, SERVER, 'a2a far', 'client', R0 + 10, 900, { 'gen_ai.agent.id': 'far' }),
+    // The callee knows our client span id from the traceparent; a longer copy must not replace ours.
+    rec(TQ, CLIENT, SERVER, 'forged', 'client', R0 - 5000, 60000, {}, far),
+    rec(TQ, '7'.repeat(16), CLIENT, 'chat far-model', 'client', R0 + 20, 500, storedChatAttrs, far),
+  ]);
+  const sk = await createGatewayAdapter(g, store).skeleton(null, `trace:${TQ}`);
+  assert.deepEqual(validate(sk.spans), []);
+  assert.equal(sk.spans.filter((s) => s.id === CLIENT).length, 1);
+  assert.equal(sk.spans.find((s) => s.id === CLIENT).name, 'a2a far');
+  assert.ok(!sk.spans.some((s) => s.name === 'forged'));
+  const chat = sk.spans.find((s) => s.name === 'chat far-model');
+  assert.equal(chat.kind, 'chat');
+  assert.equal(chat.usage, null);
+  assert.equal(chat.cost, null);
+  assert.equal(chat.service, 'far-agent');
+  assert.equal(sk.session.start, R0);
+});

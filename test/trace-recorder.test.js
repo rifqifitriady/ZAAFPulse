@@ -54,16 +54,26 @@ test('recorder: an OTel span becomes a record in microseconds, without content a
   assert.equal(failed.p, 'b7ad6b7169203331');
 });
 
-test('recorder: buffers until flush, writes in one batch, and knows the trace IDs it saw', () => {
+test('recorder: buffers until flush, writes in one batch; knows only the trace IDs it was told went out', () => {
   const store = memStore();
   const rec = createRecorder({ store, flushMs: 0 });
   rec.add(otelRec());
   assert.equal(store.spans.length, 0);
   assert.equal(rec.flush(), 1);
   assert.equal(store.spans.length, 1);
+  // A stored span (here or a SERVER span continuing a caller's traceparent) does not make its trace known.
+  assert.equal(rec.knows(T), false);
+  rec.add(otelRec({ kind: 2, parentSpanId: 'f'.repeat(16), name: 'POST /v1/chat/completions' }));
+  assert.equal(rec.flush(), 1);
+  assert.equal(rec.knows(T), false);
+  rec.expect(T);
   assert.equal(rec.knows(T), true);
   assert.equal(rec.knows('f'.repeat(32)), false);
-  assert.deepEqual(rec.stats(), { buffered: 0, written: 1, dropped: 0, writeErrors: 0 });
+  for (const bad of ['0'.repeat(32), 'xyz', null, 42]) {
+    assert.doesNotThrow(() => rec.expect(bad));
+    assert.equal(rec.knows(bad), false);
+  }
+  assert.deepEqual(rec.stats(), { buffered: 0, written: 2, dropped: 0, writeErrors: 0 });
 });
 
 test('recorder: off means nothing is kept; a full buffer drops and counts; a failed write never throws', () => {
@@ -71,6 +81,7 @@ test('recorder: off means nothing is kept; a full buffer drops and counts; a fai
   const store = memStore();
   const rec = createRecorder({ store, enabled: () => on, flushMs: 0, batch: 100, maxBuffer: 2 });
   rec.add(otelRec());
+  rec.expect(T);
   assert.equal(rec.stats().buffered, 0);
   assert.equal(rec.knows(T), false);
   on = true;
@@ -102,11 +113,13 @@ test('recorder: a full batch is written at once; known trace IDs expire', async 
   let t = 0;
   const store = memStore();
   const rec = createRecorder({ store, flushMs: 0, batch: 2, knownMs: 1000, now: () => t });
+  rec.expect(T);
   rec.add(otelRec());
   rec.add(otelRec());
   assert.equal(store.spans.length, 0); // never on the request path
   await new Promise((res) => setImmediate(res));
   assert.equal(store.spans.length, 2);
+  assert.equal(rec.knows(T), true);
   t = 2000;
   assert.equal(rec.knows(T), false);
 });
@@ -151,10 +164,15 @@ test('recorder: a span that cannot be converted is dropped and its trace stays u
 test('recorder: the oldest known trace IDs are forgotten past maxKnown', () => {
   const rec = createRecorder({ store: memStore(), flushMs: 0, maxKnown: 3 });
   const id = (i) => String(i).padStart(32, '0');
-  for (let i = 1; i <= 5; i++) rec.add(otelRec({ traceId: id(i) }));
+  for (let i = 1; i <= 5; i++) rec.expect(id(i));
   assert.equal(rec.knows(id(1)), false);
   assert.equal(rec.knows(id(2)), false);
   for (let i = 3; i <= 5; i++) assert.equal(rec.knows(id(i)), true);
+  // Sent out again, a trace is recent again: the next one to go is the oldest of the others.
+  rec.expect(id(3));
+  rec.expect(id(6));
+  assert.equal(rec.knows(id(4)), false);
+  for (const i of [3, 5, 6]) assert.equal(rec.knows(id(i)), true);
 });
 
 test('recorder: ingest never throws, keeps only well-formed records, strips content and masks err', () => {
