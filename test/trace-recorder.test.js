@@ -205,3 +205,17 @@ test('recorder: ingest rebuilds each record from the named fields only', () => {
   assert.equal(c.src, 'remote');
   assert.equal(Object.keys(d.a).length, 64);
 });
+
+test('recorder: ingest takes only string ids; a non-string id is not coerced, and err numbers are stored as text', () => {
+  const store = memStore();
+  const rec = createRecorder({ store, flushMs: 0 });
+  const good = { t: T, s: '1'.repeat(16), p: null, n: 'x', k: 'server', st: 1, d: 1, ok: true, src: 'r', svc: 'f' };
+  const arrId = { ...good, t: ['a'.repeat(32)] };
+  const objId = { ...good, s: { toString: () => '1'.repeat(16) } };
+  assert.equal(rec.ingest([arrId, objId]), 0);
+  assert.equal(rec.stats().dropped, 2);
+  assert.equal(rec.ingest([{ ...good, err: 500, ok: false }]), 1);
+  rec.flush();
+  assert.equal(store.spans.length, 1);
+  assert.equal(store.spans[0].err, '500');
+});
