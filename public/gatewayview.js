@@ -32,7 +32,7 @@ const GW_COPY = {
   sessions: ['Sessions & memory', 'Conversations kept per key, and the notes agents remember between them.'],
   playground: [
     'Playground',
-    'Try the orchestrator, an agent or a model. Every run spends tokens on the provider you picked.',
+    'Try the orchestrator, an agent or a model, or replay a dataset. Every run spends tokens on the provider you picked.',
   ],
   connect: ['Connect', 'Point any OpenAI SDK, script or MCP client at ZAAFPulse.'],
 };
@@ -216,6 +216,8 @@ function paintGateway() {
   const sec = SECTION[state.route] || SECTION.gateway;
   el.innerHTML = (sec.pages[state.sub || ''] || sec.pages[''])();
   if (state.route === 'gateway' && !state.sub) mountGatewayScene();
+  if (state.route === 'gateway' && state.sub === 'playground' && gw.pg.mode === 'dataset')
+    dsPlaygroundMount(gw.pg, paintGateway);
 }
 
 /* ---------- Overview ---------- */
@@ -1667,6 +1669,8 @@ function gwSessions() {
 function gwPlayground() {
   const d = gw.data;
   const p = gw.pg;
+  // A dataset "Replay" link (?ds=&ex=) opens Dataset mode on that example (public/datasetview.js).
+  if (typeof dsPlaygroundHash === 'function') dsPlaygroundHash(p);
   const r = p.result;
   return `<section class="holo panel"><div class="panel-head"><h3>Run</h3><span class="meta">runs as the dashboard (no key, no budget) · spends tokens</span></div>
     <form class="gw-form" id="gw-pg-form">
@@ -1674,6 +1678,7 @@ function gwPlayground() {
         ['orchestrate', 'Orchestrator'],
         ['agent', 'One agent'],
         ['model', 'Model only'],
+        ['dataset', 'Dataset'],
       ]
         .map(([v, l]) => `<button type="button" data-gwpg="${v}" aria-pressed="${p.mode === v}">${l}</button>`)
         .join('')}</div>
@@ -1686,9 +1691,13 @@ function gwPlayground() {
             : ''
         }
         ${p.mode === 'model' ? `<input class="input" name="model" list="gw-models" value="${esc(p.model || d.defaults.model)}" placeholder="provider/model"><datalist id="gw-models">${d.providers.flatMap((pr) => (pr.models || []).map((m) => `<option value="${esc(pr.id)}/${esc(m)}">`)).join('')}</datalist>` : ''}
-        ${p.sessionId ? `<span class="pill">session ${esc(p.sessionId.slice(0, 12))}… <button class="link" type="button" data-gwpg="new">new</button></span>` : ''}</div>
-      <textarea class="input" name="input" rows="4" placeholder="${p.mode === 'orchestrate' ? 'e.g. Customers report slow checkout. Check for network problems and draft a status update.' : 'Ask something…'}">${esc(p.input)}</textarea>
-      <div class="gw-row"><button class="btn" type="submit" ${p.busy || (!d.defaults.model && p.mode !== 'model') ? 'disabled' : ''}>${p.busy ? 'Running…' : 'Run'}</button>${!d.defaults.model && p.mode !== 'model' ? '<span class="muted">Set a default model under Providers first.</span>' : ''}</div>
+        ${p.sessionId && p.mode !== 'dataset' ? `<span class="pill">session ${esc(p.sessionId.slice(0, 12))}… <button class="link" type="button" data-gwpg="new">new</button></span>` : ''}</div>
+      ${
+        p.mode === 'dataset'
+          ? dsPlayground(p)
+          : `<textarea class="input" name="input" rows="4" placeholder="${p.mode === 'orchestrate' ? 'e.g. Customers report slow checkout. Check for network problems and draft a status update.' : 'Ask something…'}">${esc(p.input)}</textarea>
+      <div class="gw-row"><button class="btn" type="submit" ${p.busy || (!d.defaults.model && p.mode !== 'model') ? 'disabled' : ''}>${p.busy ? 'Running…' : 'Run'}</button>${!d.defaults.model && p.mode !== 'model' ? '<span class="muted">Set a default model under Providers first.</span>' : ''}</div>`
+      }
     </form>
     ${
       r
@@ -2262,10 +2271,11 @@ document.addEventListener('click', (e) => {
     });
     return;
   }
+  if (gw.pg.mode === 'dataset' && t('#ds-pg')) return void dsPlaygroundAct(e, gw.pg, paintGateway);
   const pg = t('[data-gwpg]');
   if (pg) {
     const f = $('#gw-pg-form');
-    if (f) gw.pg.input = f.input.value;
+    if (f && f.input) gw.pg.input = f.input.value;
     if (pg.dataset.gwpg === 'new') gw.pg.sessionId = null;
     else {
       gw.pg.mode = pg.dataset.gwpg;
@@ -2276,6 +2286,7 @@ document.addEventListener('click', (e) => {
 });
 
 document.addEventListener('change', (e) => {
+  if (e.target.closest && e.target.closest('#ds-pg')) return void dsPlaygroundAct(e, gw.pg, paintGateway);
   if (e.target.name === 'effort' && e.target.closest('#a2a-form')) {
     a2aSync();
     paintGateway();
@@ -2607,6 +2618,7 @@ document.addEventListener('submit', (e) => {
       await gwPost('memory', { action: 'save', text: v('text'), scope: v('scope') });
       await refreshGateway();
     });
+  if (f.id === 'gw-pg-form' && gw.pg.mode === 'dataset') return void dsPlaygroundAct(e, gw.pg, paintGateway);
   if (f.id === 'gw-pg-form') {
     gw.pg.input = v('input');
     if (f.agent) gw.pg.agent = f.agent.value;

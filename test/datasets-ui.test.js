@@ -13,6 +13,14 @@ const {
   dsAddResult,
   dsSlugOf,
   dsRoute,
+  dsModelOptions,
+  dsRunBody,
+  dsResultCells,
+  dsPassTable,
+  dsCompare,
+  dsProgressLine,
+  dsStopLine,
+  dsPgParams,
 } = require('../public/datasetview');
 
 const SRC = path.join(__dirname, '..', 'public', 'datasetview.js');
@@ -133,8 +141,9 @@ test('datasetview.js builds no HTML from example text, tags, names or reasons (S
   const sets = [
     ...src.matchAll(/\binnerHTML\s*\+?=\s*([\s\S]*?);\s*\n/g),
     ...src.matchAll(/\binsertAdjacentHTML\(([\s\S]*?)\);\s*\n/g),
-    // The page shell viewDatasets returns is HTML too.
+    // The page shell viewDatasets returns is HTML too, and so is the Playground's Dataset mode shell.
     ...src.matchAll(/function viewDatasets\(\) \{[\s\S]*?\n  return (`[\s\S]*?`);\n\}/g),
+    ...src.matchAll(/function dsPlayground\(pg\) \{[\s\S]*?\n  return (`[\s\S]*?`);\n\}/g),
   ].map((m) => m[1]);
   assert.ok(sets.length > 1, 'the audit found the HTML it should check');
   for (const raw of sets) {
@@ -145,7 +154,265 @@ test('datasetview.js builds no HTML from example text, tags, names or reasons (S
       `innerHTML built from: ${rhs.slice(0, 120)}`,
     );
   }
-  // The cells are filled as text.
+  // The cells are filled as text: example previews, replayed outputs, proposals, errors and the preview messages.
   assert.match(src, /\.textContent\s*=\s*[^;\n]*\bdsPreview\(/);
+  assert.match(src, /\.textContent\s*=\s*[^;\n]*\bcell\.text\b/);
+  assert.match(src, /\.textContent\s*=\s*[^;\n]*\bcell\.proposal\.arguments\b/);
+  assert.match(src, /\.textContent\s*=\s*[^;\n]*\bm\.content\b/);
   assert.doesNotMatch(src, /outerHTML|document\.write|DOMParser|createContextualFragment/);
+});
+
+// The models GET /api/experiments lists: local first, as the gateway orders them.
+const MODELS = [
+  { name: 'ollama/qwen3-coder:30b', provider: 'ollama', label: 'Ollama', tier: 'private', priced: true },
+  { name: 'lmstudio/mistral-small', provider: 'lmstudio', label: 'LM Studio', tier: 'private', priced: true },
+  { name: 'anthropic/claude-haiku-5-5', provider: 'anthropic', label: 'Anthropic', tier: 'external', priced: true },
+  { name: 'openai/gpt-6.1', provider: 'openai', label: 'OpenAI', tier: 'external', priced: false },
+  { name: 'groq/qwen3-32b', provider: 'groq', label: 'Groq', tier: 'external', priced: true },
+];
+
+test('dsModelOptions: local models first and preselected, external ones never', () => {
+  assert.deepEqual(dsModelOptions(MODELS), {
+    groups: [
+      {
+        label: 'On this machine',
+        options: [
+          { value: 'ollama/qwen3-coder:30b', label: 'ollama/qwen3-coder:30b', external: false },
+          { value: 'lmstudio/mistral-small', label: 'lmstudio/mistral-small', external: false },
+        ],
+      },
+      {
+        label: 'External (sends masked text)',
+        options: [
+          { value: 'anthropic/claude-haiku-5-5', label: 'anthropic/claude-haiku-5-5', external: true },
+          { value: 'groq/qwen3-32b', label: 'groq/qwen3-32b', external: true },
+        ],
+      },
+    ],
+    defaults: ['ollama/qwen3-coder:30b'],
+  });
+  // An external model without a price is left out: the server refuses it, as the cost cap could not count it.
+  const onlyExternal = dsModelOptions(MODELS.filter((m) => m.tier === 'external'));
+  assert.deepEqual(onlyExternal.defaults, [], 'no local model: nothing preselected');
+  assert.deepEqual(onlyExternal.groups[0], { label: 'On this machine', options: [] });
+  assert.equal(onlyExternal.groups[1].options.length, 2);
+  assert.deepEqual(dsModelOptions(null), {
+    groups: [
+      { label: 'On this machine', options: [] },
+      { label: 'External (sends masked text)', options: [] },
+    ],
+    defaults: [],
+  });
+});
+
+test('dsRunBody: a good body, the whole dataset or one example, and every refusal', () => {
+  const good = {
+    dataset: 'auth-regressions',
+    example: '',
+    models: ['ollama/qwen3-coder:30b', 'anthropic/claude-haiku-5-5'],
+    evaluators: ['reference_match', 'secret_leak'],
+    maxCostUSD: '0.5',
+    maxRequests: '100',
+  };
+  assert.deepEqual(dsRunBody(good), {
+    dataset: 'auth-regressions',
+    models: ['ollama/qwen3-coder:30b', 'anthropic/claude-haiku-5-5'],
+    evaluators: ['reference_match', 'secret_leak'],
+    maxCostUSD: 0.5,
+    maxRequests: 100,
+  });
+  assert.deepEqual(dsRunBody({ ...good, example: 'ex_0000000000000001' }).examples, ['ex_0000000000000001']);
+  assert.deepEqual(dsRunBody({ ...good, maxCostUSD: 10, maxRequests: 1000 }).maxRequests, 1000, 'the top of R8');
+  const refused = (patch, re) => {
+    const r = dsRunBody({ ...good, ...patch });
+    assert.ok(r.error && !r.dataset, `refused: ${JSON.stringify(patch)}`);
+    assert.match(r.error, re);
+  };
+  refused({ dataset: '' }, /dataset/i);
+  refused({ models: [] }, /model/i);
+  refused({ models: ['a/1', 'a/2', 'a/3', 'a/4'] }, /model/i);
+  refused({ evaluators: [] }, /evaluator/i);
+  for (const maxCostUSD of ['0', '-1', '10.01', 'abc', '']) refused({ maxCostUSD }, /cost/i);
+  for (const maxRequests of ['0', '1001', '2.5', 'x', '']) refused({ maxRequests }, /request/i);
+  assert.equal(dsRunBody(null).error.length > 0, true);
+});
+
+// A finished run as GET /api/experiments/:id sends it.
+const RECORD = {
+  id: 'exp_00000000000000a1',
+  dataset: 'auth-regressions',
+  models: ['ollama/qwen3-coder:30b', 'lmstudio/mistral-small', 'anthropic/claude-haiku-5-5'],
+  evaluators: ['reference_match', 'secret_leak', 'relevance'],
+  status: 'stopped',
+  stopped: 'cost cap',
+  caps: { maxCostUSD: 0.5, maxRequests: 100 },
+  perExample: [
+    {
+      exampleId: 'ex_1',
+      model: 'anthropic/claude-haiku-5-5',
+      output: { text: '', proposal: { name: 'Bash', arguments: '{"command":"npm test"}' } },
+      error: null,
+      labels: { secret_leak: { label: 'clean', score: 1, pass: true }, relevance: null },
+    },
+    {
+      exampleId: 'ex_1',
+      model: 'ollama/qwen3-coder:30b',
+      output: { text: 'Fixed the redirect.', proposal: null },
+      error: null,
+      labels: {
+        secret_leak: { label: 'clean', score: 1, pass: true },
+        relevance: { label: 'partly', score: 0.5, pass: false },
+      },
+    },
+    {
+      exampleId: 'ex_1',
+      model: 'lmstudio/mistral-small',
+      output: null,
+      error: 'connection refused',
+      labels: { secret_leak: null, relevance: null },
+    },
+    {
+      exampleId: 'ex_2',
+      model: 'ollama/qwen3-coder:30b',
+      output: { text: null, proposal: null },
+      error: null,
+      labels: {},
+    },
+    { exampleId: 'ex_2', model: 'lmstudio/mistral-small', output: null, error: null, labels: {} },
+  ],
+};
+
+test('dsResultCells: the original first, then each model in record order, with errors and proposals', () => {
+  const example = { id: 'ex_1', output: { text: 'The original answer.', model: 'claude-opus' } };
+  assert.deepEqual(dsResultCells(RECORD, example), [
+    { head: 'Original output', text: 'The original answer.', labels: [], proposal: null, error: null },
+    {
+      head: 'ollama/qwen3-coder:30b',
+      text: 'Fixed the redirect.',
+      labels: [
+        { id: 'secret_leak', label: 'clean', pass: true },
+        { id: 'relevance', label: 'partly', pass: false },
+      ],
+      proposal: null,
+      error: null,
+    },
+    { head: 'lmstudio/mistral-small', text: null, labels: [], proposal: null, error: 'connection refused' },
+    {
+      head: 'anthropic/claude-haiku-5-5',
+      text: '',
+      // A missing verdict shows as such; reference_match is not there for an example without a reference.
+      labels: [
+        { id: 'secret_leak', label: 'clean', pass: true },
+        { id: 'relevance', label: null, pass: false },
+      ],
+      proposal: { name: 'Bash', arguments: '{"command":"npm test"}' },
+      error: null,
+    },
+  ]);
+  // Content off: texts are null and an error's reason is gone; a model the run never reached says so.
+  const two = dsResultCells(RECORD, { id: 'ex_2', output: { text: null } });
+  assert.equal(two[0].text, null);
+  assert.equal(two[1].text, null);
+  assert.equal(two[1].error, null);
+  assert.match(two[2].error, /hidden/);
+  assert.match(two[3].error, /not run/i);
+  // An example since deleted from the dataset keeps its replayed cells.
+  const gone = dsResultCells(RECORD, { id: 'ex_1' });
+  assert.match(gone[0].error, /no longer/i);
+  assert.equal(gone[1].text, 'Fixed the redirect.');
+});
+
+test('dsPassTable: one row per model, one cell per evaluator, n/a when nothing counted', () => {
+  const summary = {
+    models: {
+      'ollama/a': {
+        evaluators: {
+          reference_match: { pass: 1, total: 2, rate: 0.5 },
+          secret_leak: { pass: 2, total: 2, rate: 1 },
+        },
+      },
+      'anthropic/b': { evaluators: { reference_match: { pass: 0, total: 0, rate: null } } },
+    },
+  };
+  assert.deepEqual(dsPassTable(summary, ['reference_match', 'secret_leak']), [
+    {
+      model: 'ollama/a',
+      cells: [
+        { evaluator: 'reference_match', rate: 0.5, pass: 1, total: 2 },
+        { evaluator: 'secret_leak', rate: 1, pass: 2, total: 2 },
+      ],
+    },
+    {
+      model: 'anthropic/b',
+      cells: [
+        { evaluator: 'reference_match', rate: null, pass: 0, total: 0 },
+        { evaluator: 'secret_leak', rate: null, pass: 0, total: 0 },
+      ],
+    },
+  ]);
+  assert.deepEqual(dsPassTable(null, ['x']), []);
+});
+
+test('dsCompare: the evaluator and model pairs both runs have, with the change', () => {
+  const rates = (m) => ({
+    models: Object.fromEntries(
+      Object.entries(m).map(([model, evs]) => [
+        model,
+        {
+          evaluators: Object.fromEntries(
+            Object.entries(evs).map(([id, rate]) => [id, { rate, pass: 0, total: rate === null ? 0 : 4 }]),
+          ),
+        },
+      ]),
+    ),
+  });
+  const a = {
+    models: ['ollama/a', 'ollama/b'],
+    evaluators: ['secret_leak', 'relevance', 'faithfulness'],
+    summary: rates({
+      'ollama/a': { secret_leak: 1, relevance: 0.5, faithfulness: 0.25 },
+      'ollama/b': { secret_leak: 0.5, relevance: null, faithfulness: 1 },
+    }),
+  };
+  const b = {
+    models: ['ollama/b', 'anthropic/c'],
+    evaluators: ['relevance', 'secret_leak', 'task_completion'],
+    summary: rates({
+      'ollama/b': { secret_leak: 0.75, relevance: 0.5 },
+      'anthropic/c': { secret_leak: 1, relevance: 1, task_completion: 1 },
+    }),
+  };
+  assert.deepEqual(dsCompare(a, b), [
+    { evaluator: 'secret_leak', model: 'ollama/b', a: 0.5, b: 0.75, delta: 0.25 },
+    { evaluator: 'relevance', model: 'ollama/b', a: null, b: 0.5, delta: null },
+  ]);
+  assert.deepEqual(dsCompare(b, a)[0], { evaluator: 'relevance', model: 'ollama/b', a: 0.5, b: null, delta: null });
+  assert.equal(dsCompare(b, a)[1].delta, -0.25);
+  assert.deepEqual(dsCompare(a, { models: [], evaluators: [] }), []);
+  assert.deepEqual(dsCompare(null, b), []);
+});
+
+test('dsProgressLine and dsStopLine: a running and a stopped run in words', () => {
+  assert.equal(dsProgressLine({ done: 12, total: 40, requests: 15, cost: 0.03 }), '12 / 40 · 15 requests · $0.03');
+  assert.equal(dsProgressLine({ done: 0, total: 3, requests: 1, cost: 0 }), '0 / 3 · 1 request · $0.00');
+  assert.equal(dsProgressLine({ done: 1, total: 2, requests: 2, cost: 0.0061 }), '1 / 2 · 2 requests · $0.0061');
+  assert.equal(dsProgressLine(null), '0 / 0 · 0 requests · $0.00');
+  const caps = { maxCostUSD: 0.5, maxRequests: 100 };
+  assert.equal(dsStopLine({ status: 'done', stopped: null, caps }), null);
+  assert.equal(dsStopLine({ status: 'stopped', stopped: 'cost cap', caps }), 'Stopped at the cost cap ($0.50)');
+  assert.equal(dsStopLine({ status: 'stopped', stopped: 'request cap', caps }), 'Stopped at the request cap (100)');
+  assert.equal(dsStopLine({ status: 'stopped', stopped: 'error', caps }), 'Stopped: the run failed');
+  assert.equal(dsStopLine({ status: 'stopped', stopped: 'cancelled', caps }), 'Stopped: cancelled');
+});
+
+test('dsPgParams: the dataset and example a Replay link opens the Playground on', () => {
+  assert.deepEqual(dsPgParams('#gateway/playground?ds=auth-regressions&ex=ex_00000000000000a1'), {
+    slug: 'auth-regressions',
+    ex: 'ex_00000000000000a1',
+  });
+  assert.deepEqual(dsPgParams('#gateway/playground?ds=auth'), { slug: 'auth', ex: '' });
+  assert.deepEqual(dsPgParams('#gateway/playground?ds=auth&ex=../x'), { slug: 'auth', ex: '' }, 'not an id');
+  assert.equal(dsPgParams('#gateway/playground'), null);
+  assert.equal(dsPgParams('#gateway/playground?ds=../x'), null);
+  assert.equal(dsPgParams('#gateway?ds=auth'), null, 'only the Playground');
 });
