@@ -1831,23 +1831,55 @@ function dsPgSay(s, msg, bad = false) {
   s.bad = bad;
 }
 
+// The run body the form holds now. Evaluators go in the server's order, so the pass-rate columns line up across runs.
+function dsPgFormBody(s) {
+  const order = (dsState.expEvs || []).map((e) => e.id);
+  const rank = (id) => (order.includes(id) ? order.indexOf(id) : order.length);
+  return dsRunBody({
+    dataset: s.slug,
+    example: s.ex,
+    models: s.picked,
+    evaluators: [...(s.evs || [])].sort((a, b) => rank(a) - rank(b)),
+    maxCostUSD: s.maxCostUSD,
+    maxRequests: s.maxRequests,
+  });
+}
+// What Send posts: the previewed body, and only while the form still matches it. The confirm token covers the
+// dataset, examples and models only, so a cap or evaluator changed after the preview would otherwise go unseen.
+function dsPgSendBody(s) {
+  if (!s.preview || !s.preview.body) return null;
+  return JSON.stringify(dsPgFormBody(s)) === JSON.stringify(s.preview.body) ? s.preview.body : null;
+}
+// One edit to the form. Any edit drops an open preview, so what is sent is always what was previewed last.
+function dsPgEdit(s, act, value, checked) {
+  if (act === 'model' || act === 'ev') {
+    const list = act === 'model' ? s.picked : s.evs;
+    const i = list.indexOf(value);
+    if (checked && i < 0) {
+      if (act === 'model' && list.length >= DS_MAX_MODELS) return { error: 'Three models at most' };
+      list.push(value);
+    } else if (!checked && i >= 0) list.splice(i, 1);
+  } else if (act === 'cost') s.maxCostUSD = value;
+  else if (act === 'req') s.maxRequests = value;
+  else if (act === 'ds') {
+    s.slug = value;
+    s.ex = '';
+  } else if (act === 'ex') s.ex = value;
+  else return {};
+  s.preview = null;
+  return {};
+}
+
 // Starts a run, or asks for the preview first when an external model is ticked. `confirm` sends the previewed body.
 async function dsPgRun(pg, confirm) {
   const s = dsPg(pg);
   if (s.busy || s.runId) return;
-  // Evaluators in the server's order, so the pass-rate columns read the same in every run.
-  const order = (dsState.expEvs || []).map((e) => e.id);
-  const rank = (id) => (order.includes(id) ? order.indexOf(id) : order.length);
-  const body = confirm
-    ? s.preview.body
-    : dsRunBody({
-        dataset: s.slug,
-        example: s.ex,
-        models: s.picked,
-        evaluators: [...s.evs].sort((a, b) => rank(a) - rank(b)),
-        maxCostUSD: s.maxCostUSD,
-        maxRequests: s.maxRequests,
-      });
+  const body = confirm ? dsPgSendBody(s) : dsPgFormBody(s);
+  if (!body) {
+    s.preview = null;
+    dsPgSay(s, 'The form changed since the preview: preview again', true);
+    return s.repaint();
+  }
   if (body.error) {
     dsPgSay(s, body.error, true);
     return s.repaint();
@@ -1913,30 +1945,21 @@ function dsPlaygroundAct(event, pg, repaint) {
     // Enter in a cap field submits before its change event: read the fields as they are now.
     const cost = document.getElementById('ds-pg-cost');
     const req = document.getElementById('ds-pg-req');
-    if (cost) s.maxCostUSD = cost.value;
-    if (req) s.maxRequests = req.value;
+    if (cost && cost.value !== s.maxCostUSD) dsPgEdit(s, 'cost', cost.value);
+    if (req && req.value !== s.maxRequests) dsPgEdit(s, 'req', req.value);
     s.focus = 'run';
     return void dsPgRun(pg);
   }
   const el = event.target && event.target.closest ? event.target.closest('[data-dspg]') : null;
   if (!el) return;
   const act = el.dataset.dspg;
-  const changed = () => {
-    // A confirmed preview covers one dataset, example set and model set; any change asks for a new one.
-    s.preview = null;
-    if (!s.bad) s.msg = '';
-  };
   if (event.type === 'change') {
-    if (act === 'cost') s.maxCostUSD = el.value;
-    else if (act === 'req') s.maxRequests = el.value;
-    else if (act === 'ds' || act === 'ex') {
-      if (act === 'ds') {
-        s.slug = el.value;
-        s.ex = '';
-      } else s.ex = el.value;
-      changed();
-      s.bad = false;
-      s.msg = '';
+    if (!['cost', 'req', 'ds', 'ex'].includes(act)) return;
+    const had = !!s.preview;
+    dsPgEdit(s, act, el.value);
+    // A cap edit repaints only when it dropped a preview (Send must go); a dataset or example edit always does.
+    if (act === 'ds' || act === 'ex' || had) {
+      dsPgSay(s, had ? 'The form changed: preview what will be sent again' : '');
       s.focus = act;
       repaint();
     }
@@ -1944,19 +1967,11 @@ function dsPlaygroundAct(event, pg, repaint) {
   }
   if (event.type !== 'click') return;
   if (act === 'model' || act === 'ev') {
-    const list = act === 'model' ? s.picked : s.evs;
-    const i = list.indexOf(el.value);
-    if (el.checked && i < 0) {
-      if (act === 'model' && list.length >= DS_MAX_MODELS) {
-        event.preventDefault();
-        dsPgSay(s, 'Three models at most', true);
-        return void repaint();
-      }
-      list.push(el.value);
-    } else if (!el.checked && i >= 0) list.splice(i, 1);
-    changed();
-    s.bad = false;
-    s.msg = '';
+    const r = dsPgEdit(s, act, el.value, el.checked);
+    if (r.error) {
+      event.preventDefault();
+      dsPgSay(s, r.error, true);
+    } else dsPgSay(s, '');
     s.focus = el.dataset.dsfocus;
     return void repaint();
   }
@@ -2255,4 +2270,8 @@ if (typeof module !== 'undefined')
     dsProgressLine,
     dsStopLine,
     dsPgParams,
+    dsPg,
+    dsPgEdit,
+    dsPgFormBody,
+    dsPgSendBody,
   };

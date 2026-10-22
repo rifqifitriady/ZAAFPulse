@@ -21,6 +21,10 @@ const {
   dsProgressLine,
   dsStopLine,
   dsPgParams,
+  dsPg,
+  dsPgEdit,
+  dsPgFormBody,
+  dsPgSendBody,
 } = require('../public/datasetview');
 
 const SRC = path.join(__dirname, '..', 'public', 'datasetview.js');
@@ -415,4 +419,47 @@ test('dsPgParams: the dataset and example a Replay link opens the Playground on'
   assert.equal(dsPgParams('#gateway/playground'), null);
   assert.equal(dsPgParams('#gateway/playground?ds=../x'), null);
   assert.equal(dsPgParams('#gateway?ds=auth'), null, 'only the Playground');
+});
+
+test('the external preview: any change to the form drops it, and Send never posts a stale body', () => {
+  // The form state with a preview built from it, as dsPgRun leaves it.
+  const open = () => {
+    const s = dsPg({});
+    Object.assign(s, {
+      slug: 'auth-regressions',
+      ex: '',
+      picked: ['ollama/qwen3-coder:30b', 'anthropic/claude-haiku-5-5'],
+      evs: ['secret_leak', 'relevance'],
+      maxCostUSD: '0.5',
+      maxRequests: '100',
+    });
+    s.preview = { items: [], confirm: 'tok', body: dsPgFormBody(s), providers: ['Anthropic'] };
+    return s;
+  };
+  const edits = [
+    ['cost', '0.05'],
+    ['req', '10'],
+    ['ds', 'pagination'],
+    ['ex', 'ex_0000000000000001'],
+    ['model', 'lmstudio/mistral-small', true],
+    ['model', 'anthropic/claude-haiku-5-5', false],
+    ['ev', 'task_completion', true],
+    ['ev', 'secret_leak', false],
+  ];
+  for (const [act, value, checked] of edits) {
+    const s = open();
+    dsPgEdit(s, act, value, checked);
+    assert.equal(s.preview, null, `${act} ${value} drops the preview`);
+  }
+  // Send posts the previewed body only while the form still matches it.
+  const s = open();
+  assert.equal(dsPgSendBody(s).maxCostUSD, 0.5);
+  s.maxCostUSD = '0.05'; // a cap changed without going through dsPgEdit
+  assert.equal(dsPgSendBody(s), null, 'a stale preview is not sent');
+  // A fourth model is refused and leaves the preview alone.
+  const full = open();
+  full.picked.push('ollama/b');
+  const r = dsPgEdit(full, 'model', 'ollama/c', true);
+  assert.match(r.error, /three/i);
+  assert.ok(full.preview);
 });
