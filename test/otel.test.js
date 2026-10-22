@@ -398,7 +398,7 @@ const completion = (content, extra = {}) => ({
   usage: { prompt_tokens: 100, completion_tokens: 20, prompt_tokens_details: { cached_tokens: 40 } },
   ...extra,
 });
-async function gatewaySetup(upstreamHandler, otelCfg) {
+async function gatewaySetup(upstreamHandler, otelCfg, sink = null) {
   const upstream = await fakeServer({
     'POST /chat/completions': upstreamHandler,
     'GET /models': { body: { data: [{ id: 'm' }] } },
@@ -419,7 +419,7 @@ async function gatewaySetup(upstreamHandler, otelCfg) {
     defaults: { model: 'fake/m', plannerModel: 'fake/m' },
   };
   const config = { gateway: gw, otel: otelCfg };
-  otel.init({ getConfig: () => config, secrets: secretsFor(), env: {}, refreshMs: 0, log: () => {}, version: '1.0.3' });
+  otel.init({ getConfig: () => config, secrets: secretsFor(), env: {}, refreshMs: 0, log: () => {}, version: '1.0.3', sink });
   const gateway = createGateway({
     dataDir,
     getConfig: () => config,
@@ -783,4 +783,60 @@ test('otel: shutdown sends what is still queued', async () => {
   o.startSpan('after').end(); // after shutdown: dropped, not sent
   assert.equal(o.status().stats.dropped, 1);
   await c.close();
+});
+
+test('otel: a collaboration run keeps one trace, and its model calls sit under the agent that made them', async () => {
+  const got = [];
+  let n = 0;
+  const t = await gatewaySetup(
+    () => {
+      n++;
+      return n === 1
+        ? {
+            body: completion(null, {
+              choices: [
+                {
+                  index: 0,
+                  finish_reason: 'tool_calls',
+                  message: {
+                    role: 'assistant',
+                    content: null,
+                    tool_calls: [
+                      {
+                        id: 't1',
+                        type: 'function',
+                        function: { name: 'zp_handoff', arguments: '{"agent":"hr-finance","note":"over limit"}' },
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+          }
+        : { body: completion('Finance approves the refund.') };
+    },
+    { enabled: false },
+    { enabled: () => true, add: (r) => got.push(r) },
+  );
+  try {
+    const r = await t.call('/v1/collaborate', { pattern: 'handoff', agent: 'customer-service', task: 'I want a refund' });
+    assert.equal(r.status, 200, r.text);
+    await sleep(30);
+    const server = got.find((s) => s.kind === 2);
+    const root = got.find((s) => s.name === 'invoke_workflow handoff');
+    const runId = root.attributes['zaafpulse.run.id'];
+    const run = t.gateway.trace.run(runId);
+    assert.deepEqual(run.otel, { traceId: server.traceId, spanId: server.spanId, sampled: true });
+    for (const s of got) assert.equal(s.traceId, server.traceId, s.name);
+    const agents = new Set(got.filter((s) => s.attributes['gen_ai.operation.name'] === 'invoke_agent').map((s) => s.spanId));
+    const rtChats = new Set(run.trace.filter((s) => /^chat /.test(s.name)).map((s) => otel.runSpanId(runId, s.id)));
+    const chats = got.filter((s) => s.name === 'chat fake/m');
+    assert.equal(chats.length, n);
+    for (const ch of chats) {
+      assert.ok(agents.has(ch.parentSpanId), 'a model call sits under its agent');
+      assert.ok(rtChats.has(ch.spanId), "it takes the run's own chat span id");
+    }
+  } finally {
+    await t.close();
+  }
 });

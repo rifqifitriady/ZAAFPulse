@@ -85,3 +85,42 @@ test('sink: a sink that throws never breaks the hooks', () => {
     });
   }
 });
+
+test('sink: within() parents the spans started inside it; the first successful model call takes the given id', () => {
+  const { o, got } = setup();
+  const parent = { traceId: 'a'.repeat(32), spanId: 'b'.repeat(16), sampled: true };
+  o.within(parent, () => {
+    o.onUsage(usage({ status: 500, error: 'upstream' }));
+    o.onUsage(usage());
+    o.onUsage(usage());
+  }, 'c'.repeat(16));
+  assert.equal(got.length, 3);
+  for (const r of got) {
+    assert.equal(r.traceId, 'a'.repeat(32));
+    assert.equal(r.parentSpanId, 'b'.repeat(16));
+  }
+  assert.notEqual(got[0].spanId, 'c'.repeat(16), 'a failed attempt keeps a random id');
+  assert.equal(got[1].spanId, 'c'.repeat(16));
+  assert.notEqual(got[2].spanId, 'c'.repeat(16), 'the id is used once');
+});
+
+test('sink: a run exported with its fixed trace context and an explicit span list', () => {
+  const { o, got } = setup();
+  const T0 = Date.now() - 1000;
+  const spans = [
+    { id: 'r0', parent: null, name: 'invoke_workflow auto', start: 0, end: 900, status: 'ok', attrs: { 'zp.pattern': 'auto' } },
+    { id: 'r1', parent: 'r0', name: 'invoke_agent a', start: 10, end: 800, status: 'ok', attrs: { 'zp.agent': 'a', 'zp.cost_usd': 0.5 } },
+  ];
+  o.exportRun({ id: 'run_9', pattern: 'auto', state: 'completed', createdAt: T0, updatedAt: T0 + 900, otel: { traceId: 'd'.repeat(32), spanId: 'e'.repeat(16), sampled: true }, trace: [] }, spans);
+  const [root, agent] = got;
+  assert.equal(root.traceId, 'd'.repeat(32));
+  assert.equal(root.parentSpanId, 'e'.repeat(16));
+  assert.equal(root.spanId, otel.runSpanId('run_9', 'r0'));
+  assert.equal(agent.parentSpanId, root.spanId);
+  assert.equal(agent.attributes['gen_ai.agent.id'], 'a');
+  assert.equal(agent.attributes['zaafpulse.cost.usd'], 0.5);
+  // Outside a request, a run gets a stable trace of its own and no parent.
+  const own = o.runContext('run_9');
+  assert.match(own.traceId, /^[0-9a-f]{32}$/);
+  assert.deepEqual(o.runContext('run_9'), { traceId: own.traceId, spanId: '', sampled: true });
+});
