@@ -494,7 +494,15 @@ test('monitor api: with the real control, candidates and status name a paused pr
   const rows = async () => {
     reads++;
     return [
-      { pid: 4242, cpu: 1, rssKB: 1, upSec: 599, args: '/Users/owner/.local/bin/claude', cwd: `${HOME}/code/shop` },
+      {
+        pid: 4242,
+        cpu: 1,
+        rssKB: 1,
+        upSec: 599,
+        args: '/Users/owner/.local/bin/claude',
+        argv: ['/Users/owner/.local/bin/claude'],
+        cwd: `${HOME}/code/shop`,
+      },
     ];
   };
   const ctl = createAgentControl({
