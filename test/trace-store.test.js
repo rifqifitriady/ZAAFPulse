@@ -121,3 +121,70 @@ test('store: retention deletes whole segments by age, then by size, never today'
   assert.ok(small.getSummary(T3));
 });
 
+
+test('store: the snapshot is written only when something changed since the last one (or when forced)', () => {
+  const dir = tmp();
+  const snapFile = path.join(dir, 'index.json');
+  const store = createTraceStore({ dir, now: NOON });
+  assert.equal(store.snapshot(), false, 'an empty new store has nothing to save');
+  store.writeSpans([sp(T1, 'a'.repeat(16))]);
+  assert.equal(store.snapshot(), true);
+  fs.rmSync(snapFile);
+  assert.equal(store.snapshot(), false, 'unchanged: not rewritten');
+  assert.equal(fs.existsSync(snapFile), false);
+  assert.equal(store.snapshot({ force: true }), true);
+  assert.ok(fs.existsSync(snapFile));
+  store.writeSpans([sp(T2, 'b'.repeat(16))]);
+  assert.equal(store.snapshot(), true);
+  // A restart that reads nothing new leaves the snapshot alone.
+  const again = createTraceStore({ dir, now: NOON });
+  assert.equal(again.snapshot(), false);
+});
+
+test('store: the generation changes with every write and every retention, not with reads', () => {
+  const dir = tmp();
+  let t = Date.UTC(2026, 9, 1, 12);
+  const store = createTraceStore({ dir, now: () => t });
+  const g0 = store.generation();
+  store.writeSpans([sp(T1, 'a'.repeat(16))]);
+  const g1 = store.generation();
+  assert.notEqual(g1, g0);
+  store.getSpans(T1);
+  store.summaries();
+  store.snapshot();
+  assert.equal(store.generation(), g1);
+  t = Date.UTC(2026, 9, 22, 12);
+  store.writeSpans([sp(T2, 'b'.repeat(16))]);
+  const g2 = store.generation();
+  assert.notEqual(g2, g1);
+  store.applyRetention();
+  assert.notEqual(store.generation(), g2);
+  assert.equal(store.writeSpans([]), 0);
+});
+
+test('store: retention goes on past a segment it cannot delete, and still snapshots', () => {
+  const dir = tmp();
+  let t = Date.UTC(2026, 9, 1, 12);
+  const unlink = (file) => {
+    if (file.endsWith('2026-10-01.ndjson')) throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+    fs.unlinkSync(file);
+  };
+  const logged = [];
+  const store = createTraceStore({ dir, now: () => t, unlink, log: (m) => logged.push(m) });
+  store.writeSpans([sp(T1, 'a'.repeat(16))]);
+  t = Date.UTC(2026, 9, 2, 12);
+  store.writeSpans([sp(T2, 'b'.repeat(16))]);
+  t = Date.UTC(2026, 9, 22, 12);
+  store.writeSpans([sp(T3, 'c'.repeat(16))]);
+  store.snapshot();
+  fs.rmSync(path.join(dir, 'index.json'));
+  const out = store.applyRetention();
+  assert.deepEqual(out.deleted, ['2026-10-02.ndjson']);
+  assert.deepEqual(out.failed, ['2026-10-01.ndjson']);
+  assert.ok(store.getSummary(T1), 'a segment still on disk stays indexed');
+  assert.equal(store.getSummary(T2), null);
+  assert.ok(fs.existsSync(path.join(dir, 'index.json')), 'the snapshot after it was still taken');
+  assert.equal(logged.length, 1);
+  assert.match(logged[0], /2026-10-01\.ndjson: EPERM/);
+  assert.ok(!logged[0].includes(dir), 'no path in the log line');
+});

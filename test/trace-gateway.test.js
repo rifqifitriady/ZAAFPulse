@@ -483,3 +483,17 @@ test('a remote span cannot take the place of ours, and carries no usage or cost'
   assert.equal(chat.service, 'far-agent');
   assert.equal(sk.session.start, R0);
 });
+
+test('stored rows are rebuilt only when the store changed', () => {
+  const { store, g2 } = storedFixture();
+  let reads = 0;
+  const summaries = store.summaries;
+  store.summaries = () => (reads++, summaries());
+  const a = createGatewayAdapter({ ...g2, runs: () => [] }, store);
+  const first = a.sessions().filter((r) => r.id.startsWith('trace:')).length;
+  a.sessions();
+  assert.equal(reads, 1, 'same generation: the rows of the last listing');
+  store.writeSpans([rec('c'.repeat(32), '9'.repeat(16), null, 'POST /v1/chat/completions', 'server', R0 + 40000, 100)]);
+  assert.equal(a.sessions().filter((r) => r.id.startsWith('trace:')).length, first + 1);
+  assert.equal(reads, 2);
+});
