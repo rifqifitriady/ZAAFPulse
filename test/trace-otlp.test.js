@@ -202,6 +202,21 @@ test('otlp: spans from a resource named zaafpulse (our own export pointed back h
   assert.equal(store.spans.length, 0);
 });
 
+test('otlp: the configured service name is our own: its spans are refused, and a broken lookup falls back', () => {
+  const svc = (name) => ({ attributes: [{ key: 'service.name', value: { stringValue: name } }] });
+  let name = 'zp-prod';
+  const { store, recorder } = known();
+  const recv = createReceiver({ recorder, serviceName: () => name });
+  assert.equal(recv.receive(body([span(T, '1111111111111111')], svc('zp-prod'))).partialSuccess.rejectedSpans, 1);
+  assert.deepEqual(recv.receive(body([span(T, '2222222222222222')], svc('far-agent'))), {});
+  name = 'zaafpulse'; // read per request: a config change applies at once
+  assert.equal(recv.receive(body([span(T, '3333333333333333')], svc('zaafpulse'))).partialSuccess.rejectedSpans, 1);
+  const broken = createReceiver({ recorder, serviceName: () => { throw new Error('config broke'); } });
+  assert.equal(broken.receive(body([span(T, '4444444444444444')], svc('zaafpulse'))).partialSuccess.rejectedSpans, 1);
+  recorder.flush();
+  assert.deepEqual(store.spans.map((s) => s.s), ['2222222222222222']);
+});
+
 test('otlp: past maxTraces the oldest trace counts are forgotten, recent ones keep their limit', () => {
   const store = memStore();
   const recorder = createRecorder({ store, flushMs: 0 });

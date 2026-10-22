@@ -439,11 +439,11 @@ async function gatewaySetup(upstreamHandler, otelCfg, sink = null) {
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   const { secret, key } = gateway.keys.create({ name: 'app', scopes: ['llm', 'agents'], rpm: 1000 });
-  const call = async (p, body, headers = {}) => {
+  const call = async (p, body, headers = {}, method = 'POST') => {
     const r = await fetch(base + p, {
-      method: 'POST',
+      method,
       headers: { 'content-type': 'application/json', authorization: `Bearer ${secret}`, ...headers },
-      body: JSON.stringify(body),
+      body: body === undefined ? undefined : JSON.stringify(body),
     });
     return { status: r.status, text: await r.text() };
   };
@@ -857,6 +857,38 @@ test('otel: a standalone agent run has an invoke_agent span with its model call 
     assert.equal(agent.parentSpanId, server.spanId);
     const chat = got.find((s) => s.name === 'chat fake/m');
     assert.equal(chat.parentSpanId, agent.spanId);
+  } finally {
+    await t.close();
+  }
+});
+
+test('otel: replies carry no trace id (a return-channel capability); the usage entry keeps it on the server', async () => {
+  const got = [];
+  const t = await gatewaySetup(() => ({ body: completion('Here is the refund policy.') }), { enabled: false }, {
+    enabled: () => true,
+    add: (r) => got.push(r),
+  });
+  try {
+    const agent = await t.call('/v1/agents/customer-service/run', { input: 'refund policy?' });
+    assert.equal(agent.status, 200, agent.text);
+    assert.equal('span' in JSON.parse(agent.text), false);
+    const run = await t.call('/v1/collaborate', { pattern: 'handoff', agent: 'customer-service', task: 'I want a refund' });
+    assert.equal(run.status, 200, run.text);
+    const body = JSON.parse(run.text);
+    assert.equal('otel' in body, false);
+    const one = await t.call(`/v1/runs/${body.id}`, undefined, {}, 'GET');
+    assert.equal(one.status, 200, one.text);
+    assert.equal('otel' in JSON.parse(one.text), false);
+    const dash = await t.gateway.admin('collab', 'POST', { action: 'get', id: body.id });
+    assert.equal('otel' in dash.run, false);
+    await sleep(30);
+    const traces = [...new Set(got.filter((s) => s.kind === 2).map((s) => s.traceId))];
+    for (const id of traces) for (const text of [agent.text, run.text, one.text, JSON.stringify(dash)]) assert.ok(!text.includes(id));
+    // The usage log keeps each request's trace id, so the explorer lists a stored request once; the dashboard's log does not show it.
+    const entries = t.gateway.trace.requests();
+    assert.ok(entries.length && entries.every((e) => traces.includes(e.traceId)), JSON.stringify(entries.map((e) => e.traceId)));
+    const logs = await t.gateway.admin('logs', 'GET');
+    assert.ok(logs.entries.length && logs.entries.every((e) => !('traceId' in e)));
   } finally {
     await t.close();
   }

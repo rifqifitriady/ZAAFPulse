@@ -250,14 +250,20 @@ const tracingOn = () => {
   const now = Date.now();
   if (now - tracingOnAt >= 2000) {
     tracingOnAt = now;
-    tracingOnValue = tracingCfg().enabled !== false;
+    // false or "false" (a hand-edited config.json) turns it off.
+    tracingOnValue = String(tracingCfg().enabled) !== 'false';
   }
   return tracingOnValue;
 };
 const recorder = traceStore
   ? createRecorder({ store: traceStore, enabled: tracingOn })
   : createRecorder({ store: { writeSpans: () => 0 }, enabled: () => false });
-const traceReceiver = createReceiver({ recorder });
+// Our own OTLP export pointed back here is refused by its service name: the one export uses (otel.serviceName,
+// OTEL_SERVICE_NAME), else the configured name, else zaafpulse.
+const traceReceiver = createReceiver({
+  recorder,
+  serviceName: () => otel.status().serviceName || ((rawConfig() || {}).otel || {}).serviceName || 'zaafpulse',
+});
 // OpenTelemetry trace export: off unless config.json has "otel": { "enabled": true } (see docs/otel.md). The local
 // store is its second sink.
 otel.init({
