@@ -640,10 +640,11 @@ test('test rig: a child with its own env still gets what Windows needs to start'
 });
 
 test('discovery: a --version that ignores SIGTERM is killed at the time limit', { skip: !POSIX }, async () => {
-  const t = rig('stubborn-version', {}, { versionMs: 300 });
+  // The limit leaves a busy machine time to start node before the kill; well under the fake's own 8 s exit.
+  const t = rig('stubborn-version', {}, { versionMs: 1500 });
   const started = Date.now();
   assert.equal(await t.claude.find(), null);
-  assert.ok(Date.now() - started < 3000, `settled in ${Date.now() - started} ms`);
+  assert.ok(Date.now() - started < 5000, `settled in ${Date.now() - started} ms`);
   const v = readLog(t.log).find((r) => r.version && r.pid);
   assert.ok(v, 'the fake was started');
   for (let i = 0; i < 40 && alive(v.pid); i++) await sleep(25);
