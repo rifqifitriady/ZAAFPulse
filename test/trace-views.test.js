@@ -13,6 +13,11 @@ async function demoSkeleton() {
   return t.session(row.key);
 }
 
+async function demoRow() {
+  const t = createTrace({ demo: true });
+  return t.sessions({ range: 30 }).find((r) => r.source === 'claude');
+}
+
 test('views: topology, critical path, errors and one span, without text or content ids', async () => {
   const sk = await demoSkeleton();
   const topo = traceView(sk, 'topology');
@@ -30,6 +35,10 @@ test('views: topology, critical path, errors and one span, without text or conte
   assert.equal(one.onCriticalPath, true);
   assert.deepEqual(one.tool, { name: 'Bash' });
   assert.ok(Number.isFinite(one.selfMs));
+  assert.equal(one.tool.target, undefined);
+  for (const v of [topo, cp, err, one]) assert.doesNotMatch(JSON.stringify(v), /"target"|"npm"/);
+  const project = (await demoRow()).project;
+  if (project) for (const v of [topo, cp, err, one]) assert.ok(!JSON.stringify(v).includes(project));
   for (const v of [topo, cp, err, one]) assert.doesNotMatch(JSON.stringify(v), /ci_[0-9a-f]{16}|FAIL src|apiKey|"text"|"result"/);
   assert.throws(() => traceView(sk, 'span', 'nope'), /unknown span/);
   assert.throws(() => traceView(sk, 'everything'), /view must be/);
@@ -41,4 +50,31 @@ test('local.traceGet reads a session that traceSessions listed', async () => {
   const row = (await local.traceSessions({})).find((r) => r.source === 'claude');
   const r = await local.traceGet({ key: row.key, view: 'errors' });
   assert.equal(r.rootCause.name, 'execute_tool Bash');
+});
+
+// okResult pretty-prints with JSON.stringify(x, null, 2) and cuts at 50 KB.
+const asMcp = (v) => JSON.stringify(v, null, 2);
+
+test('views: a huge topology and failed list stay under the MCP result cap and say truncated', () => {
+  const name = 'x'.repeat(80);
+  const spans = Array.from({ length: 3000 }, (_, i) => ({
+    id: `s${i}`, parent: i ? 's0' : null, kind: 'tool', name, start: 0, end: 5, status: i % 5 === 0 ? 'error' : 'ok', error: 'boom '.repeat(10),
+  }));
+  const topo = traceView({ spans }, 'topology');
+  assert.ok(asMcp(topo).length < 50000);
+  assert.deepEqual(JSON.parse(asMcp(topo)).truncated, true);
+  const failing = spans.slice(0, 600).map((s) => ({ ...s, status: 'error' }));
+  const err = traceView({ spans: failing }, 'errors');
+  assert.ok(asMcp(err).length < 50000);
+  assert.equal(JSON.parse(asMcp(err)).truncated, true);
+  assert.equal(traceView({ spans: spans.slice(0, 3) }, 'errors').truncated, false);
+});
+
+test('local.traceGet rejects a bad turn and an unknown key without a path', async () => {
+  const indexer = { version: 1, state: {}, results: () => [], refresh: async () => {} };
+  const local = createLocal({ cacheDir: fs.mkdtempSync(path.join(os.tmpdir(), 'zp-views-')), indexer, contentOff: true, demo: true });
+  const row = (await local.traceSessions({})).find((r) => r.source === 'claude');
+  await assert.rejects(local.traceGet({ key: row.key, view: 'topology', turn: -1 }), /bad turn/);
+  await assert.rejects(local.traceGet({ key: row.key, view: 'topology', turn: 1.5 }), /bad turn/);
+  await assert.rejects(local.traceGet({ key: 'nope', view: 'topology' }), (e) => /unknown session/.test(e.message) && !/[\\/]/.test(e.message));
 });
