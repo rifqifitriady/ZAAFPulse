@@ -9,9 +9,12 @@ const { tool } = require('../lib/connectors/base');
 const { secretsFor } = require('./helpers');
 
 const TP = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
-function recording() {
+// got.expected: the trace ids the sink was told went out (the return channel accepts spans for those only).
+function recording(expect = 'record') {
   const got = [];
-  otel.init({ getConfig: () => ({}), env: {}, refreshMs: 0, log: () => {}, sink: { enabled: () => true, add: (r) => got.push(r) } });
+  got.expected = [];
+  if (expect === 'record') expect = (t) => got.expected.push(t);
+  otel.init({ getConfig: () => ({}), env: {}, refreshMs: 0, log: () => {}, sink: { enabled: () => true, add: (r) => got.push(r), expect } });
   return got;
 }
 
@@ -41,6 +44,7 @@ test('propagation: a remote A2A agent gets the traceparent of a client span unde
     assert.equal(client.attributes['server.address'], '127.0.0.1:9');
     assert.equal(client.attributes['rpc.system'], 'a2a');
     assert.equal(headers.traceparent, `00-${client.traceId}-${client.spanId}-01`);
+    assert.deepEqual(got.expected, [client.traceId]);
   } finally {
     await otel.reset();
   }
@@ -182,4 +186,40 @@ test('propagation: the -32601 retry sends the same traceparent on both attempts'
   } finally {
     await otel.reset();
   }
+});
+
+test('propagation: an MCP tool call tells the sink its trace went out; other integrations do not', () => {
+  const got = recording();
+  try {
+    const mcp = otel.toolCall('up_echo', { id: 'up', type: 'mcp' }, {});
+    mcp.end(true, { content: [] });
+    const other = otel.toolCall('f_echo', { id: 'f', type: 'fake' }, {});
+    other.end(true, { content: [] });
+    const span = got.find((s) => s.name === 'execute_tool up_echo');
+    assert.equal(mcp.traceparent, `00-${span.traceId}-${span.spanId}-01`);
+    assert.deepEqual(got.expected, [span.traceId]);
+  } finally {
+    otel.reset();
+  }
+});
+
+test('propagation: a sink that cannot take expect, or throws, never fails the call', async () => {
+  for (const expect of [
+    undefined,
+    () => {
+      throw new Error('boom');
+    },
+  ]) {
+    const got = recording(expect);
+    try {
+      const mcp = otel.toolCall('up_echo', { id: 'up', type: 'mcp' }, {});
+      assert.match(mcp.traceparent, /^00-/);
+      assert.doesNotThrow(() => otel.expectReturn('a'.repeat(32)));
+      const r = await remoteOrch(async () => ({ json: async () => ({ result: { message: { parts: [{ text: 'pong' }] } } }) })).runAgent(FAR, 'ping', {});
+      assert.equal(r.text, 'pong');
+    } finally {
+      await otel.reset();
+    }
+  }
+  assert.doesNotThrow(() => otel.expectReturn('a'.repeat(32))); // no instance at all
 });
