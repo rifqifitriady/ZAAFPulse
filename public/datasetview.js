@@ -1,8 +1,9 @@
 'use strict';
 /* Datasets: the list (#datasets), one dataset's examples (#datasets?ds=<slug>), the Experiments tab
-   (#datasets/experiments) and "Add to dataset" for the trace explorer (dsAddPicker, dsTraceMount). Names, tags,
-   reasons and every example text are set with textContent through dsEl (S1); the only innerHTML here is static
-   markup. With content viewing off the server sends no text, and adding turns and export are refused (R7). */
+   (#datasets/experiments), the Playground's Dataset mode (dsPlayground, dsPlaygroundAct) and "Add to dataset" for
+   the trace explorer (dsAddPicker, dsTraceMount). Names, tags, reasons, every example text, replayed output and
+   preview message are set with textContent through dsEl (S1); the only HTML strings here are static markup. With
+   content viewing off the server sends no text, and adding turns, export and the external preview are refused (R7). */
 
 /* ---------- pure helpers (exported for the tests) ---------- */
 const DS_TAG = /^[\p{L}\p{N}_.:-]{1,40}$/u; // R1, as lib/datasets/shape.js
@@ -129,6 +130,177 @@ function dsRoute(hash) {
   return { tab, slug: tab === 'list' && slug && DS_SLUG.test(slug) ? slug : null };
 }
 
+/* ---------- Playground Dataset mode and experiments: pure helpers ---------- */
+const DS_MAX_MODELS = 3;
+const DS_EVAL_DEFAULTS = ['reference_match', 'secret_leak', 'task_completion', 'relevance'];
+const DS_EXAMPLE_ID = /^ex_[0-9a-f]{16}$/;
+const DS_EXTERNAL_OFF = 'External models need content viewing on, because what is sent must be previewed first.';
+
+// The model checkboxes: local models first (S4), in the gateway's order. An external model with no known price is
+// left out, as the server refuses it (the cost cap could not count it); an external model is never preselected.
+function dsModelOptions(models) {
+  const local = [];
+  const external = [];
+  for (const m of Array.isArray(models) ? models : []) {
+    if (!m || typeof m.name !== 'string' || !m.name) continue;
+    if (m.tier === 'private') local.push({ value: m.name, label: m.name, external: false });
+    else if (m.priced) external.push({ value: m.name, label: m.name, external: true });
+  }
+  return {
+    groups: [
+      { label: 'On this machine', options: local },
+      { label: 'External (sends masked text)', options: external },
+    ],
+    defaults: local.length ? [local[0].value] : [],
+  };
+}
+
+// The POST /api/experiments body from the form, or the first thing to fix. The caps follow R8.
+function dsRunBody(state) {
+  const s = state || {};
+  if (typeof s.dataset !== 'string' || !s.dataset) return { error: 'Pick a dataset' };
+  const models = [...new Set(Array.isArray(s.models) ? s.models : [])];
+  if (models.length < 1 || models.length > DS_MAX_MODELS) return { error: 'Pick one to three models' };
+  const evaluators = [...new Set(Array.isArray(s.evaluators) ? s.evaluators : [])];
+  if (!evaluators.length) return { error: 'Pick at least one evaluator' };
+  const num = (v) => (typeof v === 'number' ? v : String(v ?? '').trim() === '' ? NaN : Number(v));
+  const maxCostUSD = num(s.maxCostUSD);
+  if (!(Number.isFinite(maxCostUSD) && maxCostUSD > 0 && maxCostUSD <= 10))
+    return { error: 'The cost cap must be more than $0 and at most $10' };
+  const maxRequests = num(s.maxRequests);
+  if (!(Number.isInteger(maxRequests) && maxRequests >= 1 && maxRequests <= 1000))
+    return { error: 'The request cap must be a whole number from 1 to 1,000' };
+  return {
+    dataset: s.dataset,
+    ...(typeof s.example === 'string' && s.example ? { examples: [s.example] } : {}),
+    models,
+    evaluators,
+    maxCostUSD,
+    maxRequests,
+  };
+}
+
+// One example of a run side by side: the original output (shown, never scored), then one cell per model in the
+// record's order. With content viewing off the texts are null and an error's reason is gone (R7).
+function dsResultCells(record, example) {
+  const r = record || {};
+  const id = example && example.id;
+  const rows = (Array.isArray(r.perExample) ? r.perExample : []).filter((x) => x && x.exampleId === id);
+  const evaluators = Array.isArray(r.evaluators) ? r.evaluators : [];
+  const out = example && example.output;
+  const cells = [
+    out
+      ? { head: 'Original output', text: out.text ?? null, labels: [], proposal: null, error: null }
+      : {
+          head: 'Original output',
+          text: null,
+          labels: [],
+          proposal: null,
+          error: 'No longer in the dataset',
+        },
+  ];
+  for (const model of Array.isArray(r.models) ? r.models : []) {
+    const row = rows.find((x) => x.model === model);
+    if (!row) {
+      cells.push({ head: model, text: null, labels: [], proposal: null, error: 'Not run: the run stopped first' });
+      continue;
+    }
+    if (row.error || !row.output) {
+      const error = row.error || 'Failed (the reason is hidden while content viewing is off)';
+      cells.push({ head: model, text: null, labels: [], proposal: null, error });
+      continue;
+    }
+    // A missing verdict (the judge did not answer) shows as such; an evaluator the row lacks did not apply.
+    const given = row.labels || {};
+    const labels = evaluators
+      .filter((ev) => Object.hasOwn(given, ev))
+      .map((ev) => {
+        const v = given[ev];
+        return v && typeof v.label === 'string'
+          ? { id: ev, label: v.label, pass: !!v.pass }
+          : { id: ev, label: null, pass: false };
+      });
+    const p = row.output.proposal;
+    cells.push({
+      head: model,
+      text: row.output.text ?? null,
+      labels,
+      proposal: p ? { name: String(p.name || ''), arguments: p.arguments ?? null } : null,
+      error: null,
+    });
+  }
+  return cells;
+}
+
+// Pass rates by model and evaluator from a run's summary; a rate is null when nothing counted (R9).
+function dsPassTable(summary, evaluators) {
+  const models = summary && summary.models && typeof summary.models === 'object' ? summary.models : null;
+  if (!models) return [];
+  return Object.entries(models).map(([model, s]) => ({
+    model,
+    cells: (evaluators || []).map((evaluator) => {
+      const c = (s && s.evaluators && s.evaluators[evaluator]) || {};
+      return {
+        evaluator,
+        rate: Number.isFinite(c.rate) ? c.rate : null,
+        pass: Number.isInteger(c.pass) ? c.pass : 0,
+        total: Number.isInteger(c.total) ? c.total : 0,
+      };
+    }),
+  }));
+}
+
+// Two runs side by side: every evaluator and model both ran, in the first run's order; delta is b - a.
+function dsCompare(a, b) {
+  if (!a || !b) return [];
+  const rate = (r, model, ev) => {
+    const c = r.summary && r.summary.models && r.summary.models[model];
+    const x = c && c.evaluators && c.evaluators[ev];
+    return x && Number.isFinite(x.rate) ? x.rate : null;
+  };
+  const inB = (list, x) => Array.isArray(list) && list.includes(x);
+  const out = [];
+  for (const evaluator of (a.evaluators || []).filter((e) => inB(b.evaluators, e)))
+    for (const model of (a.models || []).filter((m) => inB(b.models, m))) {
+      const ra = rate(a, model, evaluator);
+      const rb = rate(b, model, evaluator);
+      const delta = ra === null || rb === null ? null : Math.round((rb - ra) * 1e6) / 1e6;
+      out.push({ evaluator, model, a: ra, b: rb, delta });
+    }
+  return out;
+}
+
+const dsUSD = (c) => (c > 0 && c < 0.01 ? `$${c.toFixed(4)}` : `$${(c || 0).toFixed(2)}`);
+// "12 / 40 · 15 requests · $0.03" for a run in progress.
+function dsProgressLine(p) {
+  const n = (v) => (Number.isFinite(v) ? v : 0);
+  const q = p || {};
+  const requests = n(q.requests);
+  return `${n(q.done)} / ${n(q.total)} · ${requests} request${requests === 1 ? '' : 's'} · ${dsUSD(n(q.cost))}`;
+}
+// Why a run ended early, or null for one that ran to the end.
+function dsStopLine(record) {
+  if (!record || record.status !== 'stopped') return null;
+  const caps = record.caps || {};
+  if (record.stopped === 'cost cap') return `Stopped at the cost cap (${dsUSD(caps.maxCostUSD)})`;
+  if (record.stopped === 'request cap') return `Stopped at the request cap (${caps.maxRequests})`;
+  if (record.stopped === 'error') return 'Stopped: the run failed';
+  return `Stopped: ${record.stopped || 'unknown reason'}`;
+}
+
+// The dataset and example a "Replay" link names: #gateway/playground?ds=<slug>&ex=<id>.
+function dsPgParams(hash) {
+  const [route, query = ''] = String(hash || '')
+    .replace(/^#/, '')
+    .split('?');
+  if (route !== 'gateway/playground') return null;
+  const q = new URLSearchParams(query);
+  const slug = q.get('ds');
+  if (!slug || !DS_SLUG.test(slug)) return null;
+  const ex = q.get('ex');
+  return { slug, ex: ex && DS_EXAMPLE_ID.test(ex) ? ex : '' };
+}
+
 /* ---------- DOM and API ---------- */
 // An element from a tag, attributes and children; a string child is a text node, never markup (S1).
 function dsEl(tag, attrs, ...kids) {
@@ -187,7 +359,7 @@ async function dsDownload(slug) {
 }
 
 /* ---------- the view ---------- */
-const dsState = { req: 0, content: true, evs: null };
+const dsState = { req: 0, content: true, evs: null, expEvs: null };
 const dsOn = (b, title) => {
   b.disabled = !dsState.content;
   b.title = dsState.content ? title || '' : DS_OFF;
@@ -217,7 +389,7 @@ async function mountDatasets() {
   if (crumb && tab === 'experiments') crumb.textContent = 'DATASETS / EXPERIMENTS';
   const my = ++dsState.req;
   const live = () => my === dsState.req && body.isConnected;
-  if (tab === 'experiments') return void dsPaintExperiments(body);
+  if (tab === 'experiments') return void dsPaintExperiments(body, live);
   try {
     const [list, evs] = await Promise.all([
       dsApi('/api/datasets'),
@@ -736,11 +908,1068 @@ function dsExampleRow(slug, ex, msg, counter) {
   return row;
 }
 
-/* ---- experiments ---- */
-// The Playground's Dataset mode fills this tab; until a run is stored there is only the way there.
-function dsPaintExperiments(body) {
-  body.innerHTML = `<section class="holo panel ds-panel"><div class="panel-head"><h3>Experiments</h3><span class="meta">replays of a dataset, newest first</span></div>
-    <div class="empty" id="ds-exp">Replay a dataset in the <a class="ds-a" href="#gateway/playground">Playground</a> to compare models on it; finished runs are listed here.</div></section>`;
+/* ---- experiments: shared pieces ---- */
+// Short column heads for the pass-rate tables; the full title is the cell's tooltip.
+const DS_EV_SHORT = {
+  reference_match: 'Reference',
+  secret_leak: 'Secrets',
+  risky_command: 'Risky cmd',
+  faithfulness: 'Faithful',
+  task_completion: 'Task done',
+  tool_selection: 'Tool choice',
+  relevance: 'Relevance',
+};
+const DS_EV_TINY = {
+  reference_match: 'ref',
+  secret_leak: 'secrets',
+  risky_command: 'risky',
+  faithfulness: 'faithful',
+  task_completion: 'task',
+  tool_selection: 'tools',
+  relevance: 'relevant',
+};
+const dsEvMeta = (id) => (dsState.expEvs || []).find((e) => e && e.id === id) || null;
+const dsEvTitle = (id) => (dsEvMeta(id) && dsEvMeta(id).title) || id;
+const dsPct = (r) => (r === null ? '—' : `${Math.round(r * 100)}%`);
+const dsRateTone = (r) => (r === null ? '' : r >= 0.8 ? 'pass' : r < 0.5 ? 'fail' : 'mid');
+// A verdict pill: the pass label green, the evaluator's last label red, one in between amber.
+function dsVerdictPill(l) {
+  if (l.label === null)
+    return dsEl('span', { class: 'ds-pill', title: `${dsEvTitle(l.id)}: the judge gave no verdict` }, 'no verdict');
+  const ev = dsEvMeta(l.id);
+  const labels = ev && Array.isArray(ev.labels) ? ev.labels : [];
+  const tone = l.pass ? 'pass' : !labels.length || l.label === labels[labels.length - 1] ? 'fail' : 'mid';
+  return dsEl('span', { class: `ds-pill ${tone}`, title: `${dsEvTitle(l.id)}: ${l.label}` }, l.label);
+}
+// Moves focus to a new panel's heading, so a keyboard or screen reader user lands on what just opened.
+function dsFocusHead(panel) {
+  const h = panel.querySelector('h3');
+  if (!h) return;
+  h.tabIndex = -1;
+  h.focus();
+  panel.scrollIntoView({ block: 'nearest' });
+}
+const dsWhen = (ts) => (Number.isFinite(ts) ? new Date(ts).toLocaleString() : '');
+const dsStatusText = (r) =>
+  r.status === 'running' ? 'running' : r.status === 'done' ? 'done' : `stopped · ${r.stopped || 'unknown'}`;
+
+// Pass rates as a table: one row per model, one column per evaluator.
+function dsPassTableEl(record, { compact = false } = {}) {
+  const evaluators = Array.isArray(record.evaluators) ? record.evaluators : [];
+  const rows = dsPassTable(record.summary, evaluators);
+  if (!rows.length) return dsEl('span', { class: 'muted' }, '—');
+  return dsEl(
+    'table',
+    { class: compact ? 'ds-mini' : 'holo-table ds-pass' },
+    dsEl(
+      'thead',
+      null,
+      dsEl(
+        'tr',
+        null,
+        dsEl('th', { scope: 'col' }, compact ? dsEl('span', { class: 'ds-sr' }, 'Model') : 'Model'),
+        evaluators.map((id) =>
+          dsEl(
+            'th',
+            { scope: 'col', class: 'r', title: dsEvTitle(id) },
+            (compact ? DS_EV_TINY[id] : DS_EV_SHORT[id]) || id,
+          ),
+        ),
+      ),
+    ),
+    dsEl(
+      'tbody',
+      null,
+      rows.map((row) =>
+        dsEl(
+          'tr',
+          null,
+          dsEl('th', { scope: 'row', class: 'mono' }, row.model),
+          row.cells.map((c) =>
+            dsEl(
+              'td',
+              {
+                class: `r num ds-rate ${dsRateTone(c.rate)}`,
+                title:
+                  c.rate === null
+                    ? `${dsEvTitle(c.evaluator)}: nothing to count`
+                    : `${dsEvTitle(c.evaluator)}: ${c.pass} of ${c.total} passed`,
+              },
+              dsPct(c.rate),
+              compact || c.rate === null ? null : dsEl('small', null, ` ${c.pass}/${c.total}`),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+// One cell of the side-by-side grid. Every text is set with textContent (S1).
+function dsCellEl(cell, content) {
+  const box = dsEl('div', { class: `ds-cell${cell.error ? ' bad' : ''}` });
+  box.append(dsEl('b', { class: 'ds-cell-head mono' }, cell.head));
+  if (cell.error) {
+    const err = dsEl('p', { class: 'ds-cell-err' });
+    err.textContent = cell.error;
+    box.append(err);
+    return box;
+  }
+  if (cell.text !== '' || !cell.proposal) {
+    const pre = dsEl('pre', { class: 'ds-cell-text', tabindex: 0 });
+    if (cell.text === null) {
+      pre.classList.add('muted');
+      pre.textContent = content ? '(not kept: the record was trimmed)' : DS_HIDDEN;
+    } else pre.textContent = cell.text || '(no text)';
+    box.append(pre);
+  }
+  if (cell.proposal) {
+    // A tool call the model proposed: shown, never run (S8).
+    const p = dsEl('div', { class: 'ds-proposal' });
+    const head = dsEl('b');
+    head.textContent = `Proposed tool call: ${cell.proposal.name}`;
+    const args = dsEl('pre', { class: 'ds-cell-text', tabindex: 0 });
+    args.textContent = cell.proposal.arguments === null ? DS_HIDDEN : cell.proposal.arguments || '{}';
+    p.append(head, args);
+    box.append(p);
+  }
+  if (cell.labels.length) box.append(dsEl('div', { class: 'ds-pills' }, cell.labels.map(dsVerdictPill)));
+  return box;
+}
+
+const DS_RESULT_PAGE = 25; // examples drawn at a time: a run can hold 1,000 examples × 3 models
+// A finished run: the head, the pass-rate table, then each example side by side.
+function dsResultsEl(record, examples, content) {
+  const r = record || {};
+  const byId = new Map((Array.isArray(examples) ? examples : []).map((e) => [e.id, e]));
+  const ids = [...new Set((r.perExample || []).map((x) => x && x.exampleId).filter(Boolean))];
+  const models = Array.isArray(r.models) ? r.models : [];
+  const usage = r.usage || {};
+  const stop = dsStopLine(r);
+  const wrap = dsEl('div', { class: 'ds-results' });
+  wrap.append(
+    dsEl(
+      'p',
+      { class: 'ds-run-meta' },
+      dsEl('b', null, r.datasetName || r.dataset || 'Dataset'),
+      ` · ${ids.length} example${ids.length === 1 ? '' : 's'} · ${usage.requests || 0} request${usage.requests === 1 ? '' : 's'} · ${dsUSD(usage.cost || 0)} · ${dsWhen(r.startedAt)}`,
+    ),
+  );
+  if (stop) wrap.append(dsEl('p', { class: 'ds-stop', role: 'note' }, stop));
+  if (r.trimmed) wrap.append(dsEl('p', { class: 'muted' }, 'This record was trimmed to fit: some texts are shorter.'));
+  wrap.append(dsEl('div', { class: 'table-wrap' }, dsPassTableEl(r)));
+  if (!content)
+    wrap.append(
+      dsEl(
+        'div',
+        { class: 'ds-off', role: 'note' },
+        dsEl('b', null, 'Text is hidden while content viewing is off'),
+        dsEl('span', null, 'Labels and pass rates are shown; outputs, proposals and errors are not.'),
+      ),
+    );
+  if (!ids.length) {
+    wrap.append(dsEl('div', { class: 'empty' }, 'No example ran before the run stopped.'));
+    return wrap;
+  }
+  const list = dsEl('div', { class: 'ds-rlist' });
+  const more = dsEl('button', { type: 'button', class: 'btn ghost ds-more' });
+  let shown = 0;
+  const draw = () => {
+    for (const id of ids.slice(shown, shown + DS_RESULT_PAGE)) {
+      shown++;
+      const ex = byId.get(id) || { id };
+      const input = dsEl('span', { class: 'ds-text' });
+      // A deleted example, or text hidden while content viewing is off: its id instead.
+      const said = byId.has(id) ? dsUserText(ex) : null;
+      input.textContent = said == null ? id : dsPreview(said, 200);
+      const grid = dsEl('div', { class: 'ds-rgrid', style: `--ds-cols:${models.length + 1}` });
+      for (const cell of dsResultCells(r, ex)) grid.append(dsCellEl(cell, content));
+      list.append(
+        dsEl(
+          'article',
+          { class: 'ds-rx', 'aria-label': `Example ${shown}` },
+          dsEl('div', { class: 'ds-rx-head' }, dsEl('span', { class: 'ds-rx-n' }, `#${shown}`), input),
+          dsEl('div', { class: 'ds-rgrid-wrap' }, grid),
+        ),
+      );
+    }
+    more.hidden = shown >= ids.length;
+    more.textContent = `Show ${Math.min(DS_RESULT_PAGE, ids.length - shown)} more of ${ids.length - shown}`;
+  };
+  more.addEventListener('click', draw);
+  draw();
+  wrap.append(list, more);
+  return wrap;
+}
+
+/* ---- the Experiments tab ---- */
+async function dsPaintExperiments(body, live) {
+  let r;
+  try {
+    const [exp, list] = await Promise.all([dsApi('/api/experiments'), dsApi('/api/datasets')]);
+    r = exp;
+    dsState.content = list.content !== false;
+  } catch (e) {
+    if (!live()) return;
+    return void body.replaceChildren(
+      dsEl('div', { class: 'holo panel empty' }, `Could not read the experiments: ${e.message}`),
+    );
+  }
+  if (!live()) return;
+  $('#ds-off').hidden = dsState.content;
+  dsState.expEvs = Array.isArray(r.evaluators) ? r.evaluators : [];
+  const runs = Array.isArray(r.experiments) ? r.experiments.filter((x) => x && typeof x.id === 'string') : [];
+  const detail = dsEl('div', { id: 'ds-exp-detail' });
+  const picked = [];
+  const compare = dsEl('button', { type: 'button', class: 'btn', disabled: true }, 'Compare');
+  const hint = dsEl('small', { class: 'muted' }, 'Tick two runs to compare them');
+  const syncPick = () => {
+    compare.disabled = picked.length !== 2;
+    hint.textContent = picked.length === 2 ? 'Ready to compare' : 'Tick two runs to compare them';
+  };
+
+  const running = r.running
+    ? dsEl(
+        'p',
+        { class: 'ds-running', role: 'status' },
+        dsEl('span', { class: 'ds-dot', 'aria-hidden': 'true' }),
+        `Running now on ${r.running.dataset}: ${dsProgressLine(r.running)} · `,
+        dsEl('a', { href: '#gateway/playground', class: 'ds-a' }, 'follow it in the Playground'),
+      )
+    : null;
+
+  // Opening a run: its record and the dataset's examples, for the original outputs (gone ones say so).
+  let opened = 0;
+  async function open(row) {
+    const my = ++opened;
+    // The open run's row stays marked, so the list says which results are below.
+    for (const tr of body.querySelectorAll('.ds-exp-row')) tr.classList.toggle('on', tr.dataset.id === row.id);
+    detail.replaceChildren(dsEl('div', { class: 'skeleton', style: 'height:160px' }));
+    try {
+      const [rec, ds] = await Promise.all([
+        dsApi(`/api/experiments/${encodeURIComponent(row.id)}`),
+        dsApi(dsPath(row.dataset)).catch(() => null),
+      ]);
+      if (my !== opened || !detail.isConnected) return;
+      const panel = dsPanel(
+        `Results · ${row.datasetName || row.dataset}`,
+        dsStatusText(rec),
+        dsResultsEl(rec, ds && Array.isArray(ds.examples) ? ds.examples : [], dsState.content),
+      );
+      detail.replaceChildren(panel);
+      dsFocusHead(panel);
+    } catch (e) {
+      if (my !== opened || !detail.isConnected) return;
+      detail.replaceChildren(dsEl('div', { class: 'holo panel empty' }, `Could not read the run: ${e.message}`));
+    }
+  }
+
+  compare.addEventListener('click', () => {
+    // The older run is A, so the change reads forward in time.
+    const [a, b] = picked
+      .map((id) => runs.find((x) => x.id === id))
+      .sort((x, y) => (x.startedAt || 0) - (y.startedAt || 0));
+    const rows = dsCompare(a, b);
+    const label = (x) => `${x.datasetName || x.dataset} · ${dsAgo(x.startedAt)}`;
+    const table = rows.length
+      ? dsEl(
+          'div',
+          { class: 'table-wrap' },
+          dsEl(
+            'table',
+            { class: 'holo-table ds-cmp' },
+            dsEl(
+              'thead',
+              null,
+              dsEl(
+                'tr',
+                null,
+                dsEl('th', { scope: 'col' }, 'Evaluator'),
+                dsEl('th', { scope: 'col' }, 'Model'),
+                dsEl('th', { scope: 'col', class: 'r', title: dsWhen(a.startedAt) }, `A · ${label(a)}`),
+                dsEl('th', { scope: 'col', class: 'r', title: dsWhen(b.startedAt) }, `B · ${label(b)}`),
+                dsEl('th', { scope: 'col', class: 'r' }, 'Change'),
+              ),
+            ),
+            dsEl(
+              'tbody',
+              null,
+              rows.map((x) => {
+                const d = x.delta;
+                const pts =
+                  d === null ? '—' : d === 0 ? '±0' : `${d > 0 ? '+' : '−'}${Math.round(Math.abs(d) * 100)} pts`;
+                const tone = d === null || d === 0 ? '' : d > 0 ? 'up' : 'down';
+                return dsEl(
+                  'tr',
+                  null,
+                  dsEl('td', { title: x.evaluator }, dsEvTitle(x.evaluator)),
+                  dsEl('td', { class: 'mono' }, x.model),
+                  dsEl('td', { class: 'r num' }, dsPct(x.a)),
+                  dsEl('td', { class: 'r num' }, dsPct(x.b)),
+                  dsEl(
+                    'td',
+                    { class: `r num ds-delta ${tone}` },
+                    tone ? dsEl('span', { class: 'ds-sr' }, d > 0 ? 'up ' : 'down ') : null,
+                    pts,
+                  ),
+                );
+              }),
+            ),
+          ),
+        )
+      : dsEl('div', { class: 'empty' }, 'These two runs share no evaluator and model, so there is nothing to compare.');
+    const other =
+      a.dataset !== b.dataset
+        ? dsEl(
+            'p',
+            { class: 'ds-stop', role: 'note' },
+            'These runs replay different datasets: the rates are not like for like.',
+          )
+        : null;
+    const panel = dsPanel('Compare', 'pass rates of the pairs both runs have; B minus A', other, table);
+    detail.replaceChildren(panel);
+    dsFocusHead(panel);
+  });
+
+  const table = runs.length
+    ? dsEl(
+        'div',
+        { class: 'table-wrap' },
+        dsEl(
+          'table',
+          { class: 'holo-table ds-exps' },
+          dsEl(
+            'thead',
+            null,
+            dsEl(
+              'tr',
+              null,
+              dsEl('th', { scope: 'col' }, dsEl('span', { class: 'ds-sr' }, 'Pick to compare')),
+              ['Dataset', 'Started', 'Status', 'Models · pass rate'].map((h) => dsEl('th', { scope: 'col' }, h)),
+            ),
+          ),
+          dsEl(
+            'tbody',
+            null,
+            runs.map((row) => {
+              const box = dsEl('input', {
+                type: 'checkbox',
+                class: 'ds-pick',
+                'aria-label': `Compare the run on ${row.datasetName || row.dataset} from ${dsAgo(row.startedAt)}`,
+              });
+              box.addEventListener('change', () => {
+                const i = picked.indexOf(row.id);
+                if (box.checked && i < 0) {
+                  // Two at most: the earlier pick gives way.
+                  if (picked.length === 2) {
+                    const drop = picked.shift();
+                    const other = tbody.querySelector(`input[data-id="${drop}"]`);
+                    if (other) other.checked = false;
+                  }
+                  picked.push(row.id);
+                } else if (!box.checked && i >= 0) picked.splice(i, 1);
+                syncPick();
+              });
+              box.dataset.id = row.id;
+              const name = dsEl(
+                'button',
+                { type: 'button', class: 'ds-open', title: 'Open the results' },
+                dsEl('b', null, row.datasetName || row.dataset),
+                dsEl('small', { class: 'block muted' }, `${row.examples || 0} example${row.examples === 1 ? '' : 's'}`),
+              );
+              name.addEventListener('click', () => open(row));
+              const tr = dsEl(
+                'tr',
+                { class: 'ds-exp-row' },
+                dsEl('td', { class: 'ds-pickc' }, box),
+                dsEl('td', null, name),
+                dsEl('td', { class: 'nowrap muted', title: dsWhen(row.startedAt) }, dsAgo(row.startedAt)),
+                dsEl(
+                  'td',
+                  { class: 'nowrap' },
+                  dsEl('span', { class: `ds-status ${row.status === 'done' ? 'ok' : 'warn'}` }, dsStatusText(row)),
+                ),
+                dsEl('td', null, dsPassTableEl(row, { compact: true })),
+              );
+              // The whole row opens the run; the checkbox and the button keep their own clicks.
+              tr.dataset.id = row.id;
+              tr.addEventListener('click', (e) => {
+                if (e.target.closest('input, button, a')) return;
+                open(row);
+              });
+              return tr;
+            }),
+          ),
+        ),
+      )
+    : dsEl(
+        'div',
+        { class: 'empty' },
+        'No experiments yet. Replay a dataset in the ',
+        dsEl('a', { class: 'ds-a', href: '#gateway/playground' }, 'Playground'),
+        ' (Dataset mode) to compare models on it; finished runs are listed here.',
+      );
+  const tbody = table.querySelector ? table.querySelector('tbody') : null;
+  const tools = runs.length > 1 ? dsEl('div', { class: 'ds-inline ds-cmp-bar' }, compare, hint) : null;
+  body.replaceChildren(
+    dsPanel('Experiments', `${runs.length} run${runs.length === 1 ? '' : 's'} · newest first`, running, tools, table),
+    detail,
+  );
+}
+
+/* ---------- the Playground's Dataset mode (public/gatewayview.js) ---------- */
+// The state lives on the Playground's own object (gw.pg.ds), so it outlives repaints and mode switches. The
+// gateway page paints dsPlayground's static shell, then dsPlaygroundMount builds the form with dsEl; clicks,
+// changes and the submit come back through dsPlaygroundAct.
+function dsPg(pg) {
+  if (!pg.ds)
+    pg.ds = {
+      loaded: false,
+      loading: false,
+      loadError: '',
+      content: true,
+      datasets: [],
+      models: [],
+      unpriced: 0,
+      examples: {}, // slug → rows, 'loading' or { error }
+      slug: '',
+      ex: '',
+      picked: null, // model names; null until the defaults are known
+      evs: [...DS_EVAL_DEFAULTS],
+      maxCostUSD: '0.5',
+      maxRequests: '100',
+      hashSeen: '',
+      preview: null, // { items, confirm, body, providers }
+      busy: false,
+      msg: '',
+      bad: false,
+      runId: null,
+      progress: null,
+      record: null,
+      timer: null,
+      hooked: false,
+      focus: '',
+      repaint: () => {},
+    };
+  return pg.ds;
+}
+
+// A "Replay" link (#gateway/playground?ds=&ex=) opens Dataset mode on that dataset and example, once per visit:
+// a repaint or the background refresh keeps the mode the user picked since; following a link again applies it.
+let dsHashVisits = 0;
+if (typeof addEventListener === 'function') addEventListener('hashchange', () => dsHashVisits++);
+function dsPlaygroundHash(pg, hash = location.hash) {
+  const q = dsPgParams(hash);
+  const s = dsPg(pg);
+  const seen = `${dsHashVisits}|${hash}`;
+  if (!q || seen === s.hashSeen) return;
+  s.hashSeen = seen;
+  pg.mode = 'dataset';
+  pg.result = null;
+  if (s.runId) return; // a run in progress keeps the page
+  s.slug = q.slug;
+  s.ex = q.ex;
+  s.preview = null;
+  s.record = null;
+  s.msg = '';
+}
+
+// Static markup only: everything with a name or a text in it is built by dsPlaygroundMount (S1).
+function dsPlayground(pg) {
+  dsPg(pg);
+  return `<div class="ds-pg" id="ds-pg"><div class="skeleton" style="height:180px"></div></div>`;
+}
+
+const dsPgExternal = (s, name) => {
+  const m = s.models.find((x) => x.name === name);
+  return !!m && m.tier !== 'private';
+};
+const dsPgProviders = (s, names) => [
+  ...new Set(
+    names
+      .filter((n) => dsPgExternal(s, n))
+      .map((n) => (s.models.find((x) => x.name === n) || {}).label || n.split('/')[0]),
+  ),
+];
+
+async function dsPgLoad(pg) {
+  const s = dsPg(pg);
+  s.loading = true;
+  s.loadError = '';
+  try {
+    const [list, exp] = await Promise.all([dsApi('/api/datasets'), dsApi('/api/experiments')]);
+    s.content = list.content !== false;
+    s.datasets = dsListRows(list.datasets);
+    s.models = Array.isArray(exp.models) ? exp.models.filter((m) => m && typeof m.name === 'string') : [];
+    s.unpriced = s.models.filter((m) => m.tier !== 'private' && !m.priced).length;
+    dsState.expEvs = Array.isArray(exp.evaluators) ? exp.evaluators : [];
+    const opts = dsModelOptions(s.models);
+    const usable = new Set(
+      opts.groups.flatMap((g) => g.options.filter((o) => s.content || !o.external).map((o) => o.value)),
+    );
+    s.picked = s.picked === null ? opts.defaults : s.picked.filter((n) => usable.has(n));
+    const known = new Set(dsState.expEvs.map((e) => e.id));
+    if (known.size) s.evs = s.evs.filter((id) => known.has(id));
+    if (s.slug && !s.datasets.some((d) => d.slug === s.slug)) {
+      s.msg = `There is no dataset "${s.slug}" any more`;
+      s.bad = true;
+      s.slug = '';
+      s.ex = '';
+    }
+    if (!s.slug && s.datasets.length) s.slug = s.datasets[0].slug;
+    // A run in progress (this page's, or one started elsewhere) is followed here.
+    if (exp.running && !s.runId) {
+      s.runId = exp.running.id;
+      s.progress = exp.running;
+      s.record = null;
+    }
+  } catch (e) {
+    s.loadError = e.message;
+  } finally {
+    s.loaded = true;
+    s.loading = false;
+    s.repaint();
+  }
+}
+
+// One dataset's examples: for the example picker and the original outputs. Cached for the page's life.
+function dsPgExamples(s, slug) {
+  if (!slug) return null;
+  const have = s.examples[slug];
+  if (have !== undefined) return have;
+  s.examples[slug] = 'loading';
+  dsApi(dsPath(slug))
+    .then((r) => {
+      s.examples[slug] = Array.isArray(r.examples) ? r.examples : [];
+    })
+    .catch((e) => {
+      s.examples[slug] = { error: e.message };
+    })
+    .finally(() => s.repaint());
+  return 'loading';
+}
+
+// Polls the run every 2 s. It stops when the page or the mode changes (no #ds-pg); the next mount resumes it.
+function dsPgPoll(s) {
+  if (s.timer || !s.runId) return;
+  const id = s.runId;
+  s.timer = setTimeout(async () => {
+    let r = null;
+    let err = null;
+    try {
+      r = await dsApi(`/api/experiments/${encodeURIComponent(id)}`);
+    } catch (e) {
+      err = e;
+    }
+    if (!s.timer || s.runId !== id) return; // stopped meanwhile
+    s.timer = null;
+    const here = !!document.getElementById('ds-pg');
+    if (err) {
+      if (err.status === 404) {
+        s.runId = null;
+        s.progress = null;
+        s.msg = 'The run is no longer listed';
+        s.bad = true;
+        return void (here && s.repaint());
+      }
+    } else if (r && r.status === 'running') {
+      s.progress = r.progress || s.progress;
+      const line = document.getElementById('ds-pg-progress');
+      if (line) line.textContent = dsProgressLine(s.progress);
+      const bar = document.getElementById('ds-pg-bar');
+      if (bar && s.progress) {
+        bar.max = Math.max(1, s.progress.total || 1);
+        bar.value = s.progress.done || 0;
+      }
+    } else if (r) {
+      s.runId = null;
+      s.progress = null;
+      s.record = r;
+      s.msg = '';
+      s.focus = 'results';
+      dsPgExamples(s, r.dataset);
+      return void (here && s.repaint());
+    }
+    if (here) dsPgPoll(s);
+  }, 2000);
+}
+const dsPgStop = (s) => {
+  clearTimeout(s.timer);
+  s.timer = null;
+};
+
+function dsPlaygroundMount(pg, repaint) {
+  const root = document.getElementById('ds-pg');
+  if (!root) return;
+  const s = dsPg(pg);
+  s.repaint = repaint;
+  if (!s.hooked && typeof onUnmount === 'function') {
+    // Leaving the page stops the polling and drops the lists, so a return reads them fresh.
+    s.hooked = true;
+    onUnmount(() => {
+      s.hooked = false;
+      s.loaded = false;
+      s.examples = {};
+      dsPgStop(s);
+    });
+  }
+  if (!s.loaded) {
+    if (!s.loading) dsPgLoad(pg);
+    return;
+  }
+  if (s.loadError) {
+    return void root.replaceChildren(
+      dsEl(
+        'div',
+        { class: 'empty' },
+        `Could not read the datasets and models: ${s.loadError} `,
+        dsEl('button', { type: 'button', class: 'btn ghost', 'data-dspg': 'retry', 'data-dsfocus': 'retry' }, 'Retry'),
+      ),
+    );
+  }
+  if (!s.datasets.length) {
+    return void root.replaceChildren(
+      dsEl(
+        'div',
+        { class: 'empty' },
+        'No dataset to replay yet. Save turns from the ',
+        dsEl('a', { class: 'ds-a', href: '#trace' }, 'Trace explorer'),
+        ' (⤓ Add to dataset), or import one under ',
+        dsEl('a', { class: 'ds-a', href: '#datasets' }, 'Datasets'),
+        '.',
+      ),
+    );
+  }
+  const running = !!s.runId;
+  const locked = running || s.busy;
+  const opts = dsModelOptions(s.models);
+  const allOpts = opts.groups.flatMap((g) => g.options);
+  const full = s.picked.length >= DS_MAX_MODELS;
+
+  // What to replay: a dataset, then the whole of it or one example.
+  const dsSel = dsEl(
+    'select',
+    { class: 'input', id: 'ds-pg-ds', 'data-dspg': 'ds', 'data-dsfocus': 'ds' },
+    s.datasets.map((d) =>
+      dsEl(
+        'option',
+        { value: d.slug, selected: d.slug === s.slug },
+        `${d.name} · ${d.count} example${d.count === 1 ? '' : 's'}`,
+      ),
+    ),
+  );
+  const exs = dsPgExamples(s, s.slug);
+  const exSel = dsEl('select', { class: 'input', id: 'ds-pg-ex', 'data-dspg': 'ex', 'data-dsfocus': 'ex' });
+  if (exs === 'loading') exSel.append(dsEl('option', { value: '' }, 'Loading…'));
+  else if (exs && exs.error) exSel.append(dsEl('option', { value: '' }, `Could not read the examples: ${exs.error}`));
+  else {
+    const list = Array.isArray(exs) ? exs : [];
+    if (s.ex && !list.some((e) => e.id === s.ex)) s.ex = '';
+    exSel.append(
+      dsEl('option', { value: '' }, `Whole dataset (${list.length} example${list.length === 1 ? '' : 's'})`),
+    );
+    list.forEach((e, i) => {
+      const o = dsEl('option', { value: e.id, selected: e.id === s.ex });
+      // With content off there is no text to show: the example's place and id instead.
+      const t = dsUserText(e);
+      o.textContent = `${i + 1}. ${t == null ? e.id : dsPreview(t, 90)}`;
+      exSel.append(o);
+    });
+  }
+  const what = dsEl(
+    'div',
+    { class: 'ds-pg-what' },
+    dsEl('label', { for: 'ds-pg-ds' }, 'Dataset', dsSel),
+    dsEl('label', { for: 'ds-pg-ex' }, 'Examples', exSel),
+  );
+
+  // Models: up to three, local first; external ones only with content viewing on (their preview needs it).
+  const modelSet = dsEl(
+    'fieldset',
+    { class: 'ds-pg-models' },
+    dsEl('legend', null, `Models · ${s.picked.length} of up to ${DS_MAX_MODELS}`),
+  );
+  for (const g of opts.groups) {
+    const ext = g.label.startsWith('External');
+    const box = dsEl('div', { class: 'ds-pg-group', role: 'group', 'aria-label': g.label }, dsEl('b', null, g.label));
+    if (!g.options.length)
+      box.append(
+        dsEl(
+          'small',
+          { class: 'muted' },
+          ext ? 'None with a known price.' : 'None. Add Ollama or LM Studio under ',
+          ext ? null : dsEl('a', { class: 'ds-a', href: '#gateway/providers' }, 'Providers'),
+          ext ? null : '.',
+        ),
+      );
+    if (ext && g.options.length && !s.content) box.append(dsEl('small', { class: 'ds-pg-warn' }, DS_EXTERNAL_OFF));
+    for (const o of g.options) {
+      const on = s.picked.includes(o.value);
+      const off = (ext && !s.content) || (!on && full);
+      box.append(
+        dsEl(
+          'label',
+          {
+            class: 'gw-check ds-check',
+            title: ext && !s.content ? DS_EXTERNAL_OFF : !on && full ? 'Three models at most' : null,
+          },
+          dsEl('input', {
+            type: 'checkbox',
+            value: o.value,
+            checked: on,
+            disabled: off,
+            'data-dspg': 'model',
+            'data-dsfocus': `model:${o.value}`,
+          }),
+          dsEl('span', { class: 'mono' }, o.label),
+        ),
+      );
+    }
+    if (ext && s.unpriced)
+      box.append(
+        dsEl(
+          'small',
+          { class: 'muted' },
+          `${s.unpriced} more without a known price are not offered: the cost cap could not count them.`,
+        ),
+      );
+    modelSet.append(box);
+  }
+  if (!allOpts.length)
+    modelSet.append(dsEl('small', { class: 'ds-pg-warn' }, 'No gateway model can replay: add a provider first.'));
+
+  const evSet = dsEl('fieldset', { class: 'ds-pg-evs' }, dsEl('legend', null, 'Evaluators'));
+  for (const e of dsState.expEvs || []) {
+    evSet.append(
+      dsEl(
+        'label',
+        { class: 'gw-check ds-check' },
+        dsEl('input', {
+          type: 'checkbox',
+          value: e.id,
+          checked: s.evs.includes(e.id),
+          'data-dspg': 'ev',
+          'data-dsfocus': `ev:${e.id}`,
+        }),
+        dsEl('span', null, e.title || e.id),
+        dsEl('small', { class: 'ds-kind' }, e.kind === 'judge' ? 'judge' : 'code'),
+      ),
+    );
+  }
+
+  const caps = dsEl(
+    'div',
+    { class: 'ds-pg-caps' },
+    dsEl(
+      'label',
+      { for: 'ds-pg-cost' },
+      'Cost cap (USD)',
+      dsEl('input', {
+        class: 'input',
+        id: 'ds-pg-cost',
+        type: 'number',
+        // R8 takes any amount over $0 up to $10 (a cap of $0.005 is fine); dsRunBody checks the low end.
+        max: 10,
+        step: 'any',
+        inputmode: 'decimal',
+        value: s.maxCostUSD,
+        'data-dspg': 'cost',
+        'data-dsfocus': 'cost',
+      }),
+    ),
+    dsEl(
+      'label',
+      { for: 'ds-pg-req' },
+      'Request cap',
+      dsEl('input', {
+        class: 'input',
+        id: 'ds-pg-req',
+        type: 'number',
+        min: 1,
+        max: 1000,
+        step: 1,
+        inputmode: 'numeric',
+        value: s.maxRequests,
+        'data-dspg': 'req',
+        'data-dsfocus': 'req',
+      }),
+    ),
+    dsEl(
+      'small',
+      { class: 'muted' },
+      'The run stops before the next call once a cap is reached. Tools are declared, never run.',
+    ),
+  );
+
+  const external = s.picked.some((n) => dsPgExternal(s, n));
+  const runBtn = dsEl(
+    'button',
+    { class: 'btn', type: 'submit', 'data-dspg': 'run', 'data-dsfocus': 'run', disabled: locked || !!s.preview },
+    s.busy && !s.preview ? 'Working…' : external ? 'Preview what will be sent' : 'Run',
+  );
+  const say = dsEl('p', { class: `ds-msg${s.bad ? ' bad' : ''}`, role: 'status', id: 'ds-pg-msg' });
+  say.textContent = s.msg;
+  const set = dsEl(
+    'fieldset',
+    { class: 'ds-pg-set', disabled: locked },
+    dsEl('legend', { class: 'ds-sr' }, 'Replay a dataset'),
+    dsEl('div', { class: 'ds-pg-grid' }, dsEl('div', { class: 'ds-pg-col' }, what, caps), modelSet, evSet),
+  );
+  const actions = dsEl(
+    'div',
+    { class: 'gw-row ds-pg-actions' },
+    runBtn,
+    external && !s.preview && !locked
+      ? dsEl('small', { class: 'muted' }, 'External models get masked text, and you see it before anything is sent.')
+      : null,
+  );
+  const parts = [set, actions, say];
+
+  // The masked messages each external model would get for the first example, then an explicit send (S4).
+  if (s.preview) {
+    const n = s.preview.body.examples ? 1 : (Array.isArray(exs) ? exs.length : 0) || 1;
+    const pv = dsEl(
+      'section',
+      { class: 'ds-pv', 'aria-labelledby': 'ds-pv-title' },
+      dsEl('h4', { id: 'ds-pv-title', tabindex: -1 }, 'What will be sent'),
+      dsEl(
+        'p',
+        { class: 'muted' },
+        n > 1
+          ? `The first example as each external model receives it, with secrets and personal data masked; the other ${n - 1} are masked the same way. Nothing is sent until you press Send.`
+          : 'This example as each external model receives it, with secrets and personal data masked. Nothing is sent until you press Send.',
+      ),
+    );
+    for (const item of s.preview.items) {
+      const block = dsEl('div', { class: 'ds-pv-model' }, dsEl('b', { class: 'mono' }, item.model));
+      for (const m of Array.isArray(item.messages) ? item.messages : []) {
+        const box = dsEl('pre', { class: 'ev-pre ds-pv-box', tabindex: 0, 'aria-label': `${m.role} message` });
+        box.textContent = typeof m.content === 'string' ? m.content : '';
+        block.append(dsEl('div', { class: 'ev-pre-head' }, m.role), box);
+      }
+      pv.append(block);
+    }
+    pv.append(
+      dsEl(
+        'div',
+        { class: 'gw-row' },
+        dsEl(
+          'button',
+          { type: 'button', class: 'btn', 'data-dspg': 'send', 'data-dsfocus': 'send', disabled: s.busy },
+          s.busy ? 'Sending…' : `Send to ${s.preview.providers.join(', ')}`,
+        ),
+        dsEl('button', { type: 'button', class: 'btn ghost', 'data-dspg': 'back', 'data-dsfocus': 'back' }, 'Back'),
+      ),
+    );
+    parts.push(pv);
+  }
+
+  // A run in progress: there is no stop; it ends at its caps or when every example has run (R8).
+  if (running) {
+    const p = s.progress || {};
+    const line = dsEl('span', { id: 'ds-pg-progress' });
+    line.textContent = dsProgressLine(p);
+    parts.push(
+      dsEl(
+        'div',
+        { class: 'ds-pg-run', role: 'status', 'aria-live': 'polite' },
+        dsEl('span', { class: 'ds-dot', 'aria-hidden': 'true' }),
+        dsEl(
+          'b',
+          null,
+          p.dataset && p.dataset !== s.slug
+            ? `Running on ${(s.datasets.find((d) => d.slug === p.dataset) || { name: p.dataset }).name}`
+            : 'Running',
+        ),
+        line,
+        dsEl('progress', {
+          id: 'ds-pg-bar',
+          max: Math.max(1, p.total || 1),
+          value: p.done || 0,
+          'aria-label': 'Replay progress',
+        }),
+        dsEl('small', { class: 'muted' }, 'It ends at its caps or when every example has run.'),
+      ),
+    );
+    dsPgPoll(s);
+  }
+
+  if (s.record) {
+    const rec = s.record;
+    const exRows = dsPgExamples(s, rec.dataset);
+    const head = dsEl('div', { class: 'ds-pg-rhead' });
+    const h = dsEl('h4', { id: 'ds-pg-results', tabindex: -1, 'data-dsfocus': 'results' }, 'Results');
+    head.append(
+      h,
+      dsEl('span', { class: `ds-status ${rec.status === 'done' ? 'ok' : 'warn'}` }, dsStatusText(rec)),
+      dsEl('span', { class: 'ds-spacer' }),
+      dsEl('a', { class: 'ds-a', href: '#datasets/experiments' }, 'All experiments →'),
+    );
+    parts.push(
+      dsEl(
+        'section',
+        { class: 'ds-pg-out', 'aria-labelledby': 'ds-pg-results' },
+        head,
+        dsResultsEl(rec, Array.isArray(exRows) ? exRows : [], s.content),
+      ),
+    );
+  }
+
+  root.replaceChildren(...parts);
+  // Focus goes back to the control that caused the repaint (or to what it opened).
+  if (s.focus) {
+    const want = s.focus;
+    s.focus = '';
+    const el = [...root.querySelectorAll('[data-dsfocus]')].find((x) => x.dataset.dsfocus === want);
+    if (el && !el.disabled) el.focus();
+    else if (want === 'send' || want === 'preview') root.querySelector('#ds-pv-title')?.focus();
+  }
+}
+
+function dsPgSay(s, msg, bad = false) {
+  s.msg = msg;
+  s.bad = bad;
+}
+
+// Starts a run, or asks for the preview first when an external model is ticked. `confirm` sends the previewed body.
+async function dsPgRun(pg, confirm) {
+  const s = dsPg(pg);
+  if (s.busy || s.runId) return;
+  // Evaluators in the server's order, so the pass-rate columns read the same in every run.
+  const order = (dsState.expEvs || []).map((e) => e.id);
+  const rank = (id) => (order.includes(id) ? order.indexOf(id) : order.length);
+  const body = confirm
+    ? s.preview.body
+    : dsRunBody({
+        dataset: s.slug,
+        example: s.ex,
+        models: s.picked,
+        evaluators: [...s.evs].sort((a, b) => rank(a) - rank(b)),
+        maxCostUSD: s.maxCostUSD,
+        maxRequests: s.maxRequests,
+      });
+  if (body.error) {
+    dsPgSay(s, body.error, true);
+    return s.repaint();
+  }
+  const external = body.models.some((n) => dsPgExternal(s, n));
+  if (external && !s.content) {
+    dsPgSay(s, DS_EXTERNAL_OFF, true);
+    return s.repaint();
+  }
+  s.busy = true;
+  dsPgSay(s, external && !confirm ? 'Building the preview…' : 'Starting…');
+  s.repaint();
+  try {
+    if (external && !confirm) {
+      const r = await dsSend('POST', '/api/experiments', { ...body, preview: true });
+      s.preview = {
+        items: Array.isArray(r.preview) ? r.preview : [],
+        confirm: String(r.confirm || ''),
+        body,
+        providers: dsPgProviders(s, body.models),
+      };
+      dsPgSay(s, '');
+      s.focus = 'preview';
+    } else {
+      const r = await dsSend('POST', '/api/experiments', confirm ? { ...body, confirm: s.preview.confirm } : body);
+      s.preview = null;
+      s.record = null;
+      s.runId = r.id;
+      const exs = s.examples[body.dataset];
+      const n = body.examples ? body.examples.length : Array.isArray(exs) ? exs.length : 0;
+      s.progress = { dataset: body.dataset, done: 0, total: n * body.models.length, requests: 0, cost: 0 };
+      dsPgSay(s, '');
+    }
+  } catch (e) {
+    if (e.status === 409) {
+      // Another run holds the one slot: say so and follow it, so the page shows when this one can start.
+      dsPgSay(s, 'Another experiment is running. One runs at a time: start this one when it ends.', true);
+      const r = await dsApi('/api/experiments').catch(() => null);
+      if (r && r.running && !s.runId) {
+        s.runId = r.running.id;
+        s.progress = r.running;
+      }
+    } else if (e.status === 428) {
+      s.preview = null;
+      s.loaded = false; // the model list changed under the page: read it again, then preview
+      dsPgSay(s, 'Preview what will be sent first: an external model is in this run.', true);
+    } else if (e.status === 403) {
+      s.preview = null;
+      dsPgSay(s, DS_EXTERNAL_OFF, true);
+    } else dsPgSay(s, e.message, true);
+  } finally {
+    s.busy = false;
+    s.repaint();
+  }
+}
+
+// Clicks, changes and the submit of the Playground form in Dataset mode.
+function dsPlaygroundAct(event, pg, repaint) {
+  const s = dsPg(pg);
+  s.repaint = repaint;
+  if (event.type === 'submit') {
+    event.preventDefault();
+    // Enter in a cap field submits before its change event: read the fields as they are now.
+    const cost = document.getElementById('ds-pg-cost');
+    const req = document.getElementById('ds-pg-req');
+    if (cost) s.maxCostUSD = cost.value;
+    if (req) s.maxRequests = req.value;
+    s.focus = 'run';
+    return void dsPgRun(pg);
+  }
+  const el = event.target && event.target.closest ? event.target.closest('[data-dspg]') : null;
+  if (!el) return;
+  const act = el.dataset.dspg;
+  const changed = () => {
+    // A confirmed preview covers one dataset, example set and model set; any change asks for a new one.
+    s.preview = null;
+    if (!s.bad) s.msg = '';
+  };
+  if (event.type === 'change') {
+    if (act === 'cost') s.maxCostUSD = el.value;
+    else if (act === 'req') s.maxRequests = el.value;
+    else if (act === 'ds' || act === 'ex') {
+      if (act === 'ds') {
+        s.slug = el.value;
+        s.ex = '';
+      } else s.ex = el.value;
+      changed();
+      s.bad = false;
+      s.msg = '';
+      s.focus = act;
+      repaint();
+    }
+    return;
+  }
+  if (event.type !== 'click') return;
+  if (act === 'model' || act === 'ev') {
+    const list = act === 'model' ? s.picked : s.evs;
+    const i = list.indexOf(el.value);
+    if (el.checked && i < 0) {
+      if (act === 'model' && list.length >= DS_MAX_MODELS) {
+        event.preventDefault();
+        dsPgSay(s, 'Three models at most', true);
+        return void repaint();
+      }
+      list.push(el.value);
+    } else if (!el.checked && i >= 0) list.splice(i, 1);
+    changed();
+    s.bad = false;
+    s.msg = '';
+    s.focus = el.dataset.dsfocus;
+    return void repaint();
+  }
+  if (act === 'send') return void dsPgRun(pg, true);
+  if (act === 'back') {
+    s.preview = null;
+    s.focus = 'run';
+    return void repaint();
+  }
+  if (act === 'retry') {
+    s.loaded = false;
+    return void repaint();
+  }
 }
 
 /* ---------- "Add to dataset" (trace explorer) ---------- */
@@ -1018,4 +2247,12 @@ if (typeof module !== 'undefined')
     dsAddResult,
     dsSlugOf,
     dsRoute,
+    dsModelOptions,
+    dsRunBody,
+    dsResultCells,
+    dsPassTable,
+    dsCompare,
+    dsProgressLine,
+    dsStopLine,
+    dsPgParams,
   };
