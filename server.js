@@ -472,10 +472,15 @@ const monitorTick = () =>
     .then(() => monitors.tickAggregate())
     .catch(() => console.error('monitors: the aggregate pass failed'));
 // The aggregate pass has to run on the refreshed index. The refresh timer is not changed: this waits for it to end.
+// One waiting poller at a time: a refresh that outlasts RESCAN_MS must not stack a poller per interval.
+let monitorTickWaiting = false;
 const monitorTickAfterIndex = () => {
+  if (monitorTickWaiting) return;
+  monitorTickWaiting = true;
   const t = setInterval(() => {
     if (indexer.state.indexing) return;
     clearInterval(t);
+    monitorTickWaiting = false;
     monitorTick();
   }, 250);
   t.unref();
