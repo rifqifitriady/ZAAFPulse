@@ -270,9 +270,13 @@ function storedFixture() {
     rec(TQ, '4'.repeat(16), null, 'POST /v1/chat/completions', 'server', R0 + 20000, 300),
     rec(TQ, '5'.repeat(16), '4'.repeat(16), 'chat m', 'client', R0 + 20050, 200, storedChatAttrs),
   ]);
+  // The run as runs.json holds it, at the time its spans were stored.
+  const sr = { ...run, createdAt: R0, updatedAt: R0 + 5000 };
   // A request the store already holds (inside its window): not listed again from the usage log.
   const g2 = {
     ...g,
+    runs: () => [sr],
+    run: (id) => (id === 'r1' ? sr : null),
     requests: () => [
       ...g.requests(),
       { ts: R0 + 20000, keyId: 'k1', provider: 'p', model: 'm', sessionId: 'conv-2', kind: 'chat', status: 200, ms: 300 },
@@ -282,11 +286,19 @@ function storedFixture() {
   return { store, g2 };
 }
 
-test('stored traces are listed once: runs and requests the store holds are not listed again', () => {
+test('stored traces are listed once: a run keeps its run: row, requests the store holds are not listed again', () => {
   const { store, g2 } = storedFixture();
   const rows = createGatewayAdapter(g2, store).sessions();
-  assert.deepEqual(rows.map((r) => r.id).sort(), ['req:conv-1', 'req:conv-late', `trace:${TS}`, `trace:${TQ}`]);
-  const r = rows.find((x) => x.id === `trace:${TS}`);
+  // The run's trace is stored, but the run keeps its own id (evals, feedback and links use it): no trace: row for it.
+  assert.deepEqual(rows.map((r) => r.id).sort(), ['req:conv-1', 'req:conv-late', 'run:r1', `trace:${TQ}`]);
+  const own = rows.find((x) => x.id === 'run:r1');
+  assert.equal(own.title, 'vote run · completed · 2 steps');
+  assert.equal(own.start, R0);
+  assert.equal(own.cost, 0.002);
+  assert.deepEqual(own.tags.sort(), ['a', 'm', 'web'], 'the stored trace still makes the run searchable');
+  // A stored trace that belongs to no listed run is a row of its own.
+  const alone = createGatewayAdapter({ ...g2, runs: () => [] }, store).sessions();
+  const r = alone.find((x) => x.id === `trace:${TS}`);
   assert.equal(r.title, 'POST /v1/collaborate · 5 spans · m');
   assert.equal(r.start, R0);
   assert.equal(r.end, R0 + 5000);
@@ -296,11 +308,29 @@ test('stored traces are listed once: runs and requests the store holds are not l
   assert.deepEqual(r.flags, { errors: true, loop: false, injection: false });
   assert.deepEqual(r.tags.sort(), ['a', 'm', 'web']);
   assert.equal(typeof r.stamp, 'string');
-  assert.ok(!JSON.stringify(rows).includes('secret task text'));
+  assert.ok(!JSON.stringify(rows.concat(alone)).includes('secret task text'));
   // Without a store, the adapter lists what it always did.
   assert.deepEqual(createGatewayAdapter(g).sessions().map((x) => x.id).sort(), ['req:conv-1', 'run:r1']);
 });
 
+test('a run whose trace is stored opens from the store under its run: id', async () => {
+  const { store, g2 } = storedFixture();
+  const sk = await createGatewayAdapter(g2, store).skeleton(null, 'run:r1');
+  assert.deepEqual(validate(sk.spans), []);
+  assert.equal(sk.session.id, 'run:r1');
+  const chat = sk.spans.find((s) => s.name === 'chat m');
+  assert.equal(chat.id, CHAT);
+  assert.deepEqual(chat.usage, { input: 3, output: 3, cacheRead: 2 }, 'the stored span, with provider details');
+  assert.deepEqual(chat.text, { g: 'run', id: 'r1', step: 0 });
+  assert.equal(sk.spans.find((s) => s.name === 'POST /v1/collaborate').parent, null);
+  assert.equal(sk.spans.find((s) => s.name === 'execute_tool web').status, 'error');
+  // run.trace's second chat span (x3) was never stored: merged in under the run's root.
+  const merged = sk.spans.find((s) => s.id === runSpanId('r1', 'x3'));
+  assert.equal(merged.parent, ROOT);
+  assert.deepEqual(merged.text, { g: 'run', id: 'r1', step: 1 });
+  assert.equal(sk.spans.filter((s) => s.id === ROOT).length, 1, 'a span the store holds is not added again');
+  assert.deepEqual(sk.spans.find((s) => s.kind === 'answer').text, { g: 'run', id: 'r1', answer: true });
+});
 test('a stored trace opens as explorer spans, with the run step text linked and an answer', async () => {
   const { store, g2 } = storedFixture();
   const sk = await createGatewayAdapter(g2, store).skeleton(null, `trace:${TS}`);
@@ -334,7 +364,7 @@ test('registry: stored gateway rows are found by agent, model or tool', () => {
   const { store, g2 } = storedFixture();
   const t = createTrace({ gateway: g2, traceStore: store, light: [] });
   const titles = (q) => t.sessions({ q, range: 30 }).map((r) => r.title);
-  assert.deepEqual(titles('web'), ['POST /v1/collaborate · 5 spans · m']);
+  assert.deepEqual(titles('web'), ['vote run · completed · 2 steps']); // the run's row, by its stored trace's tags
   assert.equal(titles('m').length, 3); // the two stored traces and the late request
   assert.deepEqual(titles('no-such-agent'), []);
 
@@ -357,20 +387,58 @@ test('registry: tags are searched (agent id and model names that are in no title
   assert.deepEqual(titles('beta-2'), [T9TITLE]);
 });
 
-test('a running run whose trace is stored is listed once, as the stored trace', async () => {
+test('a running run keeps its run: row and shows its real tree while only chat spans are stored', async () => {
   const store = createTraceStore({ dir: fs.mkdtempSync(path.join(os.tmpdir(), 'zp-gw-store-')) });
-  const CH = runSpanId('r1', 'x2');
-  store.writeSpans([
-    rec(TS, SERVER, 'f'.repeat(16), 'POST /v1/collaborate', 'server', R0, 5000),
-    rec(TS, AGENT, SERVER, 'invoke_agent a', 'internal', R0 + 100, 2900, { 'gen_ai.operation.name': 'invoke_agent', 'gen_ai.agent.id': 'a' }),
-    rec(TS, CH, AGENT, 'chat m', 'client', R0 + 200, 1800, storedChatAttrs),
-  ]); // no zaafpulse.run.id anywhere: the run's root span was never exported
-  const r = { ...run, otel: { traceId: TS } };
-  const a = createGatewayAdapter({ ...g, runs: () => [r], run: (id) => (id === 'r1' ? r : null) }, store);
-  assert.deepEqual(a.sessions().map((x) => x.id).filter((id) => id.startsWith('run:') || id.startsWith('trace:')), [`trace:${TS}`]);
-  const sk = await a.skeleton(null, `trace:${TS}`);
-  assert.deepEqual(sk.spans.find((s) => s.name === 'chat m').text, { g: 'run', id: 'r1', step: 0 });
-  assert.deepEqual(sk.spans.find((s) => s.kind === 'answer').text, { g: 'run', id: 'r1', answer: true });
+  store.writeSpans([rec(TS, CHAT, AGENT, 'chat m', 'client', R0 + 200, 1800, storedChatAttrs)]); // agent spans come at the end
+  const working = {
+    ...run,
+    state: 'working',
+    answer: undefined,
+    createdAt: R0,
+    updatedAt: R0 + 2000,
+    otel: { traceId: TS, spanId: SERVER },
+    trace: [
+      { ...run.trace[0], end: null },
+      { ...run.trace[1], end: null },
+      run.trace[2],
+    ],
+  };
+  const gw = { ...g, runs: () => [working], run: (id) => (id === 'r1' ? working : null), requests: () => [] };
+  const a = createGatewayAdapter(gw, store);
+  const rows = a.sessions();
+  assert.deepEqual(rows.map((x) => x.id), ['run:r1']);
+  const sk = await a.skeleton(null, 'run:r1');
+  assert.deepEqual(validate(sk.spans), []);
+  const chat = sk.spans.find((s) => s.name === 'chat m');
+  assert.equal(chat.parent, AGENT, 'under its agent span, not flattened under the root');
+  assert.deepEqual(chat.usage, { input: 3, output: 3, cacheRead: 2 });
+  assert.deepEqual(chat.text, { g: 'run', id: 'r1', step: 0 });
+  const agent = sk.spans.find((s) => s.id === AGENT);
+  assert.equal(agent.kind, 'agent');
+  assert.equal(agent.parent, ROOT);
+  assert.equal(agent.status, 'running');
+  // The request span is not stored yet: the run's root is the trace's root.
+  assert.equal(sk.spans.find((s) => s.id === ROOT).parent, null);
+  assert.equal(sk.spans.filter((s) => !s.parent).length, 1);
+  // A stored span changes the row's stamp, so a cached skeleton is not served stale.
+  const before = rows[0].stamp;
+  store.writeSpans([rec(TS, SERVER, 'f'.repeat(16), 'POST /v1/collaborate', 'server', R0, 100)]);
+  assert.notEqual(a.sessions()[0].stamp, before);
+  const sk2 = await a.skeleton(null, 'run:r1');
+  assert.equal(sk2.spans.find((s) => s.id === ROOT).parent, SERVER, 'once stored, the request span holds the run');
+});
+
+test('registry: a stored run stays judgeable under its run: id', async () => {
+  const { store, g2 } = storedFixture();
+  const t = createTrace({ gateway: g2, traceStore: store, light: [], indexer: { entries: () => [] }, roots: [] });
+  // What the eval engine's sweep reads: the gateway rows and the sid behind each key.
+  const sids = t.sessions({ source: 'gateway', range: 30 }).map((r) => t.sourceOf(r.key).sid);
+  assert.ok(sids.includes('run:r1'));
+  assert.ok(!sids.includes(`trace:${TS}`));
+  const m = await t.material('gateway', 'run:r1', 0);
+  assert.ok(m, 'judgeable');
+  assert.deepEqual(m.target, { source: 'gateway', session: 'run:r1', turn: 0, span: null });
+  assert.ok(m.material.tools.some((x) => x.output === 'step a text'));
 });
 
 test('stored op and service are a known operation and masked', () => {
