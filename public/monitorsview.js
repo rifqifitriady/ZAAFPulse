@@ -33,7 +33,7 @@ const MON_PARAMS = {
   stuckMin: { label: 'Minutes without a log line', step: '1' },
   dropPoints: { label: 'Allowed drop (points)', step: '0.5' },
   minPassRate: { label: 'Minimum pass rate (%)', step: '1', pct: true },
-  minSamples: { label: 'Minimum checks', step: '1', int: true },
+  minSamples: { label: 'Minimum samples', step: '1', int: true }, // evaluator checks, or tool results for accuracy
   windowMin: { label: 'Window (minutes)', step: '1' },
 };
 const MON_SECRETS_DOC = 'https://github.com/rifqifitriady/ZAAFPulse/blob/main/docs/integrations.md#storing-a-secret';

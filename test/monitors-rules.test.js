@@ -108,6 +108,20 @@ test('month_projection: triggered when the projection passes the budget', () => 
   assert.strictEqual(one('month_projection', {}).state, 'no_data');
 });
 
+// A projection from the first hours of the month is noise: $1 at 00:30 on the 1st projects to about $1,500.
+test('month_projection: no_data until three whole days of the month have passed, with the numbers kept', () => {
+  const snap = { budget: { monthlyUSD: 1000 }, month: { cost: 1, projection: 1488 } };
+  const at = (day, h = 0, m = 0, ms = 0) =>
+    evaluate(rule('month_projection'), {}, snap, new Date(2026, 9, day, h, m, 0, ms).getTime())[0];
+  for (const r of [at(1, 0, 30), at(2, 12), at(3, 23, 59, 59999)]) {
+    assert.strictEqual(r.state, 'no_data');
+    assert.strictEqual(r.value, 1488, 'the projection is still shown');
+    assert.strictEqual(r.threshold, 1000);
+  }
+  assert.strictEqual(at(4).state, 'triggered', 'from local midnight at the end of the 3rd');
+  assert.strictEqual(at(4).value, 1488);
+});
+
 test('cost_burn: one instance per session, over $5 in 10 minutes triggers', () => {
   const snap = { sessions: [sess({ sid: 'a', cost10m: 5 }), sess({ sid: 'b', cost10m: 5.01, title: 'Big job' })] };
   const out = run('cost_burn', snap);
@@ -200,7 +214,7 @@ test('agent_stuck: working or thinking with no new line for 10 minutes', () => {
 });
 
 test('accuracy_drop: more than 5 points below the previous 7 days', () => {
-  const snap = (today, prev7) => ({ accuracy: { today, prev7 } });
+  const snap = (today, prev7) => ({ accuracy: { today, prev7, todayResults: 20, prev7Results: 140 } });
   let r = one('accuracy_drop', snap(0.8, 0.85));
   assert.strictEqual(r.state, 'ok'); // exactly 5 points is not more than 5
   assert.strictEqual(r.threshold, 5);
@@ -214,6 +228,21 @@ test('accuracy_drop: more than 5 points below the previous 7 days', () => {
   assert.strictEqual(one('accuracy_drop', snap(null, 0.85)).state, 'no_data');
   assert.strictEqual(one('accuracy_drop', snap(0.5, null)).state, 'no_data');
   assert.strictEqual(one('accuracy_drop', {}).state, 'no_data');
+});
+
+// One fault in the morning's first ten results is a ten-point drop: both rates need minSamples results (20).
+test('accuracy_drop: no_data until today and the previous 7 days each rest on minSamples results', () => {
+  const snap = (todayResults, prev7Results) => ({ accuracy: { today: 0.8, prev7: 0.9, todayResults, prev7Results } });
+  assert.strictEqual(one('accuracy_drop', snap(19, 500)).state, 'no_data');
+  assert.strictEqual(one('accuracy_drop', snap(19, 500)).threshold, 5);
+  assert.strictEqual(one('accuracy_drop', snap(20, 500)).state, 'triggered');
+  assert.strictEqual(one('accuracy_drop', snap(500, 19)).state, 'no_data');
+  assert.strictEqual(one('accuracy_drop', snap(500, 20)).state, 'triggered');
+  assert.strictEqual(one('accuracy_drop', snap(undefined, undefined)).state, 'no_data', 'counts missing');
+  assert.strictEqual(one('accuracy_drop', snap(20, null)).state, 'no_data');
+  assert.strictEqual(one('accuracy_drop', snap(10, 10), { minSamples: 10 }).state, 'triggered');
+  assert.strictEqual(one('accuracy_drop', snap(10, 10), { minSamples: 11 }).state, 'no_data');
+  assert.deepStrictEqual(rule('accuracy_drop').params, { dropPoints: 5, minSamples: 20 });
 });
 
 test('eval_pass_rate: any evaluator under 80% with enough samples', () => {
@@ -347,11 +376,12 @@ test('negative, NaN and out-of-range numbers give no_data', () => {
 });
 
 test('accuracy must be between 0 and 1', () => {
-  assert.strictEqual(one('accuracy_drop', { accuracy: { today: 80, prev7: 85 } }).state, 'no_data');
-  assert.strictEqual(one('accuracy_drop', { accuracy: { today: 0.5, prev7: 1.01 } }).state, 'no_data');
-  assert.strictEqual(one('accuracy_drop', { accuracy: { today: -0.1, prev7: 0.9 } }).state, 'no_data');
-  assert.strictEqual(one('accuracy_drop', { accuracy: { today: 0, prev7: 1 } }).state, 'triggered');
-  assert.strictEqual(one('accuracy_drop', { accuracy: { today: 1, prev7: 1 } }).state, 'ok');
+  const acc = (today, prev7) => ({ accuracy: { today, prev7, todayResults: 50, prev7Results: 50 } });
+  assert.strictEqual(one('accuracy_drop', acc(80, 85)).state, 'no_data');
+  assert.strictEqual(one('accuracy_drop', acc(0.5, 1.01)).state, 'no_data');
+  assert.strictEqual(one('accuracy_drop', acc(-0.1, 0.9)).state, 'no_data');
+  assert.strictEqual(one('accuracy_drop', acc(0, 1)).state, 'triggered');
+  assert.strictEqual(one('accuracy_drop', acc(1, 1)).state, 'ok');
 });
 
 test('eval_pass_rate needs 0 <= pass <= total', () => {
