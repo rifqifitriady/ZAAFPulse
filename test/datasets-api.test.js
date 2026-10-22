@@ -36,6 +36,10 @@ function fakeTrace() {
       throw notFound();
     },
     sealSpan: (raw) => (typeof raw === 'string' && raw ? raw.replace('RAWSPAN-', 'sealed-') : null),
+    sourceOf(key) {
+      if (!Object.hasOwn(keys, key)) throw notFound();
+      return { source: keys[key][0], sid: keys[key][1] };
+    },
     async example(key, turn, span) {
       if (!Object.hasOwn(keys, key)) throw notFound();
       const [source, session] = keys[key];
@@ -100,6 +104,16 @@ function fakeRunner() {
             labels: {},
             cost: 0,
             ms: 5,
+          },
+          // A provider error can echo what it was sent.
+          {
+            exampleId: opts.examples[0].id,
+            model: opts.models[0],
+            output: null,
+            error: 'provider said: bad input near fix the login redirect',
+            labels: {},
+            cost: 0,
+            ms: 3,
           },
         ],
         summary: { models: {} },
@@ -324,26 +338,64 @@ test('datasets api: export then import round-trips; a bad line is a 400 with rea
   const s = setup();
   try {
     await withExample(s);
+    const spanned = { items: [{ key: 'claude.k1', turn: 1, span: 'sealed-91' }] };
+    assert.equal((await s.call('POST', '/api/datasets/auth/examples', spanned)).body.added.length, 1);
     const out = await s.call('GET', '/api/datasets/auth/export');
     assert.equal(out.status, 200);
     assert.equal(out.type, 'application/x-ndjson; charset=utf-8');
     assert.equal(typeof out.body, 'string');
-    assert.equal(out.body.trim().split('\n').length, 1);
+    const lines = out.body.trim().split('\n');
+    assert.equal(lines.length, 2);
+    // S3: the export names the session by its trace key and the span by its sealed id, never the raw ids.
+    assert.doesNotMatch(out.body, new RegExp(RAW_SESSION));
+    assert.doesNotMatch(out.body, new RegExp(RAW_SPAN));
+    assert.deepEqual(
+      lines.map((l) => JSON.parse(l).source),
+      [
+        { source: 'claude', key: 'claude.k1', turn: 0, span: null },
+        { source: 'claude', key: 'claude.k1', turn: 1, span: 'sealed-91' },
+      ],
+    );
 
     const imp = await s.call('POST', '/api/datasets/import', { slug: 'copy', name: 'Copy', jsonl: out.body });
     assert.equal(imp.status, 200);
-    assert.equal(imp.body.added, 1);
+    assert.equal(imp.body.added, 2);
     assert.equal(imp.body.dataset.slug, 'copy');
-    assert.equal(imp.body.dataset.count, 1);
+    assert.equal(imp.body.dataset.count, 2);
     const a = s.datasets.examples('auth')[0];
     const b = s.datasets.examples('copy')[0];
     assert.deepEqual(b.input, a.input);
     assert.deepEqual(b.output, a.output);
+    // The key resolves on this server: the link is kept (the real session restored, the sealed span dropped).
+    assert.deepEqual(b.source, { source: 'claude', session: RAW_SESSION, turn: 0, span: null });
+    const copied = (await s.call('GET', '/api/datasets/copy')).body.examples;
+    assert.deepEqual(
+      copied.map((r) => r.link),
+      [
+        { source: 'claude', key: 'claude.k1', turn: 0, span: null },
+        { source: 'claude', key: 'claude.k1', turn: 1, span: null },
+      ],
+    );
+
+    // A key this server cannot resolve (another machine, or a restart) imports the example without a link.
+    const foreign = out.body.replace(/claude\.k1/g, `claude.${'f'.repeat(32)}`);
+    const lost = await s.call('POST', '/api/datasets/import', { slug: 'lost', jsonl: foreign });
+    assert.equal(lost.status, 200);
+    assert.equal(lost.body.added, 2);
+    const lostRows = (await s.call('GET', '/api/datasets/lost')).body.examples;
+    assert.deepEqual(
+      lostRows.map((r) => r.link),
+      [null, null],
+    );
+    assert.deepEqual(
+      s.datasets.examples('lost').map((e) => e.source),
+      [null, null],
+    );
 
     const bad = await s.call('POST', '/api/datasets/import', { slug: 'broken', jsonl: `${out.body}{nope\n` });
     assert.equal(bad.status, 400);
     assert.ok(Array.isArray(bad.body.reasons) && bad.body.reasons.length === 1);
-    assert.match(bad.body.reasons[0], /^line 2: /);
+    assert.match(bad.body.reasons[0], /^line 3: /);
     assert.equal(s.datasets.get('broken'), null, 'nothing written');
     assert.equal((await s.call('POST', '/api/datasets/import', { slug: 'x', jsonl: 5 })).status, 400);
     assert.equal((await s.call('GET', '/api/datasets/nope/export')).status, 404);
@@ -432,6 +484,7 @@ test('datasets api: content off hides every text and refuses add, export and the
     assert.equal(rec.perExample[0].output.text, null);
     assert.equal(rec.perExample[0].output.proposal.arguments, null);
     assert.equal(rec.perExample[0].output.proposal.name, 'Bash');
+    assert.equal(rec.perExample[1].error, null, 'a provider error can echo request text');
   } finally {
     s.done();
   }
@@ -480,6 +533,7 @@ test('datasets api: an experiment starts in the background, one at a time, and i
     const rec = (await s.call('GET', '/api/experiments/exp_0000000000000001')).body;
     assert.equal(rec.status, 'done');
     assert.equal(rec.perExample[0].output.text, 'replayed answer');
+    assert.match(rec.perExample[1].error, /provider said/);
     const after = (await s.call('GET', '/api/experiments')).body;
     assert.equal(after.running, null);
     assert.equal(after.experiments.length, 1);
@@ -732,6 +786,12 @@ test('datasets api: demo datasets and experiments over HTTP, masked and path-fre
     const out = await c.call('/api/datasets/auth-regressions/export');
     assert.equal(out.status, 200);
     assert.match(out.type, /application\/x-ndjson/);
+    const pages = await c.call('/api/datasets/pagination/export');
+    for (const text of [out.text, pages.text]) {
+      assert.doesNotMatch(text, /demo-claude-1|demo-codex-1/, 'no raw session id in an export');
+      assert.doesNotMatch(text, /sk-ant/);
+    }
+    assert.ok(JSON.parse(out.text.split('\n')[0]).source.key, 'the link is exported as a trace key');
     assert.equal((await c.call('/api/datasets', { method: 'POST', body: { name: 'x' } })).status, 415);
     for (const b of c.bodies) assert.doesNotMatch(b, PATHS, 'a response body holds a file path');
   } finally {
