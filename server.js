@@ -45,6 +45,7 @@ const { createAuth, isLoopback, originAllowed } = require('./lib/auth');
 const otel = require('./lib/otel');
 const { createTraceStore } = require('./lib/trace/store');
 const { createRecorder } = require('./lib/trace/recorder');
+const { createReceiver } = require('./lib/trace/otlp');
 
 const PORT = Number(process.env.ZAAFPULSE_PORT || process.env.PORT) || 4777;
 const HOST = process.env.ZAAFPULSE_HOST || process.env.HOST || '127.0.0.1';
@@ -256,6 +257,7 @@ const tracingOn = () => {
 const recorder = traceStore
   ? createRecorder({ store: traceStore, enabled: tracingOn })
   : createRecorder({ store: { writeSpans: () => 0 }, enabled: () => false });
+const traceReceiver = createReceiver({ recorder });
 // OpenTelemetry trace export: off unless config.json has "otel": { "enabled": true } (see docs/otel.md). The local
 // store is its second sink.
 otel.init({
@@ -560,6 +562,21 @@ const handler = async (req, res) => {
     });
 
   try {
+    // OTLP/HTTP JSON return channel (lib/trace/otlp.js): spans back from remote agents and MCP servers for traces
+    // this ZAAFPulse started. From this machine only; bodies over 1 MB are cut off by readBody.
+    if (url.pathname === '/v1/traces' && req.method === 'POST') {
+      if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress))
+        return send(res, 403, { error: 'the trace return channel accepts calls from this machine only' });
+      if (!/^application\/json/.test(req.headers['content-type'] || ''))
+        return send(res, 415, { error: 'send OTLP as JSON (content-type: application/json)' });
+      let body;
+      try {
+        body = JSON.parse(await readBody(req));
+      } catch (err) {
+        return err.message === 'too large' ? undefined : send(res, 400, { error: 'invalid JSON' });
+      }
+      return send(res, 200, traceReceiver.receive(body));
+    }
     // The gateway authenticates its own callers with ZAAFPulse API keys.
     if (await gateway.handle(req, res, url)) return;
     // Dashboard and /api: a signed-in session in server mode.
