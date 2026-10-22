@@ -237,7 +237,7 @@ function mapNodes(spans) {
     const n = node(s);
     if (s.kind === 'agent') {
       const sub = below(s.id);
-      n.tools = sub.filter((x) => x.kind === 'tool').length;
+      n.tools = sub.filter((x) => x.kind === 'tool' && !x.nested).length; // a nested span repeats its parent's call
       const c = sub.reduce((a, x) => a + (Number.isFinite(x.cost) ? x.cost : 0), n.cost || 0);
       n.cost = c || n.cost;
     }

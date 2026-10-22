@@ -497,3 +497,162 @@ test('stored rows are rebuilt only when the store changed', () => {
   assert.equal(a.sessions().filter((r) => r.id.startsWith('trace:')).length, first + 1);
   assert.equal(reads, 2);
 });
+
+test('a failed model call shows once in the run: skeleton, under the id the run reserved for it', async () => {
+  const otel = require('../lib/otel');
+  const { createRecorder } = require('../lib/trace/recorder');
+  const store = createTraceStore({ dir: fs.mkdtempSync(path.join(os.tmpdir(), 'zp-gw-store-')) });
+  const recorder = createRecorder({ store, flushMs: 0 });
+  const o = otel.createOtel({ getConfig: () => ({}), env: {}, refreshMs: 0, log: () => {}, sink: recorder });
+  const C0 = Date.now() - 10000;
+  const ctx = (sp) => ({ traceId: TS, spanId: runSpanId('r1', sp), sampled: true });
+  const attempt = (ms, extra = {}) => ({ ts: C0 + ms, ms: 100, model: 'm', provider: 'p', kind: 'agent', status: 200, input: 5, output: 3, cost: 0.001, ...extra });
+  // What rt.llm does for each call: the gateway's attempts run inside within(), with the run span's id reserved.
+  const call = (parent, chat, attempts) =>
+    o
+      .within(ctx(parent), async () => {
+        for (const a of attempts) {
+          o.onUsage(a);
+          await null;
+        }
+        if (attempts.every((a) => a.status >= 400)) throw new Error('upstream failed');
+      }, runSpanId('r1', chat))
+      .catch(() => {});
+  const chat = (id, parent, start, end, status) => ({ id, parent, name: 'chat m', start, end, status, ...(status === 'error' ? { error: 'upstream failed' } : {}), attrs: { 'zp.agent': 'a', 'gen_ai.request.model': 'm' } });
+  const make = (trace, extra = {}) => ({ ...run, createdAt: C0, updatedAt: C0 + 5000, otel: { traceId: TS, spanId: '', sampled: true }, trace, ...extra });
+  const chatsOf = async (r) => {
+    recorder.flush();
+    const gw = { ...g, runs: () => [r], run: (id) => (id === r.id ? r : null), requests: () => [] };
+    const sk = await createGatewayAdapter(gw, store).skeleton(null, 'run:r1');
+    assert.deepEqual(validate(sk.spans), []);
+    return sk;
+  };
+  const top = { id: 'x0', parent: null, name: 'invoke_workflow vote', start: 0, end: 5000, status: 'ok', attrs: {} };
+  const agent = { id: 'x1', parent: 'x0', name: 'invoke_agent a', start: 100, end: 3000, status: 'ok', attrs: {} };
+
+  // 1. A run whose only call failed (two attempts, both failed).
+  await call('x1', 'c1', [attempt(300, { status: 599, error: 'network', input: 0, output: 0 }), attempt(500, { status: 500, error: 'HTTP 500', input: 0, output: 0 })]);
+  let r = make([top, agent, chat('c1', 'x1', 200, 600, 'error')], { state: 'failed', answer: undefined });
+  for (const exported of [false, true]) {
+    if (exported) o.exportRun(r, r.trace);
+    const sk = await chatsOf(r);
+    const own = sk.spans.filter((s) => s.id === runSpanId('r1', 'c1'));
+    assert.equal(own.length, 1, 'the run span and the stored last attempt are one span');
+    assert.equal(own[0].provider, 'p', 'the stored span, with provider details');
+    assert.equal(own[0].status, 'error');
+    // The first attempt is its own (stored) chat span; the run's span is not added a second time.
+    assert.equal(sk.spans.filter((s) => s.kind === 'chat').length, 2);
+    assert.equal(sk.spans.filter((s) => s.status === 'error').length, 2, 'one error per failed attempt, none doubled');
+  }
+
+  // 2. One failed call, then a successful one: exactly one chat span per run.trace chat span.
+  const T2 = 'c'.repeat(32);
+  const ctx2 = (sp) => ({ traceId: T2, spanId: runSpanId('r2', sp), sampled: true });
+  await o.within(ctx2('x1'), async () => o.onUsage(attempt(300, { status: 500, error: 'HTTP 500', input: 0, output: 0 })), runSpanId('r2', 'c1'));
+  await o.within(ctx2('x1'), async () => o.onUsage(attempt(1000)), runSpanId('r2', 'c2'));
+  r = { ...make([top, agent, chat('c1', 'x1', 200, 400, 'error'), chat('c2', 'x1', 900, 1100, 'ok')]), id: 'r2', otel: { traceId: T2, spanId: '', sampled: true } };
+  recorder.flush();
+  const gw2 = { ...g, runs: () => [r], run: (id) => (id === 'r2' ? r : null), requests: () => [] };
+  const sk = await createGatewayAdapter(gw2, store).skeleton(null, 'run:r2');
+  assert.deepEqual(validate(sk.spans), []);
+  const chats = sk.spans.filter((s) => s.kind === 'chat');
+  assert.deepEqual(chats.map((s) => s.id).sort(), [runSpanId('r2', 'c1'), runSpanId('r2', 'c2')].sort());
+  assert.ok(chats.every((s) => s.provider === 'p'));
+  assert.equal(sk.spans.filter((s) => s.status === 'error').length, 1);
+});
+
+test('a resumed run with no stored span above its executions is still one tree', async () => {
+  // A dashboard run (run.otel.spanId '') resumed once: each execution has its own root workflow span.
+  const rtrace = [
+    { id: 'x0', parent: null, name: 'invoke_workflow vote', start: 10, end: 4910, status: 'ok', attrs: {} },
+    { id: 'x1', parent: 'x0', name: 'invoke_agent a', start: 100, end: 3000, status: 'ok', attrs: {} },
+    { id: 'x2', parent: 'x1', name: 'chat m', start: 200, end: 2000, status: 'ok', attrs: { 'zp.agent': 'a', 'gen_ai.request.model': 'm' } },
+    { id: 'y0', parent: null, name: 'invoke_workflow vote', start: 6000, end: 7000, status: 'ok', attrs: {} },
+    { id: 'y1', parent: 'y0', name: 'invoke_agent b', start: 6100, end: 6900, status: 'ok', attrs: {} },
+    { id: 'y2', parent: 'y1', name: 'chat m', start: 6200, end: 6800, status: 'ok', attrs: { 'zp.agent': 'b', 'gen_ai.request.model': 'm' } },
+  ];
+  const id = (x) => runSpanId('r1', x);
+  const resumed = { ...run, createdAt: R0, updatedAt: R0 + 7000, trace: rtrace, otel: { traceId: TS, spanId: '', sampled: true } };
+  const open = async (records, r) => {
+    const store = createTraceStore({ dir: fs.mkdtempSync(path.join(os.tmpdir(), 'zp-gw-store-')) });
+    store.writeSpans(records);
+    const gw = { ...g, runs: () => [r], run: (i) => (i === 'r1' ? r : null), requests: () => [] };
+    const sk = await createGatewayAdapter(gw, store).skeleton(null, 'run:r1');
+    assert.deepEqual(validate(sk.spans), [], 'one root, every parent present');
+    const ids = sk.spans.map((s) => s.id);
+    assert.equal(new Set(ids).size, ids.length);
+    return sk;
+  };
+  // Both executions exported: two stored workflow spans without a parent.
+  let sk = await open(
+    [
+      rec(TS, id('x0'), null, 'invoke_workflow vote', 'internal', R0 + 10, 4900, { 'zaafpulse.run.id': 'r1' }),
+      rec(TS, id('x1'), id('x0'), 'invoke_agent a', 'internal', R0 + 100, 2900),
+      rec(TS, id('x2'), id('x1'), 'chat m', 'client', R0 + 200, 1800, storedChatAttrs),
+      rec(TS, id('y0'), null, 'invoke_workflow vote', 'internal', R0 + 6000, 1000, { 'zaafpulse.run.id': 'r1' }),
+      rec(TS, id('y1'), id('y0'), 'invoke_agent b', 'internal', R0 + 6100, 800),
+      rec(TS, id('y2'), id('y1'), 'chat m', 'client', R0 + 6200, 600, storedChatAttrs),
+    ],
+    resumed,
+  );
+  const root = sk.spans.find((s) => !s.parent);
+  assert.equal(root.kind, 'session');
+  assert.equal(root.start, R0 + 10);
+  assert.equal(root.end, R0 + 7000);
+  assert.deepEqual(sk.spans.filter((s) => s.parent === root.id).map((s) => s.id).sort(), [id('x0'), id('y0')].sort());
+  assert.equal(sk.spans.find((s) => s.kind === 'answer').parent, id('y0'), 'the answer stays with the last execution');
+  // The second execution still running, only its chat spans stored: the two run.trace roots are merged in.
+  sk = await open(
+    [rec(TS, id('x2'), id('x1'), 'chat m', 'client', R0 + 200, 1800, storedChatAttrs), rec(TS, id('y2'), id('y1'), 'chat m', 'client', R0 + 6200, 600, storedChatAttrs)],
+    { ...resumed, state: 'working', answer: undefined, trace: rtrace.map((s) => (s.id === 'y0' || s.id === 'y1' ? { ...s, end: null } : s)) },
+  );
+  const live = sk.spans.find((s) => !s.parent);
+  assert.equal(live.status, 'running');
+  assert.equal(live.end, null);
+  assert.deepEqual(sk.spans.filter((s) => s.parent === live.id).map((s) => s.id).sort(), [id('x0'), id('y0')].sort());
+});
+
+test('an integration tool call is one call in eval material, with or without the store', async () => {
+  // The agent's execute_tool span, and the integration's own span nested inside it (the same call).
+  const store = createTraceStore({ dir: fs.mkdtempSync(path.join(os.tmpdir(), 'zp-gw-store-')) });
+  const id = (x) => runSpanId('r1', x);
+  store.writeSpans([
+    rec(TS, SERVER, null, 'POST /v1/collaborate', 'server', R0, 5000),
+    rec(TS, id('x0'), SERVER, 'invoke_workflow vote', 'internal', R0 + 10, 4900, { 'zaafpulse.run.id': 'r1' }),
+    rec(TS, id('x1'), id('x0'), 'invoke_agent a', 'internal', R0 + 100, 2900),
+    rec(TS, id('x2'), id('x1'), 'chat m', 'client', R0 + 200, 800, { 'gen_ai.operation.name': 'chat' }),
+    rec(TS, id('t1'), id('x1'), 'execute_tool web', 'internal', R0 + 1100, 500, { 'gen_ai.operation.name': 'execute_tool', 'gen_ai.tool.name': 'web' }),
+    rec(TS, '7'.repeat(16), id('t1'), 'execute_tool web', 'client', R0 + 1150, 400, { 'gen_ai.operation.name': 'execute_tool', 'gen_ai.tool.name': 'web', 'zaafpulse.tool.nested': true }),
+  ]);
+  const r = {
+    ...run,
+    createdAt: R0,
+    updatedAt: R0 + 5000,
+    otel: { traceId: TS, spanId: SERVER },
+    steps: [{ n: 1, agent: 'a', model: 'm', text: 'step a', status: 'done' }],
+    trace: [
+      { id: 'x0', parent: null, name: 'invoke_workflow vote', start: 10, end: 4910, status: 'ok', attrs: {} },
+      { id: 'x1', parent: 'x0', name: 'invoke_agent a', start: 100, end: 3000, status: 'ok', attrs: {} },
+      { id: 'x2', parent: 'x1', name: 'chat m', start: 200, end: 1000, status: 'ok', attrs: {} },
+      { id: 't1', parent: 'x1', name: 'execute_tool web', start: 1100, end: 1600, status: 'ok', attrs: {} },
+    ],
+  };
+  const gw = { ...g, runs: () => [r], run: (i) => (i === 'r1' ? r : null), requests: () => [] };
+  const toolsOf = async (ts) => {
+    const t = createTrace({ gateway: gw, traceStore: ts, light: [], indexer: { entries: () => [] }, roots: [] });
+    t.sessions({ source: 'gateway', range: 30 });
+    const m = await t.material('gateway', 'run:r1', 0);
+    return m.material.tools.map((x) => x.name);
+  };
+  const without = await toolsOf(null);
+  assert.equal(without.filter((n) => /web/.test(n)).length, 1);
+  assert.deepEqual(await toolsOf(store), without);
+  // The nested span is still shown, marked, so a count of tool calls can leave it out.
+  const sk = await createGatewayAdapter(gw, store).skeleton(null, 'run:r1');
+  const tools = sk.spans.filter((s) => s.kind === 'tool');
+  assert.equal(tools.length, 2);
+  assert.deepEqual(tools.map((s) => !!s.nested).sort(), [false, true]);
+  assert.equal(tools.find((s) => s.nested).parent, id('t1'));
+  const { totals } = require('../lib/trace/model');
+  assert.equal(totals(sk.spans).tools, 1);
+});
