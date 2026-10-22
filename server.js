@@ -304,6 +304,7 @@ const trace = createTrace({
     : {
         indexer,
         gateway,
+        traceStore,
         roots: [...LOG_ROOTS.claude, ...LOG_ROOTS.codex],
       }),
 });

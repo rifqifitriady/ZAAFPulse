@@ -241,3 +241,93 @@ test('gateway model, provider and span names are masked and capped like a title'
     assert.ok(v.length <= 100, `capped: ${v.length}`);
   }
 });
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { createTraceStore } = require('../lib/trace/store');
+const { runSpanId } = require('../lib/otel');
+const { createTrace } = require('../lib/trace');
+
+const US = (ms) => Math.round(ms * 1000);
+const R0 = Date.now() - 60000; // the stored run starts a minute ago
+const TS = 'a'.repeat(32); // the run's trace
+const TQ = 'b'.repeat(32); // a plain chat request
+const rec = (t, s, p, n, k, startMs, durMs, a = {}, extra = {}) => ({ t, s, p, n, k, st: US(startMs), d: US(durMs), ok: true, src: 'gateway', svc: 'zaafpulse', a, ...extra });
+const storedChatAttrs = { 'gen_ai.operation.name': 'chat', 'gen_ai.request.model': 'm', 'gen_ai.provider.name': 'openai', 'gen_ai.usage.input_tokens': 5, 'gen_ai.usage.output_tokens': 3, 'gen_ai.usage.cache_read.input_tokens': 2, 'zaafpulse.cost.usd': 0.001 };
+const SERVER = '1'.repeat(16);
+const ROOT = runSpanId('r1', 'x0');
+const AGENT = runSpanId('r1', 'x1');
+const CHAT = runSpanId('r1', 'x2');
+function storedFixture() {
+  const store = createTraceStore({ dir: fs.mkdtempSync(path.join(os.tmpdir(), 'zp-gw-store-')) });
+  store.writeSpans([
+    rec(TS, SERVER, 'f'.repeat(16), 'POST /v1/collaborate', 'server', R0, 5000),
+    rec(TS, ROOT, SERVER, 'invoke_workflow vote', 'internal', R0 + 10, 4900, { 'gen_ai.operation.name': 'invoke_workflow', 'zaafpulse.run.id': 'r1' }),
+    rec(TS, AGENT, ROOT, 'invoke_agent a', 'internal', R0 + 100, 2900, { 'gen_ai.operation.name': 'invoke_agent', 'gen_ai.agent.id': 'a' }),
+    rec(TS, CHAT, AGENT, 'chat m', 'client', R0 + 200, 1800, storedChatAttrs),
+    rec(TS, '3'.repeat(16), AGENT, 'execute_tool web', 'internal', R0 + 2100, 100, { 'gen_ai.operation.name': 'execute_tool', 'gen_ai.tool.name': 'web' }, { ok: false, err: 'HTTP 500' }),
+    rec(TQ, '4'.repeat(16), null, 'POST /v1/chat/completions', 'server', R0 + 20000, 300),
+    rec(TQ, '5'.repeat(16), '4'.repeat(16), 'chat m', 'client', R0 + 20050, 200, storedChatAttrs),
+  ]);
+  // A request the store already holds (inside its window): not listed again from the usage log.
+  const g2 = { ...g, requests: () => [...g.requests(), { ts: R0 + 20000, keyId: 'k1', provider: 'p', model: 'm', sessionId: 'conv-2', kind: 'chat', status: 200, ms: 300 }] };
+  return { store, g2 };
+}
+
+test('stored traces are listed once: runs and requests the store holds are not listed again', () => {
+  const { store, g2 } = storedFixture();
+  const rows = createGatewayAdapter(g2, store).sessions();
+  assert.deepEqual(rows.map((r) => r.id).sort(), ['req:conv-1', `trace:${TS}`, `trace:${TQ}`]);
+  const r = rows.find((x) => x.id === `trace:${TS}`);
+  assert.equal(r.title, 'POST /v1/collaborate · 5 spans · m');
+  assert.equal(r.start, R0);
+  assert.equal(r.end, R0 + 5000);
+  assert.equal(r.tools, 1);
+  assert.equal(r.errors, 1);
+  assert.equal(r.cost, 0.001);
+  assert.deepEqual(r.flags, { errors: true, loop: false, injection: false });
+  assert.deepEqual(r.tags.sort(), ['a', 'm', 'web']);
+  assert.equal(typeof r.stamp, 'string');
+  assert.ok(!JSON.stringify(rows).includes('secret task text'));
+  // Without a store, the adapter lists what it always did.
+  assert.deepEqual(createGatewayAdapter(g).sessions().map((x) => x.id).sort(), ['req:conv-1', 'run:r1']);
+});
+
+test('a stored trace opens as explorer spans, with the run step text linked and an answer', async () => {
+  const { store, g2 } = storedFixture();
+  const sk = await createGatewayAdapter(g2, store).skeleton(null, `trace:${TS}`);
+  assert.deepEqual(validate(sk.spans), []);
+  const by = (name) => sk.spans.find((s) => s.name === name);
+  const root = by('POST /v1/collaborate');
+  assert.equal(root.parent, null);
+  assert.equal(root.kind, 'session');
+  assert.equal(root.start, R0);
+  assert.equal(by('invoke_agent a').kind, 'agent');
+  const chat = by('chat m');
+  assert.equal(chat.kind, 'chat');
+  assert.deepEqual(chat.usage, { input: 3, output: 3, cacheRead: 2 });
+  assert.equal(chat.cost, 0.001);
+  assert.equal(chat.model, 'm');
+  assert.equal(chat.provider, 'openai');
+  assert.equal(chat.service, 'zaafpulse');
+  assert.deepEqual(chat.text, { g: 'run', id: 'r1', step: 0 });
+  const tool = by('execute_tool web');
+  assert.equal(tool.status, 'error');
+  assert.equal(tool.error, 'HTTP 500');
+  assert.deepEqual(tool.tool, { name: 'web', target: null });
+  const answer = sk.spans.find((s) => s.kind === 'answer');
+  assert.equal(answer.parent, ROOT);
+  assert.deepEqual(answer.text, { g: 'run', id: 'r1', answer: true });
+  assert.equal(sk.session.start, R0);
+  await assert.rejects(createGatewayAdapter(g2, store).skeleton(null, `trace:${'c'.repeat(32)}`), (e) => e.status === 404);
+});
+
+test('registry: stored gateway rows are found by agent, model or tool', () => {
+  const { store, g2 } = storedFixture();
+  const t = createTrace({ gateway: g2, traceStore: store, light: [] });
+  const titles = (q) => t.sessions({ q, range: 30 }).map((r) => r.title);
+  assert.deepEqual(titles('web'), ['POST /v1/collaborate · 5 spans · m']);
+  assert.equal(titles('m').length, 2);
+  assert.deepEqual(titles('no-such-agent'), []);
+});
