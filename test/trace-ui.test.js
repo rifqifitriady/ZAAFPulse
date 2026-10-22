@@ -18,6 +18,11 @@ const {
   trColor,
   trSrc,
   trBadges,
+  trCritical,
+  trCpMs,
+  trSpanFacts,
+  trCause,
+  trDepRows,
   trOffNote,
   trStartCollapsed,
   trNameParts,
@@ -671,4 +676,45 @@ test('trMarkQueue: a key in flight is not asked twice; a refresh during the flig
   q.refresh('b');
   assert.deepEqual(q.take(1), ['b'], 'a refresh outside a flight just queues');
   assert.equal(q.take(50).length, 0);
+});
+
+test('analysis helpers: critical path, span facts, cause and dependency rows', () => {
+  const an = {
+    rootSpanId: 'r',
+    criticalPath: [
+      { spanId: 'r', start: 0, end: 100 },
+      { spanId: 'b', start: 100, end: 1600 },
+    ],
+    selfTime: { r: 100, b: 1500 },
+    rollup: { r: { tokensIn: 12000, tokensOut: 800, costUSD: 0.25, spans: 4, errors: 1 }, b: { tokensIn: 0, tokensOut: 0, costUSD: 0, spans: 1, errors: 1 } },
+    rootCause: { spanId: 'b', name: 'execute_tool Bash', error: 'Exit code 1', onCriticalPath: true },
+  };
+  assert.deepEqual([...trCritical(an)], ['r', 'b']);
+  assert.equal(trCritical(null).size, 0);
+  assert.equal(trCpMs(an), 1600);
+  assert.equal(trCpMs(null), 0);
+  assert.deepEqual(trSpanFacts(an, 'r'), ['self 100 ms', 'branch $0.25 12k → 800 tok 1 error', 'on the critical path']);
+  assert.deepEqual(trSpanFacts(an, 'b'), ['self 1.5 s', 'on the critical path']);
+  assert.deepEqual(trSpanFacts(null, 'b'), []);
+  const spans = new Map([['b', { id: 'b', kind: 'tool', name: 'execute_tool Bash' }]]);
+  assert.deepEqual(trCause(an, spans), { id: 'b', line: 'Likely cause: execute_tool · Bash: Exit code 1 (on the critical path)' });
+  assert.equal(trCause({ ...an, rootCause: null }, spans), null);
+  assert.deepEqual(
+    trDepRows({
+      nodes: [
+        { id: 'agent:a', kind: 'agent', label: 'a', count: 1 },
+        { id: 'model:m', kind: 'model', label: 'm', count: 1 },
+      ],
+      edges: [{ from: 'agent:a', to: 'model:m', count: 3, errors: 1, p95Ms: 2300 }],
+    }),
+    [['agent a', 'model m', '3', '1', '2.3 s']],
+  );
+  assert.deepEqual(trDepRows(null), []);
+});
+
+test('the analysis UI fills the cause and the dependency table with text only (S1)', () => {
+  const src = fs.readFileSync(SRC, 'utf8');
+  assert.match(src, /\$\('#tr-cause-msg'\)\.textContent = /);
+  assert.match(src, /insertCell\(\)\.textContent = /);
+  assert.doesNotMatch(src, /innerHTML[^;\n]*\b(trDepRows|trCause|cells)\b/);
 });

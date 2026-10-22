@@ -64,6 +64,51 @@ function trBadges(s) {
   return out;
 }
 
+// The analysis from /api/trace/session (lib/trace/analyze.js), as the tree and the detail use it.
+function trCritical(an) {
+  return new Set(an && Array.isArray(an.criticalPath) ? an.criticalPath.map((x) => x.spanId) : []);
+}
+const trCpMs = (an) =>
+  an && Array.isArray(an.criticalPath) ? an.criticalPath.reduce((n, x) => n + (x.end - x.start), 0) : 0;
+// One span's self time, its branch totals (for a span with children) and whether it decides the duration.
+function trSpanFacts(an, id) {
+  if (!an || typeof id !== 'string') return [];
+  const out = [];
+  const self = an.selfTime && an.selfTime[id];
+  if (Number.isFinite(self)) out.push(`self ${fmtDur(self)}`);
+  const r = an.rollup && an.rollup[id];
+  if (r && r.spans > 1) {
+    const b = [];
+    if (r.costUSD > 0) b.push(trUsd(r.costUSD));
+    if (r.tokensIn + r.tokensOut > 0) b.push(`${trTok(r.tokensIn)} → ${trTok(r.tokensOut)} tok`);
+    if (r.errors) b.push(`${r.errors} error${r.errors === 1 ? '' : 's'}`);
+    if (b.length) out.push(`branch ${b.join(' ')}`);
+  }
+  if (trCritical(an).has(id)) out.push('on the critical path');
+  return out;
+}
+// The likely root cause as one line; the error is a masked status message, shown as text.
+function trCause(an, spans) {
+  const c = an && an.rootCause;
+  if (!c || typeof c.spanId !== 'string') return null;
+  const s = spans && typeof spans.get === 'function' ? spans.get(c.spanId) : null;
+  const name = s ? trLabel(s) : String(c.name || 'span');
+  const why = c.error ? `: ${c.error}` : '';
+  return { id: c.spanId, line: `Likely cause: ${name}${why}${c.onCriticalPath ? ' (on the critical path)' : ''}` };
+}
+// The dependency table as text cells: from, to, calls, failures, p95.
+function trDepRows(deps) {
+  const nodes = deps && Array.isArray(deps.nodes) ? deps.nodes : [];
+  const name = new Map(nodes.map((n) => [n.id, `${n.kind} ${n.label}`]));
+  return (deps && Array.isArray(deps.edges) ? deps.edges : []).map((e) => [
+    name.get(e.from) || String(e.from),
+    name.get(e.to) || String(e.to),
+    String(e.count),
+    String(e.errors),
+    fmtDur(e.p95Ms),
+  ]);
+}
+
 const trValid = (spans) => (Array.isArray(spans) ? spans : []).filter((s) => s && typeof s.id === 'string');
 // Children by parent, each list in time order (ties keep the server's order). A span whose parent is
 // missing, or is itself, counts as a root.
@@ -527,6 +572,7 @@ function viewTrace() {
         <div class="tr-thead"><b id="tr-turn">No session selected</b><button type="button" class="tr-ev tr-tev" id="tr-tev" hidden></button><span class="tr-muted" id="tr-sum"></span></div>
         <div class="tr-notice tr-judge" id="tr-judge" role="status" hidden><span id="tr-judge-msg"></span><a href="#settings">Settings → Evals</a></div>
         <div class="tr-notice tr-off" id="tr-off" role="status" hidden></div>
+        <div class="tr-notice tr-cause" id="tr-cause" role="status" hidden><span id="tr-cause-msg"></span><button type="button" class="tr-btn ghost" id="tr-cause-go">Show</button></div>
         <div class="tr-notice" id="tr-notice" hidden><span id="tr-notice-msg"></span><button type="button" class="tr-btn ghost" id="tr-refresh" hidden>Refresh</button></div>
         <div class="tr-cols" aria-hidden="true"><span>Span</span><span class="tr-tl">Timeline</span><span class="r">Time</span></div>
         <div class="tr-rows" id="tr-rows" role="tree" tabindex="0" aria-label="Spans · j and k move, Enter opens the detail"></div>
@@ -557,10 +603,12 @@ function viewTrace() {
   <section class="tr-right" id="tr-right" aria-label="Session map">
     <div class="tr-rhead">
       <div class="tr-rtitle"><div class="tr-eyebrow">Session map</div><h2 id="tr-mtitle">From Prompt to Answer</h2></div>
+      <div class="tr-seg" role="group" aria-label="Right panel"><button type="button" data-tview="map" class="on" aria-pressed="true">Map</button><button type="button" data-tview="deps" aria-pressed="false">Dependencies</button></div>
       <div class="tr-stepper"><button type="button" class="tr-icon-btn" id="tr-prev" aria-label="Previous turn">◀</button><span class="tr-muted" id="tr-step">– / –</span><button type="button" class="tr-icon-btn" id="tr-next" aria-label="Next turn">▶</button></div>
     </div>
     <div class="tr-legend">${legend}</div>
     <div class="tr-map" id="tr-map"><svg class="tr-wires" id="tr-wires" aria-hidden="true"></svg></div>
+    <div class="tr-deps" id="tr-deps" tabindex="0" aria-label="Dependencies between agents, models, tools and remote services" hidden></div>
   </section>
 </div></div>`;
 }
@@ -659,6 +707,9 @@ function mountTrace() {
     rating: false,
     savingNote: false,
     contentOff: false,
+    an: null, // the analysis of the skeleton on show
+    cp: new Set(), // its critical path span ids
+    view: 'map', // the right half: the map or the dependency table
   };
   const timers = new Set();
   const later = (fn, ms) => {
@@ -943,6 +994,9 @@ function mountTrace() {
   /* ---- one turn: tree, map and detail ---- */
   function clearTurn(msg) {
     S.sk = null;
+    S.an = null;
+    S.cp = new Set();
+    $('#tr-cause').hidden = true;
     S.skKey = null;
     S.rows = [];
     S.nodes = [];
@@ -1050,6 +1104,8 @@ function mountTrace() {
   function paintSkeleton() {
     const sk = S.sk;
     S.spans = new Map(sk.spans.map((s) => [s.id, s]));
+    S.an = sk.analysis || null;
+    S.cp = trCritical(S.an);
     buildRows();
     const turns = sk.turns.length;
     $('#tr-turn').textContent = `Turn ${S.turn + 1} of ${Math.max(1, turns)}`;
@@ -1068,11 +1124,13 @@ function mountTrace() {
     const sum = [`${sk.spans.length} spans`];
     if (cost) sum.push(trUsd(cost));
     if (input + cached) sum.push(`cache hit ${Math.round((cached / (input + cached)) * 100)}%`);
+    if (trCpMs(S.an) > 0) sum.push(`critical path ${fmtDur(trCpMs(S.an))}`);
     $('#tr-sum').textContent = sum.join(' · ');
     $('#tr-mtitle').textContent = `Turn ${S.turn + 1} · From Prompt to Answer`;
     $('#tr-step').textContent = `${S.turn + 1} / ${Math.max(1, turns)}`;
     $('#tr-prev').disabled = S.turn <= 0;
     $('#tr-next').disabled = S.turn >= turns - 1;
+    paintCause();
     paintHeading();
     S.turnEv = turnRes();
     S.evSig = evSig();
@@ -1080,6 +1138,58 @@ function mountTrace() {
     paintRate();
     paintRows();
     paintMap();
+  }
+
+  // The likely root cause above the tree, with a button that selects it.
+  function paintCause() {
+    const c = S.sk ? trCause(S.an, S.spans) : null;
+    $('#tr-cause').hidden = !c;
+    $('#tr-cause-msg').textContent = c ? c.line : '';
+  }
+
+  // The right half: the session map, or the dependency table of the chosen time range.
+  function showView(v) {
+    S.view = v === 'deps' ? 'deps' : 'map';
+    for (const b of $$('[data-tview]', app)) {
+      const on = b.dataset.tview === S.view;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', String(on));
+    }
+    $('#tr-map').hidden = S.view !== 'map';
+    $('.tr-legend', app).hidden = S.view !== 'map';
+    $('#tr-deps').hidden = S.view !== 'deps';
+    if (S.view === 'deps') loadDeps();
+  }
+  async function loadDeps() {
+    const box = $('#tr-deps');
+    box.textContent = 'Loading dependencies…';
+    let d;
+    try {
+      d = await trApi(`/api/trace/deps?range=${encodeURIComponent(S.range)}`);
+    } catch (e) {
+      if (S.alive) box.textContent = `Dependencies are not available: ${e.message}`;
+      return;
+    }
+    if (!S.alive || S.view !== 'deps') return;
+    const rows = trDepRows(d);
+    if (!rows.length) {
+      box.textContent = 'No agent calls in this range. Dependencies come from Agent Gateway traces.';
+      return;
+    }
+    const table = document.createElement('table');
+    table.className = 'tr-dtable';
+    const head = table.createTHead().insertRow();
+    for (const h of ['From', 'To', 'Calls', 'Failures', 'p95']) {
+      const th = document.createElement('th');
+      th.textContent = h;
+      head.appendChild(th);
+    }
+    const tb = table.createTBody();
+    for (const cells of rows) {
+      const tr = tb.insertRow();
+      for (const c of cells) tr.insertCell().textContent = c;
+    }
+    box.replaceChildren(table);
   }
 
   // The session's time window, for the timeline bars.
@@ -1118,7 +1228,7 @@ function mountTrace() {
     const attrs = r.placeholder
       ? `data-tturn="${r.turnIndex}" title="Open turn ${r.turnIndex + 1}"`
       : `data-tspan="${esc(r.id)}"${r.kids ? ` aria-expanded="${r.open}"` : ''}`;
-    return `<div class="tr-row${on ? ' on' : ''}${r.placeholder ? ' dim' : ''}" role="treeitem" aria-level="${r.depth + 1}" aria-selected="${on}" ${attrs} style="--c:${c}"><span class="tr-name" style="--lvl:${r.depth};--guide:${r.depth ? 'block' : 'none'}"><span class="tr-d"></span><span class="tr-lbl" title="${esc(r.name)}">${tw}${op ? `<span class="tr-op">${esc(op)}</span>` : ''}${esc(what)}${pv}</span>${trRowBadges(badges)}</span><span class="tr-track"><span style="left:${l.toFixed(2)}%;width:${width.toFixed(2)}%"></span></span><span class="tr-dur">${fmtDur(d)}</span></div>`;
+    return `<div class="tr-row${on ? ' on' : ''}${r.placeholder ? ' dim' : ''}${S.cp.has(r.id) ? ' cp' : ''}" role="treeitem" aria-level="${r.depth + 1}" aria-selected="${on}" ${attrs} style="--c:${c}"><span class="tr-name" style="--lvl:${r.depth};--guide:${r.depth ? 'block' : 'none'}"><span class="tr-d"></span><span class="tr-lbl" title="${esc(r.name)}">${tw}${op ? `<span class="tr-op">${esc(op)}</span>` : ''}${esc(what)}${pv}</span>${trRowBadges(badges)}</span><span class="tr-track"><span style="left:${l.toFixed(2)}%;width:${width.toFixed(2)}%"></span></span><span class="tr-dur">${fmtDur(d)}</span></div>`;
   }
 
   // All rows, or for a long tree only the ones in view plus a margin, between two spacers (P4).
@@ -1406,6 +1516,7 @@ function mountTrace() {
     if (s.tool && s.tool.target) meta.push(s.tool.target);
     if (s.usage) meta.push(`${trTok(TR_NUM(s.usage.input) + TR_NUM(s.usage.cacheRead))} → ${trTok(TR_NUM(s.usage.output))} tok`);
     if (Number.isFinite(s.cost) && s.cost > 0) meta.push(trUsd(s.cost));
+    meta.push(...trSpanFacts(S.an, s.id));
     $('#tr-dmeta').textContent = meta.join(' · ');
     $('#tr-dmeta').title = meta.join(' · ');
     const t = textsOf(s);
@@ -1944,7 +2055,13 @@ function mountTrace() {
         b.classList.toggle('on', b === el);
         b.setAttribute('aria-pressed', String(b === el));
       }
+      if (S.view === 'deps') loadDeps();
       return void loadSessions();
+    }
+    if ((el = q('[data-tview]'))) return void showView(el.dataset.tview);
+    if (q('#tr-cause-go')) {
+      if (S.an && S.an.rootCause) select(S.an.rootCause.spanId, { force: true });
+      return;
     }
     if ((el = q('[data-tsrc]'))) {
       S.source = el.dataset.tsrc;
@@ -2182,6 +2299,11 @@ if (typeof module !== 'undefined')
     trIsLive,
     trLabel,
     trBadges,
+    trCritical,
+    trCpMs,
+    trSpanFacts,
+    trCause,
+    trDepRows,
     trShape,
     trLivePlan,
     trNavKey,
