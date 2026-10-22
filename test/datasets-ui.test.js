@@ -25,6 +25,7 @@ const {
   dsPgEdit,
   dsPgFormBody,
   dsPgSendBody,
+  dsPvModel,
 } = require('../public/datasetview');
 
 const SRC = path.join(__dirname, '..', 'public', 'datasetview.js');
@@ -163,6 +164,7 @@ test('datasetview.js builds no HTML from example text, tags, names or reasons (S
   assert.match(src, /\.textContent\s*=\s*[^;\n]*\bcell\.text\b/);
   assert.match(src, /\.textContent\s*=\s*[^;\n]*\bcell\.proposal\.arguments\b/);
   assert.match(src, /\.textContent\s*=\s*[^;\n]*\bm\.content\b/);
+  assert.match(src, /\.textContent\s*=\s*[^;\n]*\bfn\.description\b/);
   assert.doesNotMatch(src, /outerHTML|document\.write|DOMParser|createContextualFragment/);
 });
 
@@ -462,4 +464,52 @@ test('the external preview: any change to the form drops it, and Send never post
   const r = dsPgEdit(full, 'model', 'ollama/c', true);
   assert.match(r.error, /three/i);
   assert.ok(full.preview);
+});
+
+// A tiny stand-in for `document`: nodes record their children and text, and innerHTML is refused.
+function fakeDoc() {
+  const el = (tag) => {
+    const node = { tag, children: [], className: '', attrs: {}, textContent: '' };
+    node.append = (...c) => node.children.push(...c);
+    node.setAttribute = (k, v) => (node.attrs[k] = String(v));
+    Object.defineProperty(node, 'innerHTML', {
+      set() {
+        throw new Error('innerHTML used for content');
+      },
+    });
+    return node;
+  };
+  return { createElement: el };
+}
+
+test('the external preview lists the declared tools as text, exactly as the server sends them', () => {
+  const saved = global.document;
+  global.document = fakeDoc();
+  try {
+    const block = dsPvModel({
+      model: 'anthropic/claude-haiku-5-5',
+      messages: [{ role: 'user', content: 'fix it' }],
+      tools: [
+        { type: 'function', function: { name: 'Mail', description: 'Ask ‹email› <img src=x onerror=alert(1)>' } },
+        { type: 'function', function: { name: 'Bash', description: '' } },
+      ],
+    });
+    const nodes = [];
+    const walk = (n) => {
+      nodes.push(n);
+      if (n && Array.isArray(n.children)) n.children.forEach(walk);
+    };
+    walk(block);
+    const texts = nodes.map((n) => (typeof n === 'string' ? n : n.textContent)).filter(Boolean);
+    assert.ok(texts.includes('fix it'), 'the message');
+    assert.ok(texts.includes('Mail') && texts.includes('Bash'), 'every tool name');
+    assert.ok(texts.includes('Ask ‹email› <img src=x onerror=alert(1)>'), 'the masked description, as text');
+    assert.ok(
+      texts.some((t) => /tools/i.test(t)),
+      'the tool list is labelled',
+    );
+  } finally {
+    if (saved === undefined) delete global.document;
+    else global.document = saved;
+  }
 });
