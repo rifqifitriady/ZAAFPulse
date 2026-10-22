@@ -37,6 +37,12 @@ const { createExperimentStore } = require('./lib/datasets/experiments');
 const { createReplayRunner } = require('./lib/datasets/replay');
 const { createDatasetApi } = require('./lib/datasets/api');
 const { createAutoAdd } = require('./lib/datasets/auto');
+const { createMonitorState } = require('./lib/monitors/state');
+const { createChannels, checkWebhookUrl, parseHeaders } = require('./lib/monitors/channels');
+const { createMonitorApi } = require('./lib/monitors/api');
+const { createMonitors } = require('./lib/monitors');
+const { createAgentControl } = require('./lib/agents/control');
+const { isRef } = require('./lib/secrets');
 const { createPriceSync } = require('./lib/price-sync');
 const { createOpenRouter } = require('./lib/openrouter');
 const { createIntegrations } = require('./lib/integrations');
@@ -383,6 +389,155 @@ if (DEMO) {
   }
   for (const r of seed.experiments) experiments.append(r);
 }
+
+// Monitors: rules on the aggregate data after each index refresh and on the live office every 5 s, alerts to the
+// desktop and an optional webhook, and an automatic pause where the owner turned it on. States, settings and alerts
+// live in .data/ (demo: the throwaway folder). Channel settings are config.json "monitors.channels":
+// { desktop, webhook: { url, headers? } }, where the URL and the headers are secret references only (lib/secrets.js);
+// they are read on every send. ZAAFPULSE_NOTIFY=off sends nothing (the tests set it), and demo mode never notifies
+// or signals.
+const monitorDir = DEMO ? demoDir : path.join(DIR, '.data');
+const monitorState = createMonitorState({
+  file: path.join(monitorDir, 'monitors.json'),
+  alertsFile: path.join(monitorDir, 'alerts.jsonl'),
+  config: () => config,
+});
+const NOTIFY_OFF = process.env.ZAAFPULSE_NOTIFY === 'off';
+const monitorDemo = DEMO ? demo.monitorsDemo() : null;
+if (DEMO) rawCache.value = { ...rawCache.value, monitors: { channels: monitorDemo.channels } };
+// The stored channel settings. A webhook whose URL or headers are not a secret reference (a plain URL typed into
+// config.json) is not used, and the settings page says why.
+function channelConfig() {
+  const m = rawConfig().monitors;
+  const ch = m && typeof m === 'object' && m.channels && typeof m.channels === 'object' ? m.channels : {};
+  const w = ch.webhook && typeof ch.webhook === 'object' ? ch.webhook : null;
+  const ok = !!w && isRef(w.url) && (w.headers == null || isRef(w.headers));
+  return {
+    desktop: ch.desktop !== false,
+    webhook: ok ? { url: w.url, ...(w.headers != null ? { headers: w.headers } : {}) } : null,
+    problem: w && !ok ? 'the webhook in config.json must use secret references' : null,
+  };
+}
+const monitorChannels = createChannels({
+  secrets: createSecrets(),
+  settings: () => {
+    if (DEMO || NOTIFY_OFF) return { desktop: false, webhook: null };
+    const c = channelConfig();
+    return { desktop: c.desktop, webhook: c.webhook };
+  },
+  log: (m) => console.error(m),
+});
+// Agent control is for the owner at this machine: off in server mode, and whenever the dashboard signs in with a
+// password (a proxy, a public URL or ZAAFPULSE_AUTH=1), since other people may reach it then. So password mode counts
+// as server mode here: the rules then never pause an agent (the settings refuse auto-pause, the listing hides it).
+const AGENTS_OFF = SERVER_MODE || auth.mode === 'password';
+const agentControl = createAgentControl({ dataDir: monitorDir, serverMode: AGENTS_OFF, log: (m) => console.error(m) });
+const monitors = createMonitors({
+  indexer,
+  office,
+  evals: evalEngine,
+  config: () => config,
+  state: monitorState,
+  channels: monitorChannels,
+  control: agentControl,
+  log: (m) => console.error(m),
+  demo: DEMO,
+});
+// The routes: rules, channels, alerts and agent control. Demo serves a seeded store of its own (mixed states, five
+// alerts) so the page always has something to show; the engine keeps evaluating into its own file.
+let monitorApiState = monitorState;
+if (DEMO) {
+  const dir = path.join(demoDir, 'monitors-demo');
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(dir, 'monitors.json'), JSON.stringify(monitorDemo.file), { mode: 0o600 });
+  const lines = monitorDemo.alerts.map((a) => `${JSON.stringify(a)}\n`).join('');
+  fs.writeFileSync(path.join(dir, 'alerts.jsonl'), lines, { mode: 0o600 });
+  monitorApiState = createMonitorState({
+    file: path.join(dir, 'monitors.json'),
+    alertsFile: path.join(dir, 'alerts.jsonl'),
+    config: () => config,
+  });
+}
+// A session's working folder and first line, from the index (what candidates() matches on), per index version.
+let sessionMemo = { version: -1, map: new Map() };
+function sessionInfo(source, sid) {
+  if (sessionMemo.version !== indexer.version) {
+    let map = new Map();
+    try {
+      map = require('./lib/aggregate').mergeSessions(indexer.results());
+    } catch {
+      /* no index yet */
+    }
+    sessionMemo = { version: indexer.version, map };
+  }
+  const s = sessionMemo.map.get(`${source}:${sid}`);
+  return s && typeof s.project === 'string' ? { cwd: s.project, first: s.first } : null;
+}
+// Webhook secrets saved from the dashboard go to the secret store as acc.monitors-webhook-url and -headers.
+const monitorSecret = secretResolver({
+  store: DEMO
+    ? () => {}
+    : (service, value) => {
+        try {
+          keychainStore(service, value);
+        } catch {
+          throw Object.assign(new Error('the secret could not be saved in the secret store'), { status: 500 });
+        }
+      },
+});
+const monitorApi = createMonitorApi({
+  state: monitorApiState,
+  monitors,
+  channels: monitorChannels,
+  control: agentControl,
+  trace,
+  sessionInfo,
+  channelSettings: {
+    get: channelConfig,
+    save: ({ desktop, webhook }) => {
+      const m = rawConfig().monitors;
+      const monitorsCfg = {
+        ...(m && typeof m === 'object' ? m : {}),
+        channels: { desktop, ...(webhook ? { webhook } : {}) },
+      };
+      if (DEMO) {
+        rawCache.value = { ...rawCache.value, monitors: monitorsCfg };
+        return;
+      }
+      const raw = { ...rawConfig(), monitors: monitorsCfg };
+      fs.writeFileSync(`${CONFIG_FILE}.tmp`, JSON.stringify(raw, null, 2));
+      fs.renameSync(`${CONFIG_FILE}.tmp`, CONFIG_FILE);
+      rawCache = { mtime: fs.statSync(CONFIG_FILE).mtimeMs, value: raw };
+    },
+  },
+  resolveSecret: (field, input, current) =>
+    monitorSecret('monitors-webhook', { key: field, label: `webhook ${field}`, required: false }, input, current),
+  checkUrl: checkWebhookUrl,
+  checkHeaders: parseHeaders,
+  demo: DEMO ? { candidates: monitorDemo.candidates, paused: monitorDemo.paused } : null,
+  agentsOff: AGENTS_OFF,
+  notifyOff: NOTIFY_OFF,
+  home: os.homedir(),
+});
+// Each pass catches its own failures; this catch is the last line, so a pass can never break a refresh.
+const monitorTick = () =>
+  Promise.resolve()
+    .then(() => monitors.tickAggregate())
+    .catch(() => console.error('monitors: the aggregate pass failed'));
+// The aggregate pass has to run on the refreshed index. The refresh timer is not changed: this waits for it to end.
+// One waiting poller at a time: a refresh that outlasts RESCAN_MS must not stack a poller per interval.
+let monitorTickWaiting = false;
+const monitorTickAfterIndex = () => {
+  if (monitorTickWaiting) return;
+  monitorTickWaiting = true;
+  const t = setInterval(() => {
+    if (indexer.state.indexing) return;
+    clearInterval(t);
+    monitorTickWaiting = false;
+    monitorTick();
+  }, 250);
+  t.unref();
+};
 
 // Second brain sources: Obsidian by default, plus Logseq, Notion, Tana, Roam, mem.ai, Reflect, Heybrain,
 // PARA folders, the RAG knowledge bases and vector databases. Settings in config.json under "brain";
@@ -738,6 +893,18 @@ const handler = async (req, res) => {
       });
       if (hit) return send(res, hit.status, hit.body, hit.type || 'application/json');
     }
+    // Monitors, alerts and agent control, behind the same sign-in. A session is named by its trace key; no raw session
+    // id or path leaves here.
+    {
+      const hit = await monitorApi.route({
+        method: req.method,
+        path: url.pathname,
+        query: url.searchParams,
+        contentType: req.headers['content-type'],
+        readBody: () => readBody(req),
+      });
+      if (hit) return send(res, hit.status, hit.body);
+    }
     if (url.pathname === '/api/logs') {
       return send(res, 200, DEMO ? reqlogs.demoLogs() : reqlogs.logs());
     }
@@ -992,6 +1159,7 @@ const handler = async (req, res) => {
       indexer.refresh().then(() => {
         memo.clear();
         evalTick();
+        monitorTick();
       });
       return send(res, 202, indexer.state);
     }
@@ -1027,8 +1195,13 @@ server.listen(PORT, HOST, () => {
   indexer.refresh().then(() => {
     console.log(`Indexed logs in ${((Date.now() - t) / 1000).toFixed(1)}s`);
     evalTick();
+    monitorTick();
   });
   setInterval(() => indexer.refresh().then(evalTick), RESCAN_MS).unref();
+  setInterval(monitorTickAfterIndex, RESCAN_MS).unref();
+  // The live monitor pass. It reads the office snapshot itself: nothing else polls it (the AI Office page asks on
+  // its own requests), so there is no call to share.
+  setInterval(() => monitors.tickLive().catch(() => console.error('monitors: the live pass failed')), 5000).unref();
   // Live prices: refresh now if the cached list is older than 12 hours, then check hourly. Never in demo mode.
   const syncPrices = () => {
     if (!DEMO && config.pricingSync.enabled && priceSync.stale()) priceSync.refresh();
