@@ -241,6 +241,72 @@ test('the webhook body has exactly seven keys and carries no text', async () => 
   }
 });
 
+// A pause outcome row from the engine (state.note): no state or previous, a code and a reason.
+const pauseRow = (extra = {}) => ({
+  id: 'n1',
+  ts: 1_700_000_000_000,
+  rule: 'cost_burn',
+  instance: 'sess-123',
+  sessionId: 'sess-123',
+  value: 6,
+  threshold: 5,
+  action: 'pause',
+  ok: true,
+  code: 'paused',
+  reason: 'paused',
+  ...extra,
+});
+
+test('a pause outcome shows fixed words, the numbers and the session title, never its reason text', async () => {
+  const r = recorder();
+  const ch = make({ spawn: r.spawn });
+  await ch.notify(pauseRow(), { title: 'acme-web' });
+  await ch.notify(pauseRow({ ok: false, code: 'several', reason: 'could not pause: several candidates' }), {
+    title: 'acme-web',
+  });
+  // An unknown code, with a reason that must not be shown (it could be anything a caller passed).
+  await ch.notify(pauseRow({ ok: false, code: 'refused', reason: 'could not pause: /Users/me/SECRET' }));
+  await ch.notify(pauseRow({ ok: false, code: 'odd', reason: 'SECRET' }));
+  const texts = r.calls.map((c) => c.args[7]);
+  assert.deepEqual(
+    r.calls.map((c) => c.args[6]),
+    Array(4).fill('ZAAFPulse: Cost burn'),
+  );
+  assert.equal(texts[0], 'Agent paused: 6 (limit 5)\nacme-web');
+  assert.equal(texts[1], 'Could not pause the agent: several matching processes: 6 (limit 5)\nacme-web');
+  assert.equal(texts[2], 'Could not pause the agent: the process was gone or changed: 6 (limit 5)');
+  assert.equal(texts[3], 'Could not pause the agent: 6 (limit 5)');
+  for (const t of texts) assert.doesNotMatch(t, /SECRET|\/Users/);
+});
+
+test('a pause outcome never goes to the webhook, which keeps its seven-field state changes', async () => {
+  const srv = await fakeServer({ 'POST /hook': { status: 200 } });
+  try {
+    const r = recorder();
+    const ch = make({
+      spawn: r.spawn,
+      env: { HOOK_URL: `${srv.url}/hook` },
+      settings: { desktop: true, webhook: { url: { env: 'HOOK_URL' } } },
+    });
+    const out = await ch.notify(pauseRow(), { title: 'acme-web' });
+    assert.deepEqual(out, { desktop: true, webhook: false });
+    assert.equal(r.calls.length, 1, 'shown on the desktop');
+    assert.equal(srv.requests.length, 0, 'no webhook call');
+    await ch.notify(alert());
+    assert.equal(srv.requests.length, 1, 'a state change still goes out');
+    assert.equal(Object.keys(srv.requests[0].body).length, 7);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('a row with another action is not shown either', async () => {
+  const r = recorder();
+  const ch = make({ spawn: r.spawn });
+  await ch.notify(pauseRow({ action: 'other' }));
+  assert.equal(r.calls.length, 0);
+});
+
 test('a missing value or session still gives seven keys', async () => {
   const srv = await fakeServer({ 'POST /hook': { status: 200 } });
   try {
