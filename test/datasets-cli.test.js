@@ -386,6 +386,33 @@ test('eval --dataset --ci exits 1 when the run stops at the request cap', async 
   }
 });
 
+// A CI gate must not pass because a flag at the end lost its value (`--ci --require` would check nothing).
+test('eval --dataset exits 2 when a value flag is the last argument or is followed by a flag', async () => {
+  const up = await fakeUpstream(REFERENCE);
+  try {
+    const r = rig(up);
+    const cases = [
+      [...GATE, '--ci', '--require'],
+      [...GATE, '--ci', '--max-requests'],
+      [...GATE, '--ci', '--max-cost'],
+      [...GATE, '--ci', '--model'],
+      [...GATE, '--ci', '--data'],
+      [...GATE, '--data', '--ci'],
+      [...GATE, '--ci', '--dataset'],
+    ];
+    for (const args of cases) {
+      const res = await runCli(args, r);
+      assert.equal(res.code, 2, `${args.join(' ')}: ${res.err}`);
+      assert.ok(res.err.includes(DATASET_USAGE), args.join(' '));
+      assert.equal(res.out.trim(), '', args.join(' '));
+    }
+    assert.equal(calls(up), 0, 'nothing was replayed');
+    assert.equal(records(r.data).length, 0, 'nothing was recorded');
+  } finally {
+    await up.close();
+  }
+});
+
 test('eval --dataset is in the help and the usage text', async () => {
   const up = await fakeUpstream(REFERENCE);
   try {

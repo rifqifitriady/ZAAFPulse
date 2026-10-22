@@ -306,10 +306,11 @@ const commands = {
       const models = flagAll('model');
       const requires = flagAll('require');
       const one = ['dataset', 'max-cost', 'max-requests'].map((n) => flag(n));
-      // A flag that swallowed the next flag (`--dataset --ci`) is a mistake, not a value.
-      const values = [...one, ...models, ...requires];
-      if (values.some((v) => typeof v === 'string' && v.startsWith('-')) || typeof one[0] !== 'string')
-        die(`${DATASET_USAGE}\nEach of these flags needs a value that does not start with "-".`, 2);
+      // Every value flag needs a value: one that is last (`--ci --require`) or swallowed the next flag
+      // (`--dataset --ci`) would otherwise be dropped, and a CI gate would pass having checked nothing.
+      const named = ['--dataset', '--model', '--require', '--max-cost', '--max-requests', '--data'];
+      const missing = argv.some((a, i) => named.includes(a) && (i + 1 >= argv.length || argv[i + 1].startsWith('-')));
+      if (missing) die(`${DATASET_USAGE}\nEach of these flags needs a value that does not start with "-".`, 2);
       process.exitCode = await runDatasetEval({
         dataset: one[0],
         models,
