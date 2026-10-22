@@ -1,59 +1,122 @@
 # Agent run tracing: design
 
-Date: 2026-10-22 · Status: approved (2026-10-22)
+Date: 2026-10-22 · Status: revised 2026-10-22 against main `61bd037`, awaiting owner review · Shared requirements: `2026-10-20-ai-observability-overview.md` (S1–S11, P1–P10)
 
-## Decisions from brainstorming (2026-10-22)
+## Why this revision
+
+The first draft (approved 2026-10-22) was written against `feat/mcp-integrations`, 237 commits behind `main`. Since then `main` has gained most of the ground the draft planned to build:
+
+| The draft planned | Already on `main` |
+|---|---|
+| `lib/trace/tracer.js`: spans, buffer, live events | `lib/otel.js` builds OTel GenAI spans for every gateway request (SERVER), model call (`chat`, CLIENT), collaboration run (`invoke_workflow`, `invoke_agent`, `execute_tool`, `plan`, `judge`) and integration tool call, with an incoming `traceparent` continued. They are thrown away unless OTLP export is on. |
+| `lib/trace/ids.js`: IDs and `traceparent` | `newId`, `hashId`, `parseTraceparent`, `formatTraceparent` in `lib/otel.js` |
+| `lib/trace/sources/claude.js`, `codex.js`: sessions as spans | The trace explorer (`lib/trace/`, sub-project 1) builds spans from Claude Code, Codex, Gateway, Kiro, Gemini CLI and Antigravity logs, with ranged reads, an LRU, workers and opaque keys |
+| A new Traces page with a waterfall | The explorer page `#trace`: session list, span tree with timeline, animated map, detail panel, evals and feedback |
+| `/api/traces*` | `/api/trace/*` (sources, sessions, session, title, content, reveal, live, find) |
+| `acc_traces_search` | `acc_trace_sessions` |
+| Opt-in excerpts stored with spans | The explorer reads text from the original logs on demand; the overview rules that transcript text is never copied (only datasets keep a masked copy) |
+
+What `main` still lacks, and what this design adds, is the part that is really Jaeger's: a **durable trace store** for the gateway, **read-time adjusters and analysis** (critical path, self time, rollups per branch, root cause), a **dependency map**, **progressive-disclosure trace reads over MCP**, and **context propagation** to remote agents and MCP servers with a narrow return channel.
+
+## Decisions
 
 | Question | Decision |
 |---|---|
-| Edition | ZAAFPulse v1 (`ai-command-center`) only. Ragnarok is out of scope. |
-| What is traced | AI agent runs, as a user-facing feature. |
-| Sources | (1) every gateway run, (2) Claude Code and Codex sessions, (3) remote A2A agents and MCP servers through `traceparent` propagation. OTLP ingest from arbitrary outside apps is deferred. |
-| Span content | Metadata by default. Excerpts of prompts, replies and tool arguments are opt-in per source, truncated and masked. |
-| Storage approach | A: append-only daily segment files plus an in-memory trace index (the pattern of Jaeger's Badger and memory backends). |
+| Edition | ZAAFPulse v1 (`ai-command-center`) only. Ragnarok is out of scope. (unchanged) |
+| Tracer | **`lib/otel.js` is the one tracer.** The local store is a second sink next to the OTLP exporter, so one span pipeline feeds both. No `tracer.js`, no `ids.js`. |
+| Local store default | **On**, metadata only (plug and play, no setup). `"tracing": { "enabled": false }` turns it off. |
+| Span content in the store | **None.** Content attributes are stripped before a span is stored, whatever `otel.captureContent` says. The draft's opt-in excerpts are dropped: step text of collaboration runs is already read on demand from `runs.json`, and the overview keeps transcript copies out of every store. |
+| Claude Code and Codex | Not rebuilt: the explorer's adapters stay the only session sources. The analysis runs on **every** source's spans, not only the gateway's. |
+| UI | The existing explorer page gains the analysis and a dependency table. No new page. |
+| Storage approach | A: append-only daily segment files plus an in-memory trace index (Jaeger's Badger and memory backends). (unchanged) |
+| Propagation and return channel | As in the draft: `traceparent` on A2A and MCP calls; OTLP/HTTP JSON back on `POST /v1/traces` for trace IDs this ZAAFPulse started. (unchanged) |
 
 ## Goal
 
 Turn every AI agent run on this machine into a trace that can be searched, opened and explained:
 
 1. which steps a run took (planner, agents, model calls, tool calls, consults, remote agents),
-2. where the time and the money went (critical path, cost and tokens rolled up per branch),
+2. where the time and the money went (critical path, self time, cost and tokens rolled up per branch),
 3. where it failed (the failing span on the critical path, with its error),
-4. how agents, models and tools depend on each other across runs (dependency map).
+4. how agents, models and tools depend on each other across gateway runs (dependency map).
 
-The logic follows Jaeger (CNCF), adapted to one user on one machine with zero dependencies.
+Points 2 and 3 apply to every explorer source (Claude Code, Codex, Gateway, Kiro, Gemini CLI, Antigravity) as far as its spans carry times and statuses.
 
 ## Non-goals
 
-- A general OTLP backend for any application. Only the narrow return channel in [Propagation](#propagation) accepts spans from outside.
-- Sampling. One user produces few enough spans to keep all of them; retention bounds the size instead.
-- Multi-user isolation, tenants, RBAC. That belongs to Ragnarok.
-- Replacing the existing usage and cost accounting. Traces read the same numbers; `usage.js` stays the source of truth for billing.
+- A general OTLP backend. Only the narrow return channel accepts spans from outside.
+- Sampling. Retention bounds the size.
+- Multi-user isolation, tenants, RBAC (Ragnarok).
+- Replacing usage and cost accounting. `usage.js` stays the source of truth for billing.
+- Storing any prompt, reply, tool argument or tool result text.
+- Dependencies across Claude Code or Codex sessions (it would mean building every session's skeleton); the map covers stored gateway traces.
 
 ## Constraints
 
-- **Zero runtime dependencies.** Node 18+ standard library only (`fs`, `crypto`, `readline`). No `node:sqlite`.
-- **Local only.** Data under the existing data dir (`lib/platform.js`), files mode `0600`. The server keeps listening on 127.0.0.1 with the host-header check.
-- **No prompt text by default**, as the collaboration engine does today.
-- Match the existing code style: CommonJS, small single-purpose files, short comments, `node --test`.
+- **Zero runtime dependencies.** Node 18+ standard library only. No `node:sqlite`.
+- **Local only.** Traces live under the data dir (`.data/traces/`), files `0600`, folder `0700`.
+- **No content in the store** (S11). Error messages are kept, masked and cut to 200 characters, as `runs.json` already does.
+- A tracing failure never fails a request or a run.
+- Match the code style: CommonJS, small single-purpose files, short "why" comments, `node --test`, `.prettierrc.json`.
+- Commits and PRs carry no AI attribution (owner rule for this repo).
 
 ## Logic borrowed from Jaeger
 
 | Jaeger | Here |
 |---|---|
 | Trace = spans sharing a `trace_id`; the tree is rebuilt from `parent_span_id` at read time, never stored | Same |
-| `Writer.WriteTraces` / `Reader.GetTrace, FindTraces, FindSpans, GetDependencies` | Same contract in `lib/trace/store.js` and `reader.js` |
-| Search finds trace IDs from an index first, then loads spans | Trace index in memory, spans loaded by byte offset |
-| `trace_id_timestamps` table (min start, max end per trace) | Trace summary carries start and end |
-| Daily indices (Elasticsearch) / TTL (ClickHouse) | One segment file per UTC day; retention deletes whole files |
-| Adjusters: dedupe span IDs, sort, clock skew | `adjust.js`, clock skew applied only to spans from another process |
-| Critical path: from the root, take the last-finishing child, then walk back to children that finished before it started | `analyze.js`, same algorithm |
-| Dependency links: count parent→child pairs whose service differs | Edges between agents, models and tools, with counts, errors and p95 duration |
-| MCP tools with progressive disclosure (search → topology → critical path → span details) | Two `acc_*` MCP tools shaped the same way |
+| `Writer.WriteTraces` / `Reader.GetTrace, FindTraces, GetDependencies` | `lib/trace/store.js` writes and reads stored traces; the explorer registry finds and opens them |
+| Search finds trace IDs from an index first, then loads spans | Trace index in memory, spans loaded by byte range |
+| `trace_id_timestamps` (min start, max end per trace) | The trace summary carries start and end |
+| Daily indices / TTL | One segment file per UTC day; retention deletes whole files |
+| Adjusters: dedupe span IDs, sort, clock skew | `lib/trace/adjust.js`; clock skew only for spans whose service differs from the parent's |
+| Critical path: from the root, take the last-finishing child, then walk back to children that finished before it started | `lib/trace/analyze.js`, same algorithm |
+| Dependency links: parent→child pairs whose service differs | Edges from agents to models, tools, agents and remote services, with counts, errors and p95 |
+| MCP tools with progressive disclosure (search → topology → critical path → span details) | `acc_trace_sessions` (exists) and a new `acc_trace_get` with views |
 
-## Data model
+## Architecture
 
-### Span (one NDJSON line in a segment file)
+```
+gateway request ──► lib/otel.js (one tracer, AsyncLocalStorage context)
+                      │ span records
+                      ├──► OTLP exporter (only when otel.enabled)          [exists]
+                      └──► lib/trace/recorder.js ──► lib/trace/store.js    [new]
+                             strips content, buffers,      .data/traces/YYYY-MM-DD.ndjson
+                             remembers trace IDs           .data/traces/index.json (snapshot)
+                                   ▲
+              POST /v1/traces ─────┘ (return channel, known trace IDs only)
+
+explorer registry (lib/trace/index.js)
+   ├── claude, codex, kiro, gemini, antigravity adapters                   [exist]
+   └── gateway adapter ── stored traces (store)  +  older runs/requests      [extended]
+         │
+         ▼ skeleton (explorer span model)
+   adjust.js ─► analyze.js ─► `analysis` next to the spans                  [new]
+         │
+         ├── /api/trace/session (+ analysis), /api/trace/deps                [extended / new]
+         ├── public/traceview.js: critical path, self time, branch totals,
+         │   root cause, dependency table                                     [extended]
+         └── acc_trace_get (MCP)                                              [new]
+```
+
+### The local sink in `lib/otel.js`
+
+- `createOtel({ ..., sink })` takes `{ enabled() → bool, add(record) }`. Spans are produced when export is on **or** the sink is enabled; each finished span goes to the exporter when there is one and to the sink when it is enabled.
+- With export off, request handling behaves as if `captureContent` were false: no request body is copied, no reply text is kept.
+- `mcp.js` (stdio) gets no sink: only the server process writes the store.
+
+### Complete trees
+
+Two gaps in today's spans would make the analysis wrong, so they are closed:
+
+1. **Model calls sit beside their agent, not under it.** Today a model call's `chat` span is a child of the request span. A new `otel.within(parent, fn, chatSpanId)` runs code with a given parent span, so `chat` spans nest under the agent or step that made them.
+2. **A collaboration run's trace ID depends on the request that exports it.** A run gets a fixed trace context when it starts (`run.otel = { traceId, spanId }`, the request span or a stable hash), kept in `runs.json`. Its spans keep their stable IDs (`hashId(runId:spanId)`), and the gateway's `chat` span for a run's model call takes the ID of the run's own chat span, so the explorer can link step text to it.
+
+Also:
+- The export of a run uses this execution's spans in full, not `run.trace`, which stays capped at 800 for the live run view.
+- A standalone agent run (no collaboration run) gets `invoke_agent` and `execute_tool` spans too, through a small span book with the same interface as a run's `rt.span`.
+
+### Span record (one NDJSON line in a segment)
 
 ```json
 {"t":"4bf92f3577b34da6a3ce929d0e0e4736","s":"00f067aa0ba902b7","p":"b7ad6b7169203331",
@@ -64,150 +127,109 @@ The logic follows Jaeger (CNCF), adapted to one user on one machine with zero de
 
 | Field | Meaning |
 |---|---|
-| `t` | Trace ID, 16 bytes as 32 hex characters (W3C) |
-| `s` / `p` | Span ID and parent span ID, 8 bytes as 16 hex characters; `p` is `null` for the root |
-| `n` | Name, OpenTelemetry GenAI style: `invoke_workflow`, `plan`, `invoke_agent <id>`, `chat <model>`, `execute_tool <name>`, `judge` |
-| `k` | Kind: `internal`, `client` (outgoing call to a remote agent or MCP server), `server` |
-| `st` | Start, **microseconds** since the Unix epoch. Nanoseconds do not fit a JSON number without losing precision; microseconds do (Jaeger uses the same unit) |
-| `d` | Duration in microseconds |
-| `ok` / `err` | Status; `err` is the error message cut to 200 characters |
-| `src` | `gateway`, `claude`, `codex`, `remote` |
-| `svc` | Service: `zaafpulse`, `claude-code`, `codex`, or the remote agent's host |
-| `a` | Attributes: `gen_ai.*` names where one exists, `zp.*` otherwise (`zp.cost_usd`, `zp.depth`, `zp.handoff_to`, `zp.timing`) |
-| `x` | Optional excerpt, only when capture is on: `{ "in": "...", "out": "..." }`, each at most `maxExcerptBytes` |
+| `t` / `s` / `p` | Trace ID (32 hex), span ID (16 hex), parent span ID or `null` |
+| `n` | Span name as `lib/otel.js` names it |
+| `k` | `internal`, `server`, `client` |
+| `st` / `d` | Start and duration, **microseconds** (nanoseconds do not fit a JSON number exactly; Jaeger uses microseconds) |
+| `ok` / `err` | Status; `err` masked, at most 200 characters |
+| `src` / `svc` | `gateway` or `remote`; the service (`zaafpulse`, or a remote service's `service.name`) |
+| `a` | The span's attributes, minus content attributes (`gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.system_instructions`, `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`) |
 
 ### Trace summary (one entry in the trace index)
 
-`traceId, src, svc, root (name), start, end, spans, errors, tokensIn, tokensOut, costUSD, models[], agents[], tools[], ref`
+`traceId, src, svc, root, rootStart, start, end, spans, errors, toolCalls, tokensIn, tokensOut, costUSD, models[], agents[], tools[], runId, ref`
 
-`ref` points at the data: for stored traces `{ segment, offsets[] }`; for Claude Code and Codex sessions `{ file, sessionId }` (see [Session sources](#session-sources)).
+Tokens and cost come from `chat` spans only, because agent and workflow spans repeat their children's totals. `runId` is the `zaafpulse.run.id` of a run's root. `ref` maps each segment to the byte range the trace covers in it.
 
-## Components
+### Explorer integration
 
-| File | Responsibility |
-|---|---|
-| `lib/trace/ids.js` | Generate trace and span IDs (`crypto.randomBytes`), derive stable IDs from a string (SHA-256, first 16 or 8 bytes), parse and format `traceparent` |
-| `lib/trace/tracer.js` | `startTrace(name, attrs)`, `startSpan(name, attrs, parent)`, `span.end(more, err)`. Spans are buffered and handed to the store every second or every 500 spans. Emits the same live events the collaboration UI already listens to |
-| `lib/trace/store.js` | Writer: append to `traces/YYYY-MM-DD.ndjson`, record byte offsets, update the trace summary. Index snapshot to `traces/index.json` every 5 minutes and on shutdown; rebuilt by scanning segments when the snapshot is missing, older than the newest segment, or unreadable (a truncated last line is skipped). Retention: delete the oldest segments past `retentionDays` (default 14) or `maxBytes` (default 500 MB), and drop their summaries |
-| `lib/trace/reader.js` | `getTrace(id)`, `findTraces(query)`, `findSpans(query)`, `getDependencies(range)`. `findTraces` filters the in-memory index (source, service, root name, agent, model, tool, errors only, min duration, min cost, time range, limit). `findSpans` scans only the segments inside the time range and stops at `limit` |
-| `lib/trace/adjust.js` | Applied at read time, in order: dedupe span IDs, sort children by start, clock-skew correction for spans whose `svc` differs from the parent's (Jaeger's rule: centre the child inside the parent when it falls outside it), mark orphans (parent missing) and attach them under the root |
-| `lib/trace/analyze.js` | Build the tree; critical path; self time; tokens and cost rolled up per subtree; error root cause = the deepest failed span on the critical path, else the earliest failed span |
-| `lib/trace/sources/claude.js` | Claude Code session JSONL → spans (below) |
-| `lib/trace/sources/codex.js` | Codex session JSONL → spans (below) |
-| `lib/trace/propagate.js` | Inject `traceparent` into outgoing A2A requests and MCP calls; accept returned spans on the return channel |
-| `lib/trace/capture.js` | Decide whether to keep an excerpt, cut it, and mask secrets with `lib/secrets.js` |
+- **Gateway rows.** The gateway adapter lists one row per stored trace (`trace:<traceId>`). Older runs and requests still come from `runs.json` and the usage log: a run is skipped when the store holds its trace (`runId`), and a request is skipped when its time falls inside the store's covered window (first to last stored trace). So nothing shows twice, history from before the upgrade stays, and turning tracing off brings the old rows back for new traffic.
+- **Row titles** hold the root span name and counts, never a task or a prompt. Rows carry **tags** (agent IDs, model names, tool names, masked like a title) that the existing search box matches.
+- **Stored skeletons** are converted to the explorer span model (`kind`, `op`, `name`, `start`/`end` in ms, `status`, `model`, `provider`, `usage`, `cost`, `tool`, plus `service`), then adjusted. When the trace is a run that `runs.json` still holds, step text and the answer are linked as today.
+- **Analysis** is computed when a skeleton is sealed and cached with it: the response of `/api/trace/session` gains `analysis = { rootSpanId, criticalPath: [{ spanId, start, end }], selfTime: { spanId: ms }, rollup: { spanId: { tokensIn, tokensOut, costUSD, spans, errors } }, rootCause: { spanId, name, error, onCriticalPath } | null }`. For a skeleton that holds one turn, the turn span is the root of the analysis.
+- **Search**: `/api/trace/sessions` gains `minMs` and `minCost`.
+- **Dependencies**: `GET /api/trace/deps?range=` returns `{ nodes: [{ id, kind, label, count }], edges: [{ from, to, count, errors, p95Ms }] }` over stored traces in the range (at most 500 traces). Demo mode returns a fixed sample.
 
-## Coverage of gateway runs
+### UI (`public/traceview.js`)
 
-- The gateway's `llm()` (`lib/gateway/index.js`) and `runAgent()` (`lib/gateway/orchestrator.js`) take a trace context from `ctx`. When none is present, the entry point starts a new trace, so a plain chat, a single-agent run and a workflow run each become a trace, not only collaboration runs.
-- The collaboration engine's `rt.span` becomes a thin adapter over `tracer.js`. Its live `span` / `span-end` events and the shapes the UI reads stay the same.
-- Existing `run.trace` arrays in `runs.json` stay as they are. New runs store `traceId` (and `rootSpanId`) next to the live `run.trace` array, which keeps its cap of 800 spans because the existing run view reads it; the trace store has the full trace.
-- The limits of 800 spans per run and 200 runs go away for traces; retention replaces them.
+- Rows on the critical path are marked (an accent on the timeline bar), and the tree header shows the critical path's length.
+- The detail line of a span adds its self time and, for a span with children, its branch totals (cost, tokens, errors).
+- A notice above the tree names the root cause with a button that selects it.
+- The right half gets a **Map / Dependencies** switch; Dependencies is a table (from, to, calls, failures, p95) for the chosen time range.
+- Everything is text built with `esc()` / `textContent` (S1).
 
-## Session sources
+### MCP
 
-Claude Code and Codex sessions are **not copied**. The existing indexer already scans `~/.claude/projects` and `~/.codex/sessions`; it is extended to write a trace summary per session (incrementally, by file size and mtime). Spans are built from the original JSONL when a trace is opened.
+`acc_trace_get { key, turn?, view, span? }` on the `acc` connector, for sessions listed by `acc_trace_sessions` (so: no gateway sessions there, as today):
 
-Claude Code mapping:
+- `topology`: span ID, parent, kind, name, duration and status; no attributes;
+- `critical_path`: the sections with names and durations;
+- `errors`: failed spans and the root cause;
+- `span`: one span's fields (model, tool, usage, cost, self time, rollup); never text or content IDs.
 
-| Session content | Span |
-|---|---|
-| The session | root `invoke_agent claude-code`, `svc: claude-code` |
-| A user prompt | `turn` |
-| An assistant message with usage | `chat <model>`, tokens and cost from the existing pricing |
-| A `tool_use` and its `tool_result` | `execute_tool <name>`, from the `tool_use` timestamp to the `tool_result` timestamp |
-| A subagent (sidechain messages, or the Agent/Task tool) | nested `invoke_agent <type>` under the tool span |
+### Propagation and the return channel
 
-- IDs are derived, so they are the same every time: trace ID = hash of `sessionId`, span ID = hash of the message `uuid` (or `tool_use` id).
-- Timestamps in the logs have millisecond resolution and mark when a message was written, not when a model call started. A `chat` span starts at the previous event and ends at its own message; such spans carry `zp.timing: "estimated"`, and the UI shows that.
-- Codex follows the same mapping from `turn_context`, `user_message`, `function_call` / `function_call_output` and `token_count`.
-- Excerpts for these sources are read from the original file at open time and never stored.
+- **A2A**: `runRemote` records a CLIENT span `a2a <agent id>` (`rpc.system: a2a`, `server.address`, `gen_ai.agent.id`) under the calling agent and sends its `traceparent` header.
+- **MCP over Streamable HTTP**: `otel.toolCall` already makes a CLIENT span per integration call; its `traceparent` goes to `lib/mcp/client.js` as a header and as `params._meta.traceparent` on `tools/call`.
+- **Return channel**: `POST /v1/traces`, OTLP/HTTP JSON, ahead of the gateway's own routes:
+  1. only from this machine (remote address `127.0.0.1` / `::1`);
+  2. only spans whose trace ID the recorder saw in the last 24 hours (a 128-bit ID that was only ever sent to the callee works as a capability); the rest are dropped and counted;
+  3. bodies over 1 MB are refused, and at most 2,000 spans per trace are accepted from outside.
 
-## Propagation
+  Accepted spans are stored with `src: "remote"` and their own `svc`, so clock skew is corrected for them and the dependency map shows the remote service.
 
-Outgoing calls carry the current span as W3C trace context:
-
-- **A2A remote agents**: header `traceparent: 00-<traceId>-<spanId>-01` on the JSON-RPC POST in `runRemote`.
-- **MCP over Streamable HTTP** (`lib/mcp/client.js`): the same header, plus `params._meta.traceparent` on `tools/call`.
-
-The caller always records a `client` span with the remote latency and status, so the tree has the remote step even when the remote side sends nothing back.
-
-**Return channel** (so the tree does not stop at the process boundary): `POST /v1/traces` accepting OTLP/HTTP JSON on 127.0.0.1, with three guards:
-
-1. only spans whose trace ID ZAAFPulse itself started in the last 24 hours are kept; the rest are dropped and counted;
-2. bodies above 1 MB and more than 2,000 spans per trace from outside are refused;
-3. the same host-header check as the rest of the server.
-
-A remote agent or MCP server that exports OpenTelemetry can point its exporter at this endpoint. Others still appear as the caller's `client` span.
-
-## Content capture
+## Configuration
 
 ```json
 "tracing": {
+  "enabled": true,
   "retentionDays": 14,
-  "maxBytes": 524288000,
-  "capture": { "gateway": false, "claude": false, "codex": false },
-  "maxExcerptBytes": 2048
+  "maxBytes": 524288000
 }
 ```
 
-When capture is on for the gateway, `invoke_agent`, `chat` and `execute_tool` spans keep `x.in` / `x.out`, cut to `maxExcerptBytes` and masked with the existing secret masking. Off by default.
-
-## API, MCP tools and UI
-
-HTTP (same server, same auth):
-
-- `GET /api/traces?src=&agent=&model=&tool=&errors=1&minMs=&minCost=&from=&to=&limit=` → summaries
-- `GET /api/traces/<id>` → adjusted spans, tree, critical path, rollups, error root cause
-- `GET /api/traces/deps?from=&to=` → dependency edges
-- `GET /api/spans?name=&tool=&errors=1&from=&to=&limit=` → matching spans
-
-MCP (`mcp.js`, `acc` connector), shaped for an agent's context window as Jaeger's MCP tools are:
-
-- `acc_traces_search`: summaries only.
-- `acc_trace_get` with `view`: `topology` (names and durations, no attributes), `critical_path`, `errors`, or `span` (one span's attributes and excerpt).
-
-UI: a **Traces** page: the search list with filters; a trace view with a waterfall, the critical path highlighted, cost and tokens per branch, and the error root cause called out; a dependency map of agents, models and tools (in the first version, a table of edges: from, to, calls, failures, p95). It follows the dashboard's existing style and reuses the collaboration view's span rendering.
+All three are optional; these are the defaults.
 
 ## Error handling
 
-- A write failure never fails the run: spans go to a bounded in-memory buffer (10,000 spans), and the overflow is dropped and counted in `/api/traces/stats`.
-- A corrupt or truncated segment line is skipped on read and on index rebuild.
-- A session file that disappeared makes `getTrace` answer 404 and the next indexer pass drop the summary.
-- Paths in a session `ref` are checked to stay under the session roots before reading.
+- A write failure never fails a run: spans wait in a bounded buffer (10,000), the overflow is dropped and counted (`dropped`), and write errors are counted (`writeErrors`) and logged at most once a minute.
+- A corrupt or truncated segment line is skipped when indexed; a line cut short by a crash is closed before the next append.
+- A stored trace whose segments were deleted by retention answers 404 ("session file changed, rescanning"), as the explorer does for a moved log.
+- Analysis never throws into a response: a failure leaves `analysis: null`.
 
 ## Performance budget
 
 | Item | Budget |
 |---|---|
-| Tracer overhead per span | under 0.1 ms (buffer append only) |
+| Sink overhead per span | under 0.1 ms (convert and buffer) |
 | Trace index memory | about 400 bytes per trace: 100,000 traces ≈ 40 MB |
-| Search over the index | under 50 ms for 100,000 traces |
-| Open a trace of 5,000 spans | under 300 ms, analysis included |
+| Open a stored trace of 5,000 spans | under 300 ms, analysis included |
+| Analysis of a 5,000-span explorer skeleton | under 100 ms, cached with the skeleton |
 | Index rebuild from 500 MB of segments | under 30 s, at startup only |
 
 ## Testing
 
-`node --test`, one test file per module:
+`node --test`, one file per new module, all fixtures synthetic:
 
-- `ids`: format, stable derivation, `traceparent` round trip and rejection of malformed headers.
-- `store`: append and read back by offset; rebuild after a truncated last line; retention by age and by size.
-- `adjust`: duplicate IDs, orphans, clock skew cases taken from Jaeger's documented rules.
-- `analyze`: critical path on fixtures (sequential children, overlapping children, a child outliving its parent); rollups; error root cause.
-- `sources/claude` and `sources/codex`: fixture JSONL → expected spans, subagents, estimated timing flag.
-- `propagate`: header present on fake A2A and MCP servers; return channel keeps known trace IDs, drops unknown ones, refuses oversize bodies.
-- API: the four endpoints against a seeded store; the two MCP tools.
+- `trace-summary`, `trace-store`, `trace-recorder`: summaries, append and read back by byte range, catch-up from a snapshot, a truncated line, retention by age and size, content stripping, buffer limits, known trace IDs.
+- `otel` (extended): spans reach the sink with export off; nothing is copied from request bodies then; `within` parents model calls; a run keeps one trace ID across export and resume.
+- `trace-adjust`, `trace-analyze`: duplicates, orphans, clock skew; critical path on sequential, overlapping and overflowing children; rollups from chat spans only; self time; root cause.
+- `trace-gateway` (extended): stored rows, de-duplication against runs and requests, skeleton conversion, run text linking.
+- `trace-api`, `trace-ui` (extended): `analysis` in the session response, `minMs` / `minCost`, `/api/trace/deps`, critical-path rows and the root-cause notice built without HTML from content.
+- `trace-mcp`: the four views; no text and no content IDs.
+- `trace-propagate`, `trace-otlp`: headers on fake A2A and MCP servers; the return channel keeps known trace IDs, drops unknown ones, refuses oversize bodies and calls from elsewhere.
 
 ## Phases
 
-1. **Core**: `ids`, `tracer`, `store`, `reader`; every gateway run traced; collaboration adapter; `/api/traces` list and get; a basic waterfall.
-2. **Sessions**: Claude Code and Codex sources through the indexer.
-3. **Analysis**: `adjust`, `analyze` (critical path, rollups, root cause), dependency map, the two MCP tools.
-4. **Propagation**: `traceparent` on A2A and MCP, the return channel.
+1. **Store**: summary, store, recorder, the sink in `lib/otel.js`, server wiring.
+2. **Complete trees**: run trace context, model calls in place, standalone agent runs.
+3. **Analysis**: adjusters and analysis on the explorer span model.
+4. **In the explorer**: gateway rows from the store, analysis and search in the API, the UI, `acc_trace_get`.
+5. **Across processes**: `traceparent` on A2A and MCP, the return channel, documentation.
 
 Each phase ships on its own and leaves the dashboard working.
 
-## Resolved at review (2026-10-22)
+## Open points for the owner
 
-- Retention defaults stay at 14 days and 500 MB.
-- The narrow OTLP return channel of phase 4 is accepted as designed.
+- The local store is on by default. It holds no content, but it is a new file set under `.data/` (14 days, at most 500 MB).
+- The return channel trusts the trace ID as a capability for callers on this machine. A gateway API key requirement could be added later if a remote agent on another machine needs it.
