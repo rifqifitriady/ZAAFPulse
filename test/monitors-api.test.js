@@ -10,6 +10,7 @@ const net = require('net');
 const path = require('path');
 const { spawn } = require('child_process');
 const { createMonitorApi } = require('../lib/monitors/api');
+const { createAgentControl } = require('../lib/agents/control');
 const { createMonitorState } = require('../lib/monitors/state');
 const { checkWebhookUrl, parseHeaders } = require('../lib/monitors/channels');
 const { secretResolver } = require('../lib/integration-config');
@@ -436,7 +437,7 @@ test('monitor api: candidates and agent actions', async () => {
   assert.deepEqual(kiro.body, { candidates: [], canPause: true, reason: 'unsupported' });
   const r = await s.call(`/api/agents/candidates?key=${KEY}`);
   assert.equal(r.status, 200);
-  assert.deepEqual(s.calls[0], ['candidates', { cwd: `${HOME}/code/shop`, firstTs: 2000 }]);
+  assert.deepEqual(s.calls[0], ['candidates', { cwd: `${HOME}/code/shop`, firstTs: 2000, source: 'claude' }]);
   const [c] = r.body.candidates;
   assert.equal(c.cwd, '~/code/shop');
   assert.ok(c.command.startsWith('~/.local/bin/claude --flag'));
@@ -470,6 +471,58 @@ test('monitor api: candidates and agent actions', async () => {
     { pid: 4242, startTime: 1000, app: 'claude', by: 'owner', since: 1, sessionKey: KEY },
   ]);
   assert.deepEqual(status.body.agents, { available: true, pause: true, reason: null });
+  s.done();
+});
+
+// A start time comes from an age in whole seconds, so two reads of one process can be a second apart: the paused
+// flag must still find it.
+test('monitor api: a paused process read a second later is still paused', async () => {
+  const later = [{ pid: 4242, startTime: 2000, app: 'claude', by: 'owner', since: 1, sessionId: SID }];
+  const s = setup({ control: { paused: async () => later } });
+  const r = await s.call(`/api/agents/candidates?key=${KEY}`);
+  assert.equal(r.body.candidates[0].startTime, 1000);
+  assert.equal(r.body.candidates[0].paused, true);
+  later[0].startTime = 3001; // more than the 2 s tolerance: another process
+  assert.equal((await s.call(`/api/agents/candidates?key=${KEY}`)).body.candidates[0].paused, false);
+  s.done();
+});
+
+test('monitor api: with the real control, candidates and status name a paused process with one start time', async () => {
+  // The clock's sub-second phase changes on every read of the process table: 600.4 s, then 600.6 s, with an age of
+  // 599 s, which computes the start as 1 s, then 2 s.
+  let reads = 0;
+  const rows = async () => {
+    reads++;
+    return [
+      { pid: 4242, cpu: 1, rssKB: 1, upSec: 599, args: '/Users/owner/.local/bin/claude', cwd: `${HOME}/code/shop` },
+    ];
+  };
+  const ctl = createAgentControl({
+    processes: { rows },
+    platform: 'linux',
+    inDocker: false,
+    now: () => 600_400 + 200 * (reads % 2),
+    kill: () => true, // records nothing and signals nothing
+    audit: { record() {} },
+  });
+  const s = setup({
+    control: { candidates: ctl.candidates, paused: ctl.paused, pause: ctl.pause, resume: ctl.resume, stop: ctl.stop },
+  });
+  const first = await s.call(`/api/agents/candidates?key=${KEY}`);
+  const [c] = first.body.candidates;
+  assert.equal(c.paused, false);
+  assert.equal((await s.post('/api/agents/pause', { key: KEY, pid: c.pid, startTime: c.startTime })).status, 200);
+  for (let i = 0; i < 3; i++) {
+    const again = (await s.call(`/api/agents/candidates?key=${KEY}`)).body.candidates[0];
+    assert.equal(again.startTime, c.startTime);
+    assert.equal(again.paused, true);
+    const st = (await s.call('/api/monitors/status')).body;
+    assert.deepEqual(
+      st.paused.map((p) => [p.pid, p.startTime]),
+      [[4242, c.startTime]],
+    );
+  }
+  assert.ok(reads >= 8, 'the table was read on every call');
   s.done();
 });
 

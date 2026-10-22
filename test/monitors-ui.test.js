@@ -13,6 +13,8 @@ const {
   monParamValue,
   monAgentNote,
   monActionError,
+  monSameProc,
+  pausedEntryFor,
 } = require('../public/monitorsview');
 
 const SRC = path.join(__dirname, '..', 'public', 'monitorsview.js');
@@ -231,4 +233,20 @@ test('monitorsview.js builds no HTML from alert, session or process text without
   for (const m of src.matchAll(/\.innerHTML\s*=\s*([^;]+);/g))
     assert.doesNotMatch(m[1], /message|error|\.title|\.command|\.cwd/, `innerHTML = ${m[1]}`);
   assert.doesNotMatch(src, /insertAdjacentHTML|outerHTML\s*=|document\.write/);
+});
+
+// A start time comes from an age in whole seconds, so the same process can come back a second off between reads.
+test('monSameProc and pausedEntryFor: a start time a second apart is the same paused process', () => {
+  const cand = { pid: 4242, startTime: 1_000_000, app: 'claude', paused: false };
+  const paused = [{ pid: 4242, startTime: 1_001_000, app: 'claude', by: 'owner' }];
+  assert.equal(monSameProc(cand, paused[0]), true);
+  assert.equal(monSameProc(cand, { ...paused[0], startTime: 998_000 }), true, 'within 2 s either way');
+  assert.equal(monSameProc(cand, { ...paused[0], startTime: 1_002_001 }), false);
+  assert.equal(monSameProc(cand, { ...paused[0], pid: 4243 }), false);
+  assert.equal(monSameProc(cand, { pid: 4242 }), false, 'no start time');
+  assert.equal(monSameProc(null, cand), false);
+  assert.equal(pausedEntryFor(cand, paused).by, 'owner');
+  assert.equal(pausedEntryFor(cand, [{ ...paused[0], startTime: 1_005_000 }]), null);
+  assert.equal(pausedEntryFor({ ...cand, paused: true }, []).pid, 4242, 'the candidate says so itself');
+  assert.equal(pausedEntryFor(null, paused), null);
 });

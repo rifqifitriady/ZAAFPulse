@@ -241,7 +241,7 @@ test('engine: a live cost_burn with auto-pause and one candidate pauses it once,
     assert.equal(burn[0].alert.state, 'triggered');
     assert.equal(burn[0].alert.value, 6, 'only the last 10 minutes count');
     assert.equal(burn[0].title, 'acme-web', 'the notification title is the masked project name');
-    assert.deepEqual(e.calls.candidates, [{ cwd: '/work/a', firstTs: T0 - 60 * MIN }]);
+    assert.deepEqual(e.calls.candidates, [{ cwd: '/work/a', firstTs: T0 - 60 * MIN, source: 'claude' }]);
     assert.equal(e.calls.pause.length, 1);
     assert.deepEqual(e.calls.pause[0], {
       target: { pid: 4242, startTime: T0 - 2 * 60 * MIN },
@@ -366,7 +366,7 @@ test('engine: daily_cost auto-pause goes to the costliest running session today'
     await e.monitors.tickLive();
     await e.monitors.tickAggregate();
     assert.equal(ruleAlerts(e.sent, 'daily_cost')[0].alert.state, 'triggered');
-    assert.deepEqual(e.calls.candidates, [{ cwd: '/work/dear', firstTs: T0 - 80 * MIN }]);
+    assert.deepEqual(e.calls.candidates, [{ cwd: '/work/dear', firstTs: T0 - 80 * MIN, source: 'claude' }]);
     assert.deepEqual(e.calls.pause[0].meta, { by: 'rule', rule: 'daily_cost', sessionId: 'dear' });
     e.clock.t += MIN;
     await e.monitors.tickAggregate();
@@ -396,7 +396,7 @@ test('engine: daily_cost skips a finished session and pauses the costliest one s
   try {
     await e.monitors.tickLive();
     await e.monitors.tickAggregate();
-    assert.deepEqual(e.calls.candidates, [{ cwd: '/work/cheap', firstTs: T0 - 90 * MIN }]);
+    assert.deepEqual(e.calls.candidates, [{ cwd: '/work/cheap', firstTs: T0 - 90 * MIN, source: 'claude' }]);
     assert.deepEqual(e.calls.pause[0].meta, { by: 'rule', rule: 'daily_cost', sessionId: 'cheap' });
   } finally {
     e.cleanup();

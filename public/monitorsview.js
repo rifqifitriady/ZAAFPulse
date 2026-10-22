@@ -520,14 +520,26 @@ function monTarget(key, name) {
     tone: '',
   };
 }
+// One process: the same pid and start times within 2 s, the server's tolerance (lib/agents/control.js sameProcess).
+// A start time comes from an age in whole seconds, so two reads of one process can differ by a second.
+const MON_SAME_START_MS = 2000;
+function monSameProc(a, b) {
+  if (!a || !b || a.pid !== b.pid) return false;
+  return monNum(a.startTime) && monNum(b.startTime) && Math.abs(a.startTime - b.startTime) <= MON_SAME_START_MS;
+}
 const monCandId = (c) => `${c.pid}:${c.startTime}`;
-const monPicked = (t) => t.cands.find((c) => monCandId(c) === t.pick) || null;
-// Paused if the candidate says so or the server's paused list has the same process.
-function monPausedEntry(c) {
+function monPicked(t) {
+  if (typeof t.pick !== 'string') return null;
+  const [pid, startTime] = t.pick.split(':').map(Number);
+  return t.cands.find((c) => monSameProc(c, { pid, startTime })) || null;
+}
+// Paused if the candidate says so or the paused list has the same process.
+function pausedEntryFor(c, list) {
   if (!c) return null;
-  const p = monPausedList().find((x) => x.pid === c.pid && x.startTime === c.startTime);
+  const p = (Array.isArray(list) ? list : []).find((x) => monSameProc(x, c));
   return p || (c.paused ? { pid: c.pid, startTime: c.startTime, app: c.app, by: null } : null);
 }
+const monPausedEntry = (c) => pausedEntryFor(c, monPausedList());
 
 async function monLoadTarget(t) {
   t.loading = true;
@@ -545,8 +557,9 @@ async function monLoadTarget(t) {
     t.canPause = r.canPause !== false;
     t.reason = typeof r.reason === 'string' ? r.reason : null;
     // One candidate is the session's process; with several the owner chooses, nothing is picked for them.
-    if (t.cands.length === 1) t.pick = monCandId(t.cands[0]);
-    else if (!monPicked(t)) t.pick = null;
+    // A kept pick takes the reread start time, so the radio button still shows it.
+    const kept = t.cands.length === 1 ? t.cands[0] : monPicked(t);
+    t.pick = kept ? monCandId(kept) : null;
   } catch (e) {
     if (e.status === 403) t.off = true;
     else t.error = `Could not look for the agent: ${monText(e.message)}`;
@@ -761,14 +774,14 @@ function monPaintStrips() {
 }
 
 async function monStripAct(action, pid, startTime) {
-  const p = monPausedList().find((x) => x.pid === pid && x.startTime === startTime);
+  const p = monPausedList().find((x) => monSameProc(x, { pid, startTime }));
   if (!p || MON.strip.busy) return;
   let c = { pid, startTime, app: p.app, cwd: null };
   // The confirmation names the folder; the paused list has none, the candidates of its session do.
   if (action === 'stop' && p.sessionKey) {
     try {
       const r = await monApi(`/api/agents/candidates?key=${encodeURIComponent(p.sessionKey)}`);
-      const m = (r.candidates || []).find((x) => x && x.pid === pid && x.startTime === startTime);
+      const m = (r.candidates || []).find((x) => monSameProc(x, { pid, startTime }));
       if (m) c = m;
     } catch {
       /* the folder stays unknown */
@@ -1121,4 +1134,6 @@ if (typeof module !== 'undefined')
     monAgentNote,
     monActionError,
     monMeasure,
+    monSameProc,
+    pausedEntryFor,
   };
