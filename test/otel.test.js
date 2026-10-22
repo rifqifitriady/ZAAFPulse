@@ -840,3 +840,24 @@ test('otel: a collaboration run keeps one trace, and its model calls sit under t
     await t.close();
   }
 });
+
+test('otel: a standalone agent run has an invoke_agent span with its model call under it', async () => {
+  const got = [];
+  const t = await gatewaySetup(() => ({ body: completion('Here is the refund policy.') }), { enabled: false }, {
+    enabled: () => true,
+    add: (r) => got.push(r),
+  });
+  try {
+    const r = await t.call('/v1/agents/customer-service/run', { input: 'refund policy?' });
+    assert.equal(r.status, 200, r.text);
+    await sleep(30);
+    const server = got.find((s) => s.kind === 2);
+    const agent = got.find((s) => s.name === 'invoke_agent customer-service');
+    assert.ok(agent, got.map((s) => s.name).join(', '));
+    assert.equal(agent.parentSpanId, server.spanId);
+    const chat = got.find((s) => s.name === 'chat fake/m');
+    assert.equal(chat.parentSpanId, agent.spanId);
+  } finally {
+    await t.close();
+  }
+});

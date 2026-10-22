@@ -124,3 +124,23 @@ test('sink: a run exported with its fixed trace context and an explicit span lis
   assert.match(own.traceId, /^[0-9a-f]{32}$/);
   assert.deepEqual(o.runContext('run_9'), { traceId: own.traceId, spanId: '', sampled: true });
 });
+
+test('sink: a span book nests agent, tool and model spans like a run does', () => {
+  const { o, got } = setup();
+  const book = o.spanBook();
+  const agent = book.span('invoke_agent a', { 'gen_ai.operation.name': 'invoke_agent', 'zp.agent': 'a' });
+  const tool = book.span('execute_tool t', { 'gen_ai.operation.name': 'execute_tool' }, agent.id);
+  book.within(tool.id, () => o.toolCall('mcp_x', { id: 'm', type: 'mcp' }, {}).end(true, { content: [] }));
+  tool.end({}, new Error('boom'));
+  book.within(agent.id, () => o.onUsage(usage()));
+  agent.end({ 'zp.cost_usd': 0.01 });
+  const by = (n) => got.find((r) => r.name === n);
+  assert.equal(by('execute_tool t').parentSpanId, agent.id);
+  assert.equal(by('execute_tool t').status.code, 2);
+  assert.equal(by('execute_tool mcp_x').parentSpanId, tool.id);
+  assert.equal(by('chat m').parentSpanId, agent.id);
+  assert.equal(by('invoke_agent a').attributes['gen_ai.agent.id'], 'a');
+  assert.equal(by('invoke_agent a').attributes['zaafpulse.cost.usd'], 0.01);
+  assert.deepEqual(book.traceCtx(agent.id).spanId, agent.id);
+  assert.equal(setup(() => false).o.spanBook(), null);
+});
