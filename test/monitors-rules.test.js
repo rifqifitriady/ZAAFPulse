@@ -296,3 +296,171 @@ test('evaluate does not change the snapshot', () => {
   for (const r of RULES) evaluate(r, {}, snap, NOW);
   assert.strictEqual(JSON.stringify(snap), before);
 });
+
+test('daily_cost: an explicit limit works without a budget; defaultOn still follows the budget', () => {
+  const cost6 = { budget: { monthlyUSD: 0 }, today: { cost: 6 } };
+  const r = one('daily_cost', cost6, { limitUSD: 5 });
+  assert.strictEqual(r.state, 'triggered');
+  assert.strictEqual(r.threshold, 5);
+  assert.strictEqual(one('daily_cost', { today: { cost: 6 } }, { limitUSD: 5 }).state, 'triggered');
+  assert.strictEqual(one('daily_cost', { today: { cost: 4 } }, { limitUSD: 5 }).state, 'ok');
+  // The explicit limit wins over the budget in both directions.
+  const small = { budget: { monthlyUSD: 30 }, today: { cost: 4 } };
+  assert.strictEqual(one('daily_cost', small, { limitUSD: 5 }).state, 'ok');
+  // Neither a limit nor a budget: no data. A limit of 0 means "use the budget".
+  assert.strictEqual(one('daily_cost', cost6).state, 'no_data');
+  assert.strictEqual(one('daily_cost', cost6, { limitUSD: 0 }).state, 'no_data');
+  assert.strictEqual(rule('daily_cost').defaultOn({ monthlyBudgetUSD: 0 }), false);
+});
+
+test('negative, NaN and out-of-range numbers give no_data', () => {
+  const bad = [-1, NaN, Infinity, '3', null];
+  for (const v of bad) {
+    const budget = { monthlyUSD: 300 };
+    assert.strictEqual(one('daily_cost', { budget, today: { cost: v } }).state, 'no_data', `daily ${v}`);
+    assert.strictEqual(one('month_projection', { budget, month: { projection: v } }).state, 'no_data', `proj ${v}`);
+    assert.strictEqual(one('cost_burn', { sessions: [sess({ cost10m: v })] }).state, 'no_data', `burn ${v}`);
+    assert.strictEqual(one('accuracy_drop', { accuracy: { today: v, prev7: 0.9 } }).state, 'no_data', `acc ${v}`);
+    assert.strictEqual(one('accuracy_drop', { accuracy: { today: 0.5, prev7: v } }).state, 'no_data', `prev ${v}`);
+    assert.strictEqual(one('eval_pass_rate', { evals: { a: { pass: v, total: 30 } } }).state, 'no_data', `pass ${v}`);
+    assert.strictEqual(one('eval_pass_rate', { evals: { a: { pass: 1, total: v } } }).state, 'no_data', `total ${v}`);
+  }
+  // A budget that is negative or NaN is no budget.
+  for (const v of [-300, NaN]) {
+    assert.strictEqual(one('daily_cost', { budget: { monthlyUSD: v }, today: { cost: 1 } }).state, 'no_data');
+    const proj = { budget: { monthlyUSD: v }, month: { projection: 1 } };
+    assert.strictEqual(one('month_projection', proj).state, 'no_data');
+  }
+  // toolCallsTurn present but bad is bad data; an absent one is unknown but not bad.
+  for (const v of [-1, NaN, Infinity, '9']) {
+    const out = one('tool_loop', { sessions: [sess({ toolCallsTurn: v })], signals: [] });
+    assert.strictEqual(out.state, 'no_data', `calls ${v}`);
+  }
+  assert.strictEqual(one('tool_loop', { sessions: [{ sid: 'x' }], signals: [] }).state, 'ok');
+  // agent_stuck: a NaN or missing time is no data for a busy agent.
+  for (const v of [NaN, Infinity, undefined, '5']) {
+    assert.strictEqual(one('agent_stuck', { sessions: [sess({ lastTs: v })] }).state, 'no_data', `lastTs ${v}`);
+  }
+  // unsafe_content ignores signals whose time is bad rather than counting them.
+  const sigs = [-1, NaN, undefined].map((ts) => ({ ts, sid: 's1', kind: 'secret' }));
+  assert.strictEqual(one('unsafe_content', { signals: sigs }).value, 0);
+});
+
+test('accuracy must be between 0 and 1', () => {
+  assert.strictEqual(one('accuracy_drop', { accuracy: { today: 80, prev7: 85 } }).state, 'no_data');
+  assert.strictEqual(one('accuracy_drop', { accuracy: { today: 0.5, prev7: 1.01 } }).state, 'no_data');
+  assert.strictEqual(one('accuracy_drop', { accuracy: { today: -0.1, prev7: 0.9 } }).state, 'no_data');
+  assert.strictEqual(one('accuracy_drop', { accuracy: { today: 0, prev7: 1 } }).state, 'triggered');
+  assert.strictEqual(one('accuracy_drop', { accuracy: { today: 1, prev7: 1 } }).state, 'ok');
+});
+
+test('eval_pass_rate needs 0 <= pass <= total', () => {
+  assert.strictEqual(one('eval_pass_rate', { evals: { a: { pass: 31, total: 30 } } }).state, 'no_data');
+  const empty = { evals: { a: { pass: 0, total: 0 } } };
+  assert.strictEqual(one('eval_pass_rate', empty, { minSamples: 0 }).state, 'no_data');
+  assert.strictEqual(one('eval_pass_rate', { evals: { a: { pass: 30, total: 30 } } }).state, 'ok');
+  assert.strictEqual(one('eval_pass_rate', { evals: { a: { pass: 0, total: 30 } } }).state, 'triggered');
+  // A bad entry is ignored; a good one next to it still counts.
+  const mixed = { a: { pass: 40, total: 30 }, b: { pass: 10, total: 30 } };
+  assert.strictEqual(one('eval_pass_rate', { evals: mixed }).value, 0.333333);
+  assert.strictEqual(one('eval_pass_rate', { evals: { a: null, b: 'x' } }).state, 'no_data');
+});
+
+test('live rules skip entries without a string sid and keep the first of a repeated sid', () => {
+  const sessions = [
+    null,
+    'x',
+    { title: 'no sid', cost10m: 99 },
+    { sid: 7, cost10m: 99 },
+    sess({ sid: 'a', cost10m: 1 }),
+    sess({ sid: 'a', cost10m: 99 }),
+    sess({ sid: 'b', cost10m: 9 }),
+  ];
+  for (const id of ['cost_burn', 'tool_loop', 'agent_stuck']) {
+    const out = run(id, { sessions, signals: [] });
+    assert.deepStrictEqual(
+      out.map((r) => r.instance),
+      ['a', 'b'],
+      id,
+    );
+  }
+  const burn = run('cost_burn', { sessions });
+  assert.deepStrictEqual(
+    burn.map((r) => r.state),
+    ['ok', 'triggered'],
+  );
+  assert.deepStrictEqual(run('cost_burn', { sessions: [null, {}] }), []);
+});
+
+test('agent_stuck: a missing state is no_data and the age is in exact minutes', () => {
+  const out = run('agent_stuck', {
+    sessions: [
+      sess({ sid: 'a', state: undefined, lastTs: NOW - 99 * MIN }),
+      sess({ sid: 'b', state: 7, lastTs: NOW - 99 * MIN }),
+      sess({ sid: 'c', state: 'working', lastTs: NOW - 10.04 * MIN }),
+      sess({ sid: 'd', state: 'thinking', lastTs: NOW - 12.5 * MIN }),
+      sess({ sid: 'e', state: 'working', lastTs: NOW + 5 * MIN }),
+    ],
+  });
+  assert.deepStrictEqual(
+    out.map((r) => [r.sessionId, r.state, r.value]),
+    [
+      ['a', 'no_data', null],
+      ['b', 'no_data', null],
+      ['c', 'triggered', 10],
+      ['d', 'triggered', 12.5],
+      ['e', 'ok', 0],
+    ],
+  );
+  assert.strictEqual(run('agent_stuck', { sessions: [sess({ lastTs: NOW - 3.26 * MIN })] })[0].value, 3.3);
+});
+
+test('a now that is not a finite number gives no_data from every rule', () => {
+  const snap = {
+    budget: { monthlyUSD: 300 },
+    today: { cost: 99 },
+    month: { projection: 999 },
+    sessions: [sess({ cost10m: 99, toolCallsTurn: 99 })],
+    signals: [{ ts: NOW, sid: 's1', kind: 'secret' }],
+    accuracy: { today: 0.1, prev7: 0.9 },
+    evals: { a: { pass: 0, total: 30 } },
+  };
+  for (const now of [NaN, undefined, null, Infinity, '1']) {
+    for (const r of RULES) {
+      const out = evaluate(r, {}, snap, now);
+      assert.ok(out.length >= 1 && out.every((x) => x.state === 'no_data'), `${r.id} ${now}`);
+    }
+  }
+});
+
+test('windowMin and stuckMin must be positive', () => {
+  const stuck = { sessions: [sess({ lastTs: NOW - 11 * MIN })] };
+  for (const v of [0, -5, NaN, 'abc']) {
+    const r = one('agent_stuck', stuck, { stuckMin: v });
+    assert.strictEqual(r.threshold, 10, `stuckMin ${v}`);
+    assert.strictEqual(r.state, 'triggered');
+  }
+  assert.strictEqual(one('agent_stuck', stuck, { stuckMin: 15 }).state, 'ok');
+  const old = { signals: [{ ts: NOW - 90 * MIN, sid: 's1', kind: 'secret' }] };
+  for (const v of [0, -5, NaN]) {
+    assert.strictEqual(one('unsafe_content', old, { windowMin: v }).state, 'ok', `windowMin ${v}`);
+  }
+  assert.strictEqual(one('unsafe_content', old, { windowMin: 120 }).state, 'triggered');
+});
+
+test('NaN and negative parameters fall back for every rule', () => {
+  for (const r of RULES) {
+    for (const bad of [NaN, -1, 'abc', null]) {
+      const params = Object.fromEntries(Object.keys(r.params).map((k) => [k, bad]));
+      const a = evaluate(r, params, {}, NOW);
+      const b = evaluate(r, {}, {}, NOW);
+      assert.deepStrictEqual(a, b, `${r.id} ${bad}`);
+    }
+  }
+  const s = { sessions: [sess({ cost10m: 6, toolCallsTurn: 51 })], signals: [] };
+  assert.strictEqual(one('cost_burn', s, { maxUSD: NaN }).threshold, 5);
+  assert.strictEqual(one('tool_loop', s, { maxCalls: -1 }).threshold, 50);
+  assert.strictEqual(one('accuracy_drop', { accuracy: { today: 0.5, prev7: 0.9 } }, { dropPoints: NaN }).threshold, 5);
+  const low = { evals: { a: { pass: 1, total: 30 } } };
+  assert.strictEqual(one('eval_pass_rate', low, { minPassRate: -1 }).threshold, 0.8);
+});
