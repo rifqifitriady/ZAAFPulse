@@ -23,6 +23,11 @@ const otelRec = (extra = {}) => ({
   status: { code: 0, message: '' },
   ...extra,
 });
+// Built at run time so no secret-looking string sits in the source.
+const fakeKey = () => {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  return 'sk-' + 'ant-api03-' + Array.from({ length: 48 }, (_, i) => chars[(i * 7) % 36]).join('');
+};
 const memStore = () => {
   const spans = [];
   return { spans, writeSpans: (l) => (spans.push(...l), l.length) };
@@ -67,6 +72,7 @@ test('recorder: off means nothing is kept; a full buffer drops and counts; a fai
   const rec = createRecorder({ store, enabled: () => on, flushMs: 0, batch: 100, maxBuffer: 2 });
   rec.add(otelRec());
   assert.equal(rec.stats().buffered, 0);
+  assert.equal(rec.knows(T), false);
   on = true;
   rec.add(otelRec());
   rec.add(otelRec());
@@ -82,16 +88,24 @@ test('recorder: off means nothing is kept; a full buffer drops and counts; a fai
     log: () => {},
   });
   broken.add(otelRec());
+  broken.add(otelRec());
   assert.equal(broken.flush(), 0);
   assert.equal(broken.stats().writeErrors, 1);
+  assert.equal(broken.stats().dropped, 2);
+  const odd = createRecorder({ store: { writeSpans: () => undefined }, flushMs: 0 });
+  odd.add(otelRec());
+  odd.flush();
+  assert.equal(odd.stats().written, 0);
 });
 
-test('recorder: a full batch is written at once; known trace IDs expire', () => {
+test('recorder: a full batch is written at once; known trace IDs expire', async () => {
   let t = 0;
   const store = memStore();
   const rec = createRecorder({ store, flushMs: 0, batch: 2, knownMs: 1000, now: () => t });
   rec.add(otelRec());
   rec.add(otelRec());
+  assert.equal(store.spans.length, 0); // never on the request path
+  await new Promise((res) => setImmediate(res));
   assert.equal(store.spans.length, 2);
   t = 2000;
   assert.equal(rec.knows(T), false);
@@ -100,8 +114,62 @@ test('recorder: a full batch is written at once; known trace IDs expire', () => 
 test('recorder: ingest takes ready records from the return channel', () => {
   const store = memStore();
   const rec = createRecorder({ store, flushMs: 0 });
-  const r = { t: T, s: '1'.repeat(16), p: null, n: 'x', k: 'server', st: 1, d: 1, ok: true, src: 'remote', svc: 'far', a: {} };
+  const base = { t: T, s: '1'.repeat(16), p: null, n: 'x', k: 'server', st: 1, d: 1, ok: true };
+  const r = { ...base, src: 'remote', svc: 'far', a: {} };
   assert.equal(rec.ingest([r]), 1);
   rec.flush();
   assert.deepEqual(store.spans, [r]);
+});
+
+test('recorder: maxBuffer drops spans beyond it within one tick; the flush is scheduled once', async () => {
+  const store = memStore();
+  const rec = createRecorder({ store, flushMs: 0, batch: 2, maxBuffer: 3 });
+  for (let i = 0; i < 5; i++) rec.add(otelRec());
+  assert.equal(rec.stats().dropped, 2);
+  await new Promise((res) => setImmediate(res));
+  assert.equal(store.spans.length, 3);
+  assert.equal(rec.stats().written, 3);
+});
+
+test('recorder: err is masked and cut to 200 characters', () => {
+  const key = fakeKey();
+  const r = toRecord(otelRec({ status: { code: 2, message: `bad header ${key} rejected` } }));
+  assert.equal(r.err.includes(key), false);
+  assert.match(r.err, /hidden/);
+  const long = toRecord(otelRec({ status: { code: 2, message: 'a'.repeat(199) + '\u{1F600}' } }));
+  assert.ok(long.err.length <= 200);
+  assert.equal(/[\ud800-\udbff]$/.test(long.err), false);
+});
+
+test('recorder: a span that cannot be converted is dropped and its trace stays unknown', () => {
+  const rec = createRecorder({ store: memStore(), flushMs: 0 });
+  assert.doesNotThrow(() => rec.add({ traceId: T }));
+  assert.equal(rec.knows(T), false);
+  assert.equal(rec.stats().dropped, 1);
+});
+
+test('recorder: the oldest known trace IDs are forgotten past maxKnown', () => {
+  const rec = createRecorder({ store: memStore(), flushMs: 0, maxKnown: 3 });
+  const id = (i) => String(i).padStart(32, '0');
+  for (let i = 1; i <= 5; i++) rec.add(otelRec({ traceId: id(i) }));
+  assert.equal(rec.knows(id(1)), false);
+  assert.equal(rec.knows(id(2)), false);
+  for (let i = 3; i <= 5; i++) assert.equal(rec.knows(id(i)), true);
+});
+
+test('recorder: ingest never throws, keeps only well-formed records, strips content and masks err', () => {
+  const store = memStore();
+  const rec = createRecorder({ store, flushMs: 0 });
+  assert.equal(rec.ingest(null), 0);
+  assert.equal(rec.ingest(42), 0);
+  const key = fakeKey();
+  const good = { t: T, s: '1'.repeat(16), p: null, n: 'x', k: 'server', st: 1, d: 1, ok: false, src: 'r', svc: 'f' };
+  const withContent = { ...good, err: `leak ${key}`, a: { 'gen_ai.input.messages': 'secret', keep: 1 } };
+  const bad = [null, 'x', { ...good, t: 'zz' }, { ...good, s: '1' }];
+  assert.equal(rec.ingest([withContent, ...bad]), 1);
+  assert.equal(rec.stats().dropped, 4);
+  rec.flush();
+  assert.equal(store.spans.length, 1);
+  assert.deepEqual(store.spans[0].a, { keep: 1 });
+  assert.equal(store.spans[0].err.includes(key), false);
 });
