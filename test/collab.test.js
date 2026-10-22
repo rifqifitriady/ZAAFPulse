@@ -755,16 +755,17 @@ test('trace explorer: a tool-using agent step links to its last chat round, and 
 });
 
 test('trace: rt.within marks a run\'s tool span as a tool context, and nothing else', async () => {
+  // setup sits above the wrapper so that a failed setup never leaves otel.within replaced.
+  const t = await setup(
+    (r) => (toolMsgs(r).length ? 'done' : toolCall('acc_usage_summary', {})),
+    { tools: [{ name: 'acc_usage_summary', description: 'usage', inputSchema: { type: 'object', properties: {} } }] },
+  );
   const seen = [];
   const real = otel.within;
   otel.within = (parent, fn, chatSpanId, opts) => {
     seen.push({ spanId: parent.spanId, inTool: !!(opts && opts.inTool) });
     return real(parent, fn, chatSpanId, opts);
   };
-  const t = await setup(
-    (r) => (toolMsgs(r).length ? 'done' : toolCall('acc_usage_summary', {})),
-    { tools: [{ name: 'acc_usage_summary', description: 'usage', inputSchema: { type: 'object', properties: {} } }] },
-  );
   try {
     const { run } = await t.collab.run({ pattern: 'agent', agent: 'hr-finance', task: 'usage this month' });
     const tools = run.trace.filter((s) => s.name.startsWith('execute_tool '));
