@@ -777,6 +777,7 @@ docs/performance.md    indexing speed: method and numbers
 docs/explorer.md       Trace explorer: sources, privacy, keyboard, API, troubleshooting
 docs/evals.md          local evals and feedback: evaluators, local judge, caps, privacy, API, MCP tool, CLI
 docs/release-hardening.md tag ruleset and immutable releases
+docs/monitors.md       monitors, alerts, webhook, pausing an agent: rules, channels, limits, API
 docs/assets/           README banner, diagrams, screenshots and GIFs
 ```
 </details>
