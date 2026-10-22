@@ -320,7 +320,6 @@ const evalApi = createEvalApi({
   gateway,
   contentOff,
   claude: claudeCli,
-  onFeedback: (f) => datasetAuto.onFeedback(f),
   settings: {
     get: () => rawConfig().evals,
     save: (evals) => {
@@ -334,6 +333,7 @@ const evalApi = createEvalApi({
       rawCache = { mtime: fs.statSync(CONFIG_FILE).mtimeMs, value: raw };
     },
   },
+  onFeedback: (f) => datasetAuto.onFeedback(f),
 });
 // A judging pass after each index refresh. It is only queued here: a failure must not break the refresh.
 const evalTick = () =>
