@@ -75,7 +75,18 @@ test('adjust: a running span is never moved by clock skew', () => {
   assert.equal(get(out, 'b').skewMs, undefined);
 });
 
-test('adjust: a finished remote child under a running parent is not shifted', () => {
+test('adjust: a finished remote grandchild below a running root is still corrected', () => {
+  const out = adjust([
+    sp('r', null, 0, 0, { service: 'x', end: null }),
+    sp('a', 'r', 1000, 1000, { service: 'x' }),
+    sp('b', 'a', 5000, 200, { service: 'far' }),
+  ]);
+  assert.equal(get(out, 'b').start, 1400);
+  assert.equal(get(out, 'b').end, 1600);
+  assert.equal(get(out, 'b').skewMs, -3600);
+});
+
+test('adjust: the direct child of a running parent is not shifted', () => {
   const out = adjust([
     sp('a', null, 1000, 0, { service: 'x', end: null }),
     sp('b', 'a', 1500, 0, { service: 'y' }),
