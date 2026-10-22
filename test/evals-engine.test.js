@@ -90,6 +90,12 @@ function rig({ settings = {}, resolved = LOCAL, entries = [], demo, demoData } =
           signal.addEventListener('abort', () => rej(Object.assign(new Error('cancelled'), { status: 0 }))),
         );
       }
+      if (st.hold) {
+        // Held open until the test releases it, whatever the signal does (a call that is already answering).
+        const h = st.hold;
+        st.hold = null;
+        await h;
+      }
       inflight++;
       maxInflight = Math.max(maxInflight, inflight);
       await nextLoop(); // yield, so an overlapping call would show
@@ -1825,4 +1831,138 @@ test('in auto mode a tick with nothing changed does not cancel the running local
   assert.equal(r.calls[0].signal.aborted, true);
   r.engine.stop();
   await r.settle();
+});
+
+// A model call held open until release(): an experiment's judge call that keeps the lane while the queue waits.
+const holdCall = (r) => {
+  let release;
+  r.st.hold = new Promise((res) => (release = res));
+  return () => release();
+};
+// One turn queued behind the held call: the runner checks its gates, then waits in the lane.
+async function queueBehind(r) {
+  r.st.entries.push(entry('s', turnsAfter(1), T0 + 5 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  await r.engine.tick();
+  await r.settle();
+}
+
+test('a queue call that waited in the lane is not sent once judging was switched off', async () => {
+  const r = rig();
+  await r.arm();
+  const release = holdCall(r);
+  const side = r.engine.judgeMaterial('relevance', MATERIAL);
+  await r.settle();
+  await queueBehind(r);
+  assert.equal(r.calls.length, 1, 'the queue job waits behind the held call');
+  r.st.settings.judge = false;
+  release();
+  assert.equal((await side).ok, true);
+  await r.settle();
+  assert.equal(r.calls.length, 1, 'nothing more was sent');
+  const s = await r.engine.status();
+  assert.equal(s.queue, 1, 'the job is kept for later');
+  assert.equal(s.today.count, 1, 'and nothing was charged');
+});
+
+test('a queue call that waited in the lane is not sent to a provider the owner switched away from', async () => {
+  const r = extRig({ costCapUSD: 1 });
+  await r.arm();
+  const release = holdCall(r);
+  const side = r.engine.judgeMaterial('relevance', MATERIAL);
+  await r.settle();
+  await queueBehind(r);
+  // As the settings route does: a new provider, and the external confirmation is revoked.
+  r.st.settings.provider = 'auto';
+  delete r.st.settings.externalConfirmed;
+  r.st.resolved = LOCAL;
+  release();
+  await side;
+  await r.settle();
+  r.engine.kick();
+  await r.engine.drain();
+  assert.deepEqual(
+    r.calls.map((c) => c.resolved.provider),
+    ['openrouter', 'ollama'],
+  );
+  assert.equal(r.store.all().length, 1);
+  assert.equal(r.store.all()[0].judge.provider, 'ollama');
+});
+
+test('the daily cap is never passed by a queue call that waited behind judgeMaterial', async () => {
+  const r = rig({ settings: { dailyCap: 2 } });
+  await r.arm();
+  assert.equal((await r.engine.judgeMaterial('relevance', MATERIAL)).ok, true);
+  const release = holdCall(r);
+  const side = r.engine.judgeMaterial('relevance', MATERIAL);
+  await r.settle();
+  await queueBehind(r); // count 1 of 2 when the runner checked its gates
+  release();
+  assert.equal((await side).ok, true);
+  await r.settle();
+  await r.engine.drain();
+  const s = await r.engine.status();
+  assert.equal(s.today.count, 2);
+  assert.equal(r.calls.length, 2);
+  assert.equal(s.paused, 'daily cap');
+  assert.equal(s.queue, 1);
+});
+
+test('an external queue call is held in the lane when the calls before it used the cost budget', async () => {
+  const r = extRig({ costCapUSD: 0.05 });
+  r.st.price = { input: 0, output: 100 }; // an estimate of 0.02 a call
+  r.st.costs = [0.04, 0.04];
+  await r.arm();
+  const release = holdCall(r);
+  const side = r.engine.judgeMaterial('relevance', MATERIAL);
+  await r.settle();
+  await queueBehind(r); // 0 + 0.02 fits when the runner checked
+  release();
+  assert.equal((await side).ok, true); // now 0.04: 0.04 + 0.02 would pass 0.05
+  await r.settle();
+  assert.equal(r.calls.length, 1);
+  const s = await r.engine.status();
+  assert.equal(s.paused, 'cost cap');
+  assert.equal(s.queue, 1);
+});
+
+test('judgeMaterial leaves a backed-off provider alone', async () => {
+  const r = rig();
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(1), T0 + 5 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  r.st.failures = 3;
+  r.st.failStatus = 503;
+  for (let i = 0; i < 3; i++) {
+    await r.engine.tick();
+    await r.settle();
+  }
+  assert.equal(r.calls.length, 3);
+  assert.match((await r.engine.status()).judge.reason, /retrying in/);
+  assert.deepEqual(await r.engine.judgeMaterial('relevance', MATERIAL), { ok: false, reason: 'judge backing off' });
+  assert.equal(r.calls.length, 3);
+  r.clock.t += 2 * MIN; // the pause is over
+  assert.equal((await r.engine.judgeMaterial('relevance', MATERIAL)).ok, true);
+});
+
+test("an experiment's running judge call is cancelled when judging is switched off or the provider switched", async () => {
+  const r = rig();
+  r.st.hang = true;
+  const p = r.engine.judgeMaterial('relevance', MATERIAL);
+  await r.settle();
+  await r.engine.tick(); // nothing changed: it keeps running
+  await r.settle();
+  assert.equal(r.calls[0].signal.aborted, false);
+  r.st.settings.judge = false;
+  r.engine.kick();
+  assert.deepEqual(await p, { ok: false, reason: 'cancelled' });
+  assert.equal(r.calls[0].signal.aborted, true);
+
+  const q = rig();
+  q.st.hang = true;
+  const p2 = q.engine.judgeMaterial('relevance', MATERIAL);
+  await q.settle();
+  q.st.settings.provider = 'lmstudio';
+  q.engine.kick();
+  assert.deepEqual(await p2, { ok: false, reason: 'cancelled' });
 });
