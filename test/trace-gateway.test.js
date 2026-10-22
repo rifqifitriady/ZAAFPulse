@@ -612,6 +612,42 @@ test('a resumed run with no stored span above its executions is still one tree',
   assert.deepEqual(sk.spans.filter((s) => s.parent === live.id).map((s) => s.id).sort(), [id('x0'), id('y0')].sort());
 });
 
+test('a resumed run keeps one tree shape while its second execution is live and after it is exported', async () => {
+  // Dashboard run (no request span): the first execution is exported, the second still live.
+  const id = (x) => runSpanId('r1', x);
+  const rtrace = [
+    { id: 'x0', parent: null, name: 'invoke_workflow vote', start: 10, end: 4910, status: 'ok', attrs: {} },
+    { id: 'x1', parent: 'x0', name: 'invoke_agent a', start: 100, end: 3000, status: 'ok', attrs: {} },
+    { id: 'y0', parent: null, name: 'invoke_workflow vote', start: 6000, end: null, status: 'running', attrs: {} },
+    { id: 'y1', parent: 'y0', name: 'invoke_agent b', start: 6100, end: null, status: 'running', attrs: {} },
+  ];
+  const first = [
+    rec(TS, id('x0'), null, 'invoke_workflow vote', 'internal', R0 + 10, 4900, { 'zaafpulse.run.id': 'r1' }),
+    rec(TS, id('x1'), id('x0'), 'invoke_agent a', 'internal', R0 + 100, 2900),
+  ];
+  const view = async (records, r) => {
+    const store = createTraceStore({ dir: fs.mkdtempSync(path.join(os.tmpdir(), 'zp-gw-store-')) });
+    store.writeSpans(records);
+    const gw = { ...g, runs: () => [r], run: (i) => (i === 'r1' ? r : null), requests: () => [] };
+    const sk = await createGatewayAdapter(gw, store).skeleton(null, 'run:r1');
+    assert.deepEqual(validate(sk.spans), []);
+    return sk.spans;
+  };
+  const shape = (spans) => {
+    const root = spans.find((x) => !x.parent);
+    const wf = spans.filter((x) => x.parent === root.id && /^invoke_workflow/.test(x.name)).map((x) => x.id).sort();
+    return { rootKind: root.kind, wf, y1Parent: spans.find((x) => x.id === id('y1')).parent };
+  };
+  const live = { ...run, createdAt: R0, updatedAt: R0 + 6500, state: 'working', answer: undefined, trace: rtrace, otel: { traceId: TS, spanId: '', sampled: true } };
+  const during = shape(await view(first, live));
+  assert.deepEqual(during, { rootKind: 'session', wf: [id('x0'), id('y0')].sort(), y1Parent: id('y0') }, 'the second execution is a sibling, not under the first');
+  const done = { ...live, state: 'completed', updatedAt: R0 + 7000, answer: 'ans', trace: rtrace.map((x) => (x.end == null ? { ...x, end: 7000, status: 'ok' } : x)) };
+  const after = shape(
+    await view([...first, rec(TS, id('y0'), null, 'invoke_workflow vote', 'internal', R0 + 6000, 1000), rec(TS, id('y1'), id('y0'), 'invoke_agent b', 'internal', R0 + 6100, 800)], done),
+  );
+  assert.deepEqual(after, during);
+});
+
 test('an integration tool call is one call in eval material, with or without the store', async () => {
   // The agent's execute_tool span, and the integration's own span nested inside it (the same call).
   const store = createTraceStore({ dir: fs.mkdtempSync(path.join(os.tmpdir(), 'zp-gw-store-')) });

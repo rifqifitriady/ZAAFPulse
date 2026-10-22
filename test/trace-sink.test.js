@@ -162,6 +162,19 @@ test('sink: a model call that never succeeds gives its last attempt the reserved
   assert.deepEqual(got.map((r) => r.spanId), [R]);
 });
 
+test('sink: a failed entry arriving after the call settled is exported, not held forever', async () => {
+  const { o, got } = setup();
+  const parent = { traceId: 'a'.repeat(32), spanId: 'b'.repeat(16), sampled: true };
+  const R = 'c'.repeat(16);
+  // The call records nothing and settles; a timer started inside it still runs in its context.
+  await o.within(parent, async () => {
+    setTimeout(() => o.onUsage(usage({ status: 500, error: 'late' })), 10);
+  }, R);
+  await new Promise((r) => setTimeout(r, 40));
+  assert.equal(got.length, 1);
+  assert.notEqual(got[0].spanId, R, 'the reserved id was given up when the call settled');
+});
+
 test('sink: a run exported with its fixed trace context and an explicit span list', () => {
   const { o, got } = setup();
   const T0 = Date.now() - 1000;

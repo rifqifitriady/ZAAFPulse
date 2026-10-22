@@ -147,6 +147,17 @@ test('mapNodes: five identical Read calls in a row fold into one node with a cou
   assert.equal(read.end, t0 + 16);
 });
 
+test('mapNodes: an agent\'s tool count leaves out a nested integration span', () => {
+  const sp = (id, parent, kind, name, extra = {}) => ({ id, parent, kind, name, start: 1, end: 2, ...extra });
+  const nodes = mapNodes([
+    sp('r', null, 'session', 'invoke_workflow w'),
+    sp('a', 'r', 'agent', 'invoke_agent a'),
+    sp('t1', 'a', 'tool', 'execute_tool web', { tool: { name: 'web' } }),
+    sp('t2', 't1', 'tool', 'execute_tool web', { tool: { name: 'web' }, nested: true }),
+  ]);
+  assert.equal(nodes.find((n) => n.kind === 'agent').tools, 1);
+});
+
 test('mapNodes: the demo turn folds only repeats in a row, keeps failures apart and leaves subagent spans out', () => {
   const nodes = mapNodes(claudeSpans());
   assert.deepEqual(

@@ -66,3 +66,18 @@ test('deps: an operation attribute without the name prefix falls back to the kin
   store.writeSpans([rec('1'.repeat(16), null, 'planner', 'internal', { 'gen_ai.operation.name': 'invoke_agent' })]);
   assert.deepEqual(dependencies(store, win).nodes.map((n) => n.id), ['agent:agent']);
 });
+
+test('deps: an integration\'s nested tool span is its parent call, not a second one', () => {
+  const store = mk();
+  const tool = { 'gen_ai.operation.name': 'execute_tool', 'gen_ai.tool.name': 'web' };
+  store.writeSpans([
+    rec('1'.repeat(16), null, 'invoke_agent a', 'internal', { 'gen_ai.operation.name': 'invoke_agent', 'gen_ai.agent.id': 'a' }),
+    rec('2'.repeat(16), '1'.repeat(16), 'execute_tool web', 'internal', tool, true, 'zaafpulse', 10),
+    rec('3'.repeat(16), '2'.repeat(16), 'execute_tool web', 'client', { ...tool, 'zaafpulse.tool.nested': true }, true, 'zaafpulse', 900),
+  ]);
+  const d = dependencies(store, win);
+  assert.equal(d.nodes.find((n) => n.id === 'tool:web').count, 1);
+  const e = d.edges.find((x) => x.from === 'agent:a' && x.to === 'tool:web');
+  assert.equal(e.count, 1);
+  assert.equal(e.p95Ms, 10, 'the nested span\'s duration is not in the p95');
+});
