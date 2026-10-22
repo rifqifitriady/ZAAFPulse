@@ -168,6 +168,16 @@ test('otlp: only allowed attributes are kept, so no prompt or reply text of othe
   assert.ok(!JSON.stringify(store.spans).includes('-TEXT'));
 });
 
+test('otlp: an allowed attribute after many others is still kept', () => {
+  const { store, recorder } = known();
+  const others = Array.from({ length: 100 }, (_, i) => ({ key: `llm.input_messages.${i}.message.role`, value: { stringValue: 'user' } }));
+  createReceiver({ recorder }).receive(
+    body([span(T, '1111111111111111', { attributes: [...others, { key: 'gen_ai.request.model', value: { stringValue: 'm' } }] })]),
+  );
+  recorder.flush();
+  assert.deepEqual(store.spans[0].a, { 'gen_ai.request.model': 'm' });
+});
+
 test('otlp: malformed shapes never throw and are counted as rejected', () => {
   const { store, recorder } = known();
   const recv = createReceiver({ recorder });

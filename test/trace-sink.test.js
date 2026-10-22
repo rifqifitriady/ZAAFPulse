@@ -123,6 +123,45 @@ test('sink: within() parents the spans started inside it; the first successful m
   assert.notEqual(got[2].spanId, 'c'.repeat(16), 'the id is used once');
 });
 
+test('sink: a model call that never succeeds gives its last attempt the reserved id, once the call ends', async () => {
+  const { o, got } = setup();
+  const parent = { traceId: 'a'.repeat(32), spanId: 'b'.repeat(16), sampled: true };
+  const R = 'c'.repeat(16);
+  // Synchronous call, one failed attempt.
+  o.within(parent, () => o.onUsage(usage({ status: 500, error: 'upstream' })), R);
+  assert.equal(got.length, 1);
+  assert.equal(got[0].spanId, R);
+  assert.equal(got[0].parentSpanId, 'b'.repeat(16));
+  assert.equal(got[0].status.code, 2);
+  // Asynchronous call that throws after two failed attempts: the first keeps a random id, the last takes R.
+  got.length = 0;
+  await assert.rejects(
+    o.within(parent, async () => {
+      o.onUsage(usage({ status: 599, error: 'network' }));
+      await new Promise((r) => setTimeout(r, 5));
+      o.onUsage(usage({ status: 503, error: 'busy' }));
+      throw new Error('all targets failed');
+    }, R),
+    /all targets failed/,
+  );
+  assert.equal(got.length, 2);
+  assert.notEqual(got[0].spanId, R);
+  assert.equal(got[1].spanId, R);
+  assert.ok(got.every((r) => r.parentSpanId === 'b'.repeat(16) && r.traceId === 'a'.repeat(32)));
+  // A failed attempt and then a successful one: the successful one takes R, as before.
+  got.length = 0;
+  await o.within(parent, async () => {
+    o.onUsage(usage({ status: 500, error: 'upstream' }));
+    await null;
+    o.onUsage(usage());
+  }, R);
+  assert.deepEqual(got.map((r) => r.spanId === R), [false, true]);
+  // A synchronous throw still settles the held attempt.
+  got.length = 0;
+  assert.throws(() => o.within(parent, () => { o.onUsage(usage({ status: 500, error: 'x' })); throw new Error('sync'); }, R), /sync/);
+  assert.deepEqual(got.map((r) => r.spanId), [R]);
+});
+
 test('sink: a run exported with its fixed trace context and an explicit span list', () => {
   const { o, got } = setup();
   const T0 = Date.now() - 1000;
