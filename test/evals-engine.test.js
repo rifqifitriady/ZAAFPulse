@@ -1804,3 +1804,25 @@ test('judgeMaterial in demo mode makes no model call and gives a stable verdict'
   assert.equal(second.pass, false);
   assert.equal(r.calls.length, 0);
 });
+
+test('in auto mode a tick with nothing changed does not cancel the running local call', async () => {
+  const r = rig(); // provider 'auto', resolves to the local Ollama model
+  r.st.hang = true;
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(1), T0 + 5 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  await r.engine.tick();
+  await r.settle();
+  assert.equal(r.calls.length, 1);
+  await r.engine.tick();
+  r.engine.kick();
+  await r.settle();
+  assert.equal(r.calls[0].signal.aborted, false, 'still running');
+  assert.equal(r.calls.length, 1, 'and not sent again');
+  // A real switch still cancels it.
+  r.st.settings.provider = 'lmstudio';
+  r.engine.kick();
+  assert.equal(r.calls[0].signal.aborted, true);
+  r.engine.stop();
+  await r.settle();
+});
