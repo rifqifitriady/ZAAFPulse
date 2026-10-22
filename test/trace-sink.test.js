@@ -71,3 +71,17 @@ test('sink: a gateway request is traced for the sink, continues traceparent, and
     server.close();
   }
 });
+
+test('sink: a sink that throws never breaks the hooks', () => {
+  for (const sink of [
+    { enabled: () => { throw new Error('boom'); }, add: () => {} },
+    { enabled: () => true, add: () => { throw new Error('boom'); } },
+  ]) {
+    const o = otel.createOtel({ getConfig: () => ({}), env: {}, refreshMs: 0, log: () => {}, sink });
+    assert.doesNotThrow(() => {
+      o.startSpan('x').end();
+      o.onUsage(usage());
+      o.toolCall('t', { id: 'f', type: 'http' }, {}).end(true, { content: [] });
+    });
+  }
+});

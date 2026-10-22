@@ -231,12 +231,31 @@ function rawConfig() {
 // Local trace store: every gateway trace without content, under .data/traces (on unless "tracing": { "enabled":
 // false }). Retention is read at start; the on/off switch whenever config.json changes.
 const tracingCfg = () => (rawConfig() || {}).tracing || {};
-const traceStore = createTraceStore({
-  dir: path.join(DEMO ? demoDir : path.join(DIR, '.data'), 'traces'),
-  retentionDays: Number(tracingCfg().retentionDays) > 0 ? Number(tracingCfg().retentionDays) : 14,
-  maxBytes: Number(tracingCfg().maxBytes) > 0 ? Number(tracingCfg().maxBytes) : 500 * 1024 * 1024,
-});
-const recorder = createRecorder({ store: traceStore, enabled: () => tracingCfg().enabled !== false });
+// A store that cannot open (unwritable or corrupt folder) never takes the server down: tracing is just off.
+let traceStore = null;
+try {
+  traceStore = createTraceStore({
+    dir: path.join(DEMO ? demoDir : path.join(DIR, '.data'), 'traces'),
+    retentionDays: Number(tracingCfg().retentionDays) > 0 ? Number(tracingCfg().retentionDays) : 14,
+    maxBytes: Number(tracingCfg().maxBytes) > 0 ? Number(tracingCfg().maxBytes) : 500 * 1024 * 1024,
+  });
+} catch (err) {
+  console.error('traces: the local trace store is off:', err.message);
+}
+// The on/off answer is asked several times per span: re-read config.json at most every 2 seconds.
+let tracingOnAt = 0;
+let tracingOnValue = true;
+const tracingOn = () => {
+  const now = Date.now();
+  if (now - tracingOnAt >= 2000) {
+    tracingOnAt = now;
+    tracingOnValue = tracingCfg().enabled !== false;
+  }
+  return tracingOnValue;
+};
+const recorder = traceStore
+  ? createRecorder({ store: traceStore, enabled: tracingOn })
+  : createRecorder({ store: { writeSpans: () => 0 }, enabled: () => false });
 // OpenTelemetry trace export: off unless config.json has "otel": { "enabled": true } (see docs/otel.md). The local
 // store is its second sink.
 otel.init({
@@ -992,8 +1011,10 @@ server.listen(PORT, HOST, () => {
   const keepTraces = () => {
     try {
       recorder.flush();
-      traceStore.applyRetention();
-      traceStore.snapshot();
+      if (traceStore) {
+        traceStore.applyRetention();
+        traceStore.snapshot();
+      }
     } catch (err) {
       console.error('traces:', err.message);
     }
@@ -1018,7 +1039,7 @@ for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP'])
       evalEngine.stop(); // a running judge call is cancelled, and its working folder removed
       gateway.flush();
       recorder.flush();
-      traceStore.snapshot();
+      if (traceStore) traceStore.snapshot();
     } finally {
       // Queued spans get up to 2 seconds to reach the OTLP endpoint.
       otel.shutdown(2000).finally(() => process.exit(0));
