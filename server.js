@@ -37,10 +37,11 @@ const { createChannels, checkWebhookUrl, parseHeaders } = require('./lib/monitor
 const { createMonitorApi } = require('./lib/monitors/api');
 const { createMonitors } = require('./lib/monitors');
 const { createAgentControl } = require('./lib/agents/control');
+const { isRef } = require('./lib/secrets');
 const { createPriceSync } = require('./lib/price-sync');
 const { createOpenRouter } = require('./lib/openrouter');
 const { createIntegrations } = require('./lib/integrations');
-const { createSecrets, isRef } = require('./lib/secrets');
+const { createSecrets } = require('./lib/secrets');
 const { createAudit } = require('./lib/audit');
 const { createLocal } = require('./lib/local');
 const { describeRoots } = require('./lib/logroots');
@@ -374,7 +375,8 @@ const monitorChannels = createChannels({
   log: (m) => console.error(m),
 });
 // Agent control is for the owner at this machine: off in server mode, and whenever the dashboard signs in with a
-// password (a proxy, a public URL or ZAAFPULSE_AUTH=1), since other people may reach it then.
+// password (a proxy, a public URL or ZAAFPULSE_AUTH=1), since other people may reach it then. So password mode counts
+// as server mode here: the rules then never pause an agent (the settings refuse auto-pause, the listing hides it).
 const AGENTS_OFF = SERVER_MODE || auth.mode === 'password';
 const agentControl = createAgentControl({ dataDir: monitorDir, serverMode: AGENTS_OFF, log: (m) => console.error(m) });
 const monitors = createMonitors({
@@ -469,9 +471,14 @@ const monitorTick = () =>
   Promise.resolve()
     .then(() => monitors.tickAggregate())
     .catch(() => console.error('monitors: the aggregate pass failed'));
-const afterRefresh = () => {
-  evalTick();
-  monitorTick();
+// The aggregate pass has to run on the refreshed index. The refresh timer is not changed: this waits for it to end.
+const monitorTickAfterIndex = () => {
+  const t = setInterval(() => {
+    if (indexer.state.indexing) return;
+    clearInterval(t);
+    monitorTick();
+  }, 250);
+  t.unref();
 };
 
 // Second brain sources: Obsidian by default, plus Logseq, Notion, Tana, Roam, mem.ai, Reflect, Heybrain,
@@ -1082,7 +1089,8 @@ const handler = async (req, res) => {
         return send(res, 415, { error: 'json only' });
       indexer.refresh().then(() => {
         memo.clear();
-        afterRefresh();
+        evalTick();
+        monitorTick();
       });
       return send(res, 202, indexer.state);
     }
@@ -1117,9 +1125,11 @@ server.listen(PORT, HOST, () => {
   const t = Date.now();
   indexer.refresh().then(() => {
     console.log(`Indexed logs in ${((Date.now() - t) / 1000).toFixed(1)}s`);
-    afterRefresh();
+    evalTick();
+    monitorTick();
   });
-  setInterval(() => indexer.refresh().then(afterRefresh), RESCAN_MS).unref();
+  setInterval(() => indexer.refresh().then(evalTick), RESCAN_MS).unref();
+  setInterval(monitorTickAfterIndex, RESCAN_MS).unref();
   // The live monitor pass. It reads the office snapshot itself: nothing else polls it (the AI Office page asks on
   // its own requests), so there is no call to share.
   setInterval(() => monitors.tickLive().catch(() => console.error('monitors: the live pass failed')), 5000).unref();

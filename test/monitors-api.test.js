@@ -32,7 +32,14 @@ const noPaths = (bodies) => {
 
 // ---- in process ----
 
-function setup({ agentsOff = false, notifyOff = false, demo = null, platform = 'darwin', control = {} } = {}) {
+function setup({
+  agentsOff = false,
+  notifyOff = false,
+  demo = null,
+  platform = 'darwin',
+  control = {},
+  failStore = null,
+} = {}) {
   const dir = tmp('zp-mon-api-');
   let t = 1_800_000_000_000;
   const state = createMonitorState({
@@ -92,7 +99,13 @@ function setup({ agentsOff = false, notifyOff = false, demo = null, platform = '
   };
   let channelCfg = { desktop: true, webhook: null, problem: null };
   const stored = [];
-  const resolve = secretResolver({ store: (service, value) => stored.push([service, value]) });
+  const resolve = secretResolver({
+    store: (service, value) => {
+      if (failStore && failStore(service))
+        throw Object.assign(new Error('the secret could not be saved'), { status: 500 });
+      stored.push([service, value]);
+    },
+  });
   const tests = [];
   const api = createMonitorApi({
     state,
@@ -325,6 +338,28 @@ test('monitor api: channels keep the webhook as secret references only', async (
   s.done();
 });
 
+test('monitor api: a failure part-way through the channel settings leaves them unchanged', async () => {
+  const s = setup({ failStore: (service) => service.endsWith('-headers') });
+  const before = JSON.stringify(s.channels());
+  const r = await s.post('/api/monitors/channels', {
+    desktop: false,
+    webhookRef: { mode: 'store', value: 'https://hooks.example.com/abc' },
+    webhookHeadersRef: { mode: 'store', value: 'Authorization: Bearer abc' },
+  });
+  assert.equal(r.status, 500);
+  assert.equal(JSON.stringify(s.channels()), before, 'nothing was written to the settings');
+  // A refusal that needs no secret store is decided before the URL is stored.
+  const s2 = setup();
+  const u = await s2.post('/api/monitors/channels', {
+    webhookRef: { mode: 'none' },
+    webhookHeadersRef: { mode: 'store', value: 'Authorization: Bearer abc' },
+  });
+  assert.equal(u.status, 400);
+  assert.equal(s2.stored.length, 0);
+  s.done();
+  s2.done();
+});
+
 test('monitor api: the test button', async () => {
   const s = setup();
   assert.equal((await s.post('/api/monitors/test', { kind: 'sms' })).status, 400);
@@ -474,6 +509,15 @@ test('monitor api: server mode refuses agent routes; demo answers without the co
   }
   assert.equal(off.calls.length, 0);
   assert.equal((await off.call('/api/monitors')).status, 200, 'the rules still answer');
+  // No rule may pause an agent while control is off: the listing says so and turning it on is refused (409).
+  const listed = (await off.call('/api/monitors')).body.rules;
+  assert.ok(listed.every((x) => x.mayAutoPause === false));
+  const refused = await off.post('/api/monitors/cost_burn', { autoPause: true });
+  assert.equal(refused.status, 409);
+  assert.deepEqual(refused.body, { error: 'agent control is off on this server' });
+  assert.equal(off.state.settings('cost_burn').autoPause, false, 'nothing was saved');
+  assert.equal((await off.post('/api/monitors/cost_burn', { autoPause: false })).status, 200);
+  assert.equal((await off.post('/api/monitors/cost_burn', { enabled: true })).status, 200);
   assert.equal((await off.call('/api/monitors/status')).body.agents.available, false);
   off.done();
 
@@ -663,6 +707,8 @@ test('monitors over HTTP: the webhook is saved as a secret reference, and a plai
   }
 });
 
+const sleeper = () => spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
+
 test('monitors over HTTP: sign-in gate, gateway keys refused, agent routes off with password sign-in', async () => {
   const data = tmp('zp-mon-api-auth-');
   const gw = createGateway({
@@ -709,10 +755,18 @@ test('monitors over HTTP: sign-in gate, gateway keys refused, agent routes off w
     assert.equal((await c.call('/api/alerts')).status, 200);
     assert.equal((await c.call('/api/monitors/status')).json.agents.available, false);
     assert.equal((await c.call('/api/agents/candidates?key=x')).status, 403);
-    for (const a of ['pause', 'resume', 'stop']) {
-      const r = await c.post(`/api/agents/${a}`, { pid: process.pid, startTime: 1, confirm: true });
-      assert.equal(r.status, 403, a);
+    // The pid is a child spawned here, never the test runner or any other live process.
+    const child = sleeper();
+    try {
+      for (const a of ['pause', 'resume', 'stop']) {
+        const r = await c.post(`/api/agents/${a}`, { pid: child.pid, startTime: 1, confirm: true });
+        assert.equal(r.status, 403, a);
+      }
+    } finally {
+      child.kill('SIGKILL');
     }
+    assert.equal((await c.post('/api/monitors/cost_burn', { autoPause: true })).status, 409);
+    assert.ok((await c.call('/api/monitors')).json.rules.every((x) => x.mayAutoPause === false));
     for (const who of [c, anon, bearer]) noPaths(who.bodies);
   } finally {
     await s.stop();
