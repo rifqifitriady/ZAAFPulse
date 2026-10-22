@@ -138,9 +138,22 @@ test('sink: a span book nests agent, tool and model spans like a run does', () =
   assert.equal(by('execute_tool t').parentSpanId, agent.id);
   assert.equal(by('execute_tool t').status.code, 2);
   assert.equal(by('execute_tool mcp_x').parentSpanId, tool.id);
+  assert.equal(by('execute_tool mcp_x').attributes['zaafpulse.tool.nested'], true);
   assert.equal(by('chat m').parentSpanId, agent.id);
   assert.equal(by('invoke_agent a').attributes['gen_ai.agent.id'], 'a');
   assert.equal(by('invoke_agent a').attributes['zaafpulse.cost.usd'], 0.01);
   assert.deepEqual(book.traceCtx(agent.id).spanId, agent.id);
   assert.equal(setup(() => false).o.spanBook(), null);
+});
+
+test('sink: only a tool called from inside a tool span is marked nested', () => {
+  const { o, got } = setup();
+  const book = o.spanBook();
+  const agent = book.span('invoke_agent a', { 'gen_ai.operation.name': 'invoke_agent' });
+  book.within(agent.id, () => o.toolCall('under_agent', { id: 'm', type: 'mcp' }, {}).end(true, { content: [] }));
+  o.toolCall('direct', { id: 'm', type: 'mcp' }, {}).end(true, { content: [] });
+  agent.end();
+  const by = (n) => got.find((r) => r.name === n);
+  assert.equal(by('execute_tool under_agent').attributes['zaafpulse.tool.nested'], undefined);
+  assert.equal(by('execute_tool direct').attributes['zaafpulse.tool.nested'], undefined);
 });

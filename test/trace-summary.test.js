@@ -52,3 +52,14 @@ test('summary: a span with a remote parent still becomes the root when it starts
   assert.equal(s.root, 'POST /v1/chat/completions');
   assert.equal(s.runId, null);
 });
+
+test('summary: an integration call under the agent\'s tool span is one tool call', () => {
+  const tool = { 'gen_ai.operation.name': 'execute_tool', 'gen_ai.tool.name': 'web' };
+  const s = summarize(T, [
+    rec('1'.repeat(16), null, 'invoke_agent a', 1000, 300, { 'gen_ai.operation.name': 'invoke_agent' }),
+    rec('2'.repeat(16), '1'.repeat(16), 'execute_tool web', 1100, 100, tool),
+    rec('3'.repeat(16), '2'.repeat(16), 'execute_tool web', 1110, 80, { ...tool, 'zaafpulse.tool.nested': true }),
+  ]);
+  assert.equal(s.toolCalls, 1);
+  assert.deepEqual(s.tools, ['web']);
+});
