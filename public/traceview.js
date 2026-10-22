@@ -938,6 +938,8 @@ function mountTrace() {
     loadSkeleton(turn);
     loadEvals();
     loadFeedback();
+    // The session's agent process: Pause (the button above), Resume and Stop, from public/monitorsview.js.
+    if (typeof monTraceSession === 'function') monTraceSession(key);
   }
 
   /* ---- one turn: tree, map and detail ---- */
@@ -2110,6 +2112,7 @@ function mountTrace() {
 
   onUnmount(() => {
     S.alive = false;
+    if (typeof monTraceSession === 'function') monTraceSession(null);
     clearTimeout(S.poll);
     for (const t of timers) clearTimeout(t);
     timers.clear();
