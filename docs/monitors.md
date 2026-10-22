@@ -11,11 +11,11 @@ Eight rules ship with ZAAFPulse. Each can be switched on or off and has its own 
 | Rule | Triggers when | Default | On by default | Auto-pause |
 |---|---|---|---|---|
 | `daily_cost` | Today's spend passes the daily limit | `limitUSD`: the monthly budget / 30 | only with a monthly budget | yes |
-| `month_projection` | This month's projected cost passes the monthly budget | the monthly budget | only with a monthly budget | no |
+| `month_projection` | This month's projected cost passes the monthly budget, from the 4th of the month | the monthly budget | only with a monthly budget | no |
 | `cost_burn` | One session spent more than the limit in the last 10 minutes | `maxUSD`: 5 | no | yes |
-| `tool_loop` | A session shows a loop in the last 10 minutes | `maxCalls`: 50 | yes | yes |
+| `tool_loop` | A session shows a loop in the last 10 minutes | `maxCalls`: 50 (no effect yet, see [Known limits](#known-limits)) | yes | yes |
 | `agent_stuck` | An agent is working or thinking but wrote no new log line | `stuckMin`: 10 | no | no |
-| `accuracy_drop` | Today's accuracy is below the previous 7 days by more than the limit | `dropPoints`: 5 | yes | no |
+| `accuracy_drop` | Today's accuracy is below the previous 7 days by more than the limit, once both rest on enough results | `dropPoints`: 5, `minSamples`: 20 | yes | no |
 | `eval_pass_rate` | An evaluator passed less than the minimum share of checks in 24 hours | `minPassRate`: 0.8, `minSamples`: 20 | no | no |
 | `unsafe_content` | A secret leak, or a prompt injection from outside, in the window | `windowMin`: 60 | yes | no |
 
@@ -23,6 +23,8 @@ Notes:
 
 - Rules are either **live** (one instance per session: `cost_burn`, `tool_loop`, `agent_stuck`) or **aggregate** (one instance for everything).
 - `daily_cost` and `month_projection` need a monthly budget, set in Settings. Without one they stay off. Set `limitUSD` on `daily_cost` to use a limit of your own.
+- `month_projection` reports `no_data` for the first three days of each month (local time). A projection from a few hours of spend is noise: $1 by 00:30 on the 1st projects to about $1,500. The projection and the budget are still shown.
+- `accuracy_drop` reports `no_data` unless today and the previous 7 days each rest on at least `minSamples` tool results (default 20, the same as `eval_pass_rate`). One fault among the morning's first ten results would otherwise be a ten-point drop.
 - `eval_pass_rate` looks at the worst evaluator that has at least `minSamples` results. Evaluators with fewer are ignored.
 - `unsafe_content` counts a secret leak, or a prompt injection that came from outside (a tool result or a file, not from you).
 - A rule whose input is missing reports `no_data`. It never triggers on missing data.
@@ -88,7 +90,7 @@ An `{ "env": "NAME" }` reference works too. A plain URL typed into `config.json`
 
 ## Agent control
 
-You can pause, resume or stop a local agent process (Claude Code, Codex and the other apps on the Live page) from an alert in the bell drawer, where the dashboard shows the controls for that session.
+You can pause, resume or stop the local agent process behind a Claude Code or Codex session from the Explorer's session panel, the Live monitor's sessions and the AI Office. The bell drawer, the Live monitor and the AI Office also show a banner for each paused agent, with Resume and Stop.
 
 | Action | macOS and Linux | Windows |
 |---|---|---|
@@ -101,7 +103,7 @@ Details:
 - `SIGKILL` is never sent.
 - Claude Code may treat the first `SIGINT` as "interrupt the current turn" and not exit. That is why Stop follows with `SIGTERM`.
 - On Windows `taskkill` without `/F` asks the app to close. Console apps may not. Then the API answers 502 and the dashboard tells you to close the app from its own window.
-- Stop needs an explicit confirmation. A stopped (paused) process is continued first so it can handle the signal.
+- Stop needs an explicit confirmation. A paused (`SIGSTOP`) process is continued with `SIGCONT` right after the `SIGINT` so it can handle the signal. The `SIGCONT` gets its own audit line, with a note that says why.
 - **A paused agent is never resumed or stopped automatically.** You resume it.
 
 ### Safety checks
@@ -113,11 +115,11 @@ Before every signal ZAAFPulse reads the process table again and refuses unless:
 - it is an AI app, not ZAAFPulse itself or the judge's Claude Code calls;
 - for a rule, the action is a pause and the rule is allowed to pause.
 
-Every action, refused or not, is written to `.data/agent-audit.jsonl` (mode 0600, rotated at 5 MB). It holds the time, action, pid, start time, app, session id, who asked (`owner` or `rule`), the signal and the result. It holds no paths and no text.
+Every action, refused or not, is written to `.data/agent-audit.jsonl` (mode 0600, rotated at 5 MB). It holds the time, action, pid, start time, app, session id, who asked (`owner` or `rule`), the rule (for a rule's pause), the signal and the result, and a `note` on the `SIGCONT` that follows a stop. It holds no paths and no text.
 
 ### Linking a session to a process
 
-A session is linked to a process by working folder and start time: an agent process whose working folder matches the session's and which started before the session's first log line. If exactly one process matches, it is the target. If none or several match, nothing is paused and you are told which. The dashboard never guesses.
+A session is linked to a process by app, working folder and start time: a process of the session's own app (Claude Code for a Claude Code session, Codex for a Codex one), whose program is that app's own binary, whose working folder matches the session's, and which started before the session's first log line. A command line that only mentions the app, such as a dev server under `~/code/codex-clone`, is not a candidate. If exactly one process matches, it is the target. If none or several match, nothing is paused and you are told which. The dashboard never guesses.
 
 On macOS the working folder comes from `lsof`, on Linux from `/proc`. On Windows the working folder of a process is not available, so there are **no candidates** and sessions cannot be linked to processes there.
 
@@ -165,6 +167,7 @@ All routes are behind the dashboard sign-in. They are never open to gateway API 
 ## Known limits
 
 - **Too many tool calls in one turn does not fire.** The `tool_loop` rule currently triggers only on loop signals the index finds. The per-turn call count is not measured yet, so `maxCalls` has no effect.
+- **Quiet starts.** `month_projection` stays `no_data` for the first three days of a month, and `accuracy_drop` until today and the previous 7 days each have 20 tool results (`minSamples`).
 - **No statistical detection.** The rules compare numbers to limits. They do not learn a baseline.
 - **Local only.** Agents on other machines, and remote paging, are out of scope.
 - **Windows:** no pause, no resume, and no session-to-process link. Stop may fail on console apps.
