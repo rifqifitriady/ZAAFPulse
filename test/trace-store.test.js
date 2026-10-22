@@ -53,10 +53,43 @@ test('store: a new instance loads the snapshot and reads only what was appended 
   const a = createTraceStore({ dir, now: NOON });
   a.writeSpans([sp(T1, 'a'.repeat(16))]);
   a.snapshot();
+  const snapFile = path.join(dir, 'index.json');
+  assert.ok(fs.existsSync(snapFile));
+  if (process.platform !== 'win32') assert.equal(fs.statSync(snapFile).mode & 0o777, 0o600);
+  // Edit the snapshot on disk: a new instance must show this value, which only a load from the snapshot can give.
+  const snap = JSON.parse(fs.readFileSync(snapFile, 'utf8'));
+  snap.traces.find((s) => s.traceId === T1).root = 'from-snapshot';
+  fs.writeFileSync(snapFile, JSON.stringify(snap));
   a.writeSpans([sp(T2, 'b'.repeat(16))]);
   const b = createTraceStore({ dir, now: NOON });
   assert.equal(b.summaries().length, 2);
+  assert.equal(b.getSummary(T1).root, 'from-snapshot');
   assert.equal(b.getSummary(T1).spans, 1);
+  assert.equal(b.getSummary(T2).spans, 1);
+});
+
+test('store: one trace over two daily segments, with a foreign trace between, reads back whole after a restart', () => {
+  const dir = tmp();
+  let t = Date.UTC(2026, 9, 21, 12);
+  const store = createTraceStore({ dir, now: () => t });
+  store.writeSpans([sp(T1, 'a'.repeat(16), null, 1000, 10)]);
+  t = Date.UTC(2026, 9, 22, 12);
+  store.writeSpans([sp(T2, 'b'.repeat(16), null, 2000, 10), sp(T1, 'c'.repeat(16), 'a'.repeat(16), 1005, 2)]);
+  const ids = (spans) => spans.map((s) => s.s).sort();
+  const expected = ['a'.repeat(16), 'c'.repeat(16)];
+  assert.deepEqual(ids(store.getSpans(T1)), expected);
+  assert.deepEqual(Object.keys(store.getSummary(T1).ref).sort(), ['2026-10-21.ndjson', '2026-10-22.ndjson']);
+  store.snapshot();
+  const reopened = createTraceStore({ dir, now: () => t });
+  assert.deepEqual(ids(reopened.getSpans(T1)), expected);
+  assert.ok(reopened.getSpans(T1).every((s) => s.t === T1));
+});
+
+test('store: an existing folder with a looser mode is made private', () => {
+  const dir = tmp();
+  fs.chmodSync(dir, 0o755);
+  createTraceStore({ dir, now: NOON });
+  if (process.platform !== 'win32') assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
 });
 
 test('store: a line cut short by a crash is closed and skipped; later writes stay intact', () => {
