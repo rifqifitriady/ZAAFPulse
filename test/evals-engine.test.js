@@ -1647,3 +1647,160 @@ test("the judge's own sessions are skipped also when the project comes from the 
   const { queued } = await r.engine.tick();
   assert.equal(queued, 4, 'only the sessions that are not the judge');
 });
+
+// ---- judgeMaterial: judge calls outside the queue (dataset experiments) ----
+const MATERIAL = { prompt: 'fix the redirect', answer: 'Fixed.', tools: [], available: ['Read'] };
+
+test('judgeMaterial gives a verdict from the local model and writes nothing to the store', async () => {
+  const r = rig();
+  const v = await r.engine.judgeMaterial('task_completion', MATERIAL);
+  assert.equal(v.ok, true);
+  assert.equal(v.label, 'complete');
+  assert.equal(v.score, 1);
+  assert.equal(v.pass, true);
+  assert.equal(v.explanation, 'fine');
+  assert.deepEqual(v.judge, { kind: 'ollama', model: 'qwen3:8b', provider: 'ollama' });
+  assert.equal(v.trimmed, false);
+  assert.equal(r.calls.length, 1);
+  assert.match(r.calls[0].user, /fix the redirect/);
+  assert.equal(r.store.all().length, 0);
+  assert.equal((await r.engine.status()).today.count, 1);
+});
+
+test('judgeMaterial follows the queue gates: judge off, no model, daily cap', async () => {
+  const off = rig({ settings: { judge: false } });
+  assert.deepEqual(await off.engine.judgeMaterial('relevance', MATERIAL), { ok: false, reason: 'judge off' });
+  assert.equal(off.calls.length, 0);
+
+  const none = rig({ resolved: WAITING });
+  assert.deepEqual(await none.engine.judgeMaterial('relevance', MATERIAL), { ok: false, reason: WAITING.reason });
+  assert.equal(none.calls.length, 0);
+
+  const cap = rig({ settings: { dailyCap: 1 } });
+  assert.equal((await cap.engine.judgeMaterial('relevance', MATERIAL)).ok, true);
+  assert.deepEqual(await cap.engine.judgeMaterial('relevance', MATERIAL), { ok: false, reason: 'daily cap' });
+  assert.equal(cap.calls.length, 1);
+  assert.equal((await cap.engine.status()).today.count, 1);
+});
+
+test('judgeMaterial never sends to an unconfirmed or unpriced external judge', async () => {
+  const r = extRig({ externalConfirmed: undefined });
+  assert.deepEqual(await r.engine.judgeMaterial('relevance', MATERIAL), {
+    ok: false,
+    reason: 'Confirm the preview before sending to openrouter',
+  });
+  const p = extRig();
+  p.st.priced = false;
+  assert.equal(
+    (await p.engine.judgeMaterial('relevance', MATERIAL)).reason,
+    'No price known for gpt-x, so the cost cap cannot apply',
+  );
+  assert.equal(r.calls.length + p.calls.length, 0);
+});
+
+test('judgeMaterial counts an external call against the cost cap, and refuses one the estimate would pass', async () => {
+  const r = extRig({ costCapUSD: 0.05 });
+  r.st.cost = 0.03;
+  assert.equal((await r.engine.judgeMaterial('relevance', MATERIAL)).ok, true);
+  assert.equal((await r.engine.judgeMaterial('relevance', MATERIAL)).ok, true); // 0.03 < 0.05: the call that crosses
+  assert.deepEqual(await r.engine.judgeMaterial('relevance', MATERIAL), { ok: false, reason: 'cost cap' });
+  assert.equal(r.calls.length, 2);
+  assert.ok(Math.abs((await r.engine.status()).today.cost - 0.06) < 1e-9);
+
+  const e = extRig({ costCapUSD: 0.05 });
+  e.st.price = { input: 1e6, output: 0 }; // a dollar a token: the estimate alone passes the cap
+  assert.deepEqual(await e.engine.judgeMaterial('relevance', MATERIAL), { ok: false, reason: 'cost cap' });
+  assert.equal(e.calls.length, 0);
+});
+
+test('judgeMaterial: an invalid verdict and a failed call are reasons, not throws', async () => {
+  const r = rig();
+  r.st.text = () => 'not json';
+  assert.deepEqual(await r.engine.judgeMaterial('relevance', MATERIAL), { ok: false, reason: 'invalid verdict' });
+  assert.equal(r.engine.stats().invalid, 1);
+  r.st.text = null;
+  r.st.failures = 1;
+  r.st.failStatus = 500;
+  assert.deepEqual(await r.engine.judgeMaterial('relevance', MATERIAL), { ok: false, reason: 'judge call failed' });
+  assert.equal(r.store.all().length, 0);
+});
+
+test('judgeMaterial throws 400 for an id that is not a turn judge', async () => {
+  const r = rig();
+  for (const id of ['secret_leak', 'user_frustration', 'reference_match', 'nope']) {
+    await assert.rejects(r.engine.judgeMaterial(id, MATERIAL), (err) => err.status === 400);
+  }
+  assert.equal(r.calls.length, 0);
+});
+
+test('judgeMaterial is cancelled by its signal and by stop()', async () => {
+  const r = rig();
+  const ctl = new AbortController();
+  ctl.abort();
+  assert.deepEqual(await r.engine.judgeMaterial('relevance', MATERIAL, { signal: ctl.signal }), {
+    ok: false,
+    reason: 'cancelled',
+  });
+  const live = new AbortController();
+  r.st.hang = true;
+  const p = r.engine.judgeMaterial('relevance', MATERIAL, { signal: live.signal });
+  await r.settle();
+  live.abort();
+  assert.deepEqual(await p, { ok: false, reason: 'cancelled' });
+  assert.equal(r.calls[0].signal.aborted, true);
+
+  r.st.hang = true;
+  const q = r.engine.judgeMaterial('relevance', MATERIAL);
+  await r.settle();
+  r.engine.stop();
+  assert.equal((await q).ok, false);
+  assert.equal(r.calls[1].signal.aborted, true);
+  assert.deepEqual(await r.engine.judgeMaterial('relevance', MATERIAL), { ok: false, reason: 'judge stopped' });
+  assert.equal(r.calls.length, 2);
+});
+
+test('a queue job and judgeMaterial calls share one lane: never two model calls in flight', async () => {
+  const r = rig({ settings: { evaluators: only('faithfulness', 'task_completion', 'relevance') } });
+  await r.arm();
+  r.st.entries.push(entry('s', turnsAfter(3), T0 + 6 * MIN));
+  r.clock.t = T0 + 20 * MIN;
+  const side = Promise.all([
+    r.engine.judgeMaterial('relevance', MATERIAL),
+    r.engine.judgeMaterial('faithfulness', MATERIAL),
+    r.engine.judgeMaterial('tool_selection', MATERIAL),
+  ]);
+  const [ticked, verdicts] = await Promise.all([r.engine.tick(), side]);
+  await r.engine.drain();
+  assert.equal(ticked.queued, 3);
+  assert.ok(verdicts.every((v) => v.ok));
+  assert.equal(r.calls.length, 3 * 3 + 3);
+  assert.equal(r.maxInflight(), 1);
+  assert.equal(r.store.all().length, 9, 'only the queue writes results');
+  assert.equal((await r.engine.status()).today.count, 12);
+});
+
+test('judgeMaterial in demo mode makes no model call and gives a stable verdict', async () => {
+  const r = rig({ demo: true, demoData: { status: {} } });
+  const crypto = require('crypto');
+  const pick = (want) => {
+    for (let i = 0; ; i++) {
+      const a = `answer ${i}`;
+      if ((crypto.createHash('sha256').update(a).digest()[0] % 4 === 0) === want) return a;
+    }
+  };
+  const pass = await r.engine.judgeMaterial('task_completion', { ...MATERIAL, answer: pick(false) });
+  assert.deepEqual(pass, {
+    ok: true,
+    label: 'complete',
+    score: 1,
+    pass: true,
+    explanation: 'Demo verdict (no model was called).',
+    judge: { kind: 'ollama', model: 'qwen3:8b', provider: 'ollama' },
+    trimmed: false,
+  });
+  const second = await r.engine.judgeMaterial('task_completion', { ...MATERIAL, answer: pick(true) });
+  assert.equal(second.label, 'partial');
+  assert.equal(second.score, 0.5);
+  assert.equal(second.pass, false);
+  assert.equal(r.calls.length, 0);
+});
