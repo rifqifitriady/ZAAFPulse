@@ -51,7 +51,8 @@ Notes per source:
 On the page: choose 24 h, 7 d or 30 d, search by title, project or branch, filter by source or by sessions
 with errors, and drag the splitter between the tree and the map. A session opens on its last turn; the turn
 buttons switch turns. Search never reads a transcript: it matches the titles the list has already read (a
-Claude Code or Codex title is read when its row comes into view), the project and the branch. Under 1100 px of
+Claude Code or Codex title is read when its row comes into view), the project and the branch, and for a stored
+gateway trace its agents, models and tools. Under 1100 px of
 window width the two halves stack, the map below the explorer. In demo mode, links from the Sessions and AI
 Office pages open the synthetic session of their tool.
 
@@ -203,8 +204,8 @@ reads nothing under your home folder.
 `acc_trace_get` reads one of those sessions in small views, so an AI client can look at structure before
 details: `topology` (span ids, parents, kinds, names, durations, statuses), `critical_path`, `errors` (failed
 spans and the likely cause) and `span` (one span's model, tool name, tokens, cost, self time and branch totals).
-Arguments: `key`, `view`, and `turn` and `span` where needed. A turn that does not exist is an error, not the
-last turn. A large view is cut to fit the MCP result, and then says `truncated: true`. It never returns text,
+Arguments: `key`, `view`, and `turn` and `span` where needed. A turn that is not a whole number of zero or more
+is an error; a turn past the last one is not (Claude Code and Codex then read their last turn). A large view is cut to fit the MCP result, and then says `truncated: true`. It never returns text,
 content ids, tool targets or paths.
 
 ## Troubleshooting
