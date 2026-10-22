@@ -22,6 +22,7 @@ const {
   trCpMs,
   trSpanFacts,
   trCause,
+  trAncestors,
   trDepRows,
   trOffNote,
   trStartCollapsed,
@@ -717,4 +718,30 @@ test('the analysis UI fills the cause and the dependency table with text only (S
   assert.match(src, /\$\('#tr-cause-msg'\)\.textContent = /);
   assert.match(src, /insertCell\(\)\.textContent = /);
   assert.doesNotMatch(src, /innerHTML[^;\n]*\b(trDepRows|trCause|cells)\b/);
+});
+
+test('trAncestors lists the ids above a span and survives cycles', () => {
+  const m = new Map([
+    ['a', { id: 'a', parent: null }],
+    ['b', { id: 'b', parent: 'a' }],
+    ['c', { id: 'c', parent: 'b' }],
+    ['x', { id: 'x', parent: 'y' }],
+    ['y', { id: 'y', parent: 'x' }],
+    ['o', { id: 'o', parent: 'gone' }],
+  ]);
+  assert.deepEqual(trAncestors(m, 'c'), ['b', 'a']);
+  assert.deepEqual(trAncestors(m, 'a'), []);
+  assert.deepEqual(trAncestors(m, 'nope'), []);
+  assert.deepEqual(trAncestors(m, 'x'), ['y']);
+  assert.deepEqual(trAncestors(m, 'o'), ['gone']);
+});
+
+test('audit: Show opens collapsed ancestors, live adopt refreshes the analysis, deps ignore stale replies', () => {
+  const src = fs.readFileSync(SRC, 'utf8');
+  assert.match(src, /trAncestors\(S\.spans, id\)\.filter\(\(a\) => S\.collapsed\.delete\(a\)\)/);
+  const live = src.slice(src.indexOf('async function pollLive'));
+  assert.match(live, /S\.an = r\.skeleton\.analysis \|\| null;\s+S\.cp = trCritical\(S\.an\);[\s\S]*?paintCause\(\);/);
+  const deps = src.slice(src.indexOf('async function loadDeps'), src.indexOf('// The session'));
+  assert.match(deps, /const my = \+\+S\.dreq/);
+  assert.equal((deps.match(/my === S\.dreq|my !== S\.dreq/g) || []).length, 2);
 });

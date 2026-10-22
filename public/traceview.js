@@ -686,6 +686,7 @@ function mountTrace() {
     preview: '',
     req: 0,
     creq: 0,
+    dreq: 0,
     poll: 0,
     frame: 0,
     listReq: 0,
@@ -1162,15 +1163,16 @@ function mountTrace() {
   }
   async function loadDeps() {
     const box = $('#tr-deps');
+    const my = ++S.dreq; // only the latest range paints
     box.textContent = 'Loading dependencies…';
     let d;
     try {
       d = await trApi(`/api/trace/deps?range=${encodeURIComponent(S.range)}`);
     } catch (e) {
-      if (S.alive) box.textContent = `Dependencies are not available: ${e.message}`;
+      if (S.alive && my === S.dreq) box.textContent = `Dependencies are not available: ${e.message}`;
       return;
     }
-    if (!S.alive || S.view !== 'deps') return;
+    if (!S.alive || my !== S.dreq || S.view !== 'deps') return;
     const rows = trDepRows(d);
     if (!rows.length) {
       box.textContent = 'No agent calls in this range. Dependencies come from Agent Gateway traces.';
@@ -1994,7 +1996,17 @@ function mountTrace() {
           S.sk = r.skeleton;
           S.turn = Math.max(0, r.skeleton.turns.length - 1);
           if (plan.repaint) paintSkeleton();
-          else S.spans = new Map(r.skeleton.spans.map((s) => [s.id, s]));
+          else {
+            S.spans = new Map(r.skeleton.spans.map((s) => [s.id, s]));
+            // A growing turn changes its critical path and cause even when the tree is left alone.
+            S.an = r.skeleton.analysis || null;
+            S.cp = trCritical(S.an);
+            const cpMs = trCpMs(S.an);
+            const base = $('#tr-sum').textContent.replace(/ · critical path .*$/, '');
+            $('#tr-sum').textContent = cpMs > 0 ? `${base} · critical path ${fmtDur(cpMs)}` : base;
+            paintCause();
+            paintRows();
+          }
           const now = S.sel && S.spans.get(S.sel);
           if (!now) pickSelection();
           else {
@@ -2060,7 +2072,16 @@ function mountTrace() {
     }
     if ((el = q('[data-tview]'))) return void showView(el.dataset.tview);
     if (q('#tr-cause-go')) {
-      if (S.an && S.an.rootCause) select(S.an.rootCause.spanId, { force: true });
+      if (S.an && S.an.rootCause) {
+        // The row only exists when every ancestor is open.
+        const id = S.an.rootCause.spanId;
+        const shut = trAncestors(S.spans, id).filter((a) => S.collapsed.delete(a));
+        if (shut.length) {
+          buildRows();
+          paintRows();
+        }
+        select(id, { force: true });
+      }
       return;
     }
     if ((el = q('[data-tsrc]'))) {
@@ -2289,8 +2310,22 @@ function mountTrace() {
   })();
 }
 
+// The ids above a span, nearest first; a parent cycle or a missing parent ends the walk.
+function trAncestors(spans, id) {
+  const out = [];
+  const seen = new Set([id]);
+  let cur = spans.get(id);
+  while (cur && cur.parent != null && !seen.has(cur.parent)) {
+    seen.add(cur.parent);
+    out.push(cur.parent);
+    cur = spans.get(cur.parent);
+  }
+  return out;
+}
+
 if (typeof module !== 'undefined')
   module.exports = {
+    trAncestors,
     treeRows,
     mapNodes,
     textNodes,
