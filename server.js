@@ -43,6 +43,8 @@ const register = require('./scripts/register-mcp');
 const platform = require('./lib/platform');
 const { createAuth, isLoopback, originAllowed } = require('./lib/auth');
 const otel = require('./lib/otel');
+const { createTraceStore } = require('./lib/trace/store');
+const { createRecorder } = require('./lib/trace/recorder');
 
 const PORT = Number(process.env.ZAAFPULSE_PORT || process.env.PORT) || 4777;
 const HOST = process.env.ZAAFPULSE_HOST || process.env.HOST || '127.0.0.1';
@@ -226,8 +228,23 @@ function rawConfig() {
   }
   return rawCache.value;
 }
-// OpenTelemetry trace export: off unless config.json has "otel": { "enabled": true } (see docs/otel.md).
-otel.init({ getConfig: rawConfig, secrets: createSecrets(), version: require('./package.json').version });
+// Local trace store: every gateway trace without content, under .data/traces (on unless "tracing": { "enabled":
+// false }). Retention is read at start; the on/off switch whenever config.json changes.
+const tracingCfg = () => (rawConfig() || {}).tracing || {};
+const traceStore = createTraceStore({
+  dir: path.join(DEMO ? demoDir : path.join(DIR, '.data'), 'traces'),
+  retentionDays: Number(tracingCfg().retentionDays) > 0 ? Number(tracingCfg().retentionDays) : 14,
+  maxBytes: Number(tracingCfg().maxBytes) > 0 ? Number(tracingCfg().maxBytes) : 500 * 1024 * 1024,
+});
+const recorder = createRecorder({ store: traceStore, enabled: () => tracingCfg().enabled !== false });
+// OpenTelemetry trace export: off unless config.json has "otel": { "enabled": true } (see docs/otel.md). The local
+// store is its second sink.
+otel.init({
+  getConfig: rawConfig,
+  secrets: createSecrets(),
+  version: require('./package.json').version,
+  sink: recorder,
+});
 const gatewaySecret = secretResolver({ store: DEMO ? () => {} : keychainStore });
 const gateway = createGateway({
   dataDir: DEMO ? demoDir : path.join(DIR, '.data'),
@@ -971,6 +988,18 @@ server.listen(PORT, HOST, () => {
   };
   syncPrices();
   setInterval(syncPrices, 3600 * 1000).unref();
+  // Trace store: snapshot the index and apply retention now and every 5 minutes.
+  const keepTraces = () => {
+    try {
+      recorder.flush();
+      traceStore.applyRetention();
+      traceStore.snapshot();
+    } catch (err) {
+      console.error('traces:', err.message);
+    }
+  };
+  keepTraces();
+  setInterval(keepTraces, 5 * 60 * 1000).unref();
   // Demo: seed the workspace, then run chats, agents, collaboration patterns and workflows once.
   if (DEMO)
     demoGw
@@ -988,6 +1017,8 @@ for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP'])
     try {
       evalEngine.stop(); // a running judge call is cancelled, and its working folder removed
       gateway.flush();
+      recorder.flush();
+      traceStore.snapshot();
     } finally {
       // Queued spans get up to 2 seconds to reach the OTLP endpoint.
       otel.shutdown(2000).finally(() => process.exit(0));

@@ -8,6 +8,11 @@
     "serviceName": "zaafpulse",
     "captureContent": false
   },
+  "tracing": {
+    "enabled": true,
+    "retentionDays": 14,
+    "maxBytes": 524288000
+  },
   "integrations": {
     "dynatrace-saas": {
       "type": "dynatrace",
