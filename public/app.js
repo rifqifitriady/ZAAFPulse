@@ -234,6 +234,7 @@ const TITLES = {
   rag: 'RAG SERVICE',
   a2a: 'AGENT-TO-AGENT',
   settings: 'SETTINGS',
+  datasets: 'DATASETS',
 };
 
 async function api(path, opts) {
@@ -1082,6 +1083,7 @@ const VIEWS = {
   skills: viewSkillsPage,
   rag: viewRag,
   a2a: viewA2a,
+  datasets: viewDatasets,
 };
 // Pages that moved when the sidebar was regrouped (AI Observability / Agentic Workspace).
 const ROUTE_MOVED = { agents: '#skills/usage' };
@@ -1133,7 +1135,7 @@ function render(animate = true) {
   unmountBrain();
   unmountStages();
   if (state.route === 'settings') return viewSettings(el);
-  if (!state.data && !['live', 'brain', 'integrations', 'trace'].includes(state.route)) {
+  if (!state.data && !['live', 'brain', 'integrations', 'trace', 'datasets'].includes(state.route)) {
     el.innerHTML =
       '<div class="grid kpis">' +
       '<div class="skeleton"></div>'.repeat(4) +
@@ -1148,6 +1150,7 @@ function render(animate = true) {
   if (state.route === 'quality') mountQualityPage();
   if (state.route === 'sessions') mountSessions();
   if (state.route === 'trace') mountTrace();
+  if (state.route === 'datasets') mountDatasets();
   if (state.route === 'projects') mountProjects();
   if (state.route === 'skills' && state.sub === 'usage') mountAgents();
   if (state.route === 'integrations') mountIntegrations();
@@ -1315,7 +1318,7 @@ function applyTheme() {
     if (state.route === 'live' && updateLive()) {
       /* patched in place */
     } else if (
-      !['settings', 'brain', 'squad', 'trace'].includes(state.route) &&
+      !['settings', 'brain', 'squad', 'trace', 'datasets'].includes(state.route) &&
       !$('#view').contains(document.activeElement)
     )
       render(false); // squad and trace pages poll on their own

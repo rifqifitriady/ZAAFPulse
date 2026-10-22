@@ -32,6 +32,8 @@ const {
   trEvalWhy,
   trNoteSaved,
   trMarkQueue,
+  trSelToggle,
+  trAddBody,
 } = require('../public/traceview.js');
 const { EVALUATORS } = require('../lib/evals/registry');
 
@@ -671,4 +673,52 @@ test('trMarkQueue: a key in flight is not asked twice; a refresh during the flig
   q.refresh('b');
   assert.deepEqual(q.take(1), ['b'], 'a refresh outside a flight just queues');
   assert.equal(q.take(50).length, 0);
+});
+
+test('trSelToggle: adds and removes a turn by key and turn, at most 50', () => {
+  let sel = trSelToggle([], { key: 'a', turn: 0 });
+  sel = trSelToggle(sel, { key: 'a', turn: 2 });
+  sel = trSelToggle(sel, { key: 'b', turn: 0 });
+  assert.deepEqual(sel, [
+    { key: 'a', turn: 0 },
+    { key: 'a', turn: 2 },
+    { key: 'b', turn: 0 },
+  ]);
+  const before = sel;
+  sel = trSelToggle(sel, { key: 'a', turn: 2, span: 'ignored' });
+  assert.deepEqual(sel, [
+    { key: 'a', turn: 0 },
+    { key: 'b', turn: 0 },
+  ]);
+  assert.equal(before.length, 3, 'the old list is not changed');
+  const full = Array.from({ length: 50 }, (_, i) => ({ key: 'k', turn: i }));
+  const capped = trSelToggle(full, { key: 'k', turn: 50 });
+  assert.equal(capped.length, 50);
+  assert.ok(!capped.some((x) => x.turn === 50), 'the 51st turn is not added');
+  assert.equal(trSelToggle(full, { key: 'k', turn: 7 }).length, 49, 'removing still works at the cap');
+  assert.deepEqual(trSelToggle(null, { key: 'a', turn: 1 }), [{ key: 'a', turn: 1 }]);
+  assert.deepEqual(trSelToggle([], { key: '', turn: 1 }), [], 'no key, no item');
+  assert.deepEqual(trSelToggle([], { key: 'a', turn: -1 }), [], 'a bad turn, no item');
+});
+
+test('trAddBody: the multi-selection, else the turn on show with its selected span', () => {
+  const S = { key: 'k1', skKey: 'k1', sk: { turns: [] }, turn: 3, sel: 'span-9' };
+  assert.deepEqual(trAddBody([], S), { items: [{ key: 'k1', turn: 3, span: 'span-9' }] });
+  assert.deepEqual(trAddBody(null, { ...S, sel: null }), { items: [{ key: 'k1', turn: 3, span: null }] });
+  assert.deepEqual(
+    trAddBody(
+      [
+        { key: 'a', turn: 0 },
+        { key: 'b', turn: 4 },
+      ],
+      S,
+    ),
+    {
+      items: [
+        { key: 'a', turn: 0 },
+        { key: 'b', turn: 4 },
+      ],
+    },
+  );
+  assert.equal(trAddBody([], { ...S, skKey: 'old' }), null, 'nothing while another session loads');
 });
