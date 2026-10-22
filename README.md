@@ -792,6 +792,7 @@ docs/explorer.md       Trace explorer: sources, privacy, keyboard, API, troubles
 docs/evals.md          local evals and feedback: evaluators, local judge, caps, privacy, API, MCP tool, CLI
 docs/datasets.md       datasets, replay and the CI gate: shapes, limits, privacy, API, recipes
 docs/release-hardening.md tag ruleset and immutable releases
+docs/monitors.md       monitors, alerts, webhook, pausing an agent: rules, channels, limits, API
 docs/assets/           README banner, diagrams, screenshots and GIFs
 ```
 </details>

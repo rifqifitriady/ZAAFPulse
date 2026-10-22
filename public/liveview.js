@@ -62,6 +62,7 @@ function viewLive() {
       <p>Every AI app running on ${esc(state.data?.config.host || 'this machine')}, sampled every 5 seconds.</p></div>
       <div class="hero-actions"><span class="pill live-pill"><i class="live-dot"></i><span id="lv-clock">LIVE</span></span>
         <span class="pill" id="lv-samples"></span></div></div>
+    <div class="mon-strip" data-mon-strip hidden></div>
 
     <section class="holo stage">
       <canvas id="lv-scene" aria-label="3D view of running AI apps: tower height is CPU, the spike field is memory, the back walls show the last five minutes"></canvas>
@@ -342,7 +343,9 @@ function sessionsTable() {
     ${rows
       .map((s) => {
         const hot = Date.now() - s.end < 5 * 60000;
-        return `<tr><td class="clip"><b title="${esc(s.project)}">${esc(s.project)}</b><small class="block muted">${whole.format(s.calls)} calls${s.branch && s.branch !== 'HEAD' ? ` · ${esc(s.branch)}` : ''}</small></td>
+        // An active Claude Code or Codex session can be paused, resumed or stopped (public/monitorsview.js).
+        const agent = hot ? monAgentButton(s.tool, s.id, s.project) : '';
+        return `<tr><td class="clip"><b title="${esc(s.project)}">${esc(s.project)}</b><small class="block muted">${whole.format(s.calls)} calls${s.branch && s.branch !== 'HEAD' ? ` · ${esc(s.branch)}` : ''}${agent}</small></td>
         <td><span class="tool-dot" style="background:${seriesColor(s.tool)}"></span>${esc(toolName(s.tool))}<small class="block muted">${esc((s.model || '—').replace(/^claude-/, ''))}</small></td>
         <td class="r num">${fmtN(s.tokens)}</td><td class="r num">${fmtUSD(s.cost)}</td>
         <td class="r">${hot ? '<span class="hot"><i></i>active</span>' : `<span class="muted">${ago(s.end)}</span>`}</td></tr>`;
@@ -539,6 +542,7 @@ function mountLive() {
   const canvas = $('#lv-scene');
   if (!canvas || !state.live) return;
   paintLive();
+  monPaintStrips(); // paused agents, with Resume and Stop
   liveScene = isoStage(canvas, { draw: drawLiveScene });
 }
 // Refresh in place; false when the page is not mounted (the caller then does a full render).
