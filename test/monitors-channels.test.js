@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('events');
+const { spawnSync } = require('child_process');
 const { createChannels, WINDOWS_SCRIPT } = require('../lib/monitors/channels');
 const { fakeServer, secretsFor } = require('./helpers');
 
@@ -74,37 +75,92 @@ test('macOS passes the title and text as argv after the fixed AppleScript, with 
   assert.ok(!opts || !opts.shell);
 });
 
-test('Linux uses notify-send with fixed flags and the text as separate arguments', async () => {
+test('Linux uses notify-send with fixed flags, a -- guard and the text as separate arguments', async () => {
   const r = recorder();
   const ch = make({ platform: 'linux', spawn: r.spawn });
   await ch.notify(alert(), { title: NASTY });
   const { cmd, args, opts } = r.calls[0];
   assert.equal(cmd, 'notify-send');
-  assert.equal(args.length, 3);
+  assert.equal(args.length, 4);
   assert.equal(args[0], '--app-name=ZAAFPulse');
-  assert.equal(args[1], 'ZAAFPulse: Daily cost');
-  assert.ok(args[2].includes('$(rm -rf ~)'));
+  assert.equal(args[1], '--', 'nothing after this can be read as an option');
+  assert.equal(args[2], 'ZAAFPulse: Daily cost');
+  assert.ok(args[3].includes('$(rm -rf ~)'));
   assert.ok(!opts || !opts.shell);
 });
 
-test('Windows runs a constant script from stdin and hands the text over in the environment', async () => {
+test('Linux escapes markup in the title and text, since the notification daemon renders it', async () => {
+  const r = recorder();
+  const ch = make({ platform: 'linux', spawn: r.spawn });
+  await ch.notify(alert(), { title: 'Click <a href="x">here</a> & <b>now</b>' });
+  const text = r.calls[0].args[3];
+  assert.ok(!text.includes('<a') && !text.includes('<b>'), text);
+  assert.ok(text.includes('&lt;a href="x"&gt;here&lt;/a&gt; &amp; &lt;b&gt;now&lt;/b&gt;'), text);
+  assert.ok(!/&(?!amp;|lt;|gt;)/.test(text), 'every ampersand is an entity');
+  // macOS shows plain text, so nothing is escaped there.
+  const mac = recorder();
+  await make({ spawn: mac.spawn }).notify(alert(), { title: 'a <b> & c' });
+  assert.ok(mac.calls[0].args[7].includes('a <b> & c'));
+});
+
+test('Windows runs a constant encoded script, with no stdin, and the text in the environment', async () => {
   const r = recorder();
   const ch = make({ platform: 'win32', spawn: r.spawn });
-  await ch.notify(alert(), { title: NASTY });
+  const saved = process.env.ZP_DRY_RUN;
+  process.env.ZP_DRY_RUN = '1'; // a stray variable of ZAAFPulse's own must not silence the toast
+  try {
+    await ch.notify(alert(), { title: NASTY });
+  } finally {
+    if (saved === undefined) delete process.env.ZP_DRY_RUN;
+    else process.env.ZP_DRY_RUN = saved;
+  }
   const { cmd, args, opts, stdin } = r.calls[0];
   assert.equal(cmd, 'powershell');
-  assert.deepEqual(args, ['-NoProfile', '-NonInteractive', '-Command', '-']);
-  assert.equal(stdin, WINDOWS_SCRIPT);
+  assert.deepEqual(args.slice(0, 3), ['-NoProfile', '-NonInteractive', '-EncodedCommand']);
+  assert.equal(args.length, 4);
+  assert.equal(Buffer.from(args[3], 'base64').toString('utf16le'), WINDOWS_SCRIPT);
+  assert.equal(stdin, '', 'nothing is written to stdin');
+  assert.equal(opts.stdio, 'ignore');
   assert.match(WINDOWS_SCRIPT, /\$env:ZP_TITLE/);
   assert.match(WINDOWS_SCRIPT, /\$env:ZP_TEXT/);
+  assert.match(WINDOWS_SCRIPT, /SecurityElement\]::Escape/);
+  assert.match(WINDOWS_SCRIPT, /ZP_DRY_RUN/);
   assert.match(WINDOWS_SCRIPT, /ToastNotificationManager/);
   assert.match(WINDOWS_SCRIPT, /BalloonTip/);
+  assert.ok(WINDOWS_SCRIPT.includes('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe'));
   assert.equal(opts.env.ZP_TITLE, 'ZAAFPulse: Daily cost');
   assert.ok(opts.env.ZP_TEXT.includes('$(rm -rf ~)'));
+  assert.equal(opts.env.ZP_DRY_RUN, undefined);
   assert.ok(!opts.shell);
-  // Nothing alert-specific is in the script text, so nothing can be injected into it.
-  assert.ok(!stdin.includes('12.35') && !stdin.includes('rm -rf'));
+  const enc = args[3];
+  assert.ok(!Buffer.from(enc, 'base64').toString('utf16le').includes('12.35'), 'the alert is not in the script');
 });
+
+// The one place a real OS command runs: with ZP_DRY_RUN the script builds and parses the toast XML, prints OK and
+// shows nothing. It runs on the windows-latest runner.
+test(
+  'the real Windows script builds valid toast XML from awkward text without showing anything',
+  { skip: process.platform !== 'win32' },
+  () => {
+    const out = spawnSync(
+      'powershell',
+      ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(WINDOWS_SCRIPT, 'utf16le').toString('base64')],
+      {
+        env: {
+          ...process.env,
+          ZP_DRY_RUN: '1',
+          ZP_TITLE: `ZAAFPulse: <b>"Cost"</b> & 'x'`,
+          ZP_TEXT: `Triggered: 12.35 (limit 10)\n</text><evil a="1"/> & $(whoami) \`id\``,
+        },
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 60e3,
+      },
+    );
+    assert.equal(out.status, 0, out.stderr);
+    assert.equal(out.stdout.trim(), 'OK');
+  },
+);
 
 test('the text holds only the rule title, state, numbers and the masked, clipped session title', async () => {
   const r = recorder();
@@ -237,31 +293,47 @@ test('a failed webhook is retried three times with the 1 s, 4 s, 16 s backoff, t
   }
 });
 
-test('a webhook that recovers stops retrying; a redirect is not followed', async () => {
+test('a webhook that recovers stops retrying', async () => {
   let n = 0;
-  const srv = await fakeServer({
-    'POST /hook': () => (++n < 3 ? { status: 503 } : { status: 200 }),
-    'POST /redir': { status: 302, headers: { location: 'http://127.0.0.1:9/elsewhere' } },
-  });
+  const srv = await fakeServer({ 'POST /hook': () => (++n < 3 ? { status: 503 } : { status: 200 }) });
   try {
     const waits = [];
     const ch = make({
       spawn: recorder().spawn,
-      env: { HOOK_URL: `${srv.url}/hook`, REDIR_URL: `${srv.url}/redir` },
+      env: { HOOK_URL: `${srv.url}/hook` },
       settings: { desktop: false, webhook: { url: { env: 'HOOK_URL' } } },
       sleep: async (ms) => waits.push(ms),
     });
     await ch.notify(alert());
     assert.equal(srv.requests.length, 3);
     assert.deepEqual(waits, [1000, 4000]);
-    const redir = make({
+  } finally {
+    await srv.close();
+  }
+});
+
+test('a redirect is not followed, and it is a configuration error: one try, one log line', async () => {
+  let srv;
+  srv = await fakeServer({
+    'POST /redir': () => ({ status: 302, headers: { location: `${srv.url}/elsewhere` } }),
+    'POST /elsewhere': { status: 200 },
+  });
+  try {
+    const waits = [];
+    const logs = [];
+    const ch = make({
       spawn: recorder().spawn,
       env: { REDIR_URL: `${srv.url}/redir` },
       settings: { desktop: false, webhook: { url: { env: 'REDIR_URL' } } },
+      sleep: async (ms) => waits.push(ms),
+      logs,
     });
-    const before = srv.requests.length;
-    await redir.notify(alert());
-    assert.equal(srv.requests.length - before, 4, 'the 302 counts as a failure and is retried, not followed');
+    await ch.notify(alert());
+    assert.equal(srv.requests.filter((r) => r.path === '/redir').length, 1);
+    assert.equal(srv.requests.filter((r) => r.path === '/elsewhere').length, 0);
+    assert.deepEqual(waits, []);
+    assert.equal(logs.length, 1);
+    assert.match(logs[0], /redirect/);
   } finally {
     await srv.close();
   }
@@ -297,6 +369,9 @@ test('only https, or http to loopback, is allowed; other URLs are refused and ne
     'file:///etc/passwd',
     'not a url',
     'https://user:pw@hooks.example.com/x',
+    'http://127.0.0.1.evil.com/',
+    'http://localhost.evil.com/',
+    'http://[::ffff:127.0.0.1]/',
   ]) {
     let called = 0;
     const logs = [];
@@ -442,4 +517,100 @@ test('a failing webhook test reports the failure without waiting through the bac
   } finally {
     await srv.close();
   }
+});
+
+test('the webhook sends only known rule ids and states; anything else is null', async () => {
+  const srv = await fakeServer({ 'POST /hook': { status: 200 } });
+  try {
+    const ch = make({
+      spawn: recorder().spawn,
+      env: { HOOK_URL: `${srv.url}/hook` },
+      settings: { desktop: false, webhook: { url: { env: 'HOOK_URL' } } },
+    });
+    await ch.notify(alert({ rule: 'my secret rule', state: 'free text here', previous: 'no_data' }));
+    await ch.notify(alert({ state: 'snoozed', previous: 'ok' }));
+    const [a, b] = srv.requests.map((r) => r.body);
+    assert.equal(a.rule, null);
+    assert.equal(a.state, null);
+    assert.equal(a.previous, 'no_data');
+    assert.equal(b.rule, 'daily_cost');
+    assert.equal(b.state, 'snoozed');
+  } finally {
+    await srv.close();
+  }
+});
+
+test('no_data and snoozed alerts skip the desktop notification without a failure log', async () => {
+  const r = recorder();
+  const logs = [];
+  const ch = make({ spawn: r.spawn, logs });
+  await ch.notify(alert({ state: 'no_data' }));
+  await ch.notify(alert({ state: 'snoozed' }));
+  assert.equal(r.calls.length, 0);
+  assert.deepEqual(logs, []);
+});
+
+test('at most two desktop notifications are in flight; extras are dropped with one hint', async () => {
+  const calls = [];
+  const spawn = (cmd, args) => {
+    const child = new EventEmitter();
+    child.stdin = null;
+    child.kill = () => {};
+    calls.push({ cmd, args, child });
+    return child;
+  };
+  const logs = [];
+  const ch = make({ spawn, logs });
+  const jobs = [];
+  for (let i = 0; i < 5; i++) jobs.push(ch.notify(alert()));
+  assert.equal(calls.length, 2);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /more alerts/i);
+  for (const c of calls) c.child.emit('close', 0);
+  await Promise.all(jobs);
+  assert.equal(logs.length, 1, 'dropped notifications are not failures');
+  // Room again: it shows, and a later burst gets its own hint.
+  const next = ch.notify(alert());
+  assert.equal(calls.length, 3);
+  calls[2].child.emit('close', 0);
+  await next;
+  const burst = [];
+  for (let i = 0; i < 3; i++) burst.push(ch.notify(alert()));
+  assert.equal(calls.length, 5);
+  assert.equal(logs.length, 2);
+  for (const c of calls.slice(3)) c.child.emit('close', 0);
+  await Promise.all(burst);
+});
+
+test('at most four webhook sends are in flight; up to 50 wait and the oldest beyond that are dropped', async () => {
+  const pending = [];
+  const sent = [];
+  const fetchImpl = (_u, init) => {
+    sent.push(JSON.parse(init.body).ts);
+    return new Promise((resolve) => pending.push(resolve));
+  };
+  const logs = [];
+  const ch = createChannels({
+    spawn: recorder().spawn,
+    fetchImpl,
+    secrets: secretsFor({ U: 'https://h.example.com/x' }),
+    settings: () => ({ desktop: false, webhook: { url: { env: 'U' } } }),
+    platform: 'linux',
+    sleep: noWait,
+    log: (m) => logs.push(m),
+  });
+  const jobs = [];
+  for (let i = 0; i < 56; i++) jobs.push(ch.notify(alert({ ts: i })));
+  assert.equal(sent.length, 4);
+  while (pending.length) {
+    pending.shift()({ ok: true, status: 200 });
+    await new Promise((r) => setImmediate(r));
+  }
+  await Promise.all(jobs);
+  assert.equal(sent.length, 54, '4 in flight + 50 queued; two were dropped');
+  assert.deepEqual(sent.slice(0, 4), [0, 1, 2, 3]);
+  assert.ok(!sent.includes(4) && !sent.includes(5), 'the oldest waiting ones were dropped');
+  assert.ok(sent.includes(55));
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /dropped/i);
 });
