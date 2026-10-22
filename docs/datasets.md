@@ -130,8 +130,9 @@ What is sent:
 
 - **Text only.** The recorded messages go as they were saved. A `tool` message is sent as a user message that starts
   with `[tool result: <name>]`, because a saved result has no call id to pair with. The saved tools are **declared**
-  to the model (name only, with an open parameter schema) and **never run**. If the model proposes a tool call, it is
-  shown as a proposal and that example ends there.
+  to the model (name and description, with an open parameter schema) and **never run**. A tool built from a trace has
+  an empty description; an imported one may carry text, which is masked for an external model like the messages and
+  shown in the preview. If the model proposes a tool call, it is shown as a proposal and that example ends there.
 - **One call per example and model.** Every call goes through the gateway, so usage, cost, OTLP export and key
   budgets apply as for any request.
 
@@ -148,9 +149,9 @@ External providers follow the same rule as the judge:
 - **A known price is required.** An external model with no known price is not offered, because the cost cap could not
   count it.
 - **Masked, with personal data hidden too.** Secrets are masked as everywhere; for an external model, emails, phone
-  numbers and similar personal data are also hidden.
+  numbers and similar personal data are also hidden, in the messages and in the declared tool descriptions.
 - **Preview, then confirm.** **Preview what will be sent** shows the first example exactly as each external model
-  would receive it. Nothing is sent until you press **Send**. Any change to the form (dataset, examples, models,
+  would receive it: the messages and the declared tools (names and masked descriptions). Nothing is sent until you press **Send**. Any change to the form (dataset, examples, models,
   evaluators, caps) while the preview is open drops the preview; you preview again before sending. A run that reaches
   the server without a matching preview is refused (428).
 - **With content viewing off the preview is refused**, so external models cannot run. Local models still work and
@@ -214,7 +215,8 @@ A finished run is one line in `.data/experiments.jsonl`:
 }
 ```
 
-`stopped` is `null`, `request cap` or `cost cap` (`status` is then `stopped`).
+`stopped` is `null`, `request cap` or `cost cap` (`status` is then `stopped`). It is also `cancelled` when a CLI
+run is interrupted (Ctrl-C or a kill), and `error` when a dashboard run fails before it ends.
 
 - **Bounded.** The newest 100 records are kept. Outputs are masked and cut to 4,000 characters (head and tail). A
   record is kept to about 2 MB: a very large one may have its texts shortened or dropped, and is then marked
@@ -359,7 +361,7 @@ All routes need the dashboard sign-in. A body is JSON (415 otherwise). Errors ar
 | `GET /api/datasets/settings` · `POST` | the auto-add rule `{ autoAdd: { enabled, dataset, onFail, onBad } }` |
 | `GET /api/experiments` | the records (without outputs), the running one, the models and the evaluators |
 | `GET /api/experiments/<id>` | one record; while it runs, its progress |
-| `POST /api/experiments` | start a run `{ dataset, examples?, models, evaluators, maxCostUSD?, maxRequests?, preview?, confirm? }`; 202 with an id. `preview: true` returns the masked messages and a `confirm` token; an external model without it gets 428; a run already going gets 409 |
+| `POST /api/experiments` | start a run `{ dataset, examples?, models, evaluators, maxCostUSD?, maxRequests?, preview?, confirm? }`; 202 with an id. `preview: true` returns, per external model, `{ model, messages, tools }` as they will be sent (masked) and a `confirm` token; an external model without it gets 428; a run already going gets 409 |
 
 ## Known limits
 

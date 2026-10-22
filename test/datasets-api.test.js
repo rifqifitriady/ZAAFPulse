@@ -601,6 +601,30 @@ test('datasets api: experiment requests are checked (models, evaluators, example
   }
 });
 
+test('datasets api: the preview lists the declared tools, an imported description masked', async () => {
+  const s = setup();
+  try {
+    const line = JSON.stringify({
+      input: {
+        messages: [{ role: 'user', text: 'fix it' }],
+        tools: [{ name: 'Mail', description: `Ask ${EMAIL} before reading /Users/alex/notes` }],
+      },
+      output: { text: 'a' },
+    });
+    assert.equal((await s.call('POST', '/api/datasets/import', { slug: 'imp', jsonl: line })).status, 200);
+    const body = { dataset: 'imp', models: ['ext/gpt'], evaluators: ['secret_leak'], preview: true };
+    const p = await s.call('POST', '/api/experiments', body);
+    assert.equal(p.status, 200);
+    assert.deepEqual(
+      p.body.preview[0].tools.map((t) => [t.function.name, t.function.description]),
+      [['Mail', 'Ask ‹email› before reading /Users/‹user›/notes']],
+    );
+    assert.ok(!JSON.stringify(p.body).includes(EMAIL));
+  } finally {
+    s.done();
+  }
+});
+
 test('datasets api: an external model needs the preview, whose confirm then starts the run', async () => {
   const s = setup();
   try {

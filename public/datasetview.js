@@ -1740,15 +1740,7 @@ function dsPlaygroundMount(pg, repaint) {
           : 'This example as each external model receives it, with secrets and personal data masked. Nothing is sent until you press Send.',
       ),
     );
-    for (const item of s.preview.items) {
-      const block = dsEl('div', { class: 'ds-pv-model' }, dsEl('b', { class: 'mono' }, item.model));
-      for (const m of Array.isArray(item.messages) ? item.messages : []) {
-        const box = dsEl('pre', { class: 'ev-pre ds-pv-box', tabindex: 0, 'aria-label': `${m.role} message` });
-        box.textContent = typeof m.content === 'string' ? m.content : '';
-        block.append(dsEl('div', { class: 'ev-pre-head' }, m.role), box);
-      }
-      pv.append(block);
-    }
+    for (const item of s.preview.items) pv.append(dsPvModel(item));
     pv.append(
       dsEl(
         'div',
@@ -1824,6 +1816,30 @@ function dsPlaygroundMount(pg, repaint) {
     if (el && !el.disabled) el.focus();
     else if (want === 'send' || want === 'preview') root.querySelector('#ds-pv-title')?.focus();
   }
+}
+
+// One external model's part of the preview: the messages, then the tools declared with them (never run), all as
+// text. The descriptions are the server's masked ones, so the page shows exactly what is sent.
+function dsPvModel(item) {
+  const block = dsEl('div', { class: 'ds-pv-model' }, dsEl('b', { class: 'mono' }, String(item.model || '')));
+  for (const m of Array.isArray(item.messages) ? item.messages : []) {
+    const box = dsEl('pre', { class: 'ev-pre ds-pv-box', tabindex: 0, 'aria-label': `${m.role} message` });
+    box.textContent = typeof m.content === 'string' ? m.content : '';
+    block.append(dsEl('div', { class: 'ev-pre-head' }, m.role), box);
+  }
+  const tools = (Array.isArray(item.tools) ? item.tools : []).filter((t) => t && t.function);
+  if (tools.length) {
+    block.append(dsEl('div', { class: 'ev-pre-head' }, `Tools declared, never run (${tools.length})`));
+    for (const t of tools) {
+      const fn = t.function;
+      const name = dsEl('b', { class: 'mono' });
+      name.textContent = typeof fn.name === 'string' ? fn.name : '';
+      const box = dsEl('pre', { class: 'ev-pre ds-pv-box', tabindex: 0, 'aria-label': 'tool description' });
+      box.textContent = typeof fn.description === 'string' && fn.description ? fn.description : '(no description)';
+      block.append(dsEl('div', { class: 'ds-pv-tool' }, name, box));
+    }
+  }
+  return block;
 }
 
 function dsPgSay(s, msg, bad = false) {
@@ -2274,4 +2290,5 @@ if (typeof module !== 'undefined')
     dsPgEdit,
     dsPgFormBody,
     dsPgSendBody,
+    dsPvModel,
   };

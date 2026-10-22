@@ -290,7 +290,9 @@ test('external sends are masked; the preview shows them; the confirm token and t
     evaluators: [],
   });
   assert.equal(replay.sent[0].messages[0].content, 'mail alex@example.com about /Users/alex/x');
-  assert.deepEqual(replay.sent[1].messages, preview.messages);
+  // The preview is exactly what the external model gets: model, messages and the declared tools.
+  const { model, messages, tools } = replay.sent[1];
+  assert.deepEqual({ model, messages, tools }, preview);
 
   const key = Buffer.from('0123456789abcdef');
   const a = confirmToken(key, { dataset: 'auth', exampleIds: ['b', 'a'], models: ['openai/gpt-6.1', 'local/qwen3'] });
@@ -322,6 +324,32 @@ test('external sends are masked; the preview shows them; the confirm token and t
     (e) => e.status === 400 && /unknown model nope\/y/.test(e.message),
   );
   assert.equal(replay.sent.length, before, 'refused before any call');
+});
+
+test('an imported tool description is masked for an external model, shown in the preview, and kept for a local one', async () => {
+  const description = 'Ask alex@example.com before reading /Users/alex/notes';
+  const ex = example(1, 'fix the login redirect', {
+    input: { system: null, messages: [{ role: 'user', text: 'fix it' }], tools: [{ name: 'Mail', description }] },
+  });
+  const preview = previewOf(ex, 'openai/gpt-6.1', { external: true });
+  assert.deepEqual(
+    preview.tools.map((t) => [t.function.name, t.function.description]),
+    [['Mail', 'Ask ‹email› before reading /Users/‹user›/notes']],
+  );
+  assert.ok(!JSON.stringify(preview).includes('alex@example.com'));
+  assert.equal(previewOf(ex, 'local/qwen3').tools[0].function.description, description, 'private: unchanged');
+
+  const replay = fakeReplay({ tiers: TIERS, priced: ['openai/gpt-6.1'] });
+  await createReplayRunner({ replay, judge: noJudge }).run({
+    id: 'exp_0000000000000006',
+    dataset: META,
+    examples: [ex],
+    models: ['local/qwen3', 'openai/gpt-6.1'],
+    evaluators: [],
+  });
+  assert.equal(replay.sent[0].tools[0].function.description, description, 'the local model gets the original');
+  assert.deepEqual(replay.sent[1].tools, preview.tools, 'the external model gets what the preview showed');
+  assert.ok(!JSON.stringify(replay.sent[1]).includes('alex@example.com'));
 });
 
 test('stored output is masked and capped while secret_leak still sees the raw text', async () => {
