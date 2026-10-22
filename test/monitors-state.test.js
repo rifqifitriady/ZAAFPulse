@@ -45,7 +45,7 @@ const live = (sid, state, value = 1, extra = {}) => ({
 const lines = (f) => fs.readFileSync(f, 'utf8').split('\n').filter(Boolean);
 
 test('an alert is raised only when the state changes', () => {
-  const { state } = make();
+  const { state, clock } = make();
   assert.deepEqual(state.apply('daily_cost', [agg('ok')]), [], 'first sight of ok is silent');
   assert.deepEqual(state.apply('daily_cost', [agg('ok')]), []);
   const [up] = state.apply('daily_cost', [agg('triggered', 12)]);
@@ -59,6 +59,8 @@ test('an alert is raised only when the state changes', () => {
   assert.equal(up.threshold, 10);
   assert.equal(typeof up.ts, 'number');
   assert.deepEqual(state.apply('daily_cost', [agg('triggered', 13)]), [], 'still triggered, no repeat');
+  assert.deepEqual(state.apply('daily_cost', [agg('ok', 2)]), [], 'the resolution is held while ok is young');
+  clock.t += 5 * MIN;
   const [down] = state.apply('daily_cost', [agg('ok', 2)]);
   assert.equal(down.state, 'ok');
   assert.equal(down.previous, 'triggered');
@@ -128,9 +130,11 @@ test('no_data neither alerts nor resolves, and the first trigger after it alerts
   // Data goes missing while an alert is open: not resolved by that, but resolved when it is ok again.
   assert.deepEqual(state.apply('agent_stuck', [live('s1', 'no_data', null)]), []);
   clock.t += HOUR;
+  assert.deepEqual(state.apply('agent_stuck', [live('s1', 'ok', 1)]), [], 'held');
+  clock.t += 5 * MIN;
   const [r] = state.apply('agent_stuck', [live('s1', 'ok', 1)]);
   assert.equal(r.state, 'ok');
-  assert.equal(r.previous, 'no_data');
+  assert.equal(r.previous, 'triggered');
   assert.deepEqual(state.apply('agent_stuck', [live('s1', 'no_data', null)]), []);
   assert.deepEqual(state.apply('agent_stuck', [live('s1', 'ok', 1)]), [], 'no open alert, so nothing to resolve');
 });
@@ -387,7 +391,8 @@ test('a torn last line in the alerts file is skipped and the next alert starts o
   assert.equal(createMonitorState({ ...files, now: () => clock.t }).alerts({}).length, 2);
 });
 
-test('a corrupt or foreign state file starts empty instead of throwing', () => {
+test('a corrupt or foreign state file starts empty instead of throwing', (t) => {
+  t.mock.method(console, 'warn', () => {});
   const { files, build } = make();
   fs.mkdirSync(path.dirname(files.file), { recursive: true });
   for (const text of ['{nope', '[]', '"x"', '{"states":7,"snoozes":[],"settings":3}', '']) {
@@ -441,4 +446,151 @@ test('the state and alerts files are mode 0600', { skip: process.platform === 'w
   fs.chmodSync(files.file, 0o644);
   state.apply('cost_burn', [live('s1', 'triggered', 9)]);
   assert.equal(fs.statSync(files.file).mode & 0o777, 0o600);
+});
+
+test('parameter names are the rule\'s own keys, not inherited ones', () => {
+  const { state, files, build } = make();
+  for (const name of ['constructor', 'toString', 'hasOwnProperty', 'valueOf']) {
+    assert.throws(() => state.setSettings('cost_burn', { params: { [name]: 1 } }), { status: 400 }, name);
+  }
+  // JSON.parse makes __proto__ a real own key, which is how it would arrive from a request body.
+  for (const body of ['{"__proto__":{"maxUSD":1}}', '{"__proto__":1}']) {
+    assert.throws(() => state.setSettings('cost_burn', { params: JSON.parse(body) }), { status: 400 }, body);
+  }
+  assert.deepEqual(state.settings('cost_burn').params, {});
+  assert.equal(({}).maxUSD, undefined, 'Object.prototype is untouched');
+  // The same names in an edited file are dropped on load.
+  state.setSettings('cost_burn', { enabled: true });
+  const j = JSON.parse(fs.readFileSync(files.file, 'utf8'));
+  j.settings.cost_burn.params = JSON.parse('{"constructor":1,"toString":2,"__proto__":3,"maxUSD":7}');
+  fs.writeFileSync(files.file, JSON.stringify(j));
+  assert.deepEqual(build().settings('cost_burn').params, { maxUSD: 7 });
+});
+
+test('a value hovering at its threshold gives only the first trigger alert', () => {
+  const { state, clock } = make();
+  const sent = [];
+  // Alternates every evaluation for 10 minutes, one evaluation a minute.
+  for (let i = 0; i <= 10; i++) {
+    sent.push(...state.apply('cost_burn', [live('s1', i % 2 === 0 ? 'triggered' : 'ok', 5)]));
+    clock.t += MIN;
+  }
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].state, 'triggered');
+  assert.equal(state.states()[0].state, 'triggered');
+});
+
+test('a re-trigger inside the hold keeps the original alert and its 30 minute reminder spacing', () => {
+  const { state, clock } = make();
+  assert.equal(state.apply('cost_burn', [live('s1', 'triggered', 9)]).length, 1);
+  clock.t += 10 * MIN;
+  assert.deepEqual(state.apply('cost_burn', [live('s1', 'ok', 1)]), []);
+  clock.t += 4 * MIN;
+  assert.deepEqual(state.apply('cost_burn', [live('s1', 'ok', 1)]), [], '4 minutes of ok is not enough');
+  clock.t += 1 * MIN;
+  assert.deepEqual(state.apply('cost_burn', [live('s1', 'triggered', 9)]), [], 'no resolution and no new trigger');
+  // The hold started again from scratch: a later ok must last 5 minutes from its own start.
+  clock.t += MIN;
+  assert.deepEqual(state.apply('cost_burn', [live('s1', 'ok', 1)]), []);
+  clock.t += 4 * MIN;
+  assert.deepEqual(state.apply('cost_burn', [live('s1', 'ok', 1)]), []);
+  // Back to triggered 30 minutes after the original alert: the reminder is due, with previous 'triggered'.
+  clock.t += 15 * MIN;
+  const [again] = state.apply('cost_burn', [live('s1', 'triggered', 9)]);
+  assert.equal(again.state, 'triggered');
+  assert.equal(again.previous, 'triggered');
+});
+
+test('five minutes of ok gives one resolution, and a later trigger is a new incident', () => {
+  const { state, clock } = make();
+  state.apply('cost_burn', [live('s1', 'triggered', 9)]);
+  clock.t += MIN;
+  const sent = [];
+  for (let i = 0; i < 8; i++) {
+    sent.push(...state.apply('cost_burn', [live('s1', 'ok', 1)]));
+    clock.t += MIN;
+  }
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].state, 'ok');
+  assert.equal(sent[0].previous, 'triggered');
+  assert.deepEqual(state.apply('cost_burn', [live('s1', 'ok', 1)]), []);
+  const [fresh] = state.apply('cost_burn', [live('s1', 'triggered', 9)]);
+  assert.equal(fresh.state, 'triggered');
+  assert.equal(fresh.previous, 'ok');
+});
+
+test('the pending resolution survives a restart', () => {
+  const { state, clock, build } = make();
+  state.apply('cost_burn', [live('s1', 'triggered', 9)]);
+  clock.t += MIN;
+  state.apply('cost_burn', [live('s1', 'ok', 1)]);
+  clock.t += 3 * MIN;
+  const again = build();
+  assert.deepEqual(again.apply('cost_burn', [live('s1', 'ok', 1)]), [], 'only 3 minutes of ok so far');
+  clock.t += 2 * MIN;
+  const [r] = build().apply('cost_burn', [live('s1', 'ok', 1)]);
+  assert.equal(r.state, 'ok', 'the ok period counts from before the restart');
+});
+
+test('a failed snooze save puts the snoozed flags back too', (t) => {
+  t.mock.method(console, 'warn', () => {});
+  const dir = tmpDir();
+  const file = path.join(dir, 'monitors.json');
+  const state = createMonitorState({ file, alertsFile: path.join(dir, 'a.jsonl'), now: () => 1_700_000_000_000 });
+  state.apply('cost_burn', [live('s1', 'triggered', 9)]);
+  // Make the next write fail: a directory where the temp file must go.
+  fs.mkdirSync(`${file}.tmp`);
+  assert.throws(() => state.snooze('cost_burn', 's1', HOUR));
+  assert.equal(state.states()[0].state, 'triggered');
+  fs.rmdirSync(`${file}.tmp`);
+  // The flag was restored, so a later apply after the (never stored) snooze is not treated as a snooze end.
+  assert.deepEqual(state.apply('cost_burn', [live('s1', 'triggered', 9)]), [], 'still the same open alert');
+});
+
+test('an unreadable state file warns once and is kept aside before the first write', (t) => {
+  const warn = t.mock.method(console, 'warn', () => {});
+  const clockT = 1_700_000_000_000;
+  const { files, build } = make({ now: () => clockT });
+  fs.mkdirSync(path.dirname(files.file), { recursive: true });
+  fs.writeFileSync(files.file, '{"settings": {"cost_burn": {"enabled": tru');
+  const s = build({ now: () => clockT });
+  s.states();
+  s.settings('cost_burn');
+  assert.equal(warn.mock.callCount(), 1);
+  assert.deepEqual(fs.readdirSync(path.dirname(files.file)), ['monitors.json']);
+  s.setSettings('cost_burn', { enabled: true });
+  const names = fs.readdirSync(path.dirname(files.file)).sort();
+  assert.deepEqual(names, ['monitors.json', `monitors.json.corrupt-${clockT}`]);
+  const kept = fs.readFileSync(path.join(path.dirname(files.file), names[1]), 'utf8');
+  assert.equal(kept, '{"settings": {"cost_burn": {"enabled": tru');
+  assert.equal(JSON.parse(fs.readFileSync(files.file, 'utf8')).settings.cost_burn.enabled, true);
+  // A missing file is the normal first start: no warning, nothing set aside.
+  const clean = make();
+  clean.state.states();
+  clean.state.setSettings('cost_burn', { enabled: true });
+  assert.equal(warn.mock.callCount(), 1);
+  assert.deepEqual(fs.readdirSync(path.dirname(clean.files.file)), ['monitors.json']);
+});
+
+test('an unexpired snooze outlives the pruning of its instance', () => {
+  const { state, clock } = make();
+  state.apply('cost_burn', [live('gone', 'ok'), live('stays', 'ok')]);
+  state.snooze('cost_burn', 'gone', 48 * HOUR);
+  clock.t += 25 * HOUR;
+  state.apply('cost_burn', [live('stays', 'ok')]);
+  assert.deepEqual(state.states().map((s) => s.instance), ['stays'], 'the entry is pruned');
+  assert.deepEqual(state.apply('cost_burn', [live('gone', 'triggered', 9)]), [], 'but the snooze still holds');
+  assert.equal(state.states().find((s) => s.instance === 'gone').state, 'snoozed');
+  clock.t += 24 * HOUR;
+  assert.equal(state.apply('cost_burn', [live('gone', 'triggered', 9)]).length, 1, 'and ends on time');
+});
+
+test('only the newest maxAlerts rows are kept when the alerts file is loaded', () => {
+  const { files, build } = make({ maxAlerts: 5 });
+  fs.mkdirSync(path.dirname(files.alertsFile), { recursive: true });
+  const rows = Array.from({ length: 8 }, (_, i) => ({ id: 'a' + i, ts: 1000 + i, rule: 'cost_burn' }));
+  fs.writeFileSync(files.alertsFile, rows.map((r) => JSON.stringify(r) + '\n').join(''));
+  const s = build({ maxAlerts: 5 });
+  assert.deepEqual(s.alerts({ limit: 100 }).map((a) => a.id), ['a7', 'a6', 'a5', 'a4', 'a3']);
+  assert.equal(lines(files.alertsFile).length, 5);
 });
