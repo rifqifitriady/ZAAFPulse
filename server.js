@@ -651,7 +651,9 @@ const handler = async (req, res) => {
       const route = url.pathname.slice('/api/trace/'.length);
       const q = url.searchParams;
       const post = route === 'reveal';
-      if (!['sources', 'settings', 'sessions', 'session', 'title', 'content', 'reveal', 'live', 'find'].includes(route))
+      if (
+        !['sources', 'settings', 'sessions', 'session', 'title', 'content', 'reveal', 'live', 'find', 'deps'].includes(route)
+      )
         return send(res, 404, { error: 'unknown route' });
       if (req.method !== (post ? 'POST' : 'GET')) return send(res, 405, { error: 'method not allowed' });
       // Nothing a client sends for a filter, a cursor or a session id is longer than this.
@@ -665,13 +667,21 @@ const handler = async (req, res) => {
         if (route === 'sessions') {
           const days = parseInt(q.get('range'), 10);
           const range = Number.isNaN(days) ? 7 : Math.min(30, Math.max(1, days));
+          const minMs = Number(q.get('minMs'));
+          const minCost = Number(q.get('minCost'));
           const rows = trace.sessions({
             range,
             source: q.get('source') || undefined,
             q: q.get('q') || undefined,
             flags: q.get('flags') || undefined,
+            minMs: Number.isFinite(minMs) && minMs > 0 ? minMs : undefined,
+            minCost: Number.isFinite(minCost) && minCost > 0 ? minCost : undefined,
           });
           return send(res, 200, { sessions: rows });
+        }
+        if (route === 'deps') {
+          const days = parseInt(q.get('range'), 10);
+          return send(res, 200, trace.deps({ range: Number.isNaN(days) ? 7 : Math.min(30, Math.max(1, days)) }));
         }
         if (route === 'session')
           return send(res, 200, await trace.session(q.get('key'), { turn: wholeParam(q.get('turn')) }));
