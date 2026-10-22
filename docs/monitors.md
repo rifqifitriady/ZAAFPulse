@@ -119,7 +119,7 @@ Every action, refused or not, is written to `.data/agent-audit.jsonl` (mode 0600
 
 ### Linking a session to a process
 
-A session is linked to a process by app, working folder and start time: a process of the session's own app (Claude Code for a Claude Code session, Codex for a Codex one), whose program is that app's own binary, whose working folder matches the session's, and which started before the session's first log line. A command line that only mentions the app, such as a dev server under `~/code/codex-clone`, is not a candidate. If exactly one process matches, it is the target. If none or several match, nothing is paused and you are told which. The dashboard never guesses.
+A session is linked to a process by app, working folder and start time: a process of the session's own app (Claude Code for a Claude Code session, Codex for a Codex one), whose program is that app's own binary, whose working folder matches the session's, and which started before the session's first log line. The program is matched by its exact name (`claude` or `codex`, or the script node runs), read from the process's own argument list, so a path with spaces is read whole. Claude Code started by the Claude desktop app counts. A command line that only mentions the app (a dev server under `~/code/codex-clone`, the ChatGPT app's Codex helpers) or a launcher that wraps the agent is not a candidate. If exactly one process matches, it is the target. If none or several match, nothing is paused and you are told which. The dashboard never guesses.
 
 On macOS the working folder comes from `lsof`, on Linux from `/proc`. On Windows the working folder of a process is not available, so there are **no candidates** and sessions cannot be linked to processes there.
 

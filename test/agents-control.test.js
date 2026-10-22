@@ -11,7 +11,29 @@ const POSIX = process.platform !== 'win32';
 const CLAUDE_ARGS = '/home/u/.local/bin/claude --resume';
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const startOf = (upSec) => Math.round((Date.now() - upSec * 1000) / 1000) * 1000;
-const row = (pid, args, extra = {}) => ({ pid, cpu: 1, rssKB: 1024, upSec: 600, args, ...extra });
+// A process row as lib/processes gives it; argv as /proc gives it (these test paths have no spaces unless `extra`
+// brings an argv of its own).
+const row = (pid, args, extra = {}) => ({
+  pid,
+  cpu: 1,
+  rssKB: 1024,
+  upSec: 600,
+  args,
+  argv: args.split(' '),
+  ...extra,
+});
+// The Claude desktop app's Claude Code and its launcher, as ps shows them on macOS ("Application Support" has a space).
+const DESKTOP_CLAUDE =
+  '/Users/u/Library/Application Support/Claude/claude-code/2.1.308/a93ded4b1b47/claude.app/Contents/MacOS/claude';
+const DESKTOP_FLAGS = ['--output-format', 'stream-json', '--verbose'];
+const DISCLAIMER = '/Applications/Claude.app/Contents/Helpers/disclaimer';
+const CODEX_FW = '/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/154.0/Helpers';
+const CODEX_HELPERS = [
+  [`${CODEX_FW}/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)`, '--type=renderer'],
+  [`${CODEX_FW}/Codex (Service).app/Contents/MacOS/Codex (Service)`, '--type=gpu-process'],
+  [`${CODEX_FW}/browser_crashpad_handler`, '--monitor-self'],
+  ['/Users/u/.codex/computer-use/Codex Computer Use.app/Contents/MacOS/SkyComputerUseService'],
+];
 
 // A kill that records every call and never signals anything. `gone` pids throw ESRCH, `denied` ones EPERM; a pid
 // that gets the `exitOn` signal is gone from then on.
@@ -465,16 +487,18 @@ test('candidates: only the session app, run from its own binary, never a path th
   assert.deepEqual(k.sent(), []);
 });
 
-test('isAgentBinary: the program or the script node runs, by name', () => {
+test('isAgentBinary: the program or the script node runs, by its exact name, from argv', () => {
+  const words = (x) => (typeof x === 'string' ? x.split(' ') : x);
   const yes = [
     ['claude', 'claude --resume'],
     ['claude', '/home/u/.local/bin/claude'],
     ['claude', '/x/extensions/anthropic.claude-code-2.1.0/resources/native-binary/claude --output-format stream-json'],
     ['claude', 'node /usr/local/bin/claude -c'],
     ['claude', 'node --no-warnings /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js'],
-    ['claude', '"C:\\Users\\u\\.local\\bin\\claude.exe" --resume'],
+    ['claude', ['C:\\Users\\u\\.local\\bin\\claude.exe', '--resume']],
+    ['claude', [DESKTOP_CLAUDE, ...DESKTOP_FLAGS]],
     ['codex', 'codex'],
-    ['codex', '/opt/homebrew/bin/codex exec "fix it"'],
+    ['codex', ['/opt/homebrew/bin/codex', 'exec', 'fix it']],
     ['codex', '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex app-server'],
     ['codex', '/x/node_modules/@openai/codex/vendor/aarch64-apple-darwin/codex/codex'],
     ['codex', '/opt/homebrew/Caskroom/codex/0.5.0/codex-aarch64-apple-darwin'],
@@ -485,16 +509,61 @@ test('isAgentBinary: the program or the script node runs, by name', () => {
     ['codex', 'tail -f codex.log'],
     ['codex', '/usr/bin/vim /home/u/codex'],
     ['codex', '/home/u/codex/bin/server --codex'],
+    ['codex', 'node scripts/codex.js --watch'], // a codex.js that is not @openai/codex's
+    ['codex', '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex-code-mode-host'],
     ['codex', 'claude'],
+    ['codex', '/Applications/ChatGPT.app/Contents/Frameworks/Codex'], // what splitting on spaces used to give
+    ...CODEX_HELPERS.map((argv) => ['codex', argv]),
     ['claude', '/usr/local/bin/codex'],
     ['claude', 'node /home/u/code/claude-code-clone/server.js'],
     ['claude', '/usr/bin/vim /home/u/claude'],
+    ['claude', '/Applications/Claude.app/Contents/MacOS/Claude'], // the desktop app itself
+    ['claude', [DISCLAIMER, '--pgroup', '--', DESKTOP_CLAUDE, ...DESKTOP_FLAGS]], // a wrapper, not the agent
     ['claude', 'node'],
     ['kiro', 'kiro-cli'],
     ['claude', ''],
   ];
-  for (const [source, args] of yes) assert.equal(isAgentBinary(source, args), true, `${source}: ${args}`);
-  for (const [source, args] of no) assert.equal(isAgentBinary(source, args), false, `${source}: ${args}`);
+  for (const [source, x] of yes) assert.equal(isAgentBinary(source, words(x)), true, `${source}: ${x}`);
+  for (const [source, x] of no) assert.equal(isAgentBinary(source, words(x)), false, `${source}: ${x}`);
+  // Without an argv there is no program to judge: never a candidate.
+  assert.equal(isAgentBinary('claude', undefined), false);
+  assert.equal(isAgentBinary('claude', 'claude --resume'), false);
+});
+
+test('candidates: the Claude desktop app runs Claude Code from a path with a space; it, not its launcher, is the one', async (t) => {
+  const work = tmp('zp-agent-desktop-');
+  t.after(() => fs.rmSync(work, { recursive: true, force: true }));
+  const first = Date.now() - 60e3;
+  const line = (argv) => argv.join(' ');
+  const rows = [
+    row(40, line([DISCLAIMER, '--pgroup', '--', DESKTOP_CLAUDE, ...DESKTOP_FLAGS]), {
+      cwd: work,
+      argv: [DISCLAIMER, '--pgroup', '--', DESKTOP_CLAUDE, ...DESKTOP_FLAGS],
+    }),
+    row(41, line([DESKTOP_CLAUDE, ...DESKTOP_FLAGS]), { cwd: work, argv: [DESKTOP_CLAUDE, ...DESKTOP_FLAGS] }),
+  ];
+  const { ctl, k } = control({ processes: fakeTable(rows) });
+  const claude = await ctl.candidates({ cwd: work, firstTs: first, source: 'claude' });
+  assert.deepEqual(
+    claude.map((c) => [c.pid, c.app]),
+    [[41, 'claude-desktop']], // the live page counts it under the app that started it
+  );
+  // And it can be paused: the pre-signal check accepts it as an AI app process.
+  await ctl.pause({ pid: 41, startTime: claude[0].startTime }, { by: 'owner' });
+  assert.deepEqual(k.sent(), [[41, 'SIGSTOP']]);
+});
+
+test('candidates: the ChatGPT app helpers say Codex in their path, but none is the codex binary', async (t) => {
+  const work = tmp('zp-agent-helpers-');
+  t.after(() => fs.rmSync(work, { recursive: true, force: true }));
+  const rows = CODEX_HELPERS.map((argv, i) => row(50 + i, argv.join(' '), { cwd: work, argv }));
+  const { ctl } = control({ processes: fakeTable(rows) });
+  assert.deepEqual(await ctl.candidates({ cwd: work, firstTs: Date.now() - 60e3, source: 'codex' }), []);
+  rows.push(row(60, '/opt/homebrew/bin/codex', { cwd: work }));
+  assert.deepEqual(
+    (await ctl.candidates({ cwd: work, firstTs: Date.now() - 60e3, source: 'codex' })).map((c) => c.pid),
+    [60],
+  );
 });
 
 test('a start time read a second apart is the same process: every reply names it with the first one', async (t) => {
