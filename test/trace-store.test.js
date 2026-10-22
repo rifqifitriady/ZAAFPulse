@@ -27,10 +27,11 @@ const NOON = () => Date.UTC(2026, 9, 22, 12);
 test('store: appended spans read back by trace; summaries, runs and the covered window are kept', () => {
   const dir = tmp();
   const store = createTraceStore({ dir, now: NOON });
+  const B = NOON() * 1000 - 3600e6; // an hour ago, in microseconds
   store.writeSpans([
-    sp(T1, 'a'.repeat(16), null, 1000, 50, { 'zaafpulse.run.id': 'run_1' }),
-    sp(T2, 'b'.repeat(16), null, 5000, 10),
-    sp(T1, 'c'.repeat(16), 'a'.repeat(16), 1005, 2),
+    sp(T1, 'a'.repeat(16), null, B + 1000, 50, { 'zaafpulse.run.id': 'run_1' }),
+    sp(T2, 'b'.repeat(16), null, B + 5000, 10),
+    sp(T1, 'c'.repeat(16), 'a'.repeat(16), B + 1005, 2),
   ]);
   assert.deepEqual(store.getSpans(T1).map((s) => s.s), ['a'.repeat(16), 'c'.repeat(16)]);
   assert.equal(store.getSpans(T2).length, 1);
@@ -39,7 +40,7 @@ test('store: appended spans read back by trace; summaries, runs and the covered 
   assert.equal(store.getSummary(T1).spans, 2);
   assert.equal(store.byRun('run_1').traceId, T1);
   assert.equal(store.byRun('run_2'), null);
-  assert.deepEqual(store.covered(), { from: 1000, to: 5010 });
+  assert.deepEqual(store.covered(), { from: B + 1000, to: B + 5010 });
   const file = path.join(dir, '2026-10-22.ndjson');
   assert.ok(fs.existsSync(file));
   if (process.platform !== 'win32') {
@@ -119,4 +120,20 @@ test('store: retention deletes whole segments by age, then by size, never today'
   small.writeSpans([sp(T3, 'c'.repeat(16))]);
   assert.deepEqual(small.applyRetention().deleted, ['2026-10-10.ndjson']);
   assert.ok(small.getSummary(T3));
+});
+
+test('store: the covered window uses only gateway traces with believable times', () => {
+  const store = createTraceStore({ dir: tmp(), now: NOON });
+  const B = NOON() * 1000 - 3600e6;
+  store.writeSpans([
+    sp(T1, 'a'.repeat(16), null, B, 100),
+    { ...sp(T2, 'b'.repeat(16), null, B - 1e6, 10), src: 'remote' }, // the OTLP return channel: not ours
+    sp(T3, 'c'.repeat(16), null, 1000, 10), // a gateway trace stamped in 1970
+    sp('4'.repeat(32), 'd'.repeat(16), null, B + 1e6, 10),
+    sp('5'.repeat(32), 'e'.repeat(16), null, B + 2e6, (NOON() + 7 * 86400000) * 1000), // ends far in the future
+  ]);
+  assert.deepEqual(store.covered(), { from: B, to: B + 1e6 + 10 });
+  const empty = createTraceStore({ dir: tmp(), now: NOON });
+  empty.writeSpans([{ ...sp(T2, 'b'.repeat(16), null, B, 10), src: 'remote' }]);
+  assert.equal(empty.covered(), null);
 });
