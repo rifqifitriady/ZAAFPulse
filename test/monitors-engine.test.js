@@ -49,13 +49,15 @@ function setup({ results = [], agents = [], settings = {}, candidates = [], budg
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-mon-engine-'));
   const clock = { t: T0 };
   const conf = { monthlyBudgetUSD: budget, pricing: PRICING };
-  const state = createMonitorState({
-    file: path.join(dir, 'monitors.json'),
-    alertsFile: path.join(dir, 'alerts.jsonl'),
-    now: () => clock.t,
-    config: () => conf,
-  });
-  for (const [id, s] of Object.entries(settings)) state.setSettings(id, s);
+  const newState = () =>
+    createMonitorState({
+      file: path.join(dir, 'monitors.json'),
+      alertsFile: path.join(dir, 'alerts.jsonl'),
+      now: () => clock.t,
+      config: () => conf,
+    });
+  const first = newState();
+  for (const [id, s] of Object.entries(settings)) first.setSettings(id, s);
   const sent = [];
   const calls = { candidates: [], pause: [], resume: [], stop: [], paused: 0 };
   const logs = [];
@@ -86,29 +88,49 @@ function setup({ results = [], agents = [], settings = {}, candidates = [], budg
     snapshot: () => ({ ts: clock.t, agents: data.agents }),
     demoSnapshot: () => ({ ts: clock.t, agents: data.agents }),
   };
-  const monitors = createMonitors({
-    indexer: { results: () => data.results },
-    office,
-    evals: { summary: () => ({ evaluators: opts.evaluators || {} }) },
-    config: () => conf,
-    state,
-    channels: {
-      notify: async (alert, o) => {
-        sent.push({ alert, title: o && o.title });
-        return { desktop: true, webhook: false };
+  const boot = (state) =>
+    createMonitors({
+      indexer: { results: () => data.results },
+      office,
+      evals: { summary: () => ({ evaluators: opts.evaluators || {} }) },
+      config: () => conf,
+      state,
+      channels: {
+        notify: async (alert, o) => {
+          sent.push({ alert, title: o && o.title });
+          return { desktop: true, webhook: false };
+        },
       },
-    },
-    control,
-    now: () => clock.t,
-    log: (m) => logs.push(m),
-    demo,
-    platform: opts.platform || 'darwin',
-  });
-  return { monitors, state, sent, calls, logs, clock, data, conf, cleanup: () => fs.rmSync(dir, { recursive: true }) };
+      control,
+      now: () => clock.t,
+      log: (m) => logs.push(m),
+      demo,
+      platform: opts.platform || 'darwin',
+    });
+  const e = {
+    sent,
+    calls,
+    logs,
+    clock,
+    data,
+    conf,
+    stateFile: path.join(dir, 'monitors.json'),
+    cleanup: () => fs.rmSync(dir, { recursive: true }),
+  };
+  e.state = first;
+  e.monitors = boot(first);
+  // A server restart: a new state store read from the same files, and a new engine (nothing kept in memory).
+  e.restart = () => {
+    e.state = newState();
+    e.monitors = boot(e.state);
+  };
+  return e;
 }
 
 const notes = (state) => state.alerts({ limit: 100 }).filter((a) => a.action === 'pause');
-const ruleAlerts = (sent, rule) => sent.filter((s) => s.alert.rule === rule);
+// State-change alerts sent for a rule; pause outcomes (action rows) are counted apart.
+const ruleAlerts = (sent, rule) => sent.filter((s) => s.alert.rule === rule && s.alert.action === undefined);
+const outcomes = (sent) => sent.filter((s) => s.alert.action === 'pause');
 
 test('engine: aggregate rules alert on a change only, and the snapshot keeps no signal text', async () => {
   const sid = 's1';
@@ -323,7 +345,7 @@ test('engine: a pause that fails is logged and noted, and the pass goes on', asy
   }
 });
 
-test('engine: daily_cost auto-pause goes to the costliest session today', async () => {
+test('engine: daily_cost auto-pause goes to the costliest running session today', async () => {
   const e = setup({
     budget: 300,
     results: [
@@ -336,10 +358,12 @@ test('engine: daily_cost auto-pause goes to the costliest session today', async 
         signals: { days: {}, events: [] },
       },
     ],
+    agents: [agent('claude:cheap', 'working', 'cheap'), agent('claude:dear', 'working', 'dear')],
     candidates: [{ pid: 77, startTime: T0 - 100 * MIN, app: 'claude' }],
     settings: { daily_cost: { enabled: true, autoPause: true } },
   });
   try {
+    await e.monitors.tickLive();
     await e.monitors.tickAggregate();
     assert.equal(ruleAlerts(e.sent, 'daily_cost')[0].alert.state, 'triggered');
     assert.deepEqual(e.calls.candidates, [{ cwd: '/work/dear', firstTs: T0 - 80 * MIN }]);
@@ -347,6 +371,232 @@ test('engine: daily_cost auto-pause goes to the costliest session today', async 
     e.clock.t += MIN;
     await e.monitors.tickAggregate();
     assert.equal(e.calls.pause.length, 1);
+  } finally {
+    e.cleanup();
+  }
+});
+
+test('engine: daily_cost skips a finished session and pauses the costliest one still running', async () => {
+  const e = setup({
+    budget: 300,
+    results: [
+      {
+        sessions: {
+          cheap: session('/work/cheap', T0 - 90 * MIN, T0 - MIN),
+          dear: session('/work/dear', T0 - 80 * MIN, T0 - 40 * MIN),
+        },
+        events: [usage(T0 - 60 * MIN, 'cheap', 3), usage(T0 - 50 * MIN, 'dear', 9)],
+        signals: { days: {}, events: [] },
+      },
+    ],
+    agents: [agent('claude:cheap', 'working', 'cheap')], // dear has finished
+    candidates: [{ pid: 78, startTime: T0 - 100 * MIN, app: 'claude' }],
+    settings: { daily_cost: { enabled: true, autoPause: true } },
+  });
+  try {
+    await e.monitors.tickLive();
+    await e.monitors.tickAggregate();
+    assert.deepEqual(e.calls.candidates, [{ cwd: '/work/cheap', firstTs: T0 - 90 * MIN }]);
+    assert.deepEqual(e.calls.pause[0].meta, { by: 'rule', rule: 'daily_cost', sessionId: 'cheap' });
+  } finally {
+    e.cleanup();
+  }
+});
+
+test('engine: daily_cost with no running session reports it once and pauses one that starts later', async () => {
+  const e = setup({
+    budget: 300,
+    results: [
+      {
+        sessions: { dear: session('/work/dear', T0 - 80 * MIN, T0 - 40 * MIN) },
+        events: [usage(T0 - 50 * MIN, 'dear', 12)],
+        signals: { days: {}, events: [] },
+      },
+    ],
+    agents: [],
+    candidates: [{ pid: 79, startTime: T0 - 100 * MIN, app: 'claude' }],
+    settings: { daily_cost: { enabled: true, autoPause: true } },
+  });
+  try {
+    await e.monitors.tickLive();
+    await e.monitors.tickAggregate();
+    for (let i = 0; i < 3; i++) {
+      e.clock.t += 5000;
+      await e.monitors.tickLive();
+    }
+    assert.equal(e.calls.candidates.length, 0, 'nothing to look for');
+    const n = notes(e.state);
+    assert.equal(n.length, 1, 'reported once, not on every pass');
+    assert.equal(n[0].code, 'none');
+    assert.match(n[0].reason, /no running session/);
+    // The session runs again: the episode was not used up, so it is paused now.
+    e.data.agents = [agent('claude:dear', 'working', 'dear')];
+    e.clock.t += 5000;
+    await e.monitors.tickLive();
+    assert.equal(e.calls.pause.length, 1);
+    assert.equal(e.calls.pause[0].meta.sessionId, 'dear');
+  } finally {
+    e.cleanup();
+  }
+});
+
+test('engine: the outcome of an automatic pause is notified too, with its code and the session title', async () => {
+  const e = burning();
+  try {
+    await e.monitors.tickAggregate();
+    await e.monitors.tickLive();
+    const out = outcomes(e.sent);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].alert.ok, true);
+    assert.equal(out[0].alert.code, 'paused');
+    assert.equal(out[0].alert.value, 6);
+    assert.equal(out[0].title, 'acme-web');
+  } finally {
+    e.cleanup();
+  }
+  const f = burning({ candidates: [{ pid: 1 }, { pid: 2 }] });
+  try {
+    await f.monitors.tickAggregate();
+    await f.monitors.tickLive();
+    const [o] = outcomes(f.sent);
+    assert.equal(o.alert.ok, false);
+    assert.equal(o.alert.code, 'several');
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('engine: after a restart a reminder does not pause again, so an owner resume sticks', async () => {
+  const e = burning();
+  try {
+    await e.monitors.tickAggregate();
+    await e.monitors.tickLive();
+    assert.equal(e.calls.pause.length, 1);
+    // The owner resumes the agent (outside the engine), then the server restarts.
+    e.restart();
+    e.clock.t = T0 + 31 * MIN;
+    e.data.results[0].events.push(usage(e.clock.t - MIN, 's1', 7));
+    await e.monitors.tickAggregate();
+    await e.monitors.tickLive();
+    const burn = ruleAlerts(e.sent, 'cost_burn');
+    assert.equal(burn.length, 2, 'the reminder came after the restart');
+    assert.equal(burn[1].alert.previous, 'triggered');
+    assert.equal(e.calls.pause.length, 1, 'not paused again');
+    assert.equal(e.calls.resume.length + e.calls.stop.length, 0);
+  } finally {
+    e.cleanup();
+  }
+});
+
+test('engine: the episode mark is saved in the state file, private to the owner', async () => {
+  const e = burning();
+  try {
+    await e.monitors.tickAggregate();
+    await e.monitors.tickLive();
+    const file = e.stateFile;
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const entry = saved.states.find((x) => x.rule === 'cost_burn' && x.instance === 's1');
+    assert.equal(entry.actedAt, T0);
+    if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  } finally {
+    e.cleanup();
+  }
+});
+
+test('engine: turning auto-pause on while the rule is triggered pauses on the next tick', async () => {
+  const e = burning({ settings: { cost_burn: { enabled: true, autoPause: false } } });
+  try {
+    await e.monitors.tickAggregate();
+    await e.monitors.tickLive();
+    assert.equal(e.calls.pause.length, 0);
+    e.state.setSettings('cost_burn', { autoPause: true });
+    e.clock.t += 5000;
+    await e.monitors.tickLive();
+    assert.equal(e.calls.pause.length, 1, 'no wait for a reminder');
+    e.clock.t += 5000;
+    await e.monitors.tickLive();
+    assert.equal(e.calls.pause.length, 1);
+  } finally {
+    e.cleanup();
+  }
+});
+
+test('engine: a resolved episode clears the mark, so the next trigger pauses again', async () => {
+  const e = burning();
+  try {
+    await e.monitors.tickAggregate();
+    await e.monitors.tickLive();
+    assert.equal(e.calls.pause.length, 1);
+    // No spend for a while: ok, held for 5 minutes, then resolved.
+    e.clock.t = T0 + 11 * MIN;
+    await e.monitors.tickLive();
+    e.clock.t = T0 + 17 * MIN;
+    await e.monitors.tickLive();
+    assert.ok(
+      ruleAlerts(e.sent, 'cost_burn').some((s) => s.alert.state === 'ok'),
+      'resolved',
+    );
+    // A new burn: a new episode.
+    e.clock.t = T0 + 20 * MIN;
+    e.data.results[0].events.push(usage(e.clock.t - MIN, 's1', 9));
+    await e.monitors.tickAggregate();
+    await e.monitors.tickLive();
+    assert.equal(e.calls.pause.length, 2);
+  } finally {
+    e.cleanup();
+  }
+});
+
+test('engine: a snooze leaves no stale mark; the episode after it may pause, the snoozed one does not', async () => {
+  const e = burning();
+  try {
+    await e.monitors.tickAggregate();
+    await e.monitors.tickLive();
+    assert.equal(e.calls.pause.length, 1);
+    e.state.snooze('cost_burn', null, 60 * MIN);
+    for (const dt of [5, 30, 59]) {
+      e.clock.t = T0 + dt * MIN;
+      e.data.results[0].events.push(usage(e.clock.t - 30e3, 's1', 9));
+      await e.monitors.tickAggregate();
+      await e.monitors.tickLive();
+    }
+    assert.equal(e.calls.pause.length, 1, 'nothing while snoozed');
+    // The snooze ends with the session still burning: a new episode starts, and it is acted on.
+    e.clock.t = T0 + 61 * MIN;
+    e.data.results[0].events.push(usage(e.clock.t - 30e3, 's1', 9));
+    await e.monitors.tickAggregate();
+    await e.monitors.tickLive();
+    assert.equal(e.calls.pause.length, 2);
+  } finally {
+    e.cleanup();
+  }
+});
+
+test('engine: a bad clock on the aggregate pass keeps what the previous pass built', async () => {
+  const e = burning();
+  try {
+    await e.monitors.tickAggregate();
+    const before = e.monitors.snapshot();
+    const t = e.clock.t;
+    e.clock.t = NaN;
+    await e.monitors.tickAggregate();
+    assert.deepEqual(e.monitors.snapshot().today, before.today);
+    assert.equal((await e.monitors.status()).lastAggregate, t);
+    e.clock.t = t + 5000;
+    await e.monitors.tickLive();
+    assert.equal(e.monitors.snapshot().sessions[0].cost10m, 6, 'the usage rows were kept');
+  } finally {
+    e.cleanup();
+  }
+});
+
+test('engine: before an aggregate pass the budget is checked the same way', () => {
+  const e = setup();
+  try {
+    e.conf.monthlyBudgetUSD = 'lots';
+    assert.deepEqual(e.monitors.snapshot().budget, { monthlyUSD: null });
+    e.conf.monthlyBudgetUSD = 90;
+    assert.deepEqual(e.monitors.snapshot().budget, { monthlyUSD: 90 });
   } finally {
     e.cleanup();
   }
