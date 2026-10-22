@@ -182,13 +182,13 @@ test('recorder: ingest never throws, keeps only well-formed records, strips cont
   assert.equal(rec.ingest(42), 0);
   const key = fakeKey();
   const good = { t: T, s: '1'.repeat(16), p: null, n: 'x', k: 'server', st: 1, d: 1, ok: false, src: 'r', svc: 'f' };
-  const withContent = { ...good, err: `leak ${key}`, a: { 'gen_ai.input.messages': 'secret', keep: 1 } };
+  const withContent = { ...good, err: `leak ${key}`, a: { 'gen_ai.input.messages': 'secret', 'gen_ai.request.model': 'm' } };
   const bad = [null, 'x', { ...good, t: 'zz' }, { ...good, s: '1' }];
   assert.equal(rec.ingest([withContent, ...bad]), 1);
   assert.equal(rec.stats().dropped, 4);
   rec.flush();
   assert.equal(store.spans.length, 1);
-  assert.deepEqual(store.spans[0].a, { keep: 1 });
+  assert.deepEqual(store.spans[0].a, { 'gen_ai.request.model': 'm' });
   assert.equal(store.spans[0].err.includes(key), false);
 });
 
@@ -197,8 +197,16 @@ test('recorder: ingest rebuilds each record from the named fields only', () => {
   const rec = createRecorder({ store, flushMs: 0 });
   const good = { t: T, s: '1'.repeat(16), p: null, n: 'x', k: 'server', st: 1, d: 1, ok: true, src: 'r', svc: 'f' };
   const long = 'y'.repeat(2000);
-  const attrs = { n: 1, b: true, s: long, o: { x: 1 }, l: [1], z: null, ['k'.repeat(101)]: 1 };
-  const many = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`k${i}`, i]));
+  const attrs = {
+    'gen_ai.usage.input_tokens': 1,
+    'gen_ai.tool.name': long,
+    'gen_ai.agent.id': { x: 1 },
+    'gen_ai.agent.name': [1],
+    'gen_ai.request.model': null,
+    'server.port': 8080,
+    ['k'.repeat(101)]: 1,
+  };
+  const many = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`k${i}`, i])); // none allowed
   const input = [
     { ...good, prompt: 'secret text', extra: 1, err: null, a: 'text' },
     { ...good, a: [1, 2] },
@@ -216,12 +224,31 @@ test('recorder: ingest rebuilds each record from the named fields only', () => {
   assert.equal('err' in a, false);
   assert.deepEqual(a.a, {});
   assert.deepEqual(b.a, {});
-  assert.deepEqual(Object.keys(c.a), ['n', 'b', 's']);
-  assert.equal(c.a.s.length, 1000);
+  assert.deepEqual(Object.keys(c.a), ['gen_ai.usage.input_tokens', 'gen_ai.tool.name', 'server.port']);
+  assert.equal(c.a['gen_ai.tool.name'].length, 1000);
   assert.equal(c.k, 'internal');
   assert.equal(c.n.length, 200);
   assert.equal(c.src, 'remote');
-  assert.equal(Object.keys(d.a).length, 64);
+  assert.deepEqual(d.a, {});
+});
+
+test('recorder: ingest keeps only allowed attributes: no OpenInference or OpenLLMetry text', () => {
+  const store = memStore();
+  const rec = createRecorder({ store, flushMs: 0 });
+  const good = { t: T, s: '1'.repeat(16), p: null, n: 'x', k: 'client', st: 1, d: 1, ok: true, src: 'remote', svc: 'far' };
+  const a = {
+    'input.value': 'PROMPT-TEXT',
+    'output.value': 'REPLY-TEXT',
+    'llm.input_messages.0.message.content': 'PROMPT-TEXT',
+    'gen_ai.prompt.0.content': 'PROMPT-TEXT',
+    'gen_ai.completion.0.content': 'REPLY-TEXT',
+    'gen_ai.operation.name': 'chat',
+    'gen_ai.response.model': 'm',
+    'rpc.method': 'message/send',
+  };
+  assert.equal(rec.ingest([{ ...good, a }]), 1);
+  rec.flush();
+  assert.deepEqual(store.spans[0].a, { 'gen_ai.operation.name': 'chat', 'gen_ai.response.model': 'm', 'rpc.method': 'message/send' });
 });
 
 test('recorder: ingest takes only string ids; a non-string id is not coerced, and err numbers are stored as text', () => {

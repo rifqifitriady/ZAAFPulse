@@ -60,7 +60,7 @@ test('otlp: spans of a trace this ZAAFPulse started are kept; unknown, malformed
     { t: a.t, p: a.p, k: a.k, src: a.src, svc: a.svc, st: a.st, d: a.d, ok: a.ok, err: a.err },
     { t: T, p: CLIENT, k: 'server', src: 'remote', svc: 'far-agent', st: 1792642201123456, d: 100000, ok: false, err: 'boom' },
   );
-  assert.deepEqual(a.a, { 'http.route': '/a2a', n: 3 });
+  assert.deepEqual(a.a, { 'http.route': '/a2a' }, 'n is not an allowed attribute');
   assert.deepEqual(recv.receive({ resourceSpans: [] }), {});
   assert.deepEqual(recv.receive(null), {});
 });
@@ -127,7 +127,45 @@ test('otlp: zaafpulse.* attributes and numbers that are not finite are dropped f
     ]),
   );
   recorder.flush();
-  assert.deepEqual(store.spans[0].a, { 'gen_ai.operation.name': 'chat', ratio: 0.5 });
+  assert.deepEqual(store.spans[0].a, { 'gen_ai.operation.name': 'chat' });
+});
+
+test('otlp: only allowed attributes are kept, so no prompt or reply text of other conventions is stored', () => {
+  const { store, recorder } = known();
+  const str = (key, v) => ({ key, value: { stringValue: v } });
+  createReceiver({ recorder }).receive(
+    body([
+      span(T, '1111111111111111', {
+        attributes: [
+          // OpenInference
+          str('input.value', 'PROMPT-TEXT'),
+          str('output.value', 'REPLY-TEXT'),
+          str('llm.input_messages.0.message.content', 'PROMPT-TEXT'),
+          str('llm.output_messages.0.message.content', 'REPLY-TEXT'),
+          // OpenLLMetry
+          str('gen_ai.prompt.0.content', 'PROMPT-TEXT'),
+          str('gen_ai.completion.0.content', 'REPLY-TEXT'),
+          // kept
+          str('gen_ai.request.model', 'm'),
+          str('gen_ai.agent.name', 'far'),
+          { key: 'gen_ai.usage.input_tokens', value: { intValue: '7' } },
+          { key: 'http.response.status_code', value: { intValue: '200' } },
+          str('mcp.method.name', 'tools/call'),
+          str('error.type', '_OTHER'),
+        ],
+      }),
+    ]),
+  );
+  recorder.flush();
+  assert.deepEqual(store.spans[0].a, {
+    'gen_ai.request.model': 'm',
+    'gen_ai.agent.name': 'far',
+    'gen_ai.usage.input_tokens': 7,
+    'http.response.status_code': 200,
+    'mcp.method.name': 'tools/call',
+    'error.type': '_OTHER',
+  });
+  assert.ok(!JSON.stringify(store.spans).includes('-TEXT'));
 });
 
 test('otlp: malformed shapes never throw and are counted as rejected', () => {

@@ -133,7 +133,7 @@ Also:
 | `st` / `d` | Start and duration, **microseconds** (nanoseconds do not fit a JSON number exactly; Jaeger uses microseconds) |
 | `ok` / `err` | Status; `err` masked, at most 200 characters |
 | `src` / `svc` | `gateway` or `remote`; the service (`zaafpulse`, or a remote service's `service.name`) |
-| `a` | The span's attributes, minus content attributes (`gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.system_instructions`, `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`) |
+| `a` | The span's attributes, minus content attributes (`gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.system_instructions`, `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`); a span from the return channel keeps only an allow-list of attributes (see below) |
 
 ### Trace summary (one entry in the trace index)
 
@@ -174,7 +174,8 @@ Tokens and cost come from `chat` spans only, because agent and workflow spans re
 - **Return channel**: `POST /v1/traces`, OTLP/HTTP JSON, ahead of the gateway's own routes:
   1. only from this machine (remote address `127.0.0.1` / `::1`);
   2. only spans whose trace ID the recorder saw in the last 24 hours (a 128-bit ID that was only ever sent to the callee works as a capability); the rest are dropped and counted;
-  3. bodies over 1 MB are refused, and at most 2,000 spans per trace are accepted from outside.
+  3. bodies over 1 MB are refused, and at most 2,000 spans per trace are accepted from outside;
+  4. a span from outside keeps only allowed attributes (operation, models, provider, agent and tool names, token counts, `rpc.*`, `server.*`, `http.*` method, status and route, `error.type`, `mcp.method.name`): other conventions carry prompt and reply text under their own keys (OpenInference `input.value`, OpenLLMetry `gen_ai.prompt.*`), so a deny-list would not keep the store free of content.
 
   Accepted spans are stored with `src: "remote"` and their own `svc`, so clock skew is corrected for them and the dependency map shows the remote service.
 

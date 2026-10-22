@@ -140,8 +140,13 @@ JSON (`content-type: application/json`) to `http://127.0.0.1:<port>/v1/traces`. 
 - Only for traces whose `traceparent` ZAAFPulse itself sent to an MCP server or a remote A2A agent in the last
   24 hours. Spans of any other trace are dropped.
 - At most 2,000 spans per trace. A body over 1 MB is cut off and the connection is closed.
-- A span needs a valid start and end. Content attributes, `zaafpulse.*` attributes and numbers that are not
-  finite are dropped.
+- A span needs a valid start and end. It keeps only these attributes: `gen_ai.operation.name`,
+  `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.provider.name`, `gen_ai.agent.id`, `gen_ai.agent.name`,
+  `gen_ai.tool.name`, `gen_ai.tool.type`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `rpc.system`,
+  `rpc.method`, `server.address`, `server.port`, `http.request.method`, `http.response.status_code`, `http.route`,
+  `error.type` and `mcp.method.name`. Everything else is dropped, so no prompt or reply text is stored under any
+  convention's keys (OpenTelemetry GenAI, OpenInference, OpenLLMetry), and no `zaafpulse.*` attribute comes from
+  outside. Numbers that are not finite are dropped too.
 - A resource whose `service.name` is `zaafpulse` is refused, so pointing the OTLP export back at this server is
   ignored.
 - Returned spans add no tokens or cost to a trace's totals, and never replace one of ZAAFPulse's own spans.
