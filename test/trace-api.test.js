@@ -9,7 +9,7 @@ const net = require('net');
 const path = require('path');
 const { spawn } = require('child_process');
 const { createGateway } = require('../lib/gateway');
-const { secretsFor, NO_JUDGE_PORTS } = require('./helpers');
+const { secretsFor, NO_JUDGE_PORTS, fakeServer } = require('./helpers');
 
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const ROOT = path.join(__dirname, '..');
@@ -486,5 +486,68 @@ test('gateway /mcp: acc_evals returns labels and keys, never an explanation', as
     noPaths(mcp.bodies);
   } finally {
     await s.stop();
+  }
+});
+
+test('trace api: a gateway request is stored without content and opens with its analysis', async () => {
+  const upstream = await fakeServer({
+    'POST /chat/completions': {
+      body: { id: 'chatcmpl-1', choices: [{ index: 0, message: { role: 'assistant', content: 'hi' }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 2 } },
+    },
+    'GET /models': { body: { data: [{ id: 'm' }] } },
+  });
+  const data = tmp('zp-trace-api-gw-');
+  fs.writeFileSync(
+    path.join(data, 'config.json'),
+    JSON.stringify({
+      gateway: {
+        providers: [{ id: 'fake', preset: 'openai', baseUrl: upstream.url, models: [], enabled: true, tier: 'private', approved: true }],
+        defaults: { model: 'fake/m' },
+      },
+    }),
+  );
+  const gw = createGateway({
+    dataDir: path.join(data, '.data'),
+    getConfig: () => ({ gateway: {} }),
+    writeGatewayConfig: () => {},
+    secrets: secretsFor(),
+    resolveSecret: () => undefined,
+    getPricing: () => ({}),
+    getIntegrations: () => ({ listTools: async () => [], callTool: async () => ({}) }),
+  });
+  const apiKey = gw.keys.create({ name: 'trace', scopes: ['llm'], rpm: 60 }).secret;
+  gw.flush();
+  const s = await startServer({ ZAAFPULSE_AUTH: 'none' }, { data });
+  const c = client(s.base);
+  try {
+    const r = await fetch(`${s.base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { ...JSON_HEADERS, authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ model: 'fake/m', messages: [{ role: 'user', content: 'secret prompt' }] }),
+    });
+    assert.equal(r.status, 200, await r.text());
+    let row;
+    for (let i = 0; i < 40 && !row; i++) {
+      row = (await c.call('/api/trace/sessions?source=gateway')).json.sessions.find((x) => /^POST \/v1\/chat\/completions/.test(x.title || ''));
+      if (!row) await new Promise((res) => setTimeout(res, 250));
+    }
+    assert.ok(row, 'the stored trace is listed');
+    const sk = await c.call(`/api/trace/session?key=${row.key}`);
+    assert.equal(sk.status, 200);
+    assert.ok(sk.json.spans.some((x) => x.kind === 'chat' && x.model === 'fake/m'));
+    assert.equal(sk.json.analysis.rootSpanId, sk.json.spans.find((x) => x.parent == null).id);
+    assert.equal((await c.call('/api/trace/sessions?source=gateway&minCost=1000')).json.sessions.length, 0);
+    const deps = await c.call('/api/trace/deps?range=1');
+    assert.equal(deps.status, 200);
+    assert.ok(Array.isArray(deps.json.nodes) && Array.isArray(deps.json.edges));
+    for (const b of c.bodies) assert.ok(!b.includes('secret prompt'));
+    const dir = path.join(data, '.data', 'traces');
+    const segs = fs.readdirSync(dir).filter((f) => /^\d{4}-\d{2}-\d{2}\.ndjson$/.test(f));
+    assert.ok(segs.length > 0);
+    for (const f of segs) assert.ok(!fs.readFileSync(path.join(dir, f), 'utf8').includes('secret prompt'));
+    noPaths(c.bodies);
+  } finally {
+    await s.stop();
+    await upstream.close();
   }
 });

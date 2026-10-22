@@ -1261,3 +1261,19 @@ test('material: a turn of 300 calls keeps the first 50 and the last 150, and ava
   assert.equal(m.tools[199].name, 'FinalTool');
   assert.ok(m.available.includes('LateTool') && m.available.includes('FinalTool') && m.available.includes('Bash'));
 });
+
+test('registry: an opened skeleton carries its analysis, rooted at the turn', async () => {
+  const t = createTrace({ demo: true });
+  const row = t.sessions({ range: 30 }).find((r) => r.source === 'claude');
+  const sk = await t.session(row.key);
+  const turn = sk.spans.find((s) => s.kind === 'turn');
+  assert.equal(sk.analysis.rootSpanId, turn.id);
+  assert.ok(sk.analysis.criticalPath.length > 0);
+  assert.equal(sk.analysis.rootCause.name, 'execute_tool Bash');
+  assert.ok(sk.analysis.rollup[turn.id].costUSD > 0);
+  // Filters on duration and cost.
+  assert.equal(t.sessions({ range: 30, minCost: 1000 }).length, 0);
+  assert.ok(t.sessions({ range: 30, minMs: 1 }).length >= 3);
+  // Demo dependencies are a fixed sample.
+  assert.ok(t.deps({ range: 7 }).edges.length > 0);
+});
