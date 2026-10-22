@@ -5658,6 +5658,46 @@ a.trace-link:focus-visible b {
 .tr-row.dim:hover {
   opacity: 0.85;
 }
+/* A span on the critical path: its bar is outlined and fully lit. */
+.tr-row.cp .tr-track span {
+  opacity: 1;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.85),
+    0 0 8px var(--c);
+}
+.tr-notice.tr-cause {
+  border-color: rgba(255, 90, 110, 0.45);
+  background: rgba(255, 90, 110, 0.08);
+  color: #ff8a99;
+}
+.tr-deps {
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 0;
+  color: var(--h-text-2);
+  font-size: 12px;
+}
+.tr-dtable {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: ui-monospace, Menlo, monospace;
+}
+.tr-dtable th,
+.tr-dtable td {
+  padding: 6px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--h-edge);
+}
+.tr-dtable th {
+  position: sticky;
+  top: 0;
+  background: rgba(0, 0, 0, 0.45);
+  font-weight: 600;
+}
+.tr-dtable td:nth-child(n + 3),
+.tr-dtable th:nth-child(n + 3) {
+  text-align: right;
+}
 .tr-name {
   display: flex;
   align-items: center;
