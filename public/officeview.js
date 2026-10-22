@@ -148,6 +148,7 @@ function viewSquad() {
     <div class="hero"><div><div class="eyebrow">AI OFFICE</div><h1>The AI office</h1>
       <p>Each agent session is a character. It walks to the room for the tool it is using right now, read live from your transcripts.</p></div>
       <div class="hero-actions"><span class="pill live-pill"><i class="live-dot"></i><span id="of-clock">CONNECTING</span></span><span class="pill" id="of-count"></span></div></div>
+    <div class="mon-strip" data-mon-strip hidden></div>
 
     <section class="holo stage office-stage">
       <canvas id="of-scene" aria-label="3D office: agent characters move between coding desks, library, server room, web globe, planning table, MCP hub, help desk and lounge according to what they are doing"></canvas>
@@ -296,7 +297,7 @@ function paintOffice() {
     ${ag
       .map(
         (a) => `<tr><td><span class="tool-dot" style="background:${agentColor(a)}"></span>${agentTraceHref(a) ? `<a class="trace-link" href="${esc(agentTraceHref(a))}" title="Open in the trace explorer"><b>${esc(agentName(a))}</b></a>` : `<b>${esc(agentName(a))}</b>`}
-        <small class="block muted">${a.kind === 'subagent' ? `subagent of ${esc(agentName(office.agents.find((p) => p.id === a.parent) || { kind: 'session', project: a.project }))}` : esc(toolName(a.tool))}${a.model ? ` · ${esc(a.model.replace(/^claude-/, ''))}` : ''}</small></td>
+        <small class="block muted">${a.kind === 'subagent' ? `subagent of ${esc(agentName(office.agents.find((p) => p.id === a.parent) || { kind: 'session', project: a.project }))}` : esc(toolName(a.tool))}${a.model ? ` · ${esc(a.model.replace(/^claude-/, ''))}` : ''}${agentControl(a)}</small></td>
       <td><span class="state-pill" style="--c:${STATE_COLOR[a.state]}"><i></i>${STATE_TEXT[a.state]}</span></td>
       <td class="clip-wide">${esc(doing(a))}</td><td class="r num">${a.calls10m || 0}</td><td class="r muted">${ago(a.lastTs)}</td></tr>`,
       )
@@ -794,9 +795,18 @@ function agentTraceHref(a) {
   return `#trace?s=${encodeURIComponent(sid)}&src=${a.tool}`;
 }
 
+// Pause, resume or stop a session's agent (public/monitorsview.js); a subagent runs in its parent's process.
+function agentControl(a) {
+  const href = a && a.kind === 'session' ? agentTraceHref(a) : null;
+  if (!href) return '';
+  const q = new URLSearchParams(href.split('?')[1]);
+  return monAgentButton(q.get('src'), q.get('s'), agentName(a));
+}
+
 function mountSquad() {
   const canvas = $('#of-scene');
   if (!canvas) return;
+  monPaintStrips(); // paused agents, with Resume and Stop
   if (office) paintOffice();
   pollOffice();
   const timer = setInterval(() => {
