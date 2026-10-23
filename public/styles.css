@@ -8697,7 +8697,10 @@ label.mon-cand.on {
   border: 0;
   background: transparent;
   color: var(--text-2);
-  font: 600 16px/1 inherit;
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
   cursor: pointer;
 }
 .topo-zbtn + .topo-zbtn {
