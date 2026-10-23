@@ -8456,6 +8456,17 @@ label.mon-cand.on {
 .rt-form h4 {
   margin: 0;
 }
+/* .btn sets display, which would show a [hidden] Cancel in "Add a runtime" mode */
+.rt-form [hidden] {
+  display: none;
+}
+/* .input is one 36 px line; a command is one argument per line */
+.rt-form textarea.input {
+  height: auto;
+  min-height: 7.5em;
+  padding: 8px 10px;
+  resize: vertical;
+}
 .rt-form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
