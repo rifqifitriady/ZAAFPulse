@@ -381,7 +381,7 @@ All routes need the dashboard sign-in. A body is JSON (415 otherwise). Errors ar
 | `GET /api/datasets` | the datasets, the limits, and whether content is on |
 | `POST /api/datasets` | create `{ name, slug? }` |
 | `GET /api/datasets/<slug>` | the dataset and its examples |
-| `GET /api/datasets/<slug>?view=preview` | the light view the examples page and the Playground use: long input and output texts cut to their first 600 characters (such an example is marked `cut: true`), tool descriptions emptied, the reference whole; any other `view` is 400 |
+| `GET /api/datasets/<slug>?view=preview` | the light view the examples page uses, and **↻ Replay turn** in the Explorer when it looks up a turn that was already saved (the Playground reads the full view): long input and output texts cut to their first 600 characters, tool descriptions emptied, the reference whole; an example is marked `cut: true` when anything in it was cut or emptied; any other `view` is 400 |
 | `PUT /api/datasets/<slug>` | rename `{ name }` (the slug stays) |
 | `DELETE /api/datasets/<slug>` | delete it |
 | `POST /api/datasets/<slug>/examples` | add turns `{ items: [{ key, turn, span? }] }` (1 to 50); returns `added` and `skipped` with reasons; 403 with content off |
@@ -393,7 +393,7 @@ All routes need the dashboard sign-in. A body is JSON (415 otherwise). Errors ar
 | `GET /api/experiments` | the records (without outputs), the running one, the models and the evaluators |
 | `GET /api/experiments/<id>` | one record; while it runs, its progress (with `cancelling: true` once a stop was asked) |
 | `POST /api/experiments` | start a run `{ dataset, examples?, models, evaluators, maxCostUSD?, maxRequests?, preview?, confirm? }`; 202 with an id. `preview: true` returns, per external model, `{ model, messages, tools }` as they will be sent (masked) and a `confirm` token; an external model without it gets 428; a run already going gets 409 |
-| `POST /api/experiments/<id>/cancel` | stop the running run after the current call (body `{}`); 202 `{ id, status: "cancelling" }`, also when asked again; 409 when the run has already ended, 404 for an unknown run |
+| `POST /api/experiments/<id>/cancel` | stop the running run after the current call (body `{}`); 202 `{ id, status: "cancelling" }`, also when asked again; 409 when the run has already ended, 404 for an unknown run, 400 for a malformed id or a body with fields |
 
 ## Known limits
 
