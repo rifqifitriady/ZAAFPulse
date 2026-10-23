@@ -430,6 +430,15 @@ running keeps its own counters and does not see the CLI's, so the two together c
 Claude Code the cost cap, by up to one CLI run. The running dashboard reads the results file when it starts, so
 results written by the CLI show there after a restart.
 
+### Gating on a dataset
+
+`zaafpulse eval --dataset <slug> --model <provider/model> --require 'faithfulness>=0.8' --ci` replays a saved
+[dataset](datasets.md) against a local model and exits 1 when a pass rate falls short (quote every `--require`: an
+unquoted `>` is a shell redirect). Judge evaluators in that run use this judge through `judgeMaterial`, so they share
+its single lane, its daily count and its cost cap. The CLI and the dashboard share `evals-state.json`; writes are
+atomic, but while both run at once the daily count and cost caps can undercount. Usage, exit codes and recipes:
+[docs/datasets.md](datasets.md#the-ci-gate).
+
 ## Known limits
 
 - **Code checks are per turn.** A detector event is placed on the turn whose time span holds it, and a correction
