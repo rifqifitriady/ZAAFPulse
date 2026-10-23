@@ -10,7 +10,7 @@ In **AI Office → Installed AI tools**:
 - **llama.cpp**, **Jan**, **LocalAI** and your own runtimes get a card of their own in the same grid, with the same row and their port.
 - A runtime shows up when it is installed, running, or one of your own entries.
 
-Stop asks first: "Stop Ollama? Models it has loaded are unloaded." While a request is out the button reads "Starting…" or "Stopping…". When a start fails, the card shows the error and the last lines of the server's log, with secrets masked and paths removed.
+Stop asks first: "Stop Ollama? Its models are unloaded now and loaded again on the next Start." (for a runtime without the reload below: "Models it has loaded are unloaded.") While a request is out the button reads "Starting…" or "Stopping…". When a start fails, the card shows the error and the last lines of the server's log, with secrets masked and paths removed.
 
 ## The runtimes
 
@@ -54,6 +54,20 @@ A second Start or Stop on a runtime while one is still in progress is refused wi
 
 The server keeps running until you stop it or the machine restarts. It survives a ZAAFPulse restart. Nothing is added to your login items or system services.
 
+## Models are loaded again on Start
+
+For **Ollama** and **LM Studio**, Start also loads again the models the server last had loaded, so you do not have to run `ollama run` after a Stop.
+
+- **Which models:** the last models seen loaded. While ZAAFPulse runs, it checks the loaded models of each running Ollama and LM Studio every 30 seconds, and once more just before a Stop. It keeps the last list that was not empty in `.data/runtimes/models.json`. A model Ollama unloaded after going idle, a stop from outside ZAAFPulse and a restart of the machine therefore do not lose the list. A different list replaces it, and nothing is saved while a reload is still loading.
+- **When:** only after the **Start** button started the server and it answers. A server started any other way (a terminal, the Ollama app at login) is left as it is.
+- **How long they stay:** until Stop. Ollama loads each model with `keep_alive: -1`, and LM Studio with `lms load <model> --yes` with no time-to-live, so they are not unloaded when idle. This keeps their memory in use: a 3B model takes about 2.3 GB.
+- **How:** one model at a time, in the background; Start does not wait for them. Ollama through `POST /api/generate` with no prompt on its own port, LM Studio through `lms load`, without a shell. A model name is used only when it comes from the runtime itself and looks like a model name: one starting with `-` is never passed to `lms`. At most 8 are kept.
+- **On the card:** "Start reloads llama3.2:3b" while stopped, "Started. Loading llama3.2:3b…" after Start, then "Model loaded: llama3.2:3b". A model that is gone or does not load is shown as "Could not load … (not found)", and the others are still loaded.
+- **Stop during a reload:** no further model is loaded. A load already under way runs to its end.
+- **Audit:** the end of each reload is written to `.data/agent-audit.jsonl` as action `reload`, with the number of models loaded and failed (and `cancelled` after a Stop), never their names.
+
+The llama.cpp server and your own entries name their model in the command, so they need no reload. Jan and LocalAI are not reloaded.
+
 ## Your own runtimes
 
 Add a server of your own in **Settings → Local models**, for example `llama-server` with a model file. Each entry is stored in `config.json`:
@@ -93,7 +107,7 @@ Putting the port in the command, when the server takes one, is the more reliable
 - The routes are behind the dashboard sign-in. Gateway API keys, MCP tools and A2A cannot reach them.
 - Control is **off in server mode, with password sign-in and in Docker**, the same as agent control ([docs/monitors.md](monitors.md#where-control-is-off)). Start, Stop, Approve, and save and delete in Settings are then refused with 403. The cards hide the buttons and say why. Settings shows the reason, hides the commands, and disables its form and buttons.
 - Stop checks the pid and start time the card was shown. If the server was restarted in between, the stop is refused with "the process changed; refresh".
-- Every action that reaches control, refused or not, is written to `.data/agent-audit.jsonl` with `kind: "runtime"`. That covers start, stop, approve, save and delete: the time, the action, the runtime id, the result and, for start and stop, the pid, start time and how it was stopped. It holds no command, path or log text. A request rejected before that (a malformed body, not JSON) is not audited.
+- Every action that reaches control, refused or not, is written to `.data/agent-audit.jsonl` with `kind: "runtime"`. That covers start, stop, approve, save, delete and the end of a model reload: the time, the action, the runtime id, the result and, for start and stop, the pid, start time and how it was stopped. It holds no command, path or log text. A request rejected before that (a malformed body, not JSON) is not audited.
 - No error or log line the dashboard gets holds a file path. Settings shows your own commands with your home folder as `~` and secrets masked.
 
 Demo mode shows synthetic runtimes. Its Start, Stop and Approve change only what the page shows, and save and delete are refused: nothing is started, stopped or saved.
