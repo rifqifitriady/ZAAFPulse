@@ -1,6 +1,6 @@
 # Local model servers
 
-AI Office can start and stop the model servers on your machine with one button: Ollama, LM Studio, the llama.cpp server, Jan, LocalAI, and any server you add yourself. Start and Stop act on the **server**. Stopping it unloads every model it has loaded. Loading, unloading or pulling single models is not part of this.
+AI Office can start and stop the model servers on your machine with one button: Ollama, LM Studio, the llama.cpp server, Jan, LocalAI, and any server you add yourself. Start and Stop act on the **server**. Stopping it unloads every model it has loaded, and for Ollama and LM Studio Start loads the last ones again (see [Models are loaded again on Start](#models-are-loaded-again-on-start)). Loading, unloading or pulling a single model by hand is not part of this.
 
 ## Where the buttons are
 
@@ -58,11 +58,11 @@ The server keeps running until you stop it or the machine restarts. It survives 
 
 For **Ollama** and **LM Studio**, Start also loads again the models the server last had loaded, so you do not have to run `ollama run` after a Stop.
 
-- **Which models:** the last models seen loaded. While ZAAFPulse runs, it checks the loaded models of each running Ollama and LM Studio every 30 seconds, and once more just before a Stop. It keeps the last list that was not empty in `.data/runtimes/models.json`. A model Ollama unloaded after going idle, a stop from outside ZAAFPulse and a restart of the machine therefore do not lose the list. A different list replaces it, and nothing is saved while a reload is still loading.
-- **When:** only after the **Start** button started the server and it answers. A server started any other way (a terminal, the Ollama app at login) is left as it is.
+- **Which models:** the last models seen loaded. While ZAAFPulse runs, it checks the loaded models of each running Ollama and LM Studio every 30 seconds, and once more just before a Stop. It keeps the last list that was not empty in `.data/runtimes/models.json`. A model Ollama unloaded after going idle, a stop from outside ZAAFPulse and a restart of the machine therefore do not lose the list. A different list replaces it, and nothing is saved while a reload is still loading. The check is off where runtime control is off (demo mode, server mode, password sign-in, Docker), and with `ZAAFPULSE_RUNTIME_WATCH=off`.
+- **When:** only after the **Start** button started the server and it answers; a Start that reports "started, not answering yet" reloads nothing. A server started any other way (a terminal, the Ollama app at login) is left as it is.
 - **How long they stay:** until Stop. Ollama loads each model with `keep_alive: -1`, and LM Studio with `lms load <model> --yes` with no time-to-live, so they are not unloaded when idle. This keeps their memory in use: a 3B model takes about 2.3 GB.
-- **How:** one model at a time, in the background; Start does not wait for them. Ollama through `POST /api/generate` with no prompt on its own port, LM Studio through `lms load`, without a shell. A model name is used only when it comes from the runtime itself and looks like a model name: one starting with `-` is never passed to `lms`. At most 8 are kept.
-- **On the card:** "Start reloads llama3.2:3b" while stopped, "Started. Loading llama3.2:3b…" after Start, then "Model loaded: llama3.2:3b". A model that is gone or does not load is shown as "Could not load … (not found)", and the others are still loaded.
+- **How:** one model at a time, in the background; Start does not wait for them. A model LM Studio still has loaded is not loaded a second time. Ollama through `POST /api/generate` with no prompt on its own port, LM Studio through `lms load`, without a shell. A model name is used only when it comes from the runtime itself and looks like a model name: one starting with `-` is never passed to `lms`. At most 8 are kept.
+- **On the card:** "Start reloads llama3.2:3b" while stopped, "Loading llama3.2:3b…" after Start, then "Model loaded: llama3.2:3b". A model that is gone or does not load is shown as "Could not load … (not found)", and the others are still loaded.
 - **Stop during a reload:** no further model is loaded. A load already under way runs to its end.
 - **Audit:** the end of each reload is written to `.data/agent-audit.jsonl` as action `reload`, with the number of models loaded and failed (and `cancelled` after a Stop), never their names.
 

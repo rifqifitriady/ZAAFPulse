@@ -94,7 +94,7 @@ function rtModelsText(r) {
 function rtResultText(action, res) {
   if (!res || typeof res !== 'object') return '';
   if (res.demo) return `Demo mode: nothing was ${action === 'stop' ? 'stopped' : 'started'}.`;
-  if (res.state === 'running') return rtNames(res.reloading) ? `Started. Loading ${rtNames(res.reloading)}…` : 'Started.';
+  if (res.state === 'running') return 'Started.'; // the models a Start reloads have their own line (rtModelsText)
   if (res.state === 'starting') return `${rtCap(rtText(res.note)) || 'Started, not answering yet'}.`;
   if (res.state === 'stopped') return 'Stopped.';
   if (res.state === 'stopping') return `${rtCap(rtText(res.note)) || 'Still shutting down'}.`;
