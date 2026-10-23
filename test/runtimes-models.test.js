@@ -361,3 +361,78 @@ test('getJson gives null when headers arrive and then nothing', async (t) => {
   assert.equal(await getJson(u, 300), null);
   assert.ok(Date.now() - t0 < 1500);
 });
+
+test('cancel stops a reload before its next load; the rest are neither loaded nor failed', async () => {
+  const started = [];
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const done = [];
+  const m = mem({
+    getJson: ps('a', 'b', 'c'),
+    postJson: async (u, body) => {
+      started.push(body.model);
+      if (body.model === 'a') await gate;
+      return { status: 200, body: {} };
+    },
+    onDone: (id, r) => done.push([id, r]),
+  });
+  await m.observe(ollama());
+  m.reload(ollama());
+  await tick();
+  m.cancel('ollama');
+  assert.equal(m.status('ollama').loading, true, 'the load in flight is still running');
+  release();
+  while (m.status('ollama').loading) await tick();
+  assert.deepEqual(started, ['a']);
+  assert.deepEqual(m.status('ollama'), { loading: false, loaded: ['a'], failed: [] });
+  assert.deepEqual(done, [['ollama', { loaded: ['a'], failed: [], cancelled: true }]]);
+  assert.deepEqual(m.remembered('ollama'), ['a', 'b', 'c'], 'the saved list is kept');
+});
+
+test('a load that fails after a cancel (its server was stopped) is not counted as failed', async () => {
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const m = mem({ getJson: ps('a', 'b'), postJson: async () => (await gate, null) });
+  await m.observe(ollama());
+  m.reload(ollama());
+  await tick();
+  m.cancel('ollama');
+  release();
+  while (m.status('ollama').loading) await tick();
+  assert.deepEqual(m.status('ollama'), { loading: false, loaded: [], failed: [] });
+});
+
+test('cancel with no reload running does nothing, and the next reload runs in full', async () => {
+  const started = [];
+  const m = mem({ getJson: ps('a', 'b'), postJson: async (u, body) => (started.push(body.model), { status: 200 }) });
+  await m.observe(ollama());
+  m.cancel('ollama');
+  m.cancel('jan');
+  m.reload(ollama());
+  while (m.status('ollama').loading) await tick();
+  m.cancel('ollama'); // after the end: no effect on the next one
+  m.reload(ollama());
+  while (m.status('ollama').loading) await tick();
+  assert.deepEqual(started, ['a', 'b', 'a', 'b']);
+});
+
+test('lmstudio: a cancelled reload runs no further lms load', async () => {
+  const calls = [];
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const m = mem({
+    run: async (argv) => {
+      calls.push(argv.slice(1).join(' '));
+      if (argv[1] === 'ps') return { code: 0, stdout: '[{"modelKey":"q1"},{"modelKey":"q2"}]' };
+      await gate;
+      return { code: 0, stdout: '' };
+    },
+  });
+  await m.observe(lms());
+  m.reload(lms());
+  await tick();
+  m.cancel('lmstudio');
+  release();
+  while (m.status('lmstudio').loading) await tick();
+  assert.deepEqual(calls, ['ps --json', 'load q1 --yes']);
+});

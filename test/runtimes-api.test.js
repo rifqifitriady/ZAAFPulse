@@ -26,6 +26,7 @@ const ROW = {
   reason: null,
   approved: true,
   error: null,
+  models: null,
 };
 const err = (status, message, extra) => Object.assign(new Error(message), { status }, extra);
 
@@ -374,4 +375,49 @@ test('an edit drops the approval because the hash covers the whole entry; a bad 
   });
   assert.equal(tilde.status, 200);
   assert.deepEqual(saved.value[0].command, ['llama-server', '--root=~/x', 'a~b', '~', `${HOME}/m.gguf`, '--port', '8081']);
+});
+
+test('a row passes on its models, filtered; a start answer passes on reloading, filtered', async () => {
+  const models = {
+    remembered: ['llama3.2:3b', '-rf', 7, 'qwen3:8b'],
+    loading: 'yes',
+    loaded: ['llama3.2:3b', `${HOME}/x`],
+    failed: [{ name: 'qwen3:8b', error: `could not read ${HOME}/m.gguf`, extra: 1 }, { name: '-x', error: 'no' }, null],
+    extra: true,
+  };
+  const { call } = setup({
+    list: [{ ...ROW, models }, { ...ROW, id: 'jan', models: 'odd' }],
+    act: { start: async () => ({ state: 'running', reloading: ['llama3.2:3b', '--yes', `${HOME}/q`] }) },
+  });
+  const [a, b] = (await call('GET', '/api/runtimes')).body;
+  assert.deepEqual(a.models, {
+    remembered: ['llama3.2:3b', 'qwen3:8b'],
+    loading: false,
+    loaded: ['llama3.2:3b'],
+    failed: [{ name: 'qwen3:8b', error: 'could not read [path]' }],
+  });
+  assert.equal(b.models, null);
+  assert.deepEqual((await call('POST', '/api/runtimes/start', { id: 'ollama' })).body, {
+    state: 'running',
+    reloading: ['llama3.2:3b'],
+  });
+});
+
+test('demo mode: Ollama remembers a model, and a Start after a Stop answers reloading', async () => {
+  const { runtimesDemo } = require('../lib/demo');
+  const { call } = setup({ demo: runtimesDemo() });
+  const rows = (await call('GET', '/api/runtimes')).body;
+  const ollama = rows.find((r) => r.id === 'ollama');
+  assert.deepEqual(ollama.models, { remembered: ['llama3.2:3b'], loading: false, loaded: [], failed: [] });
+  assert.deepEqual(rows.find((r) => r.id === 'lmstudio').models, { remembered: [], loading: false, loaded: [], failed: [] });
+  assert.equal(rows.find((r) => r.id === 'localai').models, null);
+  assert.equal(rows.find((r) => r.id === 'qwen-local').models, null);
+  const stop = await call('POST', '/api/runtimes/stop', { id: 'ollama', pid: ollama.pid, startTime: ollama.startTime });
+  assert.equal(stop.body.state, 'stopped');
+  const start = await call('POST', '/api/runtimes/start', { id: 'ollama' });
+  assert.deepEqual(start.body, { state: 'running', demo: true, reloading: ['llama3.2:3b'] });
+  const after = (await call('GET', '/api/runtimes')).body.find((r) => r.id === 'ollama');
+  assert.deepEqual(after.models, { remembered: ['llama3.2:3b'], loading: false, loaded: ['llama3.2:3b'], failed: [] });
+  const lms = await call('POST', '/api/runtimes/start', { id: 'lmstudio' });
+  assert.deepEqual(lms.body, { state: 'running', demo: true }, 'nothing remembered: no reloading');
 });
