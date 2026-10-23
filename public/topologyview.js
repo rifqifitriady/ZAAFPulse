@@ -270,6 +270,23 @@ function topoReqRow(doc, r, i, labelOf, now) {
   return { li, button: b, names };
 }
 
+// A request row's key: what it is (time, source, path, client, model), then how many identical rows come before it, so
+// two gateway retries in the same millisecond differ. It holds no index, so a newer request on top keeps it.
+function topoReqKey(r, reqs, i) {
+  const what = (q) =>
+    JSON.stringify([
+      Number(q.ts) || 0,
+      topoText(q.source, 20),
+      (Array.isArray(q.path) ? q.path : []).map((id) => (typeof id === 'string' ? id : '')),
+      topoText(q.client, 80),
+      topoText(q.model, 80),
+    ]);
+  const key = what(r);
+  let n = 0;
+  for (let j = 0; j < i; j++) if (what(reqs[j]) === key) n++;
+  return `${key}#${n}`;
+}
+
 // Builds the card on first use and updates it in place after that: nodes and edges are kept by id, so the view and
 // the highlight survive a refresh. `ui` holds the view (scale, centre, moved) and the selection.
 function topoPaint(doc, root, data, ui = {}) {
@@ -330,7 +347,7 @@ function topoPaint(doc, root, data, ui = {}) {
 
   const now = Number(d.ts) || Date.now();
   const labelOf = (id) => (byId.has(id) ? topoText(byId.get(id).label, 80) || topoText(id, 80) : topoText(id, 80));
-  ui.rows = reqs.map((r, i) => ({ ...topoReqRow(doc, r, i, labelOf, now), r, key: `${r.ts}|${r.path}` }));
+  ui.rows = reqs.map((r, i) => ({ ...topoReqRow(doc, r, i, labelOf, now), r, key: topoReqKey(r, reqs, i) }));
   if (ui.rows.length) els.list.replaceChildren(...ui.rows.map((x) => x.li));
   else els.list.replaceChildren(topoEl(doc, 'li', 'topo-empty', 'No requests in the last 3 hours.'));
 

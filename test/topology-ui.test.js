@@ -441,6 +441,24 @@ test('a drag that ended off the graph does not swallow the next click', () => {
   assert.deepEqual(ui.sel, { kind: 'node', id: 'claude' });
 });
 
+test('request rows with the same time and path have their own keys, which survive a refresh', () => {
+  const doc = fakeDoc();
+  const root = doc.createElement('div');
+  const ui = {};
+  const req = (model, extra = {}) => ({ ...DATA.requests[0], model, ok: true, ...extra });
+  const requests = [req('gpt-5'), req('gpt-5-mini'), req('gpt-5-mini'), req('gpt-5', { path: [1, null, 'claude'] })];
+  topoPaint(doc, root, { ...DATA, requests }, ui);
+  const keys = ui.rows.map((x) => x.key);
+  assert.equal(new Set(keys).size, 4, keys.join(' / '));
+  const lit = () => ui.rows.map((x) => /\btopo-hi\b/.test(x.button.className));
+  ui.sel = { kind: 'req', key: ui.rows[2].key };
+  topoPaint(doc, root, { ...DATA, requests }, ui);
+  assert.deepEqual(lit(), [false, false, true, false]);
+  // A newer request on top: the same row stays lit.
+  topoPaint(doc, root, { ...DATA, requests: [req('claude-x', { ts: DATA.ts }), ...requests] }, ui);
+  assert.deepEqual(lit(), [false, false, false, true, false]);
+});
+
 test('topologyview.js builds no HTML from server text (S1)', () => {
   const src = fs.readFileSync(SRC, 'utf8');
   // The only innerHTML is the app's own icon markup.
