@@ -70,7 +70,7 @@ API:
 
 All text is rendered with `textContent`.
 - While stopped with remembered models: "Start reloads llama3.2:3b". With more than 2 models: "llama3.2:3b, qwen3:8b and 1 more".
-- The start result with `reloading`: "Started. Loading llama3.2:3b…".
+- The start result stays "Started."; the models line shows "Loading llama3.2:3b…" (changed after the final review: the result went stale beside the models line).
 - While running:
   - while `loading`: "Loading llama3.2:3b…";
   - after the reload: "Model loaded: llama3.2:3b" (or "Models loaded: …");

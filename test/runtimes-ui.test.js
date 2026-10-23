@@ -201,7 +201,8 @@ test('rtModelsText: what a Start reloads, what is loading, what loaded and what 
 });
 
 test('the start result and the Stop confirmation name the reload', () => {
-  assert.equal(rtResultText('start', { state: 'running', reloading: ['llama3.2:3b'] }), 'Started. Loading llama3.2:3b…');
+  // The models line says what is loading and stays current; the result does not repeat it and go stale.
+  assert.equal(rtResultText('start', { state: 'running', reloading: ['llama3.2:3b'] }), 'Started.');
   assert.equal(rtResultText('start', { state: 'running', reloading: [] }), 'Started.');
   assert.equal(
     rtConfirmText(R({ models: M() })),

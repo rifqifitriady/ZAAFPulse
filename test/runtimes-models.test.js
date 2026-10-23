@@ -188,17 +188,21 @@ test('reload: timeouts and other failures give short errors with no path', async
 
 test('reload: lmstudio runs lms load <name> --yes', async () => {
   const calls = [];
+  let loadedNow = '[{"modelKey":"qwen3-8b"},{"modelKey":"gemma-3"}]';
   const m = mem({
     run: async (argv, o) => {
       calls.push([argv, o]);
-      if (argv[1] === 'ps') return { code: 0, stdout: '[{"modelKey":"qwen3-8b"},{"modelKey":"gemma-3"}]' };
+      if (argv[1] === 'ps') return { code: 0, stdout: loadedNow };
       return { code: argv[2] === 'gemma-3' ? 1 : 0, stdout: '' };
     },
   });
   await m.observe(lms());
+  loadedNow = '[]'; // the server was started again with nothing loaded
   assert.deepEqual(m.reload(lms()), ['qwen3-8b', 'gemma-3']);
   while (m.status('lmstudio').loading) await tick();
-  assert.deepEqual(calls.slice(1), [
+  // observe's lms ps, the reload's own lms ps (what is still loaded), then one lms load per name
+  assert.deepEqual(calls[1], [['/x/lms', 'ps', '--json'], { timeoutMs: 3000 }]);
+  assert.deepEqual(calls.slice(2), [
     [['/x/lms', 'load', 'qwen3-8b', '--yes'], { timeoutMs: LOAD_TIMEOUT_MS }],
     [['/x/lms', 'load', 'gemma-3', '--yes'], { timeoutMs: LOAD_TIMEOUT_MS }],
   ]);
@@ -423,7 +427,8 @@ test('lmstudio: a cancelled reload runs no further lms load', async () => {
   const m = mem({
     run: async (argv) => {
       calls.push(argv.slice(1).join(' '));
-      if (argv[1] === 'ps') return { code: 0, stdout: '[{"modelKey":"q1"},{"modelKey":"q2"}]' };
+      if (argv[1] === 'ps')
+        return { code: 0, stdout: calls.length === 1 ? '[{"modelKey":"q1"},{"modelKey":"q2"}]' : '[]' };
       await gate;
       return { code: 0, stdout: '' };
     },
@@ -434,7 +439,7 @@ test('lmstudio: a cancelled reload runs no further lms load', async () => {
   m.cancel('lmstudio');
   release();
   while (m.status('lmstudio').loading) await tick();
-  assert.deepEqual(calls, ['ps --json', 'load q1 --yes']);
+  assert.deepEqual(calls, ['ps --json', 'ps --json', 'load q1 --yes']);
 });
 
 test('a Start right after a cancelled reload reloads again; the old one no longer reports', async () => {
@@ -468,4 +473,22 @@ test('a Stop after a finished reload clears its status, so a later server does n
   assert.deepEqual(m.status('ollama').loaded, ['a']);
   m.cancel('ollama');
   assert.equal(m.status('ollama'), null);
+});
+
+test('reload: lmstudio skips a model that is still loaded, so lms load does not add a second copy', async () => {
+  const loads = [];
+  let loadedNow = '[{"modelKey":"qwen3-8b"},{"modelKey":"gemma-3"}]';
+  const m = mem({
+    run: async (argv) => {
+      if (argv[1] === 'ps') return { code: 0, stdout: loadedNow };
+      loads.push(argv[2]);
+      return { code: 0, stdout: '' };
+    },
+  });
+  await m.observe(lms());
+  loadedNow = '[{"modelKey":"qwen3-8b"}]'; // LM Studio kept this one loaded while its server was off
+  m.reload(lms());
+  while (m.status('lmstudio').loading) await tick();
+  assert.deepEqual(loads, ['gemma-3']);
+  assert.deepEqual(m.status('lmstudio'), { loading: false, loaded: ['qwen3-8b', 'gemma-3'], failed: [] });
 });
