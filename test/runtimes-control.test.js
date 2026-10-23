@@ -84,7 +84,8 @@ async function realSetup({ mode, approve = true, healthWaitMs = 10000, extra = {
     binDirs: [],
     appDirs: [],
     brewPrefixes: [],
-    platform: 'linux',
+    // The path rules of this machine (the fake runtime is node at its real path), without macOS app or launchd lookups.
+    platform: POSIX ? 'linux' : 'win32',
     readCgroup: () => '',
   });
   const audit = recorder();
