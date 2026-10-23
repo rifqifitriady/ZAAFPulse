@@ -180,9 +180,19 @@ function dsRunBody(state) {
   };
 }
 
+// Why the original output of a run's example is missing: the dataset is still on its way, could not be read, or
+// was read and no longer holds the example. Only the last is a delete (D-T7-3).
+const dsMissingOriginal = (examplesState) =>
+  examplesState === 'loading'
+    ? 'Loading the dataset…'
+    : examplesState === 'ready'
+      ? 'No longer in the dataset'
+      : 'Could not read the dataset';
+
 // One example of a run side by side: the original output (shown, never scored), then one cell per model in the
-// record's order. With content viewing off the texts are null and an error's reason is gone (R7).
-function dsResultCells(record, example) {
+// record's order. With content viewing off the texts are null and an error's reason is gone (R7). `examplesState`
+// ('loading', 'error' or 'ready') says what a missing example means.
+function dsResultCells(record, example, examplesState) {
   const r = record || {};
   const id = example && example.id;
   const rows = (Array.isArray(r.perExample) ? r.perExample : []).filter((x) => x && x.exampleId === id);
@@ -196,7 +206,7 @@ function dsResultCells(record, example) {
           text: null,
           labels: [],
           proposal: null,
-          error: 'No longer in the dataset',
+          error: dsMissingOriginal(examplesState),
         },
   ];
   for (const model of Array.isArray(r.models) ? r.models : []) {
@@ -270,6 +280,14 @@ function dsCompare(a, b) {
   return out;
 }
 
+// The change of a compared pass rate in whole points; under half a point reads as no change (D-T7-4).
+function dsDeltaText(d) {
+  if (d === null || !Number.isFinite(d)) return { text: '—', tone: '' };
+  const p = Math.round(d * 100);
+  if (p === 0) return { text: '±0', tone: '' };
+  return p > 0 ? { text: `+${p} pts`, tone: 'up' } : { text: `−${Math.abs(p)} pts`, tone: 'down' };
+}
+
 const dsUSD = (c) => (c > 0 && c < 0.01 ? `$${c.toFixed(4)}` : `$${(c || 0).toFixed(2)}`);
 // "12 / 40 · 15 requests · $0.03" for a run in progress.
 function dsProgressLine(p) {
@@ -285,7 +303,48 @@ function dsStopLine(record) {
   if (record.stopped === 'cost cap') return `Stopped at the cost cap (${dsUSD(caps.maxCostUSD)})`;
   if (record.stopped === 'request cap') return `Stopped at the request cap (${caps.maxRequests})`;
   if (record.stopped === 'error') return 'Stopped: the run failed';
+  if (record.stopped === 'cancelled') return 'Stopped before the end, on request';
   return `Stopped: ${record.stopped || 'unknown reason'}`;
+}
+
+// A poll's progress over the one before: GET /api/experiments/:id has no `dataset`, so the started one stays.
+const dsMergeProgress = (prev, next) => ({ ...(prev || {}), ...(next || {}) });
+// The wait before the next poll: 2 s, doubled per failure in a row, at most 30 s (D-T7-2).
+const dsPollDelay = (failures) => Math.min(30000, 2000 * 2 ** Math.max(0, Number.isInteger(failures) ? failures : 0));
+const DS_STOPPING = ' · stopping after the current call';
+// The progress line, with the stop asked for (the call in flight still finishes, R8).
+const dsRunLine = (p) => dsProgressLine(p) + (p && p.cancelling ? DS_STOPPING : '');
+
+// Where "Replay turn" goes once the add answered: the example's id from `added`, else the example already saved for
+// this key and turn; with neither, why not, and the page stays (D-T6-4).
+function dsReplayTarget({ slug, added, skipped, examples, item } = {}) {
+  const first = Array.isArray(added) && added[0] && typeof added[0].id === 'string' ? added[0].id : '';
+  const it = item || {};
+  const found = first
+    ? null
+    : (Array.isArray(examples) ? examples : []).find(
+        (x) => x && x.link && x.link.key === it.key && x.link.turn === it.turn && typeof x.id === 'string',
+      );
+  const id = first || (found && found.id);
+  if (id) return { hash: `#gateway/playground?ds=${encodeURIComponent(slug)}&ex=${encodeURIComponent(id)}` };
+  const why = (Array.isArray(skipped) ? skipped : []).find((x) => x && typeof x.reason === 'string' && x.reason);
+  return { message: why ? `Not replayed: ${why.reason}` : 'Not replayed: the turn was not found in the dataset' };
+}
+
+// What "Add to dataset" or "Replay turn" sends, or why nothing yet: trAddBody (traceview.js) is null until the
+// selected session's turn is on show (D-T6-5).
+function dsAddOrWhy(sel, S) {
+  const body = typeof trAddBody === 'function' ? trAddBody(sel, S) : null;
+  return body ? { body } : { why: 'The session is still loading. Try again in a moment.' };
+}
+
+// The POST /api/datasets/settings body from the auto-add form, or what to fix first.
+function dsAutoAddBody(form) {
+  const f = form || {};
+  const enabled = f.enabled === true;
+  const dataset = typeof f.dataset === 'string' ? f.dataset : '';
+  if (enabled && !dataset) return { error: 'Pick a dataset for auto-add' };
+  return { autoAdd: { enabled, dataset, onFail: f.onFail === true, onBad: f.onBad === true } };
 }
 
 // The dataset and example a "Replay" link names: #gateway/playground?ds=<slug>&ex=<id>.
@@ -391,16 +450,18 @@ async function mountDatasets() {
   const live = () => my === dsState.req && body.isConnected;
   if (tab === 'experiments') return void dsPaintExperiments(body, live);
   try {
-    const [list, evs] = await Promise.all([
+    const [list, evs, settings] = await Promise.all([
       dsApi('/api/datasets'),
       dsState.evs ? Promise.resolve(null) : dsApi('/api/evals/evaluators').catch(() => null),
+      // The auto-add rule, under the list; its own failure says so there and leaves the list alone.
+      slug ? null : dsApi('/api/datasets/settings').catch((e) => ({ error: e.message })),
     ]);
     if (!live()) return;
     if (evs && Array.isArray(evs.evaluators)) dsState.evs = evs.evaluators;
     dsState.content = list.content !== false;
     $('#ds-off').hidden = dsState.content;
     if (slug) await dsMountExamples(body, slug, live);
-    else dsPaintList(body, list);
+    else dsPaintList(body, list, settings);
   } catch (e) {
     if (!live()) return;
     body.replaceChildren(dsEl('div', { class: 'holo panel empty' }, `Could not read the datasets: ${e.message}`));
@@ -421,7 +482,7 @@ function dsSay(el, msg, bad = false) {
 }
 
 /* ---- the list ---- */
-function dsPaintList(body, list) {
+function dsPaintList(body, list, settings) {
   const rows = dsListRows(list.datasets);
   const limits = list.limits || {};
   const msg = dsEl('p', { class: 'ds-msg', role: 'status' });
@@ -542,7 +603,97 @@ function dsPaintList(body, list) {
       );
 
   const meta = `${rows.length} of ${limits.datasets || 100} · up to ${fmtN(limits.examples || 1000)} examples each`;
-  body.replaceChildren(dsPanel('Datasets', meta, tools, msg, table));
+  const auto =
+    settings && settings.autoAdd
+      ? dsAutoAddEl(settings, rows, dsState.content)
+      : dsPanel(
+          'Auto-add',
+          null,
+          dsEl(
+            'p',
+            { class: 'ds-msg bad' },
+            `Could not read the auto-add settings: ${(settings && settings.error) || 'no reply'}`,
+          ),
+        );
+  body.replaceChildren(dsPanel('Datasets', meta, tools, msg, table), auto);
+}
+
+// Auto-add (D-T9-3): turns that went wrong go into one dataset as they happen. `cfg` is GET /api/datasets/settings,
+// `rows` the list's rows. Names are option text, never markup (S1). With content off the server pauses the rule.
+function dsAutoAddEl(cfg, rows, content) {
+  const a = (cfg && cfg.autoAdd) || {};
+  const list = Array.isArray(rows) ? rows : [];
+  const on = dsEl('input', {
+    type: 'checkbox',
+    role: 'switch',
+    id: 'ds-auto-on',
+    class: 'ds-switch',
+    checked: !!a.enabled,
+  });
+  // No dataset picked (or the picked one is gone): an empty choice, so Save asks for one instead of guessing.
+  const known = list.some((d) => d.slug === a.dataset);
+  const sel = dsEl(
+    'select',
+    { class: 'input', id: 'ds-auto-ds', disabled: !list.length },
+    list.length
+      ? [
+          known ? null : dsEl('option', { value: '', selected: true }, 'Pick a dataset'),
+          ...list.map((d) => dsEl('option', { value: d.slug, selected: d.slug === a.dataset }, d.name)),
+        ]
+      : dsEl('option', { value: '' }, 'Create a dataset first'),
+  );
+  const failIn = dsEl('input', { type: 'checkbox', id: 'ds-auto-fail', checked: !!a.onFail });
+  const badIn = dsEl('input', { type: 'checkbox', id: 'ds-auto-bad', checked: !!a.onBad });
+  const box = (input, id, label) =>
+    dsEl('label', { class: 'gw-check ds-check', for: id }, input, dsEl('span', null, label));
+  const say = dsEl('p', { class: 'ds-msg', role: 'status' });
+  const save = dsEl('button', { type: 'submit', class: 'btn' }, 'Save');
+  const form = dsEl(
+    'form',
+    { class: 'ds-auto', 'aria-label': 'Auto-add' },
+    dsEl(
+      'label',
+      { class: 'ds-auto-switch', for: 'ds-auto-on' },
+      on,
+      dsEl('span', null, 'Add turns that went wrong automatically'),
+    ),
+    dsEl('label', { class: 'ds-auto-ds', for: 'ds-auto-ds' }, 'Dataset', sel),
+    dsEl(
+      'fieldset',
+      { class: 'ds-auto-when' },
+      dsEl('legend', null, 'Add a turn'),
+      box(failIn, 'ds-auto-fail', 'When a judge evaluator fails a turn'),
+      box(badIn, 'ds-auto-bad', 'When you rate a turn 👎'),
+    ),
+    dsEl('div', { class: 'ds-inline' }, save, say),
+  );
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const b = dsAutoAddBody({
+      enabled: on.checked,
+      dataset: sel.disabled ? '' : sel.value,
+      onFail: failIn.checked,
+      onBad: badIn.checked,
+    });
+    if (b.error) return dsSay(say, b.error, true);
+    save.disabled = true;
+    try {
+      await dsSend('POST', '/api/datasets/settings', b);
+      dsSay(say, b.autoAdd.enabled ? 'Saved: auto-add is on' : 'Saved: auto-add is off');
+    } catch (err) {
+      dsSay(say, err.message, true); // the server's own words on a 400, e.g. "choose an existing dataset"
+    } finally {
+      save.disabled = false;
+    }
+  });
+  return dsPanel(
+    'Auto-add',
+    'turns that went wrong, saved as they happen',
+    content
+      ? null
+      : dsEl('p', { class: 'ds-off', role: 'note' }, 'Auto-add does nothing while content viewing is off.'),
+    form,
+  );
 }
 
 function dsListRow(r, msg, reload) {
@@ -632,7 +783,8 @@ function dsListRow(r, msg, reload) {
 async function dsMountExamples(body, slug, live) {
   let res;
   try {
-    res = await dsApi(dsPath(slug));
+    // The light view (D-F-2): the table shows previews, and a reference is kept whole for its editor.
+    res = await dsApi(`${dsPath(slug)}?view=preview`);
   } catch (e) {
     if (!live()) return;
     const back = dsEl('a', { href: '#datasets', class: 'ds-a' }, 'All datasets');
@@ -1038,8 +1190,9 @@ function dsCellEl(cell, content) {
 }
 
 const DS_RESULT_PAGE = 25; // examples drawn at a time: a run can hold 1,000 examples × 3 models
-// A finished run: the head, the pass-rate table, then each example side by side.
-function dsResultsEl(record, examples, content) {
+// A finished run: the head, the pass-rate table, then each example side by side. `examplesState` says whether
+// `examples` is the dataset as read ('ready'), still on its way ('loading') or unreadable ('error').
+function dsResultsEl(record, examples, content, examplesState) {
   const r = record || {};
   const byId = new Map((Array.isArray(examples) ? examples : []).map((e) => [e.id, e]));
   const ids = [...new Set((r.perExample || []).map((x) => x && x.exampleId).filter(Boolean))];
@@ -1064,7 +1217,7 @@ function dsResultsEl(record, examples, content) {
         'div',
         { class: 'ds-off', role: 'note' },
         dsEl('b', null, 'Text is hidden while content viewing is off'),
-        dsEl('span', null, 'Labels and pass rates are shown; outputs, proposals and errors are not.'),
+        dsEl('span', null, 'Labels and pass rates are shown; outputs, proposal arguments and errors are not.'),
       ),
     );
   if (!ids.length) {
@@ -1083,7 +1236,7 @@ function dsResultsEl(record, examples, content) {
       const said = byId.has(id) ? dsUserText(ex) : null;
       input.textContent = said == null ? id : dsPreview(said, 200);
       const grid = dsEl('div', { class: 'ds-rgrid', style: `--ds-cols:${models.length + 1}` });
-      for (const cell of dsResultCells(r, ex)) grid.append(dsCellEl(cell, content));
+      for (const cell of dsResultCells(r, ex, examplesState)) grid.append(dsCellEl(cell, content));
       list.append(
         dsEl(
           'article',
@@ -1133,7 +1286,7 @@ async function dsPaintExperiments(body, live) {
         'p',
         { class: 'ds-running', role: 'status' },
         dsEl('span', { class: 'ds-dot', 'aria-hidden': 'true' }),
-        `Running now on ${r.running.dataset}: ${dsProgressLine(r.running)} · `,
+        `Running now on ${r.running.dataset}: ${dsRunLine(r.running)} · `,
         dsEl('a', { href: '#gateway/playground', class: 'ds-a' }, 'follow it in the Playground'),
       )
     : null;
@@ -1148,13 +1301,15 @@ async function dsPaintExperiments(body, live) {
     try {
       const [rec, ds] = await Promise.all([
         dsApi(`/api/experiments/${encodeURIComponent(row.id)}`),
-        dsApi(dsPath(row.dataset)).catch(() => null),
+        // The whole rows, for the original outputs. A deleted dataset holds none of its examples any more.
+        dsApi(dsPath(row.dataset)).catch((e) => (e && e.status === 404 ? { examples: [] } : null)),
       ]);
       if (my !== opened || !detail.isConnected) return;
+      const read = !!ds && Array.isArray(ds.examples);
       const panel = dsPanel(
         `Results · ${row.datasetName || row.dataset}`,
         dsStatusText(rec),
-        dsResultsEl(rec, ds && Array.isArray(ds.examples) ? ds.examples : [], dsState.content),
+        dsResultsEl(rec, read ? ds.examples : [], dsState.content, read ? 'ready' : 'error'),
       );
       detail.replaceChildren(panel);
       dsFocusHead(panel);
@@ -1195,10 +1350,7 @@ async function dsPaintExperiments(body, live) {
               'tbody',
               null,
               rows.map((x) => {
-                const d = x.delta;
-                const pts =
-                  d === null ? '—' : d === 0 ? '±0' : `${d > 0 ? '+' : '−'}${Math.round(Math.abs(d) * 100)} pts`;
-                const tone = d === null || d === 0 ? '' : d > 0 ? 'up' : 'down';
+                const { text: pts, tone } = dsDeltaText(x.delta);
                 return dsEl(
                   'tr',
                   null,
@@ -1209,7 +1361,7 @@ async function dsPaintExperiments(body, live) {
                   dsEl(
                     'td',
                     { class: `r num ds-delta ${tone}` },
-                    tone ? dsEl('span', { class: 'ds-sr' }, d > 0 ? 'up ' : 'down ') : null,
+                    tone ? dsEl('span', { class: 'ds-sr' }, `${tone} `) : null,
                     pts,
                   ),
                 );
@@ -1347,6 +1499,7 @@ function dsPg(pg) {
       progress: null,
       record: null,
       timer: null,
+      pollFails: 0, // failed polls in a row, for the backoff
       hooked: false,
       focus: '',
       repaint: () => {},
@@ -1449,7 +1602,33 @@ function dsPgExamples(s, slug) {
   return 'loading';
 }
 
-// Polls the run every 2 s. It stops when the page or the mode changes (no #ds-pg); the next mount resumes it.
+const DS_POLL_RETRY = 'Could not refresh the progress. Retrying…';
+// The progress block's moving parts, set in place between repaints so focus and the Stop button stay put.
+function dsPgPaintProgress(s) {
+  const p = s.progress || {};
+  const line = document.getElementById('ds-pg-progress');
+  if (line) line.textContent = dsRunLine(p);
+  const bar = document.getElementById('ds-pg-bar');
+  if (bar) {
+    bar.max = Math.max(1, p.total || 1);
+    bar.value = p.done || 0;
+  }
+  const stop = document.getElementById('ds-pg-stop');
+  if (stop && p.cancelling) {
+    stop.disabled = true;
+    stop.textContent = 'Stopping…';
+  }
+}
+function dsPgPaintMsg(s) {
+  const m = document.getElementById('ds-pg-msg');
+  if (!m) return;
+  m.textContent = s.msg;
+  m.classList.toggle('bad', !!s.bad);
+  m.classList.toggle('ds-wait', !s.bad && s.msg === DS_POLL_RETRY); // neither good news nor an error
+}
+
+// Polls the run every 2 s, backing off while polls fail (D-T7-2). It stops when the page or the mode changes (no
+// #ds-pg); the next mount resumes it.
 function dsPgPoll(s) {
   if (s.timer || !s.runId) return;
   const id = s.runId;
@@ -1472,16 +1651,20 @@ function dsPgPoll(s) {
         s.bad = true;
         return void (here && s.repaint());
       }
+      // The run goes on at the server; the page says it is behind and tries again, later each time.
+      s.pollFails += 1;
+      dsPgSay(s, DS_POLL_RETRY);
+      if (here) dsPgPaintMsg(s);
     } else if (r && r.status === 'running') {
-      s.progress = r.progress || s.progress;
-      const line = document.getElementById('ds-pg-progress');
-      if (line) line.textContent = dsProgressLine(s.progress);
-      const bar = document.getElementById('ds-pg-bar');
-      if (bar && s.progress) {
-        bar.max = Math.max(1, s.progress.total || 1);
-        bar.value = s.progress.done || 0;
+      s.pollFails = 0;
+      if (s.msg === DS_POLL_RETRY) {
+        dsPgSay(s, '');
+        if (here) dsPgPaintMsg(s);
       }
+      s.progress = dsMergeProgress(s.progress, r.progress);
+      if (here) dsPgPaintProgress(s);
     } else if (r) {
+      s.pollFails = 0;
       s.runId = null;
       s.progress = null;
       s.record = r;
@@ -1491,7 +1674,26 @@ function dsPgPoll(s) {
       return void (here && s.repaint());
     }
     if (here) dsPgPoll(s);
-  }, 2000);
+  }, dsPollDelay(s.pollFails));
+}
+
+// Stop after the current call (D-T5-6): the call in flight finishes and is recorded, then the run ends as
+// "cancelled". The poll brings the record; a 409 means the run ended first, which the poll shows as well.
+async function dsPgCancel(pg) {
+  const s = dsPg(pg);
+  const id = s.runId;
+  if (!id || (s.progress && s.progress.cancelling)) return;
+  s.progress = dsMergeProgress(s.progress, { cancelling: true });
+  dsPgPaintProgress(s);
+  try {
+    await dsSend('POST', `/api/experiments/${encodeURIComponent(id)}/cancel`, {});
+  } catch (e) {
+    if (e.status === 409 || s.runId !== id) return;
+    s.progress = dsMergeProgress(s.progress, { cancelling: false });
+    dsPgSay(s, `Could not stop the run: ${e.message}`, true);
+    s.focus = 'stop';
+    s.repaint();
+  }
 }
 const dsPgStop = (s) => {
   clearTimeout(s.timer);
@@ -1707,7 +1909,11 @@ function dsPlaygroundMount(pg, repaint) {
     { class: 'btn', type: 'submit', 'data-dspg': 'run', 'data-dsfocus': 'run', disabled: locked || !!s.preview },
     s.busy && !s.preview ? 'Working…' : external ? 'Preview what will be sent' : 'Run',
   );
-  const say = dsEl('p', { class: `ds-msg${s.bad ? ' bad' : ''}`, role: 'status', id: 'ds-pg-msg' });
+  const say = dsEl('p', {
+    class: `ds-msg${s.bad ? ' bad' : s.msg === DS_POLL_RETRY ? ' ds-wait' : ''}`,
+    role: 'status',
+    id: 'ds-pg-msg',
+  });
   say.textContent = s.msg;
   const set = dsEl(
     'fieldset',
@@ -1756,39 +1962,16 @@ function dsPlaygroundMount(pg, repaint) {
     parts.push(pv);
   }
 
-  // A run in progress: there is no stop; it ends at its caps or when every example has run (R8).
+  // A run in progress: it ends at its caps, when every example has run, or after the current call on Stop (R8).
   if (running) {
-    const p = s.progress || {};
-    const line = dsEl('span', { id: 'ds-pg-progress' });
-    line.textContent = dsProgressLine(p);
-    parts.push(
-      dsEl(
-        'div',
-        { class: 'ds-pg-run', role: 'status', 'aria-live': 'polite' },
-        dsEl('span', { class: 'ds-dot', 'aria-hidden': 'true' }),
-        dsEl(
-          'b',
-          null,
-          p.dataset && p.dataset !== s.slug
-            ? `Running on ${(s.datasets.find((d) => d.slug === p.dataset) || { name: p.dataset }).name}`
-            : 'Running',
-        ),
-        line,
-        dsEl('progress', {
-          id: 'ds-pg-bar',
-          max: Math.max(1, p.total || 1),
-          value: p.done || 0,
-          'aria-label': 'Replay progress',
-        }),
-        dsEl('small', { class: 'muted' }, 'It ends at its caps or when every example has run.'),
-      ),
-    );
+    parts.push(dsPgRunBlock(s));
     dsPgPoll(s);
   }
 
   if (s.record) {
     const rec = s.record;
     const exRows = dsPgExamples(s, rec.dataset);
+    const exState = exRows === 'loading' ? 'loading' : Array.isArray(exRows) ? 'ready' : 'error';
     const head = dsEl('div', { class: 'ds-pg-rhead' });
     const h = dsEl('h4', { id: 'ds-pg-results', tabindex: -1, 'data-dsfocus': 'results' }, 'Results');
     head.append(
@@ -1802,7 +1985,7 @@ function dsPlaygroundMount(pg, repaint) {
         'section',
         { class: 'ds-pg-out', 'aria-labelledby': 'ds-pg-results' },
         head,
-        dsResultsEl(rec, Array.isArray(exRows) ? exRows : [], s.content),
+        dsResultsEl(rec, Array.isArray(exRows) ? exRows : [], s.content, exState),
       ),
     );
   }
@@ -1816,6 +1999,43 @@ function dsPlaygroundMount(pg, repaint) {
     if (el && !el.disabled) el.focus();
     else if (want === 'send' || want === 'preview') root.querySelector('#ds-pv-title')?.focus();
   }
+}
+
+// The progress block of a run in progress (this page's or one followed), with its Stop button. Built with dsEl
+// only; the dataset name is text (S1).
+function dsPgRunBlock(s) {
+  const p = s.progress || {};
+  const stopping = !!p.cancelling;
+  const line = dsEl('span', { id: 'ds-pg-progress' });
+  line.textContent = dsRunLine(p);
+  const named = (Array.isArray(s.datasets) ? s.datasets : []).find((d) => d.slug === p.dataset);
+  return dsEl(
+    'div',
+    { class: 'ds-pg-run', role: 'status', 'aria-live': 'polite' },
+    dsEl('span', { class: 'ds-dot', 'aria-hidden': 'true' }),
+    dsEl('b', null, p.dataset && p.dataset !== s.slug ? `Running on ${named ? named.name : p.dataset}` : 'Running'),
+    line,
+    dsEl('progress', {
+      id: 'ds-pg-bar',
+      max: Math.max(1, p.total || 1),
+      value: p.done || 0,
+      'aria-label': 'Replay progress',
+    }),
+    dsEl(
+      'button',
+      {
+        type: 'button',
+        class: 'btn ghost ds-pg-stop',
+        id: 'ds-pg-stop',
+        'data-dspg': 'stop',
+        'data-dsfocus': 'stop',
+        disabled: stopping,
+        title: 'The call in flight finishes and is counted; nothing after it is sent.',
+      },
+      stopping ? 'Stopping…' : 'Stop after the current call',
+    ),
+    dsEl('small', { class: 'muted' }, 'It ends at its caps, when every example has run, or when you stop it.'),
+  );
 }
 
 // One external model's part of the preview: the messages, then the tools declared with them (never run), all as
@@ -1924,6 +2144,7 @@ async function dsPgRun(pg, confirm) {
       s.preview = null;
       s.record = null;
       s.runId = r.id;
+      s.pollFails = 0;
       const exs = s.examples[body.dataset];
       const n = body.examples ? body.examples.length : Array.isArray(exs) ? exs.length : 0;
       s.progress = { dataset: body.dataset, done: 0, total: n * body.models.length, requests: 0, cost: 0 };
@@ -1992,6 +2213,7 @@ function dsPlaygroundAct(event, pg, repaint) {
     return void repaint();
   }
   if (act === 'send') return void dsPgRun(pg, true);
+  if (act === 'stop') return void dsPgCancel(pg);
   if (act === 'back') {
     s.preview = null;
     s.focus = 'run';
@@ -2016,7 +2238,8 @@ function dsClosePicker(refocus = false) {
 }
 
 // A small form by the button: a dataset (or "New dataset…" with a name), then POST the items. `onAdded` gets
-// { slug, added, skipped } once the server has answered; the result line stays until the picker closes.
+// { slug, added, skipped, say } once the server has answered; the result line stays until the picker closes, and
+// `say(msg, bad)` replaces it.
 function dsAddPicker(anchorEl, items, { onAdded, verb = 'Add', heading } = {}) {
   dsClosePicker();
   const list = Array.isArray(items) ? items : [];
@@ -2129,7 +2352,8 @@ function dsAddPicker(anchorEl, items, { onAdded, verb = 'Add', heading } = {}) {
       if (typeof store !== 'undefined') store.set('datasets.last', slug);
       dsSay(out, dsAddResult(r));
       close.textContent = 'Close';
-      if (typeof onAdded === 'function') onAdded({ slug, added: r.added || [], skipped: r.skipped || [] });
+      if (typeof onAdded === 'function')
+        onAdded({ slug, added: r.added || [], skipped: r.skipped || [], say: (m, bad) => dsSay(out, m, bad) });
     } catch (err) {
       go.disabled = false;
       dsSay(out, err.status === 403 ? `${DS_OFF}: turns cannot be added` : err.message, true);
@@ -2228,9 +2452,19 @@ function dsTraceMount(app, S, rowsBox) {
     rowsBox.focus();
   });
 
+  // Why a click did nothing yet, in the explorer's notice line (traceview.js owns it; the next refresh clears it).
+  const tell = (msg) => {
+    const n = $('#tr-notice');
+    const m = $('#tr-notice-msg');
+    if (!n || !m) return;
+    m.textContent = msg;
+    const r = $('#tr-refresh');
+    if (r) r.hidden = true;
+    n.hidden = false;
+  };
   const openAdd = (btn) => {
-    const body = trAddBody(S.multi, S);
-    if (!body) return;
+    const { body, why } = dsAddOrWhy(S.multi, S);
+    if (!body) return void tell(why);
     const picked = S.multi.length > 0;
     dsAddPicker(btn, body.items, {
       onAdded: () => {
@@ -2246,21 +2480,22 @@ function dsTraceMount(app, S, rowsBox) {
   // Replay: the turn on show goes into a dataset (or is found there), then the Playground opens on it.
   if (replayBtn)
     replayBtn.addEventListener('click', () => {
-      const body = trAddBody([], S);
-      if (!body) return;
+      const { body, why } = dsAddOrWhy([], S);
+      if (!body) return void tell(why);
       const item = body.items[0];
       dsAddPicker(replayBtn, body.items, {
         verb: 'Add and replay',
         heading: 'Replay this turn: first it goes into a dataset',
-        onAdded: async ({ slug, added }) => {
-          let id = added[0] && added[0].id;
-          if (!id) {
-            const r = await dsApi(dsPath(slug)).catch(() => null);
-            const ex =
-              r && (r.examples || []).find((x) => x.link && x.link.key === item.key && x.link.turn === item.turn);
-            id = ex && ex.id;
+        // Only an example in the dataset is replayed; a skipped turn says why in the picker and nothing opens.
+        onAdded: async ({ slug, added, skipped, say }) => {
+          let t = dsReplayTarget({ slug, added, skipped, examples: null, item });
+          if (!t.hash) {
+            // Skipped as already saved: find that example by key and turn (the light view is enough).
+            const r = await dsApi(`${dsPath(slug)}?view=preview`).catch(() => null);
+            t = dsReplayTarget({ slug, added, skipped, examples: r && r.examples, item });
           }
-          location.hash = `#gateway/playground?ds=${encodeURIComponent(slug)}${id ? `&ex=${encodeURIComponent(id)}` : ''}`;
+          if (t.hash) location.hash = t.hash;
+          else say(t.message, true);
         },
       });
     });
@@ -2291,4 +2526,13 @@ if (typeof module !== 'undefined')
     dsPgFormBody,
     dsPgSendBody,
     dsPvModel,
+    dsAutoAddBody,
+    dsAutoAddEl,
+    dsPgRunBlock,
+    dsReplayTarget,
+    dsAddOrWhy,
+    dsMergeProgress,
+    dsPollDelay,
+    dsDeltaText,
+    dsResultsEl,
   };

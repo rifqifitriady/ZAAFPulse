@@ -26,6 +26,15 @@ const {
   dsPgFormBody,
   dsPgSendBody,
   dsPvModel,
+  dsAutoAddBody,
+  dsAutoAddEl,
+  dsPgRunBlock,
+  dsReplayTarget,
+  dsAddOrWhy,
+  dsMergeProgress,
+  dsPollDelay,
+  dsDeltaText,
+  dsResultsEl,
 } = require('../public/datasetview');
 
 const SRC = path.join(__dirname, '..', 'public', 'datasetview.js');
@@ -323,7 +332,7 @@ test('dsResultCells: the original first, then each model in record order, with e
   assert.match(two[2].error, /hidden/);
   assert.match(two[3].error, /not run/i);
   // An example since deleted from the dataset keeps its replayed cells.
-  const gone = dsResultCells(RECORD, { id: 'ex_1' });
+  const gone = dsResultCells(RECORD, { id: 'ex_1' }, 'ready');
   assert.match(gone[0].error, /no longer/i);
   assert.equal(gone[1].text, 'Fixed the redirect.');
 });
@@ -408,7 +417,7 @@ test('dsProgressLine and dsStopLine: a running and a stopped run in words', () =
   assert.equal(dsStopLine({ status: 'stopped', stopped: 'cost cap', caps }), 'Stopped at the cost cap ($0.50)');
   assert.equal(dsStopLine({ status: 'stopped', stopped: 'request cap', caps }), 'Stopped at the request cap (100)');
   assert.equal(dsStopLine({ status: 'stopped', stopped: 'error', caps }), 'Stopped: the run failed');
-  assert.equal(dsStopLine({ status: 'stopped', stopped: 'cancelled', caps }), 'Stopped: cancelled');
+  assert.equal(dsStopLine({ status: 'stopped', stopped: 'cancelled', caps }), 'Stopped before the end, on request');
 });
 
 test('dsPgParams: the dataset and example a Replay link opens the Playground on', () => {
@@ -469,9 +478,10 @@ test('the external preview: any change to the form drops it, and Send never post
 // A tiny stand-in for `document`: nodes record their children and text, and innerHTML is refused.
 function fakeDoc() {
   const el = (tag) => {
-    const node = { tag, children: [], className: '', attrs: {}, textContent: '' };
+    const node = { tag, children: [], className: '', attrs: {}, textContent: '', classList: { add() {}, toggle() {} } };
     node.append = (...c) => node.children.push(...c);
     node.setAttribute = (k, v) => (node.attrs[k] = String(v));
+    node.addEventListener = () => {};
     Object.defineProperty(node, 'innerHTML', {
       set() {
         throw new Error('innerHTML used for content');
@@ -512,4 +522,177 @@ test('the external preview lists the declared tools as text, exactly as the serv
     if (saved === undefined) delete global.document;
     else global.document = saved;
   }
+});
+
+// Every node under a fake-document tree, strings included.
+const walkAll = (root) => {
+  const nodes = [];
+  const walk = (n) => {
+    nodes.push(n);
+    if (n && Array.isArray(n.children)) n.children.forEach(walk);
+  };
+  walk(root);
+  return nodes;
+};
+const textOf = (n) => (typeof n === 'string' ? n : [n.textContent || '', ...(n.children || []).map(textOf)].join(''));
+function withFakeDoc(fn) {
+  const saved = global.document;
+  global.document = fakeDoc();
+  try {
+    return fn();
+  } finally {
+    if (saved === undefined) delete global.document;
+    else global.document = saved;
+  }
+}
+
+test('dsAutoAddBody: a dataset is needed to turn auto-add on, and the body is exactly the settings', () => {
+  assert.deepEqual(dsAutoAddBody({ enabled: true, dataset: '', onFail: true, onBad: false }), {
+    error: 'Pick a dataset for auto-add',
+  });
+  assert.deepEqual(dsAutoAddBody({ enabled: true, dataset: 'auth-regressions', onFail: true, onBad: false }), {
+    autoAdd: { enabled: true, dataset: 'auth-regressions', onFail: true, onBad: false },
+  });
+  assert.deepEqual(dsAutoAddBody({ enabled: false, dataset: '', onFail: false, onBad: true }), {
+    autoAdd: { enabled: false, dataset: '', onFail: false, onBad: true },
+  });
+});
+
+test('the auto-add section: dataset names as option text, the content-off note, and no dataset to pick', () => {
+  const cfg = { autoAdd: { enabled: true, dataset: 'evil', onFail: true, onBad: true } };
+  const evil = '<img src=x onerror=1>';
+  withFakeDoc(() => {
+    const on = walkAll(dsAutoAddEl(cfg, [{ slug: 'evil', name: evil, count: 1 }], true));
+    const options = on.filter((n) => n && n.tag === 'option');
+    assert.ok(
+      options.some((o) => o.children.includes(evil) || o.textContent === evil),
+      'the name is an option text',
+    );
+    assert.ok(
+      options.some((o) => o.value === 'evil'),
+      'the slug is the value',
+    );
+    const texts = on.map(textOf);
+    assert.ok(texts.includes('Add turns that went wrong automatically'));
+    assert.ok(texts.includes('When a judge evaluator fails a turn'));
+    assert.ok(texts.includes('When you rate a turn 👎'));
+    assert.ok(!texts.some((t) => /content viewing is off/.test(t)), 'no note while content is on');
+
+    const off = walkAll(dsAutoAddEl(cfg, [{ slug: 'evil', name: evil, count: 1 }], false)).map(textOf);
+    assert.ok(off.includes('Auto-add does nothing while content viewing is off.'));
+
+    const none = walkAll(dsAutoAddEl({ autoAdd: { enabled: false, dataset: '' } }, [], true));
+    const sel = none.find((n) => n && n.tag === 'select');
+    assert.ok(sel && 'disabled' in sel.attrs, 'no dataset: the select is disabled');
+    assert.ok(none.map(textOf).includes('Create a dataset first'));
+  });
+});
+
+test('Stop: the progress block offers it while running, and says Stopping… once asked', () => {
+  const base = { slug: 'auth', datasets: [{ slug: 'auth', name: 'Auth', count: 2 }], runId: 'exp_00000000000000a1' };
+  withFakeDoc(() => {
+    const running = walkAll(dsPgRunBlock({ ...base, progress: { dataset: 'auth', done: 1, total: 4 } }));
+    const btn = running.find((n) => n && n.tag === 'button');
+    assert.ok(btn, 'a Stop button');
+    assert.equal(textOf(btn), 'Stop after the current call');
+    assert.ok(!('disabled' in btn.attrs));
+
+    const stopping = walkAll(
+      dsPgRunBlock({ ...base, progress: { dataset: 'auth', done: 1, total: 4, cancelling: true } }),
+    );
+    const b2 = stopping.find((n) => n && n.tag === 'button');
+    assert.equal(textOf(b2), 'Stopping…');
+    assert.ok('disabled' in b2.attrs, 'disabled while stopping');
+    assert.ok(stopping.map(textOf).some((t) => t.endsWith(' · stopping after the current call')));
+  });
+});
+
+test('dsReplayTarget: replay only an example that is in the dataset, else say why', () => {
+  const item = { key: 'k1', turn: 2 };
+  const a = dsReplayTarget({ slug: 'auth', added: [{ id: 'e1' }], skipped: [], examples: null, item });
+  assert.equal(a.hash, '#gateway/playground?ds=auth&ex=e1');
+  assert.ok(a.hash.includes('&ex=e1'));
+  assert.deepEqual(
+    dsReplayTarget({
+      slug: 'auth',
+      added: [],
+      skipped: [{ index: 0, reason: 'this session has no text' }],
+      examples: [{ id: 'ex_other', link: { key: 'k1', turn: 0 } }],
+      item,
+    }),
+    { message: 'Not replayed: this session has no text' },
+  );
+  assert.deepEqual(dsReplayTarget({ slug: 'auth', added: [], skipped: [], examples: [], item }), {
+    message: 'Not replayed: the turn was not found in the dataset',
+  });
+  const saved = dsReplayTarget({
+    slug: 'auth',
+    added: [],
+    skipped: [{ index: 0, reason: 'already in this dataset' }],
+    examples: [
+      { id: 'ex_other', link: { key: 'k1', turn: 0 } },
+      { id: 'ex_0000000000000002', link: { key: 'k1', turn: 2 } },
+    ],
+    item,
+  });
+  assert.equal(saved.hash, '#gateway/playground?ds=auth&ex=ex_0000000000000002');
+});
+
+test('dsAddOrWhy: the add body, or why there is none yet', () => {
+  const saved = global.trAddBody;
+  try {
+    global.trAddBody = () => null;
+    assert.deepEqual(dsAddOrWhy([], {}), { why: 'The session is still loading. Try again in a moment.' });
+    global.trAddBody = (sel) => ({ items: sel });
+    assert.deepEqual(dsAddOrWhy([{ key: 'k', turn: 1 }], {}), { body: { items: [{ key: 'k', turn: 1 }] } });
+  } finally {
+    if (saved === undefined) delete global.trAddBody;
+    else global.trAddBody = saved;
+  }
+});
+
+test('dsMergeProgress: a poll without the dataset keeps it', () => {
+  const prev = { dataset: 'auth', done: 0, total: 4, requests: 0, cost: 0 };
+  assert.deepEqual(dsMergeProgress(prev, { done: 2, total: 4, requests: 2, cost: 0.01 }), {
+    dataset: 'auth',
+    done: 2,
+    total: 4,
+    requests: 2,
+    cost: 0.01,
+  });
+  assert.deepEqual(dsMergeProgress(prev, null), prev);
+  assert.deepEqual(dsMergeProgress(null, { done: 1 }), { done: 1 });
+});
+
+test('dsPollDelay: 2 s doubling per failure, at most 30 s', () => {
+  assert.equal(dsPollDelay(0), 2000);
+  assert.equal(dsPollDelay(1), 4000);
+  assert.equal(dsPollDelay(4), 30000);
+  assert.equal(dsPollDelay(9), 30000);
+});
+
+test('dsResultCells: a missing example is only "no longer in the dataset" once the dataset is read', () => {
+  const ex = { id: 'ex_1' };
+  assert.equal(dsResultCells(RECORD, ex, 'loading')[0].error, 'Loading the dataset…');
+  assert.equal(dsResultCells(RECORD, ex, 'error')[0].error, 'Could not read the dataset');
+  assert.equal(dsResultCells(RECORD, ex, 'ready')[0].error, 'No longer in the dataset');
+});
+
+test('dsDeltaText: rounded points, ±0 for less than half a point', () => {
+  assert.deepEqual(dsDeltaText(null), { text: '—', tone: '' });
+  assert.deepEqual(dsDeltaText(0.004), { text: '±0', tone: '' });
+  assert.deepEqual(dsDeltaText(-0.004), { text: '±0', tone: '' });
+  assert.deepEqual(dsDeltaText(0.006), { text: '+1 pts', tone: 'up' });
+  assert.deepEqual(dsDeltaText(-0.2), { text: '−20 pts', tone: 'down' });
+});
+
+test('the content-off notice of a run names what is hidden', () => {
+  withFakeDoc(() => {
+    const texts = walkAll(dsResultsEl({ ...RECORD, perExample: [] }, [], false, 'ready')).map(textOf);
+    assert.ok(
+      texts.includes('Labels and pass rates are shown; outputs, proposal arguments and errors are not.'),
+      'the notice text',
+    );
+    assert.ok(texts.some((t) => t.includes('proposal arguments')));
+  });
 });
