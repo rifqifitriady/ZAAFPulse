@@ -145,3 +145,24 @@ test('routeOf: the gateway, a router, or direct; localhost equals 127.0.0.1', ()
   assert.equal(routeOf('http://localhost:3030', {}), null);
   assert.equal(routeOf('http://localhost:3030', { baseUrl: 'bad', routers: [{ id: 'x' }, null] }), null);
 });
+
+test('a UTF-8 BOM before settings.json is ignored', () => {
+  const home = fakeHome({
+    settings: '\uFEFF' + JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:20128/v1' } }),
+  });
+  assert.equal(readToolRoutes({ home, env: {} }).claude, 'http://127.0.0.1:20128');
+});
+
+test('an [[array.of.tables]] header resets the table, a lone ["a"] array line does not', () => {
+  const toml = `model_provider = "p"
+[model_providers.p]
+extra = [
+  ["a"],
+]
+base_url = "http://127.0.0.1:1/v1"
+[[model_providers.p.list]]
+base_url = "http://evil.example.com/v1"
+`;
+  const home = fakeHome({ toml });
+  assert.equal(readToolRoutes({ home, env: {} }).codex, 'http://127.0.0.1:1');
+});
