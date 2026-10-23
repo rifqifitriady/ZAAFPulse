@@ -136,7 +136,7 @@ There are three sign-in modes. ZAAFPulse picks one by itself:
 | **password** | Any address but 127.0.0.1, a reverse proxy (`ZAAFPULSE_TRUST_PROXY`, `ZAAFPULSE_PUBLIC_URL` or `ZAAFPULSE_ALLOWED_HOSTS`), or `ZAAFPULSE_AUTH=1` | The admin password |
 | **none** | Only with `ZAAFPULSE_AUTH=none` on 127.0.0.1, and demo mode (`--demo`) on a single-user machine | Open http://localhost:4777 |
 
-Without sign-in, any program and any other OS account on the machine could use the dashboard as you: create gateway keys, read your history and use your stored provider keys. That is why `local` is the default even on a laptop.
+Without sign-in, any program and any other OS account on the machine could use the dashboard as you: create gateway keys, read your history and use your stored provider keys. That is why `local` is the default even on a laptop. Agent control and the Start and Stop of local model servers are off without sign-in (outside demo mode), since they signal processes and run commands.
 
 ### Getting in with local sign-in
 

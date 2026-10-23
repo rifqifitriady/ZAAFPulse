@@ -552,7 +552,7 @@ const monitorApi = createMonitorApi({
 });
 // Local model servers (lib/runtimes): Start and Stop on the AI Office cards, and the owner's own runtimes in
 // config.json "localRuntimes" (Settings → Local models). Off wherever agent control is off (server mode, password
-// sign-in) and in Docker. Demo mode answers from synthetic runtimes and starts nothing.
+// sign-in, no sign-in outside demo) and in Docker. Demo mode answers from synthetic runtimes and starts nothing.
 const runtimeDir = DEMO ? demoDir : path.join(DIR, '.data');
 const runtimeEntries = () => runtimeRegistry.entries(rawConfig().localRuntimes);
 const runtimeStarted = jsonFile(path.join(runtimeDir, 'runtimes', 'started.json'));
@@ -569,8 +569,8 @@ const runtimeControl = createRuntimeControl({
   entries: runtimeEntries,
   dataDir: runtimeDir,
   started: runtimeStarted,
-  // Runtime control keeps its own rule (server mode and password sign-in), not the agents' no-sign-in rule.
-  serverMode: SERVER_MODE || auth.mode === 'password',
+  // The agents' rule: a runtime start runs a command, so it needs a sign-in just as pausing an agent does.
+  serverMode: AGENTS_OFF,
   models: runtimeModels,
   log: (m) => console.error(m),
 });

