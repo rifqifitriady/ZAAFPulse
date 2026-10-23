@@ -18,6 +18,8 @@ const { createBrain } = require('./lib/brain');
 const office = require('./lib/office');
 const { insights } = require('./lib/insights');
 const reqlogs = require('./lib/reqlogs');
+const { buildTopology, readGateway } = require('./lib/topology');
+const { readToolRoutes, routeOf } = require('./lib/toolroutes');
 const timeline = require('./lib/timeline');
 const { createOmniRoute } = require('./lib/omniroute');
 const {
@@ -735,6 +737,77 @@ const router = createOmniRoute(() => {
     return {};
   }
 });
+// GET /api/topology: the provider topology on the Overview, built from every source (lib/topology.js). Each source is
+// capped at 2 s and a failure leaves it empty; the whole answer is reused for 5 s and the log read for 10 s.
+const TOPO_TTL_MS = 5000;
+const TOPO_SOURCE_MS = 2000;
+const topoCache = { at: 0, value: null, pending: null };
+const topoLogs = { at: 0, value: null };
+async function topoSource(fn, empty = null) {
+  let timer;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(fn),
+      new Promise((_, reject) => (timer = setTimeout(() => reject(new Error('timed out')), TOPO_SOURCE_MS))),
+    ]);
+  } catch (err) {
+    return empty === null ? { error: err.message } : empty;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function buildTopologyNow() {
+  const integrations = (rawConfig() || {}).integrations || {};
+  const routerCfg = Object.entries(integrations).filter(([, c]) => c && c.type === 'router' && c.enabled !== false);
+  const [live, logs, gw, runtimes] = await Promise.all([
+    topoSource(() => processes.snapshot(), {}),
+    topoSource(() => {
+      if (!topoLogs.value || Date.now() - topoLogs.at > 10000) {
+        topoLogs.value = reqlogs.logs();
+        topoLogs.at = Date.now();
+      }
+      return topoLogs.value;
+    }, {}),
+    topoSource(() => readGateway(gateway), {}),
+    topoSource(() => runtimeControl.list(), []),
+  ]);
+  // Only the connector OmniRoute's reader uses has a management API; other routers are drawn without health or calls.
+  const active = router.id();
+  const routers = await Promise.all(
+    routerCfg.map(async ([id, c]) => {
+      const flavor = c.flavor || 'omniroute';
+      const base = { id, name: c.name || '', flavor };
+      if (id !== active) return base;
+      const [health, providers, calls] = await Promise.all([
+        topoSource(() => router.health()),
+        topoSource(() => router.providers()),
+        topoSource(() => router.callLogs()),
+      ]);
+      return { ...base, health, providers, calls };
+    }),
+  );
+  const routerOrigins = routerCfg.map(([id, c]) => ({ id, baseUrl: c.baseUrl || 'http://localhost:20128' }));
+  const tools = readToolRoutes({ home: os.homedir(), env: process.env });
+  const where = (origin) => routeOf(origin, { baseUrl: BASE_URL, routers: routerOrigins });
+  return buildTopology({
+    live,
+    logs,
+    gateway: gw,
+    routers,
+    runtimes,
+    routes: { claude: where(tools.claude), codex: where(tools.codex) },
+    appNames: Object.fromEntries(processes.APPS.map((a) => [a.id, a.name])),
+  });
+}
+// One build at a time; callers inside the 5 s window get the last answer.
+async function topology() {
+  if (topoCache.value && Date.now() - topoCache.at < TOPO_TTL_MS) return topoCache.value;
+  if (!topoCache.pending)
+    topoCache.pending = buildTopologyNow()
+      .then((v) => ((topoCache.value = v), (topoCache.at = Date.now()), v))
+      .finally(() => (topoCache.pending = null));
+  return topoCache.pending;
+}
 const insightMemo = new Map();
 function getInsights(range) {
   const key = `${range}|${indexer.version}|${new Date().getHours()}`;
@@ -949,6 +1022,7 @@ const handler = async (req, res) => {
       const r = url.searchParams.get('range') || '30';
       return send(res, 200, getInsights(r === 'all' ? 'all' : Math.min(365, Math.max(1, parseInt(r, 10) || 30))));
     }
+    if (url.pathname === '/api/topology') return send(res, 200, DEMO ? demo.topologyDemo() : await topology());
     if (url.pathname === '/api/router' && DEMO) {
       const section = url.searchParams.get('section');
       return send(res, 200, {
