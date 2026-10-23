@@ -6,7 +6,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { fakeServer, NO_JUDGE_PORTS } = require('./helpers');
 const { createDatasetStore } = require('../lib/datasets/store');
-const { parseRequirement, checkRequirements, DATASET_USAGE } = require('../lib/datasets/cli');
+const { parseRequirement, checkRequirements, DATASET_USAGE, replayRun } = require('../lib/datasets/cli');
 
 const BIN = path.join(__dirname, '..', 'bin', 'zaafpulse.js');
 const REFERENCE = 'the redirect keeps next';
@@ -322,8 +322,12 @@ test('eval --dataset --json prints one machine-readable report', async () => {
       'usage',
       'evaluators',
       'requirements',
+      'allFailed',
+      'stored',
     ]);
     assert.equal(report.ok, true);
+    assert.deepEqual(report.allFailed, []);
+    assert.equal(report.stored, true);
     assert.equal(report.dataset, 'auth-regressions');
     assert.deepEqual(report.models, ['local/qwen3']);
     assert.equal(report.experiment, records(r.data)[0].id);
@@ -455,3 +459,96 @@ test(
     }
   },
 );
+
+// ---------------------------------------------------------------------------------------------------------------
+// Follow-ups: why a verdict is missing, a run where every replay failed, a lost record, a runner that throws
+// ---------------------------------------------------------------------------------------------------------------
+
+test('eval --dataset says how many verdicts the judge could not give, and why', async () => {
+  const up = await fakeUpstream('I fixed the redirect and ran the tests.');
+  const ollama = await fakeOllama();
+  try {
+    // A daily judge budget of one: the first example is judged, the other two hit the cap.
+    const r = rig(up, { evals: { dailyCap: 1 } });
+    const res = await runCli([...GATE, '--require', 'task_completion>=0.1', '--json'], {
+      ...r,
+      env: { ZAAFPULSE_OLLAMA_URL: ollama.url },
+    });
+    assert.equal(res.code, 0, res.err);
+    assert.match(res.err, /task_completion on local\/qwen3: 2 of 3 had no verdict \(daily cap: 2\)/);
+    const report = JSON.parse(res.out);
+    assert.deepEqual(report.evaluators['local/qwen3'].task_completion, {
+      pass: 1,
+      total: 3,
+      rate: 1 / 3,
+      missing: { 'daily cap': 2 },
+    });
+    assert.deepEqual(records(r.data)[0].perExample[2].missing, { task_completion: 'daily cap' });
+  } finally {
+    await up.close();
+    await ollama.close();
+  }
+});
+
+test('eval --dataset --ci fails a run where every replay of a model failed, even with nothing required', async () => {
+  const up = await fakeServer({ 'POST /chat/completions': { status: 500, body: { error: { message: 'down' } } } });
+  try {
+    const r = rig(up);
+    const res = await runCli([...GATE, '--ci', '--json'], r);
+    assert.equal(res.code, 1, res.err);
+    assert.match(res.err, /Every replay against local\/qwen3 failed; the pass rates above count them as not passing\./);
+    const report = JSON.parse(res.out);
+    assert.deepEqual(report.allFailed, ['local/qwen3']);
+    assert.equal(report.ok, false);
+    // Without --ci it is reported and the exit stays 0.
+    const plain = await runCli(GATE, r);
+    assert.equal(plain.code, 0, plain.err);
+    assert.match(plain.err, /Every replay against local\/qwen3 failed/);
+  } finally {
+    await up.close();
+  }
+});
+
+test('eval --dataset reports why the record could not be stored, without a path', async () => {
+  const up = await fakeUpstream(`Done: ${REFERENCE}.`);
+  try {
+    const r = rig(up);
+    fs.mkdirSync(path.join(r.data, '.data', 'experiments.jsonl'));
+    const res = await runCli([...GATE, '--require', 'reference_match>=0.8', '--ci', '--json'], r);
+    assert.equal(res.code, 0, res.err);
+    assert.match(res.err, /Could not store the experiment record in experiments\.jsonl \((E[A-Z]+|error)\)/);
+    assert.equal(res.err.includes(r.data), false, 'no path');
+    assert.equal(JSON.parse(res.out).stored, false);
+  } finally {
+    await up.close();
+  }
+});
+
+test('eval --dataset --json prints a report when the replay runner throws', async () => {
+  const dataDir = tmp('ds-cli-throw-');
+  const out = [];
+  const err = [];
+  const code = await replayRun(
+    {
+      meta: { slug: 'auth-regressions', name: 'Auth regressions' },
+      examples: [{ id: 'ex_1' }],
+      models: ['local/qwen3'],
+      evaluators: ['reference_match'],
+      requirements: [],
+      flags: { maxCostUSD: 0.5, maxRequests: 10 },
+      judge: { call: async () => null, stop() {} },
+      replay: null,
+      dataDir,
+      createRunner: () => ({
+        run: async () => {
+          throw new Error(`boom in ${dataDir}`);
+        },
+      }),
+    },
+    { json: true, ci: true, out: (l) => out.push(l), err: (l) => err.push(l) },
+  );
+  assert.equal(code, 1);
+  assert.deepEqual(JSON.parse(out.join('\n')), { ok: false, error: 'the replay failed' });
+  assert.match(err.join('\n'), /The replay failed/);
+  assert.equal(fs.existsSync(path.join(dataDir, 'experiments.jsonl')), false, 'nothing recorded');
+});
