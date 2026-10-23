@@ -866,6 +866,20 @@ test('a key that appears after the last listing is found with one rebuild', asyn
   assert.ok((await t.session(key, { turn: 0 })).spans.length);
 });
 
+test('keyFor with rebuild false never forces a listing, so a default keyFor right after still rebuilds once', async () => {
+  const entries = [];
+  const t = createTrace({ indexer: { entries: () => entries }, gateway: gw, light: [], roots: [FIX] });
+  const full = (await fakeIndexer()).entries();
+  assert.equal(t.sessions({}).length, 0);
+  assert.throws(
+    () => t.keyFor('codex', 'missing', { rebuild: false }),
+    (e) => e.status === 404 && /unknown session/.test(e.message),
+  );
+  entries.push(...full);
+  // Had the call above forced a listing, this one would be inside the once-a-second limit and miss s1.
+  assert.ok(t.keyFor('claude', 's1'));
+});
+
 test('the sealed skeleton is frozen all the way down', async () => {
   const t = await make();
   const sk = await t.session(t.sessions({})[0].key, { turn: 0 });
