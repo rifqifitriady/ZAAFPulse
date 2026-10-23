@@ -1966,3 +1966,15 @@ test("an experiment's running judge call is cancelled when judging is switched o
   q.engine.kick();
   assert.deepEqual(await p2, { ok: false, reason: 'cancelled' });
 });
+
+// D-T8-5: the CLI and the dashboard share evals-state.json; each writes through a temp file of its own.
+test('writeState uses a temp file of its own process, so a stale shared temp name cannot block it', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'evals-state-'));
+  dirs.push(dir);
+  const file = path.join(dir, 'evals-state.json');
+  fs.mkdirSync(`${file}.tmp`); // the old fixed temp name, taken
+  require('../lib/evals/engine').writeState(file, { since: 1, day: '2026-10-23', count: 3, cost: 0 });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { since: 1, day: '2026-10-23', count: 3, cost: 0 });
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['evals-state.json', 'evals-state.json.tmp'], 'no temp file left');
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+});
