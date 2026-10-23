@@ -46,6 +46,7 @@ const { createAgentControl } = require('./lib/agents/control');
 const runtimeRegistry = require('./lib/runtimes/registry');
 const { createRuntimeState, jsonFile } = require('./lib/runtimes/state');
 const { createRuntimeControl } = require('./lib/runtimes/control');
+const { createModelMemory } = require('./lib/runtimes/models');
 const { createRuntimeApi } = require('./lib/runtimes/api');
 const { isRef } = require('./lib/secrets');
 const { createPriceSync } = require('./lib/price-sync');
@@ -575,14 +576,44 @@ const monitorApi = createMonitorApi({
 const runtimeDir = DEMO ? demoDir : path.join(DIR, '.data');
 const runtimeEntries = () => runtimeRegistry.entries(rawConfig().localRuntimes);
 const runtimeStarted = jsonFile(path.join(runtimeDir, 'runtimes', 'started.json'));
+const runtimeState = createRuntimeState({ entries: runtimeEntries, started: runtimeStarted });
+// The models Ollama and LM Studio last had loaded, loaded again after a Start. Its audit line is written by the
+// control module (`reloaded`), which exists by the time a reload can end.
+const runtimeModels = createModelMemory({
+  file: jsonFile(path.join(runtimeDir, 'runtimes', 'models.json')),
+  log: (m) => console.error(m),
+  onDone: (id, r) => runtimeControl.reloaded(id, r),
+});
 const runtimeControl = createRuntimeControl({
-  state: createRuntimeState({ entries: runtimeEntries, started: runtimeStarted }),
+  state: runtimeState,
   entries: runtimeEntries,
   dataDir: runtimeDir,
   started: runtimeStarted,
   serverMode: AGENTS_OFF,
+  models: runtimeModels,
   log: (m) => console.error(m),
 });
+// Every 30 s while runtime control is on, the models each running Ollama and LM Studio has loaded are read and
+// remembered. It only reads: it starts, stops and loads nothing. One pass at a time; a pass never throws.
+let runtimeObserving = false;
+const observeRuntimeModels = async () => {
+  if (runtimeObserving) return;
+  runtimeObserving = true;
+  try {
+    for (const x of await runtimeState.list()) {
+      if (!x.running || !runtimeModels.supports(x.entry.id)) continue;
+      try {
+        await runtimeModels.observe(x);
+      } catch {
+        console.error(`runtimes: the loaded models of ${x.entry.id} could not be read`);
+      }
+    }
+  } catch {
+    console.error('runtimes: the model pass failed');
+  } finally {
+    runtimeObserving = false;
+  }
+};
 const runtimeApi = createRuntimeApi({
   control: runtimeControl,
   config: {
@@ -1368,6 +1399,8 @@ server.listen(PORT, HOST, () => {
   };
   keepTraces();
   setInterval(keepTraces, 5 * 60 * 1000).unref();
+  // Local model servers: remember what is loaded. Not in demo mode, server mode or Docker (control is off there).
+  if (!DEMO && !runtimeControl.offReason()) setInterval(observeRuntimeModels, 30 * 1000).unref();
   // Demo: seed the workspace, then run chats, agents, collaboration patterns and workflows once.
   if (DEMO)
     demoGw

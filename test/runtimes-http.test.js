@@ -118,7 +118,12 @@ test('runtimes over HTTP: demo runtimes, demo start and stop, approve, nothing s
     assert.equal(by['qwen-local'].reason, 'approve it in Settings first');
     const stop = await c.post('/api/runtimes/stop', { id: 'ollama', pid: by.ollama.pid, startTime: by.ollama.startTime });
     assert.deepEqual(stop.json, { state: 'stopped', demo: true });
-    assert.deepEqual((await c.post('/api/runtimes/start', { id: 'ollama' })).json, { state: 'running', demo: true });
+    assert.deepEqual(by.ollama.models, { remembered: ['llama3.2:3b'], loading: false, loaded: [], failed: [] });
+    assert.deepEqual((await c.post('/api/runtimes/start', { id: 'ollama' })).json, {
+      state: 'running',
+      demo: true,
+      reloading: ['llama3.2:3b'],
+    });
     assert.equal((await c.post('/api/runtimes/start', { id: 'qwen-local' })).status, 403);
     assert.equal((await c.post('/api/runtimes/approve', { id: 'qwen-local' })).status, 200);
     assert.equal((await c.post('/api/runtimes/start', { id: 'qwen-local' })).status, 200);
