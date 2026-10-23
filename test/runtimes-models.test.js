@@ -436,3 +436,36 @@ test('lmstudio: a cancelled reload runs no further lms load', async () => {
   while (m.status('lmstudio').loading) await tick();
   assert.deepEqual(calls, ['ps --json', 'load q1 --yes']);
 });
+
+test('a Start right after a cancelled reload reloads again; the old one no longer reports', async () => {
+  const started = [];
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const m = mem({
+    getJson: ps('a', 'b'),
+    postJson: async (u, body) => {
+      started.push(body.model);
+      if (started.length === 1) await gate; // the first load is still in flight when Stop cancels it
+      return { status: 200, body: {} };
+    },
+  });
+  await m.observe(ollama());
+  m.reload(ollama());
+  await tick();
+  m.cancel('ollama');
+  assert.deepEqual(m.reload(ollama()), ['a', 'b'], 'the next Start does not wait for the cancelled load');
+  release();
+  while (m.status('ollama').loading) await tick();
+  assert.deepEqual(m.status('ollama'), { loading: false, loaded: ['a', 'b'], failed: [] });
+  assert.deepEqual(started, ['a', 'a', 'b']);
+});
+
+test('a Stop after a finished reload clears its status, so a later server does not show it', async () => {
+  const m = mem({ getJson: ps('a'), postJson: async () => ({ status: 200 }) });
+  await m.observe(ollama());
+  m.reload(ollama());
+  while (m.status('ollama').loading) await tick();
+  assert.deepEqual(m.status('ollama').loaded, ['a']);
+  m.cancel('ollama');
+  assert.equal(m.status('ollama'), null);
+});

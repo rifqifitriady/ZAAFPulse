@@ -1399,8 +1399,10 @@ server.listen(PORT, HOST, () => {
   };
   keepTraces();
   setInterval(keepTraces, 5 * 60 * 1000).unref();
-  // Local model servers: remember what is loaded. Not in demo mode, server mode or Docker (control is off there).
-  if (!DEMO && !runtimeControl.offReason()) setInterval(observeRuntimeModels, 30 * 1000).unref();
+  // Local model servers: remember what is loaded. Not in demo mode, server mode or Docker (control is off there), and
+  // not with ZAAFPULSE_RUNTIME_WATCH=off (the tests' spawned servers, which must not read this machine's Ollama).
+  if (!DEMO && !runtimeControl.offReason() && process.env.ZAAFPULSE_RUNTIME_WATCH !== 'off')
+    setInterval(observeRuntimeModels, 30 * 1000).unref();
   // Demo: seed the workspace, then run chats, agents, collaboration patterns and workflows once.
   if (DEMO)
     demoGw
