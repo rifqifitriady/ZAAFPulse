@@ -653,3 +653,103 @@ test('wrong types, missing fields and { error } objects in place of lists give a
   assert.deepEqual(call.path, ['router:omniroute', 'provider:other']);
   assert.equal(call.ok, false, 'a status that is not a number is not ok');
 });
+
+const HOSTILE = [
+  '/Users/bob/x/claude user@host.com sk-ant-abcdef123456 localhost:11434/v1',
+  'HTTP 401 for bob@corp.com key sk-live-1234567890 ~/.config/x ./a/b C:\\Users\\bob\\x',
+];
+const LEAKS = ['@corp.com', '@host.com', '/Users/', 'Users\\', '~/', 'sk-live', 'sk-ant', 'localhost:11434/', './a/b'];
+const noLeak = (t) => {
+  const s = JSON.stringify(t);
+  for (const l of LEAKS) assert.ok(!s.includes(l), `${l} leaked in ${s}`);
+};
+
+test('emails, paths, host:port and tokens are scrubbed from every text field', () => {
+  for (const bad of HOSTILE) {
+    const t = buildTopology(
+      input({
+        logs: { requests: [turn('claude', `${bad} claude-3`, 1 * MIN)], errors: [] },
+        gateway: {
+          providers: [{ id: 'a', preset: 'anthropic', enabled: true }],
+          usage: [
+            { ts: NOW - MIN, keyId: 'k1', provider: 'a', model: 'claude-3', status: 200 },
+            { ts: NOW - 2 * MIN, keyId: 'zz', agent: bad, provider: 'a', model: 'claude-3', status: 200 },
+          ],
+          keys: [{ id: 'k1', name: bad }],
+        },
+        routers: [
+          omni({
+            name: bad,
+            health: { error: bad },
+            providers: [{ provider: 'openai', testStatus: bad }],
+          }),
+        ],
+      }),
+      NOW,
+    );
+    noLeak(t);
+    assert.ok(
+      t.requests.some((q) => q.client),
+      'client kept as scrubbed text',
+    );
+  }
+});
+
+test('plain vendor/model names survive the scrub', () => {
+  const t = buildTopology(
+    input({
+      logs: { requests: [turn('claude', 'meta-llama/Llama-3', MIN), turn('codex', 'anthropic/claude-3', MIN)] },
+    }),
+    NOW,
+  );
+  assert.deepEqual(t.requests.map((q) => q.model).sort(), ['anthropic/claude-3', 'meta-llama/Llama-3']);
+});
+
+test('a tool label that falls back to the raw id is scrubbed', () => {
+  const t = buildTopology(input({ live: { apps: [], installed: ['/Users/bob/x/tool'] } }), NOW);
+  noLeak(t);
+});
+
+test('router ids in node ids keep only safe characters and 40 characters', () => {
+  const t = buildTopology(input({ routers: [omni({ id: 'a@corp.com/../~x sk-live-1234567890' })] }), NOW);
+  noLeak(t);
+  for (const n of t.nodes) assert.match(n.id, /^[A-Za-z0-9._:-]+$/);
+  const id = 'x'.repeat(60);
+  const u = buildTopology(input({ routers: [omni({ id })] }), NOW);
+  assert.ok(u.nodes.some((n) => n.id === `router:${'x'.repeat(40)}`));
+});
+
+test('a string status counts as a number', () => {
+  const t = buildTopology(
+    input({
+      gateway: {
+        providers: [{ id: 'a', preset: 'anthropic', enabled: true }],
+        usage: [{ ts: NOW - MIN, provider: 'a', model: 'claude-3', status: '200' }],
+      },
+      routers: [omni({ calls: [{ ts: NOW - MIN, status: '200', model: 'gpt-5', provider: 'openai' }] })],
+    }),
+    NOW,
+  );
+  assert.ok(t.requests.length === 2 && t.requests.every((q) => q.ok));
+});
+
+test('a tool routed to a hop that is not a node falls back to direct', () => {
+  for (const route of ['nosuchrouter', 'gateway']) {
+    const t = buildTopology(
+      input({
+        live: { apps: [], installed: ['claude'] },
+        logs: { requests: [turn('claude', 'claude-3', MIN)], errors: [] },
+        routes: { claude: route, codex: null },
+      }),
+      NOW,
+    );
+    assert.ok(edgeIds(t).includes('claude>provider:anthropic'));
+    assert.equal(t.requests.length, 1);
+    assert.deepEqual(t.requests[0].path, ['claude', 'provider:anthropic']);
+  }
+});
+
+test('a tool named like an Object.prototype key has no default provider', () => {
+  const t = buildTopology(input({ live: { apps: [], installed: ['constructor', 'toString'] } }), NOW);
+  assert.deepEqual(edgeIds(t), []);
+});
