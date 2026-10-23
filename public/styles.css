@@ -8498,3 +8498,124 @@ label.mon-cand.on {
   font-size: 12.5px;
   color: var(--muted);
 }
+/* Local model servers: the action row on AI Office cards, and Settings → Local models */
+.rt-slot:empty {
+  display: none;
+}
+.rt-body {
+  display: grid;
+  gap: 6px;
+}
+.rt-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.rt-state {
+  flex: 1;
+  min-width: 0;
+}
+.rt-how {
+  color: var(--muted);
+}
+.rt-msg.warn {
+  color: var(--warn-ink);
+}
+.rt-log {
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.rt-card .btn.danger,
+.agent .rt-slot .btn.danger,
+.rt-settings .btn.danger {
+  color: var(--bad);
+  border-color: color-mix(in srgb, var(--bad) 45%, transparent);
+}
+.rt-settings {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  scroll-margin-top: 76px;
+}
+.rt-entries {
+  display: grid;
+  gap: 8px;
+}
+.rt-entry {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.rt-entry-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+.rt-entry-main small {
+  color: var(--muted);
+}
+.rt-cmd {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.rt-approval {
+  font-size: 12px;
+  color: var(--muted);
+}
+.rt-approval.good {
+  color: var(--good);
+}
+.rt-form {
+  display: grid;
+  gap: 10px;
+}
+.rt-form h4 {
+  margin: 0;
+}
+/* .btn sets display, which would show a [hidden] Cancel in "Add a runtime" mode */
+.rt-form [hidden] {
+  display: none;
+}
+/* .input is one 36 px line; a command is one argument per line */
+.rt-form textarea.input {
+  height: auto;
+  min-height: 7.5em;
+  padding: 8px 10px;
+  resize: vertical;
+}
+.rt-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.rt-form-grid label {
+  display: grid;
+  gap: 4px;
+  font-size: 12.5px;
+}
+.rt-wide {
+  grid-column: 1 / -1;
+}
+@media (max-width: 720px) {
+  .rt-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

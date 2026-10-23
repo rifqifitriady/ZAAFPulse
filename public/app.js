@@ -646,15 +646,10 @@ function squadCards(limit) {
     const meta = APPS[id];
     const r = running[id];
     const t = d.tools.find((x) => x.id === id);
-    const statusCls = r ? 'running' : live.installed.includes(id) ? 'idle' : 'off';
-    const statusText = r
-      ? `Running now · ${r.processes} process${r.processes === 1 ? '' : 'es'}`
-      : t && t.lastActive
-        ? `Idle · last active ${ago(t.lastActive)}`
-        : 'Installed · not running';
+    const s = squadLive(r, live.installed.includes(id), t); // squadPatch keeps these current after the first draw
     const stats = t
       ? `<div><b class="num">${t.sessions}</b><span>sessions</span></div><div><b class="num">${fmtN(t.tokens)}</b><span>tokens</span></div><div><b class="num">${t.cost ? fmtUSD(t.cost) : '—'}</b><span>est. cost</span></div>`
-      : `<div><b class="num">${r ? r.cpu.toFixed(1) + '%' : '—'}</b><span>CPU</span></div><div><b class="num">${r ? fmtN(r.memMB) + ' MB' : '—'}</b><span>memory</span></div><div><b class="num">${r ? dur(r.uptimeSec) : '—'}</b><span>uptime</span></div>`;
+      : `<div><b class="num">${s.stats[0]}</b><span>CPU</span></div><div><b class="num">${s.stats[1]}</b><span>memory</span></div><div><b class="num">${s.stats[2]}</b><span>uptime</span></div>`;
     const tags =
       t && t.models.length
         ? `<div class="tags">${t.models
@@ -662,10 +657,10 @@ function squadCards(limit) {
             .map((m) => `<span class="tag">${esc(m.name)}</span>`)
             .join('')}</div>`
         : '';
-    return `<div class="card agent">
+    return `<div class="card agent" data-app-card="${id}">
       <div class="agent-top"><span class="agent-icon chip ${meta.chip}">${icon(meta.icon, 18)}</span>
         <div><div class="agent-name">${meta.name}</div><div class="agent-role">${meta.role}</div></div></div>
-      <div class="status ${statusCls}"><i></i>${statusText}</div>
+      <div class="status ${s.cls}"><i></i>${s.text}</div>${RT_CARD_IDS.includes(id) ? `<div class="rt-slot" data-rt-slot="${id}"></div>` : ''}
       <p class="agent-desc">${meta.desc}</p>${tags}
       <div class="agent-stats">${stats}</div></div>`;
   });
@@ -752,6 +747,7 @@ async function viewSettings(el) {
   </div>
   ${evalsSettingsShell()}
   ${monitorsSettingsShell()}
+  ${runtimesSettingsShell()}
   <section class="holo panel" id="prices-panel" style="margin-top:16px"><div class="skeleton" style="height:220px"></div></section></div>`;
 
   $('#profile-form').onsubmit = async (e) => {
@@ -774,6 +770,7 @@ async function viewSettings(el) {
   };
   mountEvalsSettings();
   mountMonitorsSettings();
+  mountRuntimesSettings();
   loadPrices().catch((err) => {
     $('#prices-panel').innerHTML = holoEmpty(`Could not load prices: ${esc(err.message)}`);
   });
@@ -1310,6 +1307,9 @@ function applyTheme() {
   setInterval(async () => {
     await loadLive();
     if (state.route === 'live' && !updateLive()) render(false);
+    // AI Office and the Overview draw the Installed AI tools cards once; their status and CPU follow every poll.
+    if ((state.route === 'squad' || state.route === 'overview') && state.data)
+      squadPatch(document, state.live, state.data.tools);
     // The Overview's empty-state note follows the first index (its progress is in the live data) and the first logs
     // found; the summary is reloaded once, when the index finishes, not at every progress step.
     const finished = wasIndexing && !indexing();
