@@ -465,8 +465,10 @@ test('discovery: in the single-file build a script runs through a real node, or 
   if (POSIX) {
     // A POSIX executable is started as it is, never through process.execPath.
     assert.equal((await none.find()).file, t.bin);
+    // A node of the test's own in a private folder: the runner's node may sit where anyone can write (Ubuntu's
+    // preinstalled tool cache is mode 777), and discovery rightly refuses to run that one (see the next test).
     const nodeDir = tmp('zp-claude-node-');
-    fs.symlinkSync(process.execPath, path.join(nodeDir, 'node'));
+    fs.writeFileSync(path.join(nodeDir, 'node'), `#!/bin/sh\nexec "${process.execPath}" "$@"\n`, { mode: 0o755 });
     const withNode = createClaude({
       env: { ZAAFPULSE_CLAUDE_BIN: script, PATH: nodeDir },
       home: tmp(),
@@ -478,6 +480,25 @@ test('discovery: in the single-file build a script runs through a real node, or 
     assert.equal(bin.file, path.join(nodeDir, 'node'));
     assert.deepEqual(bin.args, [script]);
   }
+});
+
+test('discovery: in the single-file build a node that anyone can write is not used to run a script', { skip: !POSIX }, async () => {
+  const script = fakeClaude(tmp('zp-claude-js-'), 'claude.js');
+  const nodeDir = tmp('zp-claude-node-');
+  const node = path.join(nodeDir, 'node');
+  fs.writeFileSync(node, `#!/bin/sh\nexec "${process.execPath}" "$@"\n`, { mode: 0o755 });
+  const find = () =>
+    createClaude({
+      env: { ZAAFPULSE_CLAUDE_BIN: script, PATH: nodeDir },
+      home: tmp(),
+      systemDirs: [],
+      nodeDirs: [],
+      isSea: () => true,
+    }).find();
+  assert.equal((await find()).file, node, 'a private node is used');
+  fs.chmodSync(nodeDir, 0o777);
+  fs.chmodSync(node, 0o777);
+  assert.equal(await find(), null, 'a node in a folder anyone can write is passed over');
 });
 
 test('discovery: only absolute PATH entries, and no found binary that anyone can write', { skip: !POSIX }, async () => {
