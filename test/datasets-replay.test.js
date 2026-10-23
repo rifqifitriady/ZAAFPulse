@@ -124,6 +124,9 @@ test('replay accessor: tiers, refused names and local-first model order', async 
     assert.deepEqual(lms, { name: 'lms/phi', provider: 'lms', label: 'LM Studio', tier: 'private', priced: true });
     assert.equal(r.priced('openai/gpt-6.1'), true);
     assert.equal(r.priced('local/glm-4.6:cloud'), false);
+    // The same list price the judge reads, so an external call can be estimated (D-F-1).
+    assert.deepEqual(r.priceOf('openai/gpt-6.1'), { input: 1, output: 2 });
+    assert.equal(r.priceOf('local/glm-4.6:cloud'), null);
     await assert.rejects(r.complete({ model: 'router/fast', messages: [] }), (e) => e.status === 400);
     assert.equal(t.upstream.requests.length, 0);
   } finally {
@@ -456,4 +459,67 @@ test('a cancel during a call lets that call finish, records it and makes no furt
   assert.equal(rec.status, 'stopped');
   assert.equal(rec.stopped, 'cancelled');
   assert.ok(Math.abs(rec.usage.cost - 0.1) < 1e-9);
+});
+
+// D-F-1: an external provider that sends no usage (or too little) must still count against the cost cap.
+function pricedExternal({ complete } = {}) {
+  const sent = [];
+  const tiers = { 'ext/m': 'external', 'local/qwen3': 'private' };
+  return {
+    sent,
+    tierOf: (m) => tiers[m] || null,
+    priced: () => true,
+    priceOf: (m) => (m === 'ext/m' ? { input: 10, output: 30 } : null),
+    models: () => [],
+    complete: async (req) => {
+      sent.push(req);
+      return complete ? complete(req) : { text: 'x'.repeat(4000), toolCalls: [], usage: undefined };
+    },
+  };
+}
+// 4,000 characters of message content and no tools: inEst = 1,000 tokens × $10/M = $0.01, and a 4,000-character
+// reply gives outEst = 1,000 tokens × $30/M = $0.03.
+const long = (n) =>
+  example(n, '', { input: { system: null, messages: [{ role: 'user', text: 'y'.repeat(4000) }], tools: [] } });
+
+test('an external call counts at least its estimate when the provider reports no usage', async () => {
+  const three = [long(1), long(2), long(3)];
+  const base = { id: 'exp_0000000000000010', dataset: META, examples: three, evaluators: [] };
+  let replay = pricedExternal();
+  let rec = await createReplayRunner({ replay, judge: noJudge }).run({ ...base, models: ['ext/m'], maxCostUSD: 0.05 });
+  assert.equal(replay.sent[0].messages.reduce((n, m) => n + m.content.length, 0), 4000);
+  assert.ok(Math.abs(rec.perExample[0].cost - 0.04) < 1e-9, String(rec.perExample[0].cost));
+  assert.equal(replay.sent.length, 2);
+  assert.equal(rec.status, 'stopped');
+  assert.equal(rec.stopped, 'cost cap');
+
+  // A reported cost that covers at least the input estimate is the bill; one below it is not.
+  const reporting = (cost) => () => ({ text: 'x'.repeat(4000), usage: { input: 1000, output: 1000, cost } });
+  replay = pricedExternal({ complete: reporting(0.02) });
+  rec = await createReplayRunner({ replay, judge: noJudge }).run({ ...base, examples: [long(1)], models: ['ext/m'] });
+  assert.ok(Math.abs(rec.perExample[0].cost - 0.02) < 1e-9, String(rec.perExample[0].cost));
+  replay = pricedExternal({ complete: reporting(0.001) });
+  rec = await createReplayRunner({ replay, judge: noJudge }).run({ ...base, examples: [long(1)], models: ['ext/m'] });
+  assert.ok(Math.abs(rec.perExample[0].cost - 0.04) < 1e-9, String(rec.perExample[0].cost));
+
+  // A private model with no usage still costs nothing.
+  replay = pricedExternal();
+  rec = await createReplayRunner({ replay, judge: noJudge }).run({ ...base, models: ['local/qwen3'] });
+  assert.equal(replay.sent.length, 3);
+  assert.deepEqual(
+    rec.perExample.map((r) => r.cost),
+    [0, 0, 0],
+  );
+  assert.equal(rec.status, 'done');
+
+  // A failed external call counts its input estimate: the text may have reached the provider.
+  replay = pricedExternal({
+    complete: () => {
+      throw new Error('upstream 502');
+    },
+  });
+  rec = await createReplayRunner({ replay, judge: noJudge }).run({ ...base, examples: [long(1)], models: ['ext/m'] });
+  assert.equal(rec.perExample[0].output, null);
+  assert.ok(Math.abs(rec.perExample[0].cost - 0.01) < 1e-9, String(rec.perExample[0].cost));
+  assert.ok(Math.abs(rec.usage.cost - 0.01) < 1e-9);
 });
