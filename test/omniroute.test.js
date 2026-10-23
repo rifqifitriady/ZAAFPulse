@@ -31,10 +31,11 @@ test('providers(): keeps the PROVIDER_FIELDS, masks emails, and fails on its own
     accessToken: 'sk-secret-token',
     email: 'someone@example.com',
   };
-  const r = make(async () => reply({ connections: [conn] }));
+  const r = make(async () => reply({ connections: [conn, null, 'x', [1]] }));
   const out = await r.providers();
-  assert.equal(out.connections.length, 1);
+  assert.equal(out.connections.length, 1, 'a connection that is not an object is dropped');
   const c = out.connections[0];
+  assert.equal(c.id, 'abcd…', 'connection ids are shortened');
   assert.equal(c.provider, 'claude');
   assert.equal(c.name, 'so***@example.com');
   assert.equal(c.displayName, 'ot***@example.org');

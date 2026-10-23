@@ -17,7 +17,8 @@ const freePort = () =>
     s.listen(port, '127.0.0.1', () => s.close(() => resolve(port)));
   });
 
-// Starts server.js on a free port with a throwaway HOME and data folder; the real ones are never read.
+// Starts server.js on a free port with a throwaway HOME and data folder; the real ones are never read. Only demo mode
+// and the sign-in gate are tested over HTTP: a real server's runtime list would probe this machine's Ollama.
 async function startServer(env) {
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-topo-api-'));
   for (let attempt = 0; attempt < 6; attempt++) {
@@ -34,6 +35,11 @@ async function startServer(env) {
         ZAAFPULSE_DATA: data,
         HOME: data,
         USERPROFILE: data,
+        // Set on the owner's machine, these would point the server at the real Claude Code and Codex folders.
+        CLAUDE_CONFIG_DIR: '',
+        CODEX_HOME: '',
+        ANTHROPIC_BASE_URL: '',
+        OPENAI_BASE_URL: '',
       },
       stdio: 'ignore',
     });
@@ -103,19 +109,6 @@ test('GET /api/topology: 401 without sign-in, like the other routes', async () =
   try {
     const r = await fetch(`${s.base}/api/topology`, { signal: AbortSignal.timeout(10000) });
     assert.equal(r.status, 401);
-  } finally {
-    await s.stop();
-  }
-});
-
-test('GET /api/topology: a real (non-demo) server answers with an empty graph and no router', async () => {
-  const s = await startServer({ ZAAFPULSE_AUTH: 'none' });
-  try {
-    const r = await fetch(`${s.base}/api/topology`, { signal: AbortSignal.timeout(10000) });
-    assert.equal(r.status, 200);
-    const t = await r.json();
-    assert.ok(Array.isArray(t.nodes) && Array.isArray(t.edges) && Array.isArray(t.requests));
-    assert.ok(!t.nodes.some((n) => n.kind === 'router'));
   } finally {
     await s.stop();
   }
