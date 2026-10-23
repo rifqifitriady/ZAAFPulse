@@ -73,7 +73,8 @@ means something.
 
 A longer text field keeps its head and its tail around a `[… trimmed …]` marker. A dataset name becomes its slug
 (lower case, digits and `-`, up to 64 characters). The slug is fixed when the dataset is created; renaming changes
-the display name only. `import` and `settings` cannot be used as slugs.
+the display name only. `import` and `settings` cannot be used as slugs, nor can Windows device names such as `con`
+or `com1`.
 
 **Every text field is masked when it is saved.** Secrets found by the same patterns as the Quality page (API keys,
 tokens, private keys) are replaced by a marker such as `‹anthropic key hidden›`, the same marker the Trace explorer
@@ -90,8 +91,8 @@ shows. The original is not kept. This applies to the prompt, tool results, answe
   example, so you can try another model at once.
 - **Automatically (off by default).** An optional rule copies turns that went wrong into one dataset. It adds a turn
   when a judge evaluator fails it, or when you rate it 👎. Added examples get the tag `auto`. Code checks never
-  trigger it. The rule is paused while content viewing is off. It has no screen yet: set it with
-  `POST /api/datasets/settings` (see below) or in `config.json`:
+  trigger it. The rule is paused while content viewing is off. Set it under **Auto-add** on the Datasets page (a
+  switch, the dataset and when to add), with `POST /api/datasets/settings` (see below), or in `config.json`:
 
   ```json
   { "datasets": { "autoAdd": { "enabled": true, "dataset": "auth-regressions", "onFail": true, "onBad": true } } }
@@ -111,12 +112,14 @@ its examples.
   raw session id or a file path.
 - **Import JSONL.** Choose a file of exported lines. An import is **atomic**: if any line is bad, or the result would
   pass 1,000 examples, nothing is written, and the first 20 reasons are shown (for example `line 3: …`). Importing
-  into an existing dataset appends. An example whose id already exists there gets a new id.
+  into an existing dataset appends. An example whose id already exists there gets a new id. A line's
+  `source.turn` must be a whole number from 0. The page checks the size first: a file over 16 MB, or one that passes
+  16 MB once it is wrapped in the JSON request, is refused before anything is sent.
 
 An import keeps the link back to the session only on the same running server, because trace keys use a secret that is
 new for every process. After a restart, or on another machine, examples import with no link. Even where the link
 survives, the span is dropped (a sealed span id cannot be turned back), so the example points to the turn, not to the
-span.
+span. The reply counts both: `links: { kept, dropped }`.
 
 With content viewing off (the default in server mode), adding from the trace and exporting are refused, and texts
 appear as `null`/hidden. See [Privacy](#privacy).
@@ -133,8 +136,8 @@ What is sent:
   to the model (name and description, with an open parameter schema) and **never run**. A tool built from a trace has
   an empty description; an imported one may carry text, which is masked for an external model like the messages and
   shown in the preview. If the model proposes a tool call, it is shown as a proposal and that example ends there.
-- **One call per example and model.** Every call goes through the gateway, so usage, cost, OTLP export and key
-  budgets apply as for any request.
+- **One call per example and model.** Every call goes through the gateway, so usage, cost and OTLP export apply as
+  for any request. Replay calls are recorded as dashboard calls with no API key, so no key budget applies.
 
 Which models:
 
@@ -165,9 +168,15 @@ Caps (a run's own, set in the form):
 | Requests | 100 | a whole number, 1 to 1,000 |
 
 The run **stops before the next call** once a cap is reached, and the result says which. A call that is already in
-flight completes, so the cost can pass the cap by one call. There is no stop button and no cancel route. Only one
-experiment runs at a time on a server; a second start is refused (409). A call that gets no answer in time is
-recorded as an error and the run goes on.
+flight completes, so the cost can pass the cap by one call. When a provider reports no usage (or a cost below what
+the input alone costs), an external call counts at least its estimate, from the characters sent and received at the
+model's price, so the cost cap still holds. Only one experiment runs at a time on a server; a second start is refused
+(409). A call that gets no answer in time is recorded as an error and the run goes on.
+
+**Stop after the current call** (under the progress bar) ends a run at the next call boundary, with `stopped` set to
+`cancelled`. The call in flight is never interrupted: it finishes and is recorded, and its judge verdicts are skipped
+(they show as missing, reason `cancelled`); the code evaluators still score it. The button reads **Stopping…** until
+the run ends.
 
 ## Scoring and experiments
 
@@ -177,7 +186,7 @@ Each answer is scored by the evaluators you pick:
 |---|---|---|
 | `reference_match` | code | the answer equals, or contains, the example's reference (case, spacing and Unicode form are ignored); only examples with a reference count |
 | `secret_leak` | code | a secret in the answer or in a proposed call's arguments |
-| `risky_command` | code | a proposed call whose `command` argument is risky |
+| `risky_command` | code | a proposed call whose `command` or `cmd` argument is risky |
 | `faithfulness`, `task_completion`, `tool_selection`, `relevance` | judge | the [judge evaluators](evals.md#the-evaluators), run on the replayed answer |
 
 The other code checks read log signals, and `user_frustration` is about a whole session, so they do not apply to a
@@ -211,16 +220,17 @@ A finished run is one line in `.data/experiments.jsonl`:
       "labels": { "faithfulness": { "label": "faithful" } }, "cost": 0, "ms": 2100 }
   ],
   "summary": { "models": { "local/qwen3": { "requests": 12, "cost": 0, "ms": 2100, "errors": 0, "proposals": 0,
-    "evaluators": { "faithfulness": { "pass": 10, "total": 12, "rate": 0.83 } } } } }
+    "evaluators": { "faithfulness": { "pass": 10, "total": 12, "rate": 0.8333333333333334 } } } } }
 }
 ```
 
-`stopped` is `null`, `request cap` or `cost cap` (`status` is then `stopped`). It is also `cancelled` when a CLI
-run is interrupted (Ctrl-C or a kill), and `error` when a dashboard run fails before it ends.
+`stopped` is `null`, `request cap` or `cost cap` (`status` is then `stopped`). It is also `cancelled` when you press
+**Stop after the current call**, and `error` when a dashboard run fails before it ends. An interrupted CLI run
+(Ctrl-C or a kill) writes no record. Rates are not rounded: 10 of 12 is `0.8333333333333334`.
 
 - **Bounded.** The newest 100 records are kept. Outputs are masked and cut to 4,000 characters (head and tail). A
-  record is kept to about 2 MB: a very large one may have its texts shortened or dropped, and is then marked
-  `trimmed`.
+  record is kept to 2 MB: over that, its texts are shortened to 1,000, then 250 characters, then dropped, and results
+  are dropped from the end last. The record then carries `trimmed: { textChars, droppedResults? }`.
 - **Compare.** Under **Datasets → Experiments**, tick two runs and press **Compare**. Rates are shown side by side
   for the evaluators and models they share. Two runs of different datasets are marked as not like for like.
 
@@ -242,7 +252,8 @@ task_completion  local/qwen3  66.7% (8/12)   >= 0.70   FAIL
 - `--model` may repeat, up to 3 times. `--max-cost` and `--max-requests` take the ranges of the caps above.
 - `--require` takes `>=` or `>` and a number from 0 to 1. **Quote every `--require`**: an unquoted `>` is a shell
   redirect and would write a file instead of passing the requirement. With no `--require`, only the free code
-  evaluators run (`reference_match`, `secret_leak`, `risky_command`) and nothing is gated.
+  evaluators run (`reference_match`, `secret_leak`, `risky_command`) and no pass rate is gated; `--ci` still exits 1
+  when the run stops early or every replay of a model failed.
 - A value flag with no value (for example a trailing `--require`, or `--dataset --ci`) is a configuration error, not a
   pass.
 - `--data DIR` is the data folder (the one that holds `config.json` and `.data/`), as for `zaafpulse start`. Without it
@@ -257,7 +268,7 @@ task_completion  local/qwen3  66.7% (8/12)   >= 0.70   FAIL
 | Exit code | Meaning |
 |---|---|
 | `0` | the run finished and, with `--ci`, every requirement passed (without `--ci`, a finished run is always 0) |
-| `1` | with `--ci`: a requirement failed, or the run stopped early at a cap; also, without `--ci`: the replay itself failed |
+| `1` | with `--ci`: a requirement failed, the run stopped early at a cap, or every replay of a model errored; with or without `--ci`: the replay itself failed |
 | `2` | a configuration error: unknown dataset or model, an empty dataset, a bad flag or value, an external model, or a judge that is required but unavailable |
 | `130` | stopped by Ctrl-C, `SIGTERM` or `SIGHUP`; the run ends at once and no partial record is written |
 
@@ -271,13 +282,31 @@ task_completion  local/qwen3  66.7% (8/12)   >= 0.70   FAIL
   "experiment": "exp_0123456789abcdef",
   "stopped": null,
   "usage": { "requests": 12, "cost": 0 },
-  "evaluators": { "local/qwen3": { "task_completion": { "pass": 8, "total": 12, "rate": 0.667 } } },
+  "evaluators": {
+    "local/qwen3": {
+      "task_completion": { "pass": 8, "total": 12, "rate": 0.6666666666666666, "missing": { "judge call failed": 1 } }
+    }
+  },
   "requirements": [
     { "evaluator": "task_completion", "model": "local/qwen3", "op": ">=", "threshold": 0.7,
-      "rate": 0.667, "pass": 8, "total": 12, "ok": false }
-  ]
+      "rate": 0.6666666666666666, "pass": 8, "total": 12, "ok": false }
+  ],
+  "allFailed": [],
+  "stored": true
 }
 ```
+
+- **Rates are not rounded** in `--json`; the table shows them as percentages.
+- **`missing`** appears for an evaluator when the judge gave no verdict for some examples: the count by reason. Those
+  examples count as not passing, and stderr says so, one line per evaluator and model:
+  `task_completion on local/qwen3: 1 of 12 had no verdict (judge call failed: 1)`.
+- **`allFailed`** lists the models whose every replay errored. Their pass rates checked nothing, so with `--ci` the run
+  exits 1 even with no `--require`, and stderr warns for each:
+  `Every replay against <model> failed; the pass rates above count them as not passing.`
+- **`stored`** is `false` when the record could not be appended to `experiments.jsonl` (stderr gives the error code,
+  never a path); the gate's result stands.
+- **A runner failure** (the replay itself breaks) prints `{ "ok": false, "error": "the replay failed" }` with
+  `--json`, the cause on stderr only, and exits 1.
 
 A finished CLI run is appended to the same `.data/experiments.jsonl`, so it shows under **Experiments**.
 
@@ -340,7 +369,8 @@ The hook needs no `--data` when it runs as the same user as the dashboard.
 | `.data/experiments.jsonl` | the experiment records (newest 100) |
 
 The `datasets` folder is mode 0700 and the files 0600 (not applied on Windows). Auto-add settings are in
-`config.json` under `datasets.autoAdd`. In demo mode (`--demo`) the views show synthetic data and nothing is written.
+`config.json` under `datasets.autoAdd`. In demo mode (`--demo`) the views show synthetic data and nothing is written
+to your data folder.
 
 ## HTTP API
 
@@ -351,17 +381,19 @@ All routes need the dashboard sign-in. A body is JSON (415 otherwise). Errors ar
 | `GET /api/datasets` | the datasets, the limits, and whether content is on |
 | `POST /api/datasets` | create `{ name, slug? }` |
 | `GET /api/datasets/<slug>` | the dataset and its examples |
+| `GET /api/datasets/<slug>?view=preview` | the light view the examples page and the Playground use: long input and output texts cut to their first 600 characters (such an example is marked `cut: true`), tool descriptions emptied, the reference whole; any other `view` is 400 |
 | `PUT /api/datasets/<slug>` | rename `{ name }` (the slug stays) |
 | `DELETE /api/datasets/<slug>` | delete it |
 | `POST /api/datasets/<slug>/examples` | add turns `{ items: [{ key, turn, span? }] }` (1 to 50); returns `added` and `skipped` with reasons; 403 with content off |
 | `PATCH /api/datasets/<slug>/examples/<id>` | set `{ reference }` (`null` removes it) and/or `{ tags }` |
 | `DELETE /api/datasets/<slug>/examples/<id>` | delete one example |
 | `GET /api/datasets/<slug>/export` | NDJSON, one example per line; 403 with content off |
-| `POST /api/datasets/import` | `{ slug, name?, jsonl }` (up to 16 MB); atomic; 400 with up to 20 `reasons` |
+| `POST /api/datasets/import` | `{ slug, name?, jsonl }` (up to 16 MB); atomic; 400 with up to 20 `reasons`; the reply has `links: { kept, dropped }` |
 | `GET /api/datasets/settings` · `POST` | the auto-add rule `{ autoAdd: { enabled, dataset, onFail, onBad } }` |
 | `GET /api/experiments` | the records (without outputs), the running one, the models and the evaluators |
-| `GET /api/experiments/<id>` | one record; while it runs, its progress |
+| `GET /api/experiments/<id>` | one record; while it runs, its progress (with `cancelling: true` once a stop was asked) |
 | `POST /api/experiments` | start a run `{ dataset, examples?, models, evaluators, maxCostUSD?, maxRequests?, preview?, confirm? }`; 202 with an id. `preview: true` returns, per external model, `{ model, messages, tools }` as they will be sent (masked) and a `confirm` token; an external model without it gets 428; a run already going gets 409 |
+| `POST /api/experiments/<id>/cancel` | stop the running run after the current call (body `{}`); 202 `{ id, status: "cancelling" }`, also when asked again; 409 when the run has already ended, 404 for an unknown run |
 
 ## Known limits
 
@@ -369,6 +401,4 @@ All routes need the dashboard sign-in. A body is JSON (415 otherwise). Errors ar
 - **No prompt management.** Replay sends what was recorded; there is no place to edit and compare prompts.
 - **No tool-running agent experiments.** Tools are declared and never run, so an agent loop is not replayed.
 - **No sharing with Phoenix or AX.** Datasets stay in ZAAFPulse.
-- **No stop button.** A run ends at its caps or when every example has run.
-- **The auto-add rule has no screen yet.** Use the API or `config.json`.
 - **Local models only in the CLI.** External models need the dashboard.

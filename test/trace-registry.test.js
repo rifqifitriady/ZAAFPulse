@@ -1450,3 +1450,31 @@ test('example: a text that fits the field comes back whole even when it needs tw
   assert.equal(ex.output.text, answer);
   assert.ok(!ex.output.text.includes(MARK));
 });
+
+// D-T2-3: a key at a page edge never shows raw. `half` is the page size readHeadTail uses for an answer
+// (EXAMPLE_FIELD / 2). Over 70,000 characters the head page ends at half (it stops before a key it would cut, so the
+// head key falls in the left-out middle) and the tail page starts at total − half, inside the tail key: the masking
+// of that second page is what hides the key's end. A key is planted 20 characters before each edge.
+test('example: a key cut by a head or tail page edge is masked, never shown raw', async () => {
+  const half = 65536 / 2;
+  const words = Array.from({ length: 7000 }, (_, i) => String(i % 10).repeat(9) + '|').join('');
+  assert.equal(words.length, 70000);
+  // Two different runtime-built keys, so each check knows which edge it is about.
+  const head = secret();
+  const tail = 'sk-' + 'ant-api03-' + Array.from({ length: 48 }, (_, i) => 'abcdefghijklmnopqrstuvwxyz0123456789'[(i * 5 + 1) % 36]).join('');
+  const plant = (text, at, k) => text.slice(0, at - 1) + ' ' + k + ' ' + text.slice(at + k.length + 1);
+  const answer = plant(plant(words, half - 20, head), words.length - half - 20, tail);
+  assert.equal(answer.length, 70000);
+  assert.equal(answer.indexOf(head), half - 20);
+  assert.equal(answer.indexOf(tail), answer.length - half - 20);
+  const { root, file } = tmpClaude([U('s5', '00', 'go'), A('s5', '01', 'm1', [{ type: 'text', text: answer }])], 's5');
+  const e = await tmpEntry(file);
+  const t = createTrace({ indexer: { entries: () => [e] }, light: [], roots: [root] });
+  const out = (await t.example(t.keyFor('claude', 's5'), 0)).output.text;
+  assert.match(out, /hidden›/);
+  for (const k of [head, tail]) {
+    assert.ok(!out.includes(k), 'never the whole key');
+    // Nor the part of it on either side of the edge.
+    assert.ok(!out.includes(k.slice(0, 20)) && !out.includes(k.slice(-20)), 'never a piece of the key');
+  }
+});
