@@ -8945,7 +8945,7 @@ label.mon-cand.on {
 }
 .topo-req-top {
   display: flex;
-  align-items: center;
+  align-items: flex-start; /* the path wraps; the dot and the time stay on its first line */
   gap: 7px;
   min-width: 0;
   font-size: 12.5px;
@@ -8956,9 +8956,6 @@ label.mon-cand.on {
   min-width: 0;
   /* Every path passes through ZAAFPulse, so it is long; it wraps rather than hide where the request went. */
   overflow-wrap: anywhere;
-}
-.topo-req-top {
-  align-items: flex-start;
 }
 .topo-req-ago {
   flex: none;
@@ -8976,6 +8973,7 @@ label.mon-cand.on {
 }
 .topo-rdot {
   flex: none;
+  margin-top: 5px;
   width: 7px;
   height: 7px;
   border-radius: 50%;
