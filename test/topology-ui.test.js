@@ -85,8 +85,9 @@ test('topoMetaText and topoAgo', () => {
 });
 
 // A tiny stand-in for `document` that records how nodes are filled and refuses innerHTML. With `icons`, a node's icon
-// group (the one place the app's own icon markup goes) records it instead.
-function fakeDoc({ icons = false } = {}) {
+// group (the one place the app's own icon markup goes) records it instead. With `events`, elements keep their
+// listeners in `on`, so a test can fire them.
+function fakeDoc({ icons = false, events = false } = {}) {
   const el = (tag, ns = null) => {
     const node = { tag, ns, children: [], className: '', attrs: {}, textContent: '' };
     node.appendChild = (c) => (node.children.push(c), (c.parent = node), c);
@@ -97,6 +98,13 @@ function fakeDoc({ icons = false } = {}) {
     };
     node.setAttribute = (k, v) => (node.attrs[k] = String(v));
     node.removeAttribute = (k) => delete node.attrs[k];
+    if (events) {
+      node.on = {};
+      node.addEventListener = (type, fn) => (node.on[type] = fn);
+      node.classList = { add() {}, remove() {} };
+      node.setPointerCapture = () => {};
+      node.getBoundingClientRect = () => ({ width: 880, height: 400 });
+    }
     Object.defineProperty(node, 'innerHTML', {
       get: () => node.html,
       set(v) {
@@ -404,6 +412,33 @@ test('topoMount: a failed first load, a good load, a tick, a paint that throws, 
     b.remove();
     process.off('unhandledRejection', onRejection);
   }
+});
+
+test('a drag that ended off the graph does not swallow the next click', () => {
+  const doc = fakeDoc({ events: true });
+  const root = doc.createElement('div');
+  const ui = {};
+  topoPaint(doc, root, DATA, ui);
+  const svg = ui.els.svg;
+  const at = (x) => ({ button: 0, clientX: x, clientY: 0, pointerId: 1 });
+  const onNode = {
+    target: { closest: (sel) => (sel === '[data-topo-node]' ? { getAttribute: () => 'claude' } : null) },
+  };
+  // A drag: its own click is swallowed.
+  svg.on.pointerdown(at(0));
+  svg.on.pointermove(at(40));
+  svg.on.pointerup(at(40));
+  svg.on.click(onNode);
+  assert.equal(ui.sel, null, 'the click that ends a drag selects nothing');
+  // A drag released off the graph: no click follows it.
+  svg.on.pointerdown(at(0));
+  svg.on.pointermove(at(40));
+  svg.on.pointerup(at(40));
+  // The next plain click selects its node.
+  svg.on.pointerdown(at(100));
+  svg.on.pointerup(at(100));
+  svg.on.click(onNode);
+  assert.deepEqual(ui.sel, { kind: 'node', id: 'claude' });
 });
 
 test('topologyview.js builds no HTML from server text (S1)', () => {
