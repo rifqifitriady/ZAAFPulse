@@ -70,14 +70,26 @@ test('owner entries: a valid entry gets its start command, a default health URL 
   assert.ok(e.match(row('/opt/homebrew/bin/llama-server -m /models/qwen.gguf --port 8081')));
   assert.ok(!e.match(row('/opt/homebrew/bin/llama-server -m /models/other.gguf --port 8082')), 'another port');
   assert.ok(!e.match(row('/usr/bin/python3 -m http.server 8081')), 'another program');
-  const spaced = '/opt/my tools/llama-server --port 8081';
-  assert.ok(e.match(row(spaced, ['/opt/my tools/llama-server', '--port', '8081'])), 'argv[0] when the row has one');
+  assert.ok(!e.match(row('/opt/homebrew/bin/llama-server -m /models/other.gguf --port 8081')), 'another model on the port');
+  const spaced = '/opt/my tools/llama-server -m /models/qwen.gguf --port 8081';
+  const argv = ['/opt/my tools/llama-server', '-m', '/models/qwen.gguf', '--port', '8081'];
+  assert.ok(e.match(row(spaced, argv)), 'argv[0] when the row has one');
   assert.ok(!e.match(row(spaced)), 'without argv the first word is the program');
   const [h] = ownerEntries([{ ...QWEN, health: 'http://localhost:8081/health' }]);
   assert.equal(h.health, 'http://localhost:8081/health');
   assert.deepEqual(entries([QWEN]).map((x) => x.id), ['ollama', 'lmstudio', 'llamacpp', 'jan', 'localai', 'qwen-local']);
   assert.deepEqual(entries(undefined).length, 5);
   assert.deepEqual(entries({ not: 'a list' }).length, 5);
+});
+
+test('owner entries: a command that names its port also needs its other arguments, so a stranger on that number does not match', () => {
+  const [vllm] = ownerEntries([{ id: 'vllm', command: ['python3', '-m', 'vllm.entrypoints.openai.api_server', '--port', '8000'], port: 8000 }]);
+  assert.ok(vllm.match(row('/usr/bin/python3 -m vllm.entrypoints.openai.api_server --port 8000')));
+  assert.ok(vllm.match(row('/usr/bin/python3 -m vllm.entrypoints.openai.api_server --port 8000 --dtype auto')), 'extra arguments');
+  assert.ok(!vllm.match(row('/usr/bin/python3 train.py --steps 8000')), 'another script with the number');
+  const [a] = ownerEntries([{ id: 'a', command: ['node', '/srv/a.js', '--max', '3000'], port: 3000 }]);
+  assert.ok(a.match(row('node /srv/a.js --max 3000', ['node', '/srv/a.js', '--max', '3000'])));
+  assert.ok(!a.match(row('node /other/b.js --x 3000', ['node', '/other/b.js', '--x', '3000'])), 'another script');
 });
 
 test('owner entries: a command without its port matches only the same program with the same arguments', () => {

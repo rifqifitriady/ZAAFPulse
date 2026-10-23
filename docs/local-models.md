@@ -70,11 +70,11 @@ Add a server of your own in **Settings → Local models**, for example `llama-se
 | `name` | shown on the card (optional) |
 | `command` | the program and its arguments, one string each, at most 1,000 characters each. In Settings you type one argument per line, and Settings turns `~/` at the start of an argument into your home folder when you save. In a `config.json` edited by hand, use absolute paths: `~/` is not expanded there |
 | `port` | 1 to 65535 |
-| `health` | optional. Must be an `http://` URL on this machine. Left out, the server is checked at `http://127.0.0.1:<port>/`. That default is not stored: it follows the port, so changing the port moves it too. Settings shows the URL that is checked, and **Edit** leaves the field empty unless you typed one |
+| `health` | optional. Must be an `http://` URL on this machine. Left out, the server is checked at `http://127.0.0.1:<port>/`. That default is not stored: it follows the port, so changing the port moves it too. Settings shows the URL that is checked, and **Edit** leaves the field empty unless you typed one. A URL you typed that is exactly the default is treated as the default, and follows the port too |
 
 An entry that is not valid is listed with the reason and cannot start.
 
-**A `config.json` that does not parse is refused, not overwritten.** Saving or deleting in Settings reads `config.json` again first. If the file has a syntax error (a trailing comma after a hand edit, say), the change is refused with 500 "the settings could not be saved" and the file is left as it is. Fix the file, then save again. The file is written to a private temp file (mode 0600) first and then renamed into place.
+**A `config.json` that does not parse is refused, not overwritten.** Saving or deleting in Settings reads `config.json` again first. If the file has a syntax error (a trailing comma after a hand edit, say), adding an entry is refused with 500 "the settings could not be saved"; editing or deleting one answers 404 "unknown entry", because no entries can be read. Either way the file is left as it is. Fix the file, then save again. The file is written to a private temp file (mode 0600) first and then renamed into place.
 
 **Approve before it runs.** An entry starts only after you press **Approve** in Settings, and it can be stopped from the dashboard only while it is approved. The approval is stored in `.data/runtimes/approved.json` as a hash of the command, the port and the health URL. Editing any of the three drops the approval, so the entry asks again. Deleting an entry deletes its approval. A command typed into `config.json` by hand also needs the approval in the dashboard.
 
@@ -82,8 +82,8 @@ An entry that is not valid is listed with the reason and cannot start.
 
 Your entry's server is found by its program name, and then:
 
-- **The command names the port** (`--port 8081`, `--port=8081`, `host:8081`): the process must name that port too, whatever its other arguments. Two `llama-server` entries on different ports are told apart.
-- **The command does not name the port**: the process's arguments after the program must be exactly the command's. `["python3", "serve.py"]` matches `python3 serve.py`, but not `python3 manage.py runserver` or any other `python3` on the machine, so Stop never reaches an unrelated process. A server you start with other arguments by hand is then not shown as this entry.
+- **The command names the port** (`--port 8081`, `--port=8081`, `host:8081`): the process must name that port too and carry every other argument of the command; extra arguments are allowed. Two `llama-server` entries on different ports, or with different models, are told apart, and `python3 train.py --steps 8000` is not a vllm entry on port 8000.
+- **The command does not name the port**: the process's arguments after the program must be exactly the command's. `["python3", "serve.py"]` matches `python3 serve.py`, but not `python3 manage.py runserver` or any other `python3` with a different command line, so Stop does not reach an unrelated process. A server you start with other arguments by hand is then not shown as this entry.
 
 Putting the port in the command, when the server takes one, is the more reliable of the two.
 
