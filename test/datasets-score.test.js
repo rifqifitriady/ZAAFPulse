@@ -225,3 +225,54 @@ test('summary: mean ms of answered rows, proposals, and a model with no rows', (
     evaluators: { relevance: { pass: 0, total: 0, rate: null } },
   });
 });
+
+// D-F-3: a verdict the judge could not give is still null, but the row keeps why, and the summary counts the reasons.
+test('a judge that gives no verdict leaves its reason on the row and in the summary', async () => {
+  let n = 0;
+  const judge = async (id) =>
+    n++ === 0 ? { ok: true, label: R.get(id).pass, score: 1, pass: true } : { ok: false, reason: 'daily cap' };
+  const examples = ['a', 'b', 'c'].map((id) => example({ id }));
+  const per = [];
+  for (const ex of examples) {
+    const row = { ...result('Fixed it.'), exampleId: ex.id, labels: {} };
+    row.labels = await S.scoreResult({
+      example: ex,
+      result: row,
+      evaluators: ['task_completion', 'secret_leak'],
+      judge,
+      row,
+    });
+    per.push(row);
+  }
+  assert.equal(per[0].missing, undefined);
+  assert.equal(per[1].labels.task_completion, null);
+  assert.deepEqual(per[1].missing, { task_completion: 'daily cap' });
+  const s = S.summarize(per, { models: ['local/qwen3'], evaluators: ['task_completion', 'secret_leak'], examples });
+  assert.deepEqual(s.models['local/qwen3'].evaluators.task_completion, {
+    pass: 1,
+    total: 3,
+    rate: 1 / 3,
+    missing: { 'daily cap': 2 },
+  });
+  assert.equal('missing' in s.models['local/qwen3'].evaluators.secret_leak, false, 'a code evaluator has none');
+  // A reply without a reason (or a judge that threw) is "no verdict"; a long reason is cut to 60 characters.
+  const bare = { ...result('x'), labels: {} };
+  await S.scoreResult({
+    example: example(),
+    result: bare,
+    evaluators: ['relevance'],
+    judge: async () => null,
+    row: bare,
+  });
+  assert.deepEqual(bare.missing, { relevance: 'no verdict' });
+  const long = { ...result('x'), labels: {} };
+  const reason = 'r'.repeat(80);
+  await S.scoreResult({
+    example: example(),
+    result: long,
+    evaluators: ['relevance'],
+    judge: async () => ({ ok: false, reason }),
+    row: long,
+  });
+  assert.equal(long.missing.relevance, 'r'.repeat(60));
+});

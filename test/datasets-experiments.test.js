@@ -148,3 +148,35 @@ test('a record is bounded: texts get shorter, then results are dropped; the summ
   assert.equal(store.append(c), c);
   for (const line of fs.readFileSync(file, 'utf8').trim().split('\n')) assert.ok(Buffer.byteLength(line) <= 60000);
 });
+
+// D-T3-2: the trim slices the buffer it just read, never the cached offsets of an older read. Here another writer
+// lengthened a record between the cached parse and the trim's read.
+test('a trim keeps whole lines when another writer changed the file since the last parse', () => {
+  const file = path.join(tmp(), '.data', 'experiments.jsonl');
+  const store = createExperimentStore({ file, max: 4 });
+  const ids = (k) => Array.from({ length: k }, (_, i) => `x${i}`);
+  for (let n = 1; n <= 4; n++) store.append(record(n, ids(n * 3)));
+  store.list(); // the cache now holds this file's line offsets
+  const real = fs.readFileSync;
+  let swapped = 0;
+  fs.readFileSync = function (target, ...rest) {
+    const buf = real.call(this, target, ...rest);
+    if (target !== file || swapped++) return buf;
+    // What the other writer left: record 2 (kept by the trim) is now much longer, so every later line moved.
+    const lines = buf.toString('utf8').split('\n');
+    lines[1] = JSON.stringify(record(2, ids(40)));
+    return Buffer.from(lines.join('\n'));
+  };
+  try {
+    store.append(record(5, ['a']));
+  } finally {
+    fs.readFileSync = real;
+  }
+  assert.equal(swapped, 1, 'the trim read the file once');
+  const lines = fs.readFileSync(file, 'utf8').trim().split('\n');
+  const kept = lines.map((l) => JSON.parse(l).id);
+  assert.deepEqual(
+    kept,
+    [2, 3, 4, 5].map((n) => `exp_000000000000000${n}`),
+  );
+});

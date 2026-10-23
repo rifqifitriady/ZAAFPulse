@@ -15,7 +15,20 @@ const {
   monActionError,
   monSameProc,
   pausedEntryFor,
+  monWriteHtml,
+  monAlertsBody,
+  monAgentHtml,
+  monAfterAction,
+  monParamShown,
+  monRuleCard,
 } = require('../public/monitorsview');
+
+// The page's esc() lives in public/app.js; the helpers that build markup call it, so the tests give them the same one.
+global.esc = (v) =>
+  String(v ?? '').replace(
+    /[&<>"']/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
+  );
 
 const SRC = path.join(__dirname, '..', 'public', 'monitorsview.js');
 const RULES = [
@@ -249,4 +262,147 @@ test('monSameProc and pausedEntryFor: a start time a second apart is the same pa
   assert.equal(pausedEntryFor(cand, [{ ...paused[0], startTime: 1_005_000 }]), null);
   assert.equal(pausedEntryFor({ ...cand, paused: true }, []).pid, 4242, 'the candidate says so itself');
   assert.equal(pausedEntryFor(null, paused), null);
+});
+
+// A repaint rewrites the drawer or the trace panel every few seconds; keyboard focus must survive it (M-T7-1).
+test('monWriteHtml: writes only changed HTML, and gives focus back to the same control after a write', () => {
+  const active = { getAttribute: (n) => (n === 'data-mon-act' ? 'stop' : null) };
+  const target = {
+    calls: 0,
+    focus() {
+      this.calls++;
+    },
+  };
+  let html = '';
+  let writes = 0;
+  const el = {
+    get innerHTML() {
+      return html;
+    },
+    set innerHTML(v) {
+      html = v;
+      writes++;
+    },
+    contains: (x) => x === active,
+    querySelector: (sel) => (sel === '[data-mon-act="stop"]' ? target : null),
+  };
+  const saved = global.document;
+  global.document = { activeElement: active };
+  try {
+    monWriteHtml(el, '<button data-mon-act="stop">Stop</button>');
+    monWriteHtml(el, '<button data-mon-act="stop">Stop</button>');
+    assert.equal(writes, 1, 'the same HTML is not written again');
+    target.calls = 0;
+    monWriteHtml(el, '<span>Stopping…</span><button data-mon-act="stop">Stop</button>');
+    assert.equal(writes, 2);
+    assert.equal(target.calls, 1, 'focus goes back to the new Stop button');
+  } finally {
+    if (saved === undefined) delete global.document;
+    else global.document = saved;
+  }
+});
+
+// A failed poll used to leave "Reading the alerts…" up for good (M-T7-2).
+test('monAlertsBody: a failed first read and a failed refresh say so', () => {
+  const first = monAlertsBody({ alerts: [], loaded: false, error: 'boom', readAt: null });
+  assert.match(first, /Could not read the alerts: boom\. Trying again every 15 s\./);
+  const later = monAlertsBody({ alerts: [], loaded: true, error: 'boom', readAt: Date.UTC(2026, 9, 22, 9, 5) });
+  assert.match(later, /Could not refresh the alerts \(boom\)/);
+  assert.match(later, /These are the alerts read at \d\d:\d\d\./);
+  assert.doesNotMatch(monAlertsBody({ alerts: [], loaded: true, error: '', readAt: 1 }), /Could not/);
+  assert.match(monAlertsBody({ alerts: [], loaded: false, error: '', readAt: null }), /Reading the alerts/);
+  assert.match(monAlertsBody({ alerts: [], loaded: false, error: '<b>x</b>' }), /&lt;b&gt;x&lt;\/b&gt;/, 'as text');
+});
+
+// The trace explorer said nothing when a session had no process; it now says why, except for gateway sessions (M-T7-3).
+test('monAgentHtml inline: why a session has no agent process, and quiet for sessions that have none', () => {
+  const t = (reason) => ({ loading: false, off: false, error: '', cands: [], canPause: true, reason, busy: '' });
+  assert.match(monAgentHtml(t('not-indexed'), 'inline'), /not in the index yet/);
+  assert.match(monAgentHtml(t('none'), 'inline'), /No running agent process matches/);
+  assert.match(monAgentHtml(t(null), 'inline'), /No running agent process matches/);
+  assert.equal(monAgentHtml(t('unsupported'), 'inline'), '');
+  assert.equal(
+    monAgentHtml({ ...t('unsupported'), canPause: false }, 'inline'),
+    '',
+    'a gateway session on Windows too',
+  );
+});
+
+// A Stop whose process was still there (SIGTERM sent, or not checked) took the process off the list (M-T7-4).
+test('monAfterAction: a stop removes the process only when it exited; a demo answer changes nothing', () => {
+  const run = (action, r) => {
+    const c = { pid: 9, startTime: 1, paused: false };
+    const t = { cands: [c, { pid: 10, startTime: 1 }] };
+    monAfterAction(t, c, action, r);
+    return { t, c };
+  };
+  assert.equal(run('stop', { exited: false }).t.cands.length, 2, 'still running after SIGTERM');
+  assert.equal(run('stop', { exited: null }).t.cands.length, 2, 'could not be checked');
+  assert.deepEqual(
+    run('stop', { exited: true }).t.cands.map((x) => x.pid),
+    [10],
+  );
+  assert.equal(run('stop', { demo: true, exited: true }).t.cands.length, 2);
+  assert.equal(run('pause', {}).c.paused, true);
+  assert.equal(run('pause', { demo: true }).c.paused, false);
+  const resumed = run('resume', {}).c;
+  assert.equal(resumed.paused, false);
+  // The server continues a paused process (SIGCONT) before it handles the interrupt, so one a Stop did not end runs.
+  const stopPaused = (r) => {
+    const c = { pid: 9, startTime: 1, paused: true };
+    monAfterAction({ cands: [c] }, c, 'stop', r);
+    return c.paused;
+  };
+  assert.equal(stopPaused({ signal: 'SIGTERM', exited: false }), false, 'asked to quit and still running');
+  assert.equal(stopPaused({ signal: 'SIGINT', exited: null }), false, 'not checked, but continued');
+  assert.equal(stopPaused({ demo: true, exited: false }), true, 'a demo answer changes nothing');
+});
+
+// A refused parameter stayed in the input as if saved (M-T7-5); it goes back to what the card shows for the saved rule.
+test('monParamShown: the saved value as the input shows it', () => {
+  assert.equal(monParamShown({ params: { minPassRate: 0.8 } }, 'minPassRate'), '80');
+  assert.equal(monParamShown({ params: { minPassRate: 0.755 } }, 'minPassRate'), '75.5');
+  assert.equal(monParamShown({ params: { maxUSD: 7.5 } }, 'maxUSD'), '7.5');
+  assert.equal(monParamShown({ params: { maxUSD: null } }, 'maxUSD'), '', 'the default: empty, with a placeholder');
+  assert.equal(monParamShown({}, 'maxUSD'), '');
+  assert.equal(monParamShown(null, 'maxUSD'), '');
+});
+
+// maxCalls is not measured, so it has no input that looks like it works (M-T5-4).
+test('monRuleCard: tool_loop has no maxCalls input and says the call count is not measured', () => {
+  const rule = {
+    id: 'tool_loop',
+    title: 'Tool loop',
+    describe: 'A session loops',
+    enabled: true,
+    state: 'ok',
+    kind: 'live',
+    instances: [],
+    params: { maxCalls: null },
+    defaults: { maxCalls: 50 },
+    mayAutoPause: true,
+  };
+  const html = monRuleCard(rule, { pause: true });
+  assert.doesNotMatch(html, /data-mon-param="maxCalls"/);
+  assert.match(html, /not measured yet/);
+  const cost = monRuleCard(
+    { ...rule, id: 'cost_burn', title: 'Cost burn', params: { maxUSD: 5 }, defaults: { maxUSD: 5 } },
+    { pause: true },
+  );
+  assert.match(cost, /data-mon-param="maxUSD"/, 'other parameters keep their input');
+  assert.doesNotMatch(cost, /not measured yet/);
+});
+
+test('monAgentNote: control off without sign-in names ZAAFPULSE_AUTH=none', () => {
+  const s = monAgentNote({ available: false, off: 'no-sign-in' });
+  assert.match(s, /ZAAFPULSE_AUTH=none/);
+  assert.match(s, /without sign-in/);
+  assert.doesNotMatch(s, /server mode/);
+  const none = { ...change(), action: 'pause', ok: false, code: 'none' };
+  delete none.state;
+  delete none.previous;
+  assert.equal(
+    alertLine(none, RULES, { available: false, reason: 'no-sign-in' }).change,
+    'Could not pause the agent: agent control is off without a dashboard sign-in',
+  );
 });

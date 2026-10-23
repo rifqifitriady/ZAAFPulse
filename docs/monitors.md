@@ -28,6 +28,8 @@ Notes:
 - `eval_pass_rate` looks at the worst evaluator that has at least `minSamples` results. Evaluators with fewer are ignored.
 - `unsafe_content` counts a secret leak, or a prompt injection that came from outside (a tool result or a file, not from you).
 - A rule whose input is missing reports `no_data`. It never triggers on missing data.
+- A live session that has not been seen for a minute (it ended or went idle) leaves the rule card and the counts; its alerts stay in the history.
+- The live check is skipped while no live rule and no auto-pause is on.
 
 ## States and alerts
 
@@ -104,7 +106,7 @@ Details:
 - Claude Code may treat the first `SIGINT` as "interrupt the current turn" and not exit. That is why Stop follows with `SIGTERM`.
 - On Windows `taskkill` without `/F` asks the app to close. Console apps may not. Then the API answers 502 and the dashboard tells you to close the app from its own window.
 - Stop needs an explicit confirmation. A paused (`SIGSTOP`) process is continued with `SIGCONT` right after the `SIGINT` so it can handle the signal. The `SIGCONT` gets its own audit line, with a note that says why.
-- **A paused agent is never resumed or stopped automatically.** You resume it.
+- **A paused agent is never resumed or stopped automatically.** Only you resume or stop it.
 
 ### Safety checks
 
@@ -121,6 +123,8 @@ Every action, refused or not, is written to `.data/agent-audit.jsonl` (mode 0600
 
 A session is linked to a process by app, working folder and start time: a process of the session's own app (Claude Code for a Claude Code session, Codex for a Codex one), whose program is that app's own binary, whose working folder matches the session's, and which started before the session's first log line. The program is matched by its exact name (`claude` or `codex`, or the script node runs), read from the process's own argument list, so a path with spaces is read whole. Claude Code started by the Claude desktop app counts. A command line that only mentions the app (a dev server under `~/code/codex-clone`, the ChatGPT app's Codex helpers) or a launcher that wraps the agent is not a candidate. If exactly one process matches, it is the target. If none or several match, nothing is paused and you are told which. The dashboard never guesses.
 
+An npm-installed Codex runs as a node wrapper and a native codex process; both match, so you choose, and auto-pause reports "several" instead of acting. On macOS a node script whose path holds a space is not matched (no candidate).
+
 On macOS the working folder comes from `lsof`, on Linux from `/proc`. On Windows the working folder of a process is not available, so there are **no candidates** and sessions cannot be linked to processes there.
 
 ### Auto-pause
@@ -135,9 +139,10 @@ Agent control is off, and the dashboard explains why instead of offering the but
 
 - the server runs in **server mode**;
 - the dashboard uses **password sign-in**, which includes a reverse proxy, a public URL and `ZAAFPULSE_AUTH=1`;
+- the dashboard runs **without sign-in** (`ZAAFPULSE_AUTH=none`): any program on this machine could use it, so it may not signal agents;
 - ZAAFPulse runs in **Docker** (found by `/.dockerenv` or the container's cgroups).
 
-`GET /api/monitors/status` then reports `agents.available: false` and `agents.reason` as `server` or `docker`. Turning on auto-pause is refused too (409), and a no-candidate pause is worded for that case. In demo mode the controls are shown, but nothing is signalled.
+`GET /api/monitors/status` then reports `agents.available: false` and `agents.reason` as `server`, `no-sign-in` or `docker`. Turning on auto-pause is refused too (409), and a no-candidate pause is worded for that case. In demo mode the controls are shown, but nothing is signalled.
 
 No MCP tool controls agents. The MCP server cannot pause, resume or stop anything.
 
@@ -166,12 +171,12 @@ All routes are behind the dashboard sign-in. They are never open to gateway API 
 
 ## Known limits
 
-- **Too many tool calls in one turn does not fire.** The `tool_loop` rule currently triggers only on loop signals the index finds. The per-turn call count is not measured yet, so `maxCalls` has no effect.
+- **Too many tool calls in one turn does not fire.** The `tool_loop` rule currently triggers only on loop signals the index finds. The per-turn call count is not measured yet, so `maxCalls` has no effect. Settings shows no input for it; the API still accepts it.
 - **Quiet starts.** `month_projection` stays `no_data` for the first three days of a month, and `accuracy_drop` until today and the previous 7 days each have 20 tool results (`minSamples`).
 - **No statistical detection.** The rules compare numbers to limits. They do not learn a baseline.
 - **Local only.** Agents on other machines, and remote paging, are out of scope.
 - **Windows:** no pause, no resume, and no session-to-process link. Stop may fail on console apps.
 - **Cost burn lags** by up to about a minute (see [Near-live](#near-live)).
-- **Control is off** in server mode, with password sign-in and in Docker.
-- **Pause is not undone** by anything but you.
+- **Control is off** in server mode, with password sign-in, without sign-in (`ZAAFPULSE_AUTH=none`) and in Docker.
+- **A paused agent is never resumed or stopped automatically**; only you resume or stop it.
 - **One process per session.** If two agents share a folder and start time, ZAAFPulse will not choose.

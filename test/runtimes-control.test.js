@@ -8,7 +8,7 @@ const { EventEmitter } = require('events');
 const { spawn: realSpawn } = require('child_process');
 const { entries, commandHash } = require('../lib/runtimes/registry');
 const { createRuntimeState, jsonFile } = require('../lib/runtimes/state');
-const { createRuntimeControl } = require('../lib/runtimes/control');
+const { createRuntimeControl, OFF_TEXT } = require('../lib/runtimes/control');
 
 const POSIX = process.platform !== 'win32';
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
@@ -224,7 +224,7 @@ test('a command that cannot be spawned is a 502', async (t) => {
   assert.deepEqual(s.started.read(), {});
 });
 
-test('refusals: unknown, unapproved, server mode, Docker, not installed; each is audited', async (t) => {
+test('refusals: unknown, unapproved, server mode, no sign-in, Docker, not installed; each is audited', async (t) => {
   const s = await realSetup({ approve: false });
   t.after(s.cleanup);
   await rejects(s.ctl.start('nope'), 404, /unknown runtime/);
@@ -251,6 +251,15 @@ test('refusals: unknown, unapproved, server mode, Docker, not installed; each is
   const off = (await server.ctl.list())[0];
   assert.equal(off.canStart, false);
   assert.equal(off.reason, 'runtime control is off on this server');
+  // Without sign-in the reason is kept, so the card does not say "on this server" on a laptop.
+  const none = await realSetup({ extra: { serverMode: 'no-sign-in' } });
+  t.after(none.cleanup);
+  assert.equal(none.ctl.offReason(), 'no-sign-in');
+  await rejects(none.ctl.start('fake-rt'), 403, /without sign-in/);
+  await rejects(none.ctl.stop({ id: 'fake-rt', pid: 4242, startTime: 1 }), 403, /without sign-in/);
+  await rejects(none.ctl.approve('fake-rt'), 403, /without sign-in/);
+  assert.equal((await none.ctl.list())[0].reason, OFF_TEXT['no-sign-in']);
+  assert.equal(server.ctl.offReason(), 'server');
   const docker = await realSetup({ extra: { inDocker: true } });
   t.after(docker.cleanup);
   await rejects(docker.ctl.start('fake-rt'), 403, /off in Docker/);
@@ -259,7 +268,7 @@ test('refusals: unknown, unapproved, server mode, Docker, not installed; each is
   missing.config[0].command = [path.join(os.tmpdir(), 'zp-no-such-runtime'), '--port', String(missing.port)];
   missing.approvals.write({ 'fake-rt': commandHash(missing.config[0]) });
   await rejects(missing.ctl.start('fake-rt'), 409, /not installed/);
-  for (const a of [s, server, docker, missing])
+  for (const a of [s, server, none, docker, missing])
     for (const l of a.audit.lines) {
       assert.equal(l.kind, 'runtime');
       assert.equal(l.by, 'owner');
