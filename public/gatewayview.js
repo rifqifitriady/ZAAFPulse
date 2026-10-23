@@ -2318,9 +2318,11 @@ document.addEventListener('change', (e) => {
 document.addEventListener('submit', (e) => {
   if (!GW_ROUTES.includes(state.route)) return;
   const f = e.target;
+  // The attribute, not f.id: a control named "id" (providers, agents, knowledge bases, workflows) shadows f.id.
+  const fid = f.getAttribute('id');
   e.preventDefault();
   const v = (n) => (f[n] ? f[n].value : '');
-  if (f.id === 'gw-key-form')
+  if (fid === 'gw-key-form')
     gwAct(async () => {
       const r = await gwPost('keys', {
         action: 'create',
@@ -2345,7 +2347,7 @@ document.addEventListener('submit', (e) => {
       gwMaskTimer = setTimeout(forgetSecret, 60000);
       await refreshGateway();
     });
-  if (f.id === 'gw-prov-form')
+  if (fid === 'gw-prov-form')
     gwAct(async () => {
       let aliases = {};
       try {
@@ -2396,12 +2398,12 @@ document.addEventListener('submit', (e) => {
           ? `<b class="good-text">Connected · ${r.test.models} models · ${msFmt(r.test.latencyMs)}</b>`
           : `<code class="ie-err">${esc(r.test.error)}</code>`;
     });
-  if (f.id === 'gw-defaults')
+  if (fid === 'gw-defaults')
     gwAct(async () => {
       await gwPost('defaults', { model: v('model'), plannerModel: v('plannerModel') });
       await refreshGateway();
     });
-  if (f.id === 'gw-agent-form')
+  if (fid === 'gw-agent-form')
     gwAct(async () => {
       const r = await gwPost('agents', {
         action: 'save',
@@ -2427,7 +2429,7 @@ document.addEventListener('submit', (e) => {
       gw.editingAgent = null;
       await refreshGateway();
     });
-  if (f.id === 'gw-route-form')
+  if (fid === 'gw-route-form')
     gwAct(async () => {
       const r = await gwPost('routes', {
         action: 'save',
@@ -2444,7 +2446,7 @@ document.addEventListener('submit', (e) => {
       gw.editingRoute = null;
       await refreshGateway();
     });
-  if (f.id === 'gw-kb-form')
+  if (fid === 'gw-kb-form')
     gwAct(async () => {
       const r = await gwPost('knowledge', {
         action: 'create',
@@ -2459,7 +2461,7 @@ document.addEventListener('submit', (e) => {
       }
       await refreshGateway();
     });
-  if (f.id === 'gw-kb-ingest')
+  if (fid === 'gw-kb-ingest')
     gwAct(async () => {
       const msg = $('#gw-kb-msg');
       msg.innerHTML = '<span class="muted">Ingesting…</span>';
@@ -2505,14 +2507,14 @@ document.addEventListener('submit', (e) => {
       if (m2)
         m2.innerHTML = `<b class="good-text">Added "${esc(r.doc.title)}": ${r.doc.chunks} chunks, ${r.embedded} embedded.</b>${r.warning ? `<small class="block muted">${esc(r.warning)}</small>` : ''}`;
     });
-  if (f.id === 'gw-kb-search')
+  if (fid === 'gw-kb-search')
     gwAct(async () => {
       const q = v('q');
       const r = await gwPost('knowledge', { action: 'search', id: gw.kbOpen.id, query: q, k: 6 });
       gw.kbSearch = { q, ...r };
       paintGateway();
     });
-  if (f.id === 'gw-wf-form')
+  if (fid === 'gw-wf-form')
     gwAct(async () => {
       const steps = gw.editingWf.steps.map((st, i) => ({
         agent: f[`agent-${i}`].value,
@@ -2553,7 +2555,7 @@ document.addEventListener('submit', (e) => {
       })
       .finally(() => paintGateway());
   }
-  if (f.id === 'a2a-form') {
+  if (fid === 'a2a-form') {
     a2aSync();
     const c = gw.collab;
     if (!c.task.trim()) return;
@@ -2589,7 +2591,7 @@ document.addEventListener('submit', (e) => {
       watchRun(r.run.id);
     });
   }
-  if (f.id === 'gw-tool-model')
+  if (fid === 'gw-tool-model')
     gwAct(async () => {
       gw.toolModel = v('model').trim();
       await gwPost('defaults', {
@@ -2599,7 +2601,7 @@ document.addEventListener('submit', (e) => {
       });
       await refreshGateway();
     });
-  if (f.id === 'gw-map-form')
+  if (fid === 'gw-map-form')
     gwAct(async () => {
       const n = (gw.editMap || gw.data.settings.modelMap || []).length;
       const modelMap = [];
@@ -2613,13 +2615,13 @@ document.addEventListener('submit', (e) => {
       gw.editMap = null;
       await refreshGateway();
     });
-  if (f.id === 'gw-mem-form')
+  if (fid === 'gw-mem-form')
     gwAct(async () => {
       await gwPost('memory', { action: 'save', text: v('text'), scope: v('scope') });
       await refreshGateway();
     });
-  if (f.id === 'gw-pg-form' && gw.pg.mode === 'dataset') return void dsPlaygroundAct(e, gw.pg, paintGateway);
-  if (f.id === 'gw-pg-form') {
+  if (fid === 'gw-pg-form' && gw.pg.mode === 'dataset') return void dsPlaygroundAct(e, gw.pg, paintGateway);
+  if (fid === 'gw-pg-form') {
     gw.pg.input = v('input');
     if (f.agent) gw.pg.agent = f.agent.value;
     if (f.model) gw.pg.model = f.model.value;
