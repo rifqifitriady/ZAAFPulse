@@ -298,3 +298,66 @@ test('getJson and postJson never throw', async () => {
   assert.equal(await getJson('http://127.0.0.1:1/x', 500), null);
   assert.equal(await postJson('not a url', {}, 500), null);
 });
+
+test('observe does not shrink the saved list while a reload is loading', async () => {
+  let release;
+  const gate = new Promise((r) => (release = r));
+  let seen = ['a', 'b', 'c'];
+  const m = mem({
+    getJson: async () => ({ models: seen.map((name) => ({ name })) }),
+    postJson: async () => (await gate, { status: 200, body: {} }),
+  });
+  await m.observe(ollama());
+  m.reload(ollama());
+  seen = ['a'];
+  assert.deepEqual(await m.observe(ollama()), ['a']); // still returns what it read
+  assert.deepEqual(m.remembered('ollama'), ['a', 'b', 'c']);
+  release();
+  while (m.status('ollama').loading) await tick();
+  await m.observe(ollama());
+  assert.deepEqual(m.remembered('ollama'), ['a']); // saves again once the reload is over
+});
+
+// getJson against a server that misbehaves: each must resolve null within the timeout.
+async function misbehaving(t, handler) {
+  const sockets = new Set();
+  const srv = http.createServer(handler);
+  srv.on('connection', (s) => (sockets.add(s), s.on('close', () => sockets.delete(s))));
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  t.after(() => {
+    for (const s of sockets) s.destroy();
+    srv.close();
+  });
+  return `http://127.0.0.1:${srv.address().port}/x`;
+}
+
+test('getJson gives null for an endless body bigger than the limit', async (t) => {
+  const u = await misbehaving(t, (req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    const chunk = Buffer.alloc(64 * 1024, 32);
+    const timer = setInterval(() => res.write(chunk), 1);
+    res.on('close', () => clearInterval(timer));
+  });
+  const t0 = Date.now();
+  assert.equal(await getJson(u, 2000), null);
+  assert.ok(Date.now() - t0 < 1900, 'ended by the size limit, not the timeout');
+});
+
+test('getJson gives null when the socket is destroyed mid-body', async (t) => {
+  const u = await misbehaving(t, (req, res) => {
+    res.writeHead(200, { 'content-length': '1000' });
+    res.write('{"a":');
+    setTimeout(() => req.socket.destroy(), 20);
+  });
+  assert.equal(await getJson(u, 2000), null);
+});
+
+test('getJson gives null when headers arrive and then nothing', async (t) => {
+  const u = await misbehaving(t, (req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.flushHeaders();
+  });
+  const t0 = Date.now();
+  assert.equal(await getJson(u, 300), null);
+  assert.ok(Date.now() - t0 < 1500);
+});
