@@ -443,6 +443,44 @@ test('engine: daily_cost with no running session reports it once and pauses one 
   }
 });
 
+test('engine: an auto-pause turned on before any live pass waits for it, with no false "could not pause"', async () => {
+  const LIVE_OFF = { tool_loop: { enabled: false }, cost_burn: { enabled: false }, agent_stuck: { enabled: false } };
+  const e = setup({
+    budget: 300,
+    results: [
+      {
+        sessions: { dear: session('/work/dear', T0 - 80 * MIN, T0 - MIN) },
+        events: [usage(T0 - 50 * MIN, 'dear', 12)],
+        signals: { days: {}, events: [] },
+      },
+    ],
+    agents: [agent('claude:dear', 'working', 'dear')],
+    candidates: [{ pid: 80, startTime: T0 - 100 * MIN, app: 'claude' }],
+    settings: { ...LIVE_OFF, daily_cost: { enabled: true, autoPause: false } },
+  });
+  try {
+    await e.monitors.tickLive(); // nothing needs the live sessions yet: the pass is skipped
+    await e.monitors.tickAggregate();
+    assert.equal(ruleAlerts(e.sent, 'daily_cost')[0].alert.state, 'triggered');
+    // The owner turns auto-pause on during the trigger, and an aggregate pass runs before the next live pass.
+    e.state.setSettings('daily_cost', { enabled: true, autoPause: true });
+    e.clock.t += 1000;
+    await e.monitors.tickAggregate();
+    assert.deepEqual(notes(e.state), [], 'no outcome is recorded without the live sessions');
+    assert.deepEqual(outcomes(e.sent), [], 'nothing is sent');
+    assert.equal(e.calls.pause.length, 0);
+    // The next live pass finds the running session and pauses it.
+    e.clock.t += 1000;
+    await e.monitors.tickLive();
+    assert.equal(e.calls.pause.length, 1);
+    assert.equal(e.calls.pause[0].meta.sessionId, 'dear');
+    assert.equal(outcomes(e.sent).length, 1);
+    assert.equal(outcomes(e.sent)[0].alert.code, 'paused');
+  } finally {
+    e.cleanup();
+  }
+});
+
 test('engine: the outcome of an automatic pause is notified too, with its code and the session title', async () => {
   const e = burning();
   try {
