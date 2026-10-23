@@ -341,6 +341,9 @@ test('topoPaint: the hub is drawn wide with its summary, and a tool says how it 
   const part = (id, c) => flat(g(id)).find((n) => new RegExp(`\\b${c}\\b`).test(cls(n)));
   assert.equal(part('claude', 'topo-kind').textContent, 'monitored');
   assert.equal(part('codex', 'topo-kind').textContent, 'via OmniRoute');
+  // On a phone the sub-label is clipped and there is no hover: the tooltip and the label say how it connects in full.
+  assert.match(flat(g('codex')).find((n) => n.tag === 'title').textContent, /^Codex · via OmniRoute · /);
+  assert.match(g('codex').attrs['aria-label'], /via OmniRoute/);
   assert.equal(part('gemini', 'topo-kind').textContent, 'via gateway');
   assert.equal(part('old', 'topo-kind').textContent, 'monitored');
   assert.equal(part('provider:anthropic', 'topo-kind').textContent, 'provider', 'other kinds keep their kind text');

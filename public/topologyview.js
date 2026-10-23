@@ -344,10 +344,13 @@ function topoNodeUpdate(parts, n, p) {
   parts.kind.textContent = topoClip(topoSubText(n), Math.max(4, Math.floor((p.w - left - 22) / 6.2)));
   parts.dot.setAttribute('cx', p.w - 13);
   parts.dot.setAttribute('cy', p.h / 2);
-  const tip = `${label} · ${parts.status}${note ? ` · ${note}` : ''}`;
+  // A tool's "via …" is clipped on narrow nodes and a phone has no hover, so the tooltip, the label and the line shown
+  // when it is picked carry it in full.
+  const head = n.kind === 'tool' ? `${label} · ${topoSubText(n)}` : label;
+  const tip = `${head} · ${parts.status}${note ? ` · ${note}` : ''}`;
   parts.title.textContent = tip;
   parts.g.setAttribute('aria-label', tip);
-  parts.text = { label, note };
+  parts.text = { label: head, note };
 }
 
 // One row of Recent requests: a dot for ok or error, the path, the time ago, then client, model, tokens and time.
