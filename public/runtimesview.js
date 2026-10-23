@@ -258,6 +258,11 @@ async function rtAct(id, action) {
   }
   await rtLoad();
   rtPaint();
+  // The card's own status line and CPU come from the live data (app.js): fetch it now rather than at the next poll.
+  if (typeof loadLive === 'function' && typeof squadPatch === 'function') {
+    await loadLive();
+    squadPatch(document, state.live, state.data && state.data.tools);
+  }
 }
 
 // Called by the AI Office page when it is drawn; polls while the page is on screen.
