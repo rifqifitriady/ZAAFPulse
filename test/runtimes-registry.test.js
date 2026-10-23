@@ -141,6 +141,17 @@ test('presets match the program, not a word in the arguments', () => {
   // Editors started by full path with a relative-path argument are not the server (no argv: spaces are not read as folders).
   none('ollama', row('/usr/bin/vim ~/dev/ollama serve'), row('/usr/bin/vim notes/ollama serve'));
   none('llamacpp', row('/usr/bin/vim ./llama-server'), row('/usr/bin/vim src/llama-server'));
+  // An editor with a relative or tilde argument is not the app, whatever the app's own folder holds.
+  none('lmstudio', row('/usr/bin/vim ~/Applications/LM Studio.app/Contents/MacOS/LM Studio'),
+    row('/usr/bin/vim notes/LM Studio.app/Contents/MacOS/LM Studio'));
+  none('jan', row('/usr/bin/vim ./Jan.app/Contents/MacOS/Jan'));
+  assert.ok(preset('lmstudio').match(row('/Applications/LM Studio.app/Contents/MacOS/LM Studio')));
+  assert.ok(preset('jan').match(row('/Applications/Jan.app/Contents/MacOS/Jan')));
+  // Windows CommandLine quotes a spaced program: without argv the quoted program is read; with argv = [program] too.
+  assert.ok(preset('ollama').match(row(`"${winOllama}" serve`)), 'quoted spaced Windows program, no argv');
+  assert.ok(preset('ollama').match(row(`"${winOllama}" serve`, [winOllama])), 'argv holds the program only; arguments from args');
+  none('ollama', row(`"${winOllama}" runner`, [winOllama]), row(`"C:\\Program Files\\Vim\\vim.exe" ${winOllama} serve`),
+    row('"C:\\Program Files\\Vim\\vim.exe" ollama.exe serve', ['C:\\Program Files\\Vim\\vim.exe']));
   // With argv a spaced non-app path is exact, so it matches; without argv it is the documented false negative.
   const spaced = '/Users/me/My Tools/bin/ollama';
   assert.ok(preset('ollama').match(row(`${spaced} serve`, [spaced, 'serve'])));

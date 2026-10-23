@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { parsePsRows, procRows, rows } = require('../lib/processes');
+const { parsePsRows, procRows, rows, parseWinRows } = require('../lib/processes');
 
 test('parsePsRows: pid, parent pid, cpu, memory, age, stopped and the command line', () => {
   const out = [
@@ -46,4 +46,18 @@ test('rows: this process is listed with its parent', { skip: process.platform ==
   const me = (await rows()).find((r) => r.pid === process.pid);
   assert.ok(me, 'this test process is in the table');
   assert.equal(me.ppid, process.ppid);
+});
+
+test('parseWinRows: ExecutablePath becomes argv[0] (the program only); rows without it keep only args', () => {
+  const exe = 'C:\\Program Files\\Ollama\\ollama.exe';
+  const [a, b, c] = parseWinRows(
+    [`7\t10000000\t2048\t10\t"${exe}" serve\t${exe}`, '8\t1\t1024\t10\tC:\\bin\\x.exe --a\t', '9\t1\t1024\t10\tC:\\bin\\y.exe'].join('\r\n'),
+  );
+  assert.equal(a.args, `"${exe}" serve`);
+  assert.deepEqual(a.argv, [exe]);
+  assert.equal(a.pid, 7);
+  assert.equal(b.argv, undefined);
+  assert.equal(b.args, 'C:\\bin\\x.exe --a');
+  assert.equal(c.argv, undefined);
+  assert.equal(c.args, 'C:\\bin\\y.exe');
 });
