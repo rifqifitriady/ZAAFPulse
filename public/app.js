@@ -122,6 +122,7 @@ const ICON_PATHS = {
   undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
   compass: '<circle cx="12" cy="12" r="8.5"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',
   anchor: '<circle cx="12" cy="5.5" r="2"/><path d="M12 7.5V20"/><path d="M5 13a7 7 0 0 0 14 0"/><path d="M8.5 11h7"/>',
+  bell: '<path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>',
 };
 function icon(name, size = 16) {
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] || ''}</svg>`;
@@ -234,6 +235,7 @@ const TITLES = {
   rag: 'RAG SERVICE',
   a2a: 'AGENT-TO-AGENT',
   settings: 'SETTINGS',
+  datasets: 'DATASETS',
 };
 
 async function api(path, opts) {
@@ -749,6 +751,7 @@ async function viewSettings(el) {
       <p class="muted">Prices are USD per 1M tokens and update automatically from OpenRouter's public model list, which carries each provider's list price. Edit a model to pin your own price, or add a prefix such as <code>gpt-6</code> for models the list does not have.</p></div>
   </div>
   ${evalsSettingsShell()}
+  ${monitorsSettingsShell()}
   <section class="holo panel" id="prices-panel" style="margin-top:16px"><div class="skeleton" style="height:220px"></div></section></div>`;
 
   $('#profile-form').onsubmit = async (e) => {
@@ -770,6 +773,7 @@ async function viewSettings(el) {
     await loadSummary();
   };
   mountEvalsSettings();
+  mountMonitorsSettings();
   loadPrices().catch((err) => {
     $('#prices-panel').innerHTML = holoEmpty(`Could not load prices: ${esc(err.message)}`);
   });
@@ -1082,10 +1086,13 @@ const VIEWS = {
   skills: viewSkillsPage,
   rag: viewRag,
   a2a: viewA2a,
+  datasets: viewDatasets,
 };
 // Pages that moved when the sidebar was regrouped (AI Observability / Agentic Workspace).
 const ROUTE_MOVED = { agents: '#skills/usage' };
 Object.assign(DRILLS, QUALITY_DRILLS, BRAIN_DRILLS, OPENROUTER_DRILLS);
+// The bell's alerts and an agent's controls (public/monitorsview.js) open in the same drawer.
+Object.assign(DRILLS, MONITOR_DRILLS);
 function drawPageCharts() {
   const c = $('#daily-chart');
   if (c) drawDaily(c);
@@ -1133,7 +1140,7 @@ function render(animate = true) {
   unmountBrain();
   unmountStages();
   if (state.route === 'settings') return viewSettings(el);
-  if (!state.data && !['live', 'brain', 'integrations', 'trace'].includes(state.route)) {
+  if (!state.data && !['live', 'brain', 'integrations', 'trace', 'datasets'].includes(state.route)) {
     el.innerHTML =
       '<div class="grid kpis">' +
       '<div class="skeleton"></div>'.repeat(4) +
@@ -1148,6 +1155,7 @@ function render(animate = true) {
   if (state.route === 'quality') mountQualityPage();
   if (state.route === 'sessions') mountSessions();
   if (state.route === 'trace') mountTrace();
+  if (state.route === 'datasets') mountDatasets();
   if (state.route === 'projects') mountProjects();
   if (state.route === 'skills' && state.sub === 'usage') mountAgents();
   if (state.route === 'integrations') mountIntegrations();
@@ -1285,6 +1293,7 @@ function applyTheme() {
   }
   applyTheme();
   hydrateIcons();
+  monMountBell(); // the alerts bell polls on its own, every 15 s while the page is on screen
   render(false);
   await Promise.all([
     loadLive(),
@@ -1315,7 +1324,7 @@ function applyTheme() {
     if (state.route === 'live' && updateLive()) {
       /* patched in place */
     } else if (
-      !['settings', 'brain', 'squad', 'trace'].includes(state.route) &&
+      !['settings', 'brain', 'squad', 'trace', 'datasets'].includes(state.route) &&
       !$('#view').contains(document.activeElement)
     )
       render(false); // squad and trace pages poll on their own

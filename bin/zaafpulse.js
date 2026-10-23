@@ -4,6 +4,7 @@
 //   zaafpulse set-password            admin password for server mode (asked twice, or --stdin)
 //   zaafpulse service install|uninstall|status|restart [--system] [--host H] [--port P]
 //   zaafpulse eval --judge --session <id> [--source claude|codex] [--data DIR] [--json]   judge one session locally
+//   zaafpulse eval --dataset <slug> --model <provider/model> [--require id>=0.8] [--ci] [--json]   CI quality gate
 //   zaafpulse status | open | doctor | mcp | register-mcp <client|all> [--remove] | version
 const fs = require('fs');
 const path = require('path');
@@ -12,12 +13,26 @@ const platform = require('../lib/platform');
 const pkg = require('../package.json');
 
 const argv = process.argv.slice(2);
-const VALUE_FLAGS = ['--host', '--port', '--data', '--session', '--source']; // every other flag is a switch
+// Every other flag is a switch.
+const VALUE_FLAGS = [
+  '--host',
+  '--port',
+  '--data',
+  '--session',
+  '--source',
+  '--dataset',
+  '--model',
+  '--require',
+  '--max-cost',
+  '--max-requests',
+];
 const flag = (name) => {
   const i = argv.indexOf(`--${name}`);
   if (i < 0) return undefined;
   return VALUE_FLAGS.includes(`--${name}`) ? argv[i + 1] : true;
 };
+// Every value of a flag that may repeat (--model, --require).
+const flagAll = (name) => argv.flatMap((a, i) => (a === `--${name}` && i + 1 < argv.length ? [argv[i + 1]] : []));
 const positional = argv.filter((a, i) => !a.startsWith('-') && !VALUE_FLAGS.includes(argv[i - 1]));
 const cmd =
   argv.includes('--help') || argv.includes('-h')
@@ -285,6 +300,31 @@ const commands = {
   // Judge one session from the terminal with the judge of the data folder's settings: a local model, or Claude Code
   // once its preview was confirmed in the dashboard (see docs/evals.md).
   async eval() {
+    // Replay a dataset and check pass rates: the CI gate (see docs/datasets.md).
+    if (argv.includes('--dataset')) {
+      const { runDatasetEval, DATASET_USAGE } = require('../lib/datasets/cli');
+      const models = flagAll('model');
+      const requires = flagAll('require');
+      const one = ['dataset', 'max-cost', 'max-requests'].map((n) => flag(n));
+      // Every value flag needs a value: one that is last (`--ci --require`) or swallowed the next flag
+      // (`--dataset --ci`) would otherwise be dropped, and a CI gate would pass having checked nothing.
+      const named = ['--dataset', '--model', '--require', '--max-cost', '--max-requests', '--data'];
+      const missing = argv.some((a, i) => named.includes(a) && (i + 1 >= argv.length || argv[i + 1].startsWith('-')));
+      if (missing) die(`${DATASET_USAGE}\nEach of these flags needs a value that does not start with "-".`, 2);
+      process.exitCode = await runDatasetEval({
+        dataset: one[0],
+        models,
+        requires,
+        maxCostUSD: one[1],
+        maxRequests: one[2],
+        json: !!flag('json'),
+        ci: !!flag('ci'),
+        dir: platform.dataDir(),
+        out: (m) => console.log(m),
+        err: (m) => console.error(m),
+      });
+      return;
+    }
     const { runEval, USAGE } = require('../lib/evals/cli');
     const session = flag('session');
     const source = flag('source');
@@ -319,6 +359,8 @@ const commands = {
   zaafpulse eval --judge --session <id> [--source claude|codex] [--json]
                                     judge one session with the local model or a confirmed Claude Code
                                     (--data DIR: the data folder)
+  zaafpulse eval --dataset <slug> --model <provider/model> [--require <evaluator>>=<0..1>] [--ci] [--json]
+                                    replay a dataset and gate on pass rates (--max-cost USD, --max-requests N)
   zaafpulse register-mcp <client|all> [--remove]
                                     clients: ${mcpClients().join(', ')}
   zaafpulse mcp                     the stdio MCP server (what AI clients start)

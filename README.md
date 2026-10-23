@@ -364,6 +364,7 @@ The installers use your Node.js 18+ or download the official Node.js LTS (checks
 zaafpulse status      # is it running?
 zaafpulse doctor      # OS, Node.js, data folder, secret store, log folders and file counts, service
 zaafpulse eval --judge --session <id>   # judge one session with a local model (or a confirmed Claude Code), no dashboard needed
+zaafpulse eval --dataset <slug> --model <provider/model> --ci   # replay a dataset and gate on pass rates (docs/datasets.md)
 zaafpulse open        # open the dashboard, signed in
 zaafpulse service restart | uninstall
 zaafpulse help
@@ -585,6 +586,17 @@ ZAAFPulse can grade finished turns, as well as detect signals in them. Six **cod
 
 The evaluators, model resolution, caps, scheduling, privacy, the `/api/evals/*` and `/api/feedback` routes, the `acc_evals` MCP tool, the CLI and the known limits: **[docs/evals.md](docs/evals.md)**.
 
+## Datasets, replay & the CI gate
+
+Save the turns that matter, replay them on other models, and fail a build when quality drops.
+
+- **Save turns.** **⤓ Add to dataset** in the Trace explorer (one turn or several) copies the prompt, the last tool results and the answer, masked, into a dataset kept on this machine. An optional rule adds failed or 👎 turns.
+- **Replay on other models.** In **Gateway → Playground → Dataset**, run one example or all of them on up to three models, local first. Tools are declared and never run. An external model needs a known price, a masked preview and your confirmation.
+- **Score and compare.** Code checks and the judge evaluators grade each answer; compare two runs side by side. Caps default to $0.50 and 100 requests.
+- **Gate in CI.** `zaafpulse eval --dataset auth-regressions --model local/qwen3 --require 'task_completion>=0.7' --ci` exits 1 when a rate falls short.
+
+Shapes, limits, privacy, the API and CI recipes: **[docs/datasets.md](docs/datasets.md)**.
+
 ## OpenTelemetry export
 
 ZAAFPulse can send traces of what the Agent Gateway does to any backend that accepts OTLP over HTTP. It writes OTLP itself, with no dependencies: binary protobuf by default, JSON when you set `"protocol": "http/json"`. gRPC is not supported.
@@ -690,6 +702,7 @@ By default the server listens on `127.0.0.1` only and rejects requests whose `Ho
 | Second-brain sources, remote A2A agents, URLs you give the RAG service | When you connect, sync or use them | Requests to that source's own API or address |
 | Ollama and LM Studio on this machine (local evals) | Only while a judge model is looked for or used (`127.0.0.1:11434`, `127.0.0.1:1234`); an external judge only if you pick that provider and confirm its preview ([Local evals](#local-evals--feedback)) | The masked text of a finished turn, to the judge you chose |
 | Anthropic (or the Bedrock, Vertex or `ANTHROPIC_BASE_URL` host your Claude Code uses), through your Claude Code CLI (local evals) | Only when you choose **Claude Code** as the judge and confirm its preview for that destination; `claude --version` runs to find the CLI | The masked text of a finished turn, through your Claude login or API key |
+| Gateway providers you pick as dataset replay models | Only when you run a replay: local models stay on this machine; an external model only after you preview the masked text and press Send ([Datasets](#datasets-replay--the-ci-gate)) | The saved prompt and tool results of the examples, with secrets and personal data masked, one call per example and model |
 | Your OTLP endpoint | Only when `"otel": { "enabled": true }` or an `OTEL_EXPORTER_OTLP_*ENDPOINT` variable is set ([OpenTelemetry](#opentelemetry-export)) | Spans; no prompt text unless `captureContent` is on |
 | GitHub and nodejs.org | Only while `install.sh` or `install.ps1` runs | The release (or `main` when you ask), and the official Node.js LTS when your system has no Node 18+ |
 
@@ -727,6 +740,7 @@ lib/local.js           dashboard data for the acc connector
 lib/trace/             Trace explorer: adapters for Claude Code, Codex, the gateway, Kiro, Gemini CLI and Antigravity, on-demand
                        masked text reading (content.js), and the registry with opaque keys, a cache and a worker (index.js)
 lib/evals/             local evals: registry, code evaluators, judge prompts, models, engine, stores, HTTP API, CLI
+lib/datasets/          datasets, replay and experiments: example shape, store, scoring, runner, HTTP API, auto-add, CLI gate
 lib/claude.js          Claude Code log parser (usage + signals)
 lib/codex.js           Codex log parser (usage + signals), skips the history a fork copies
 lib/signals.js         non-existent-target, injection, secret, risky-command and correction detectors; relevance and
@@ -776,7 +790,9 @@ docs/quality-metrics.md how the quality and safety detectors are measured
 docs/performance.md    indexing speed: method and numbers
 docs/explorer.md       Trace explorer: sources, privacy, keyboard, API, troubleshooting
 docs/evals.md          local evals and feedback: evaluators, local judge, caps, privacy, API, MCP tool, CLI
+docs/datasets.md       datasets, replay and the CI gate: shapes, limits, privacy, API, recipes
 docs/release-hardening.md tag ruleset and immutable releases
+docs/monitors.md       monitors, alerts, webhook, pausing an agent: rules, channels, limits, API
 docs/assets/           README banner, diagrams, screenshots and GIFs
 ```
 </details>
@@ -808,6 +824,7 @@ Apart from the sign-in routes in the first row, every `/api` route needs a signe
 | `GET /api/prices` · `POST /api/prices` | live price catalog (when synced), sync status, your pinned prices; `refresh`, `toggle`, `set`, `unpin`, `remove` |
 | `GET /api/trace/sources` · `sessions` · `title` · `session` · `content` · `live` · `find` · `POST /api/trace/reveal` | the Trace explorer: sessions of every source, one turn as spans, and their text on request, masked; see [docs/explorer.md](docs/explorer.md#http-api) |
 | `GET /api/evals` · `summary` · `status` · `evaluators` · `settings` · `POST /api/evals/run` · `settings` · `preview` · `GET /api/feedback` · `sessions` · `POST /api/feedback` | local evals and feedback: results per session, trends and judge agreement, the judge's status, settings, the external preview, and your ratings and notes; see [docs/evals.md](docs/evals.md#http-api) |
+| `GET /api/datasets` · `POST /api/datasets` · `/api/datasets/<slug>` · `…/examples` · `…/export` · `POST /api/datasets/import` · `/api/datasets/settings` · `GET /api/experiments` · `POST /api/experiments` | datasets of saved turns, import and export, the auto-add rule, and replay experiments; see [docs/datasets.md](docs/datasets.md#http-api) |
 | `POST /api/rescan` | re-index changed log files now |
 | `GET /api/integrations` | integration health, client registration and recent MCP tool calls |
 | `POST /api/integrations/test` | fresh health check of one integration (`{ "id": "..." }`) |
