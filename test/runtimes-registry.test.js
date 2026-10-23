@@ -134,8 +134,28 @@ test('commandHash changes with the command; storedEntry keeps only the stored fi
   assert.notEqual(commandHash([...QWEN.command.slice(0, -1), '8082']), a);
   assert.notEqual(commandHash(['llama-server -m', '/models/qwen.gguf']), commandHash(['llama-server', '-m /models/qwen.gguf']));
   const [e] = ownerEntries([QWEN]);
-  assert.deepEqual(storedEntry(e), { ...QWEN, health: 'http://127.0.0.1:8081/' });
+  assert.deepEqual(storedEntry(e), QWEN, 'the default health URL is not stored');
   assert.deepEqual(storedEntry({ ...e, health: null }), QWEN);
+  const [own] = ownerEntries([{ ...QWEN, health: 'http://localhost:8081/health' }]);
+  assert.deepEqual(storedEntry(own), { ...QWEN, health: 'http://localhost:8081/health' }, 'one the owner gave is');
+});
+
+test('the default health URL follows the port; one stored by an earlier version reads as the default', () => {
+  const [e] = ownerEntries([QWEN]);
+  assert.equal(e.health, 'http://127.0.0.1:8081/');
+  assert.equal(e.healthSet, false);
+  const [moved] = ownerEntries([storedEntry({ ...e, port: 8082 })]);
+  assert.equal(moved.health, 'http://127.0.0.1:8082/', 'a port change moves the health URL with it');
+  // Earlier versions stored the default itself. It is read as not given, so it is dropped at the next save and
+  // follows the port from then on; the approval hash is the same either way.
+  const [old] = ownerEntries([{ ...QWEN, health: 'http://127.0.0.1:8081/' }]);
+  assert.equal(old.healthSet, false);
+  assert.deepEqual(storedEntry(old), QWEN);
+  assert.equal(commandHash(old), commandHash(e));
+  assert.equal(commandHash({ ...QWEN, health: 'http://127.0.0.1:8081/' }), commandHash(QWEN));
+  const [own] = ownerEntries([{ ...QWEN, health: 'http://localhost:8081/health' }]);
+  assert.equal(own.healthSet, true);
+  assert.notEqual(commandHash(own), commandHash(e));
 });
 
 test('presets match the program, not a word in the arguments', () => {

@@ -151,6 +151,26 @@ test('refusals keep their status; messages and log lines carry no path; anything
   noPath((await listed.call('GET', '/api/runtimes')).body);
 });
 
+test('Settings: the health URL is stored only when given, so the default follows a port change', async () => {
+  const { call, saved } = setup({ stored: [{ ...QWEN, health: 'http://127.0.0.1:8081/' }] });
+  const before = (await call('GET', '/api/runtimes/config')).body.entries[0];
+  assert.equal(before.health, null, 'a stored default is shown as not given, so the form leaves it empty');
+  assert.equal(before.healthUsed, 'http://127.0.0.1:8081/');
+  const command = [...QWEN.command.slice(0, -1), '8082'];
+  const edit = await call('POST', '/api/runtimes/save', { was: 'qwen-local', entry: { ...QWEN, command, port: 8082 } });
+  assert.equal(edit.status, 200);
+  assert.deepEqual(saved.value, [{ ...QWEN, command, port: 8082 }], 'no health in config.json');
+  assert.equal(edit.body.entries[0].health, null);
+  assert.equal(edit.body.entries[0].healthUsed, 'http://127.0.0.1:8082/', 'the health URL followed the port');
+  const own = await call('POST', '/api/runtimes/save', {
+    was: 'qwen-local',
+    entry: { ...QWEN, command, port: 8082, health: 'http://localhost:8082/health' },
+  });
+  assert.equal(saved.value[0].health, 'http://localhost:8082/health');
+  assert.equal(own.body.entries[0].health, 'http://localhost:8082/health');
+  assert.equal(own.body.entries[0].healthUsed, 'http://localhost:8082/health');
+});
+
 test('Settings: the entries with ~ for the home folder; save expands it, checks the entry and keeps the others', async () => {
   const { call, saved, forgot, approvedIds } = setup();
   approvedIds.add('qwen-local');
@@ -162,7 +182,8 @@ test('Settings: the entries with ~ for the home folder; save expands it, checks 
       name: 'Qwen (llama.cpp)',
       command: ['llama-server', '-m', '~/models/qwen.gguf', '--port', '8081'],
       port: 8081,
-      health: 'http://127.0.0.1:8081/',
+      health: null,
+      healthUsed: 'http://127.0.0.1:8081/',
       approved: true,
       error: null,
     },
@@ -177,7 +198,6 @@ test('Settings: the entries with ~ for the home folder; save expands it, checks 
     name: 'Mistral',
     command: ['llama-server', '-m', `${HOME}/m/mistral.gguf`, '--port', '8082'],
     port: 8082,
-    health: 'http://127.0.0.1:8082/',
   });
   assert.equal(add.body.entries.length, 2);
   const dup = await call('POST', '/api/runtimes/save', { entry: { ...QWEN } });
