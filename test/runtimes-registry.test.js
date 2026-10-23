@@ -136,7 +136,15 @@ test('presets match the program, not a word in the arguments', () => {
   assert.ok(preset('ollama').match(row('/opt/homebrew/bin/ollama serve', ['/opt/homebrew/bin/ollama', 'serve'])));
   none('ollama', row('sudo /usr/local/bin/ollama serve', ['sudo', '/usr/local/bin/ollama', 'serve']),
     row('/opt/homebrew/bin/ollama runner', ['/opt/homebrew/bin/ollama', 'runner']));
-  assert.ok(preset('ollama').match(row('C:\\Program Files\\Ollama\\ollama.exe serve')), 'a Windows path with spaces');
+  const winOllama = 'C:\\Program Files\\Ollama\\ollama.exe';
+  assert.ok(preset('ollama').match(row(`${winOllama} serve`, [winOllama, 'serve'])), 'a Windows path with spaces, with argv');
+  // Editors started by full path with a relative-path argument are not the server (no argv: spaces are not read as folders).
+  none('ollama', row('/usr/bin/vim ~/dev/ollama serve'), row('/usr/bin/vim notes/ollama serve'));
+  none('llamacpp', row('/usr/bin/vim ./llama-server'), row('/usr/bin/vim src/llama-server'));
+  // With argv a spaced non-app path is exact, so it matches; without argv it is the documented false negative.
+  const spaced = '/Users/me/My Tools/bin/ollama';
+  assert.ok(preset('ollama').match(row(`${spaced} serve`, [spaced, 'serve'])));
+  assert.equal(preset('ollama').match(row(`${spaced} serve`)), false, 'known macOS false negative: spaced non-app path, no argv');
   assert.ok(preset('ollama').match(row('/opt/homebrew/bin/ollama serve')));
   assert.ok(preset('localai').match(row('/usr/local/bin/local-ai', ['/usr/local/bin/local-ai'])));
 });
