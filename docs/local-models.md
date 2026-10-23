@@ -70,15 +70,22 @@ Add a server of your own in **Settings → Local models**, for example `llama-se
 | `name` | shown on the card (optional) |
 | `command` | the program and its arguments, one string each, at most 1,000 characters each. In Settings you type one argument per line, and Settings turns `~/` at the start of an argument into your home folder when you save. In a `config.json` edited by hand, use absolute paths: `~/` is not expanded there |
 | `port` | 1 to 65535 |
-| `health` | optional; `http://127.0.0.1:<port>/` when left out. Must be an `http://` URL on this machine |
+| `health` | optional. Must be an `http://` URL on this machine. Left out, the server is checked at `http://127.0.0.1:<port>/`. That default is not stored: it follows the port, so changing the port moves it too. Settings shows the URL that is checked, and **Edit** leaves the field empty unless you typed one |
 
 An entry that is not valid is listed with the reason and cannot start.
+
+**A `config.json` that does not parse is refused, not overwritten.** Saving or deleting in Settings reads `config.json` again first. If the file has a syntax error (a trailing comma after a hand edit, say), the change is refused with 500 "the settings could not be saved" and the file is left as it is. Fix the file, then save again. The file is written to a private temp file (mode 0600) first and then renamed into place.
 
 **Approve before it runs.** An entry starts only after you press **Approve** in Settings, and it can be stopped from the dashboard only while it is approved. The approval is stored in `.data/runtimes/approved.json` as a hash of the command, the port and the health URL. Editing any of the three drops the approval, so the entry asks again. Deleting an entry deletes its approval. A command typed into `config.json` by hand also needs the approval in the dashboard.
 
 **Secrets in arguments.** Settings shows an argument that holds a secret (a key or token) masked. Leave a masked argument unchanged and the stored value is kept. A new entry may not contain the masked text: type the real value.
 
-Your entry's server is found by its program name and, when the command names the port, by that port too. Two `llama-server` entries on different ports are told apart.
+Your entry's server is found by its program name, and then:
+
+- **The command names the port** (`--port 8081`, `--port=8081`, `host:8081`): the process must name that port too, whatever its other arguments. Two `llama-server` entries on different ports are told apart.
+- **The command does not name the port**: the process's arguments after the program must be exactly the command's. `["python3", "serve.py"]` matches `python3 serve.py`, but not `python3 manage.py runserver` or any other `python3` on the machine, so Stop never reaches an unrelated process. A server you start with other arguments by hand is then not shown as this entry.
+
+Putting the port in the command, when the server takes one, is the more reliable of the two.
 
 ## Safety
 
@@ -101,11 +108,11 @@ All routes are behind the dashboard sign-in. Writes need `Content-Type: applicat
 | `POST /api/runtimes/start` | `{ id }` | `{ state: "running" }`, or `{ state: "starting", note, log }` |
 | `POST /api/runtimes/stop` | `{ id, pid, startTime }` | `{ state: "stopped" }`, or `{ state: "stopping", note }` |
 | `POST /api/runtimes/approve` | `{ id }` | `{ approved: true }` |
-| `GET /api/runtimes/config` | | your entries for Settings: `{ off, entries: [{ id, name, command, port, health, approved, error }] }`; `off` is the reason while control is off, and `command` is then `null` |
+| `GET /api/runtimes/config` | | your entries for Settings: `{ off, entries: [{ id, name, command, port, health, healthUsed, approved, error }] }`; `off` is the reason while control is off, and `command` is then `null`. `health` is the URL you gave, or `null`; `healthUsed` is the URL that is checked, the default included |
 | `POST /api/runtimes/save` | `{ entry, was? }` | the same as `config`; `was` names the entry being edited |
 | `POST /api/runtimes/delete` | `{ id }` | the same as `config` |
 
-Errors are `{ error }` with 400, 403, 404, 409 or 502 (a failed save can also be 500). A failed start (502) also has `log`.
+Errors are `{ error }` with 400, 403, 404, 409 or 502 (a failed save can also be 500, for instance when `config.json` does not parse). A failed start (502) also has `log`.
 
 | Case | Status | Message |
 |---|---|---|
