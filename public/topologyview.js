@@ -67,9 +67,10 @@ function topoAgo(ms) {
 const topoNum = (n) => (n >= 1e6 ? `${topoR(n / 1e6)}M` : n >= 1000 ? `${topoR(n / 1000)}k` : String(Math.round(n)));
 const topoMs = (ms) => (ms >= 1000 ? `${topoR(ms / 1000)} s` : `${Math.round(ms)} ms`);
 
-// The section head's meta line: "— N active · M error".
+// The section head's meta line: "— N active · M error". The hub is always active (it is the dashboard), so it is
+// not counted.
 function topoMetaText(data) {
-  const nodes = data && Array.isArray(data.nodes) ? data.nodes.filter(Boolean) : [];
+  const nodes = data && Array.isArray(data.nodes) ? data.nodes.filter((n) => n && n.kind !== 'hub') : [];
   const count = (s) => nodes.filter((n) => n.status === s).length;
   return `— ${count('active')} active · ${count('error')} error`;
 }
