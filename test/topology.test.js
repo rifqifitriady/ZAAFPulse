@@ -180,7 +180,7 @@ test('the local runtimes are drawn as runtimes, not as tools', () => {
     layer: 1,
     kind: 'runtime',
     label: 'Ollama',
-    status: 'idle',
+    status: 'active', // running and answering, though no request passed through it
     note: null,
   });
   assert.equal(node(t, 'runtime:lmstudio'), undefined);
@@ -997,4 +997,23 @@ test('readGateway reads the provider list, not the whole Gateway page, and keeps
       keys: [],
     },
   );
+});
+
+// A local runtime is used from its own app too (LM Studio's chat, `ollama run`), which no log or gateway sees: its
+// running state and the models it has loaded now decide its colour, not only the requests that pass through it.
+test('a running, answering runtime and the models it has loaded now are active; a silent one is an error', () => {
+  const lm = (o = {}) => ({ id: 'lmstudio', name: 'LM Studio', running: true, healthy: true, port: 1234, ...o });
+  const t = buildTopology(
+    input({ runtimes: [lm({ models: { current: ['qwen3.5-4b'], remembered: ['qwen3.5-4b', 'old-model'], loaded: [] } })] }),
+    NOW,
+  );
+  assert.equal(node(t, 'runtime:lmstudio').status, 'active');
+  assert.equal(node(t, 'model:lmstudio:qwen3.5-4b').status, 'active');
+  assert.equal(node(t, 'model:lmstudio:old-model'), undefined, 'only what is loaded now is drawn when that is known');
+  assert.equal(t.edges.find((e) => e.id === 'runtime:lmstudio>model:lmstudio:qwen3.5-4b').status, 'active');
+  const unknown = buildTopology(input({ runtimes: [lm({ models: { remembered: ['qwen3.5-4b'], loaded: [] } })] }), NOW);
+  assert.equal(node(unknown, 'model:lmstudio:qwen3.5-4b').status, 'idle', 'last remembered, not known to be loaded');
+  const silent = buildTopology(input({ runtimes: [lm({ healthy: false, models: null })] }), NOW);
+  assert.equal(node(silent, 'runtime:lmstudio').status, 'error');
+  assert.equal(node(silent, 'runtime:lmstudio').note, 'not answering');
 });

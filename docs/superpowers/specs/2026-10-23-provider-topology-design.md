@@ -116,6 +116,7 @@ Status is one of `active`, `recent`, `error` or `idle`. It comes from the newest
 
 Overrides:
 - a running tool (in `live.apps`) is at least `active`;
+- a running local runtime that answers is at least `active`, and so are the models it has loaded now (`models.current`, the last read, at most 90 s old) and their edges; one that runs but does not answer is `error` with note `not answering` (added 2026-10-23: a runtime used from its own app has no requests anywhere);
 - a router whose `health` failed is `error`, with `note` set to the short reason (`timed out`, `HTTP 401`, …);
 - a router provider connection with `isActive === false` or a failing `testStatus` makes that provider node `error`, with a note.
 
