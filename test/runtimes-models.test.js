@@ -492,3 +492,19 @@ test('reload: lmstudio skips a model that is still loaded, so lms load does not 
   assert.deepEqual(loads, ['gemma-3']);
   assert.deepEqual(m.status('lmstudio'), { loading: false, loaded: ['qwen3-8b', 'gemma-3'], failed: [] });
 });
+
+test('current: what the last read found loaded, empty included, for 90 s; null before a read or after', async () => {
+  let t = 1000;
+  let names = ['a'];
+  const m = createModelMemory({ file: tmpFile(), now: () => t, getJson: async () => ({ models: names.map((name) => ({ name })) }) });
+  assert.equal(m.current('ollama'), null);
+  await m.observe(ollama());
+  assert.deepEqual(m.current('ollama'), ['a']);
+  names = [];
+  await m.observe(ollama());
+  assert.deepEqual(m.current('ollama'), [], 'an empty read is current too');
+  assert.deepEqual(m.remembered('ollama'), ['a'], 'while the remembered list is kept');
+  t += 91 * 1000;
+  assert.equal(m.current('ollama'), null, 'a stale read is not current');
+  assert.equal(m.current('jan'), null);
+});

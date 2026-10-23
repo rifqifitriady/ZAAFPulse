@@ -19,15 +19,17 @@ A row holds at most 12 nodes: the 11 busiest, plus "+N more", whose tooltip name
 
 | Colour | Status | Meaning |
 |---|---|---|
-| green | Active | the newest request through it succeeded and is at most 5 minutes old; a running tool is active too, unless it has a recent error |
+| green | Active | the newest request through it succeeded and is at most 5 minutes old; a running tool is active too, unless it has a recent error; so is a local runtime that runs and answers, with the models it has loaded now and their edges |
 | orange | Recent | the newest request succeeded and is at most 60 minutes old |
-| red | Error | the newest request failed and is at most 60 minutes old; also a router whose health check fails, or a router connection that is inactive or failing its test |
+| red | Error | the newest request failed and is at most 60 minutes old; also a router whose health check fails, a router connection that is inactive or failing its test, and a local runtime that runs but does not answer ("not answering") |
+| grey | Idle | nothing in the last hour |
+
+A local runtime is often used from its own app (LM Studio's chat, `ollama run`), which no log or gateway sees, so its colour comes from its state, not only from requests. Its model nodes are the models it has loaded now, read every 30 seconds; before the first read, or when the last one is more than 90 seconds old, the models it last had loaded are drawn grey.
 
 What counts as a failed request:
 - **Logs:** a real API error that Claude Code or Codex logged (overloaded, a 5xx, an auth failure). It is drawn on the tool and the provider of its model, or the tool's own provider (Anthropic, OpenAI) when no model is named. A turn whose tool calls failed, such as a Bash command or a missing file, still counts as ok, because the provider answered.
 - **Gateway:** a status of 400 or more, or an error.
 - **Router:** a status of 400 or more. A call with no status, still in flight or from an older OmniRoute, is ok.
-| grey | Idle | nothing in the last hour |
 
 An edge gets the status of the newest request that passed along it. Active edges move.
 
