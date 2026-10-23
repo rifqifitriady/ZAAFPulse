@@ -176,6 +176,41 @@ test('runtimes over HTTP: an owner entry is saved to config.json, listed, and st
   }
 });
 
+test('runtimes over HTTP: a config.json that does not parse is refused, never overwritten', async () => {
+  const data = tmp('zp-rt-http-bad-');
+  const file = path.join(data, 'config.json');
+  const broken = '{ "userName": "Kept", "gateway": { "port": 4000 }, }\n';
+  fs.writeFileSync(file, broken);
+  const s = await startServer({ ZAAFPULSE_AUTH: 'none' }, { data });
+  const c = client(s.base);
+  try {
+    const entry = { id: 'fake-llm', command: ['zp-no-such-program', '--port', '18081'], port: 18081 };
+    const saved = await c.post('/api/runtimes/save', { entry });
+    assert.equal(saved.status, 500);
+    assert.equal(saved.json.error, 'the settings could not be saved');
+    assert.equal(fs.readFileSync(file, 'utf8'), broken, 'config.json is untouched');
+    assert.deepEqual(fs.readdirSync(data).filter((f) => f.startsWith('config.json')), ['config.json'], 'no temp file left');
+    noPaths(c.bodies);
+  } finally {
+    await s.stop();
+  }
+});
+
+test('runtimes over HTTP: a save writes config.json with mode 0600', { skip: process.platform === 'win32' }, async () => {
+  const data = tmp('zp-rt-http-mode-');
+  fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ userName: 'Kept' }), { mode: 0o644 });
+  const s = await startServer({ ZAAFPULSE_AUTH: 'none' }, { data });
+  const c = client(s.base);
+  try {
+    const entry = { id: 'fake-llm', command: ['zp-no-such-program', '--port', '18081'], port: 18081 };
+    assert.equal((await c.post('/api/runtimes/save', { entry })).status, 200);
+    assert.equal(fs.statSync(path.join(data, 'config.json')).mode & 0o777, 0o600);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(data, 'config.json'), 'utf8')).userName, 'Kept');
+  } finally {
+    await s.stop();
+  }
+});
+
 test('runtimes over HTTP: sign-in only, gateway keys refused, control off with password sign-in', async () => {
   const data = tmp('zp-rt-http-auth-');
   const gw = createGateway({

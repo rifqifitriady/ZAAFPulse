@@ -5,6 +5,7 @@
 // password; TLS with ZAAFPULSE_TLS_CERT and ZAAFPULSE_TLS_KEY, or put it behind a reverse proxy.
 const http = require('http');
 const https = require('https');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -586,10 +587,27 @@ const runtimeApi = createRuntimeApi({
   control: runtimeControl,
   config: {
     list: () => rawConfig().localRuntimes,
+    // config.json is read again here, not from the cache: rawConfig() reads a file that does not parse as {}, and
+    // saving on top of that would drop everything else in it. Such a file (often a hand edit gone wrong) is refused
+    // and left as it is; the API answers 500 "the settings could not be saved", which holds no path.
     save: (list) => {
-      const raw = { ...rawConfig(), localRuntimes: list };
-      fs.writeFileSync(`${CONFIG_FILE}.tmp`, JSON.stringify(raw, null, 2));
-      fs.renameSync(`${CONFIG_FILE}.tmp`, CONFIG_FILE);
+      let text = '';
+      try {
+        text = fs.readFileSync(CONFIG_FILE, 'utf8');
+      } catch (e) {
+        if (e.code !== 'ENOENT') throw e;
+      }
+      const base = text.trim() ? JSON.parse(text) : {};
+      if (!base || typeof base !== 'object' || Array.isArray(base)) throw new Error('config.json is not an object');
+      const raw = { ...base, localRuntimes: list };
+      const tmpFile = `${CONFIG_FILE}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+      try {
+        fs.writeFileSync(tmpFile, JSON.stringify(raw, null, 2), { mode: 0o600, flag: 'wx' });
+        fs.renameSync(tmpFile, CONFIG_FILE);
+      } catch (e) {
+        fs.rmSync(tmpFile, { force: true });
+        throw e;
+      }
       rawCache = { mtime: fs.statSync(CONFIG_FILE).mtimeMs, value: raw };
     },
   },
