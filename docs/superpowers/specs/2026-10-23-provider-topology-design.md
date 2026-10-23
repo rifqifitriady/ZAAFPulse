@@ -98,11 +98,11 @@ They are built from:
   - the gateway makes one key per connected tool, named `tool:<lib/gateway/tools.js id>`. A request made with such a key starts at that tool and has it as `client`, when the tool is a node: `tool:claude-code` is `claude`, `tool:gemini-cli` is `antigravity`, and any other id is its own APPS id (`tool:codex` is `codex`);
   - the dashboard's own calls (`keyId: 'dashboard'`: agents, collab, the evals judge, RAG embeddings) have the client "ZAAFPulse" and no tool;
   - any other request has the key name, else the agent, as `client`, and no tool. Which tools are routed to the gateway does not change this;
-  - `ok` is `status < 400 && !error`.
+  - `ok` is `!(status >= 400) && !error`, so a request with no status is ok.
 - **Router calls:**
   - path `[client?, 'router:<id>', provider:<providerOf(provider || model)>]`;
   - `client` is the tool routed there when exactly one is, since an OmniRoute call log names no client;
-  - `ok` is `status < 400`.
+  - `ok` is `!(status >= 400)`: a call with no status (in flight, or an older OmniRoute) is ok, as on the Squad page.
 
 Model names are text, clipped to 80 characters. No prompt, path, URL, key or account appears.
 
