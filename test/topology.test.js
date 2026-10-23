@@ -489,12 +489,26 @@ test('requests older than the 3-hour window, or without a time, are left out', (
   assert.deepEqual(t.requests, []);
 });
 
+// A real API failure in the logs (overloaded, 5xx, auth), as lib/reqlogs.js records it.
+const apiError = (tool, ago, extra = {}) => ({
+  ts: NOW - ago,
+  kind: 'api',
+  agent: 'app',
+  tool,
+  source: 'API',
+  label: 'API error',
+  text: 'API Error: 529 Overloaded · see https://status.anthropic.com',
+  ...extra,
+});
+
 test('status from the newest request: error, active, recent, idle', () => {
   const at = (ago, ok = true) =>
     buildTopology(
       input({
         live: { apps: [], installed: ['claude'] },
-        logs: { requests: [turn('claude', 'claude-x', ago, { toolErrors: ok ? 0 : 2 })] },
+        logs: ok
+          ? { requests: [turn('claude', 'claude-x', ago)] }
+          : { requests: [], errors: [apiError('claude', ago)] },
       }),
       NOW,
     );
@@ -509,13 +523,82 @@ test('status from the newest request: error, active, recent, idle', () => {
   // The newest request decides: an ok turn after an error.
   const t = buildTopology(
     input({
-      logs: {
-        requests: [turn('claude', 'claude-x', 10 * MIN, { toolErrors: 1 }), turn('claude', 'claude-y', 3 * MIN)],
-      },
+      logs: { requests: [turn('claude', 'claude-y', 3 * MIN)], errors: [apiError('claude', 10 * MIN)] },
     }),
     NOW,
   );
   assert.equal(node(t, 'claude').status, 'active');
+});
+
+test('a turn with failed tool calls is ok: the provider answered', () => {
+  const t = buildTopology(
+    input({
+      live: { apps: [], installed: ['claude'] },
+      logs: { requests: [turn('claude', 'claude-x', MIN, { toolErrors: 3 })] },
+    }),
+    NOW,
+  );
+  assert.equal(t.requests[0].ok, true);
+  assert.equal(node(t, 'provider:anthropic').status, 'active');
+  assert.equal(node(t, 'claude').status, 'active');
+  assert.equal(t.edges.find((e) => e.id === 'claude>provider:anthropic').status, 'active');
+});
+
+test('an API error in the logs is a failed request to the tool’s provider', () => {
+  const t = buildTopology(
+    input({
+      live: { apps: [], installed: ['codex'] },
+      logs: {
+        requests: [],
+        errors: [
+          apiError('claude', 2 * MIN),
+          apiError('codex', 3 * MIN, { model: 'claude-sonnet-5' }), // a known model names the provider
+          apiError('claude', 4 * MIN, { kind: 'tool' }), // a failed tool call is not one
+          apiError(undefined, 5 * MIN), // no tool
+          apiError('cursor', 6 * MIN), // not a tool with logs
+          apiError('claude', 4 * 60 * MIN), // outside the window
+          null,
+        ],
+      },
+    }),
+    NOW,
+  );
+  assert.deepEqual(t.requests, [
+    {
+      ts: NOW - 2 * MIN,
+      path: ['claude', 'provider:anthropic'],
+      client: 'Claude Code',
+      model: null,
+      tokens: 0,
+      ms: null,
+      ok: false,
+      source: 'logs',
+    },
+    {
+      ts: NOW - 3 * MIN,
+      path: ['codex', 'provider:anthropic'],
+      client: 'Codex',
+      model: 'claude-sonnet-5',
+      tokens: 0,
+      ms: null,
+      ok: false,
+      source: 'logs',
+    },
+  ]);
+  assert.ok(node(t, 'claude'), 'a tool with only an API error is drawn');
+  assert.equal(node(t, 'provider:anthropic').status, 'error');
+  assert.equal(t.edges.find((e) => e.id === 'claude>provider:anthropic').status, 'error');
+  assert.doesNotMatch(JSON.stringify(t), /Overloaded|status\.anthropic|https?:/, 'the error text is not copied');
+  // A tool routed through a hop: that hop reports its failures, so the log error is left out.
+  const u = buildTopology(
+    input({
+      routers: [omni()],
+      routes: { claude: 'omniroute', codex: null },
+      logs: { requests: [], errors: [apiError('claude', MIN)] },
+    }),
+    NOW,
+  );
+  assert.deepEqual(u.requests, []);
 });
 
 test('a running tool with no requests is active', () => {
