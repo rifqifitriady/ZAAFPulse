@@ -753,3 +753,31 @@ test('a tool named like an Object.prototype key has no default provider', () => 
   const t = buildTopology(input({ live: { apps: [], installed: ['constructor', 'toString'] } }), NOW);
   assert.deepEqual(edgeIds(t), []);
 });
+
+test('real model names survive the scrub: Ollama tags, Vertex @versions, dated tags', () => {
+  const names = [
+    'llama3.2:3b',
+    'qwen3:14b',
+    'deepseek-r1:70b',
+    'gpt-4:2024',
+    'claude-sonnet-4-5@20250929',
+    'nomic-embed-text:latest',
+  ];
+  const now = Date.now();
+  const out = buildTopology(
+    {
+      logs: {
+        requests: names.map((model, i) => ({ ts: now - i * 1000, source: 'claude', model, input: 1, output: 1 })),
+      },
+    },
+    now,
+  );
+  assert.deepEqual(out.requests.map((r) => r.model).sort(), [...names].sort());
+  const hostile = buildTopology(
+    {
+      logs: { requests: [{ ts: now, source: 'claude', model: 'm bob@corp.com 10.0.0.5:8080/x api.example.com:443' }] },
+    },
+    now,
+  );
+  assert.equal(hostile.requests[0].model, 'm');
+});
