@@ -1008,6 +1008,8 @@ const DRILLS = {
 
 const drawer = { kind: null, opener: null, charts: null };
 function paintDrawer(animate) {
+  // The alerts and agent drawers repaint in place (public/monitorsview.js), so keyboard focus survives a refresh.
+  if (!animate && drawer.kind && Object.hasOwn(MONITOR_DRILLS, drawer.kind)) return monPaintDrawer();
   if (!drawer.kind || !state.data) return;
   const body = $('#drawer-body');
   const scroll = body.scrollTop;

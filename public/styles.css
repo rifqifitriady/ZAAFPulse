@@ -7362,6 +7362,17 @@ svg.tr-wires {
   height: 30px;
   font-size: 12px;
 }
+/* Two tags fit at 1280 px (D-T6-9): the tags column takes a little from the input and output columns. */
+.ds-examples th.ds-c0,
+.ds-examples td.ds-c0,
+.ds-examples th.ds-c1,
+.ds-examples td.ds-c1 {
+  width: 20%;
+}
+.ds-examples th.ds-c5,
+.ds-examples td.ds-c5 {
+  width: 15%;
+}
 .ds-note {
   display: block;
   min-height: 1em;
@@ -7758,6 +7769,13 @@ svg.tr-wires {
   color: #ff8aa3;
   overflow-wrap: anywhere;
 }
+/* A state, not a failure (D-T7-6): not run, or the original still loading or gone. No red border, muted text. */
+.ds-cell-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--h-muted);
+  overflow-wrap: anywhere;
+}
 .ds-proposal {
   display: flex;
   flex-direction: column;
@@ -7868,6 +7886,116 @@ svg.tr-wires {
   .ds-pg-caps {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* Datasets: the auto-add rule under the list, and Stop on a run in progress */
+#ds-body > .ds-panel + .ds-panel {
+  margin-top: 14px;
+}
+.ds-panel > .ds-off {
+  margin: 0 0 12px;
+}
+.ds-auto {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 560px;
+  font-size: 13px;
+}
+.ds-auto-switch,
+.ds-auto .ds-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+.ds-auto-switch {
+  font-weight: 600;
+}
+.ds-auto .ds-check {
+  font-size: 12.5px;
+}
+.ds-auto-ds {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.ds-auto-ds .input {
+  max-width: 360px;
+  font-weight: 400;
+}
+.ds-auto-ds .input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.ds-auto-when {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 8px 12px 10px;
+  border: 1px solid var(--h-edge);
+  border-radius: 10px;
+}
+.ds-auto-when legend {
+  padding: 0 4px;
+  font-size: 12px;
+  color: var(--h-muted);
+}
+.ds-auto .ds-msg {
+  margin: 0;
+}
+.ds-switch {
+  appearance: none;
+  flex: none;
+  position: relative;
+  width: 34px;
+  height: 20px;
+  margin: 0;
+  border: 1px solid var(--h-edge);
+  border-radius: 999px;
+  background: rgba(8, 10, 34, 0.7);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.ds-switch::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #b9c1ec;
+  transition: transform 0.15s;
+}
+.ds-switch:checked {
+  border-color: var(--h-cyan);
+  background: rgba(77, 232, 255, 0.35);
+}
+.ds-switch:checked::before {
+  transform: translateX(14px);
+  background: var(--h-cyan);
+}
+.ds-switch:focus-visible {
+  outline: 2px solid var(--h-cyan);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ds-switch,
+  .ds-switch::before {
+    transition: none;
+  }
+}
+.ds-msg.ds-wait {
+  color: #b9c1ec;
+}
+.ds-pg-run .ds-pg-stop {
+  padding: 5px 12px;
+  font-size: 12px;
 }
 
 /* Monitors: the alerts bell and drawer, paused-agent banners, agent controls and Settings → Monitors */
@@ -8363,6 +8491,12 @@ label.mon-cand.on {
 }
 .mon-secret .ie-secret:has(.input[hidden]) select {
   grid-column: 1 / -1;
+}
+/* the alerts drawer after a failed poll: the rows shown are the last ones read */
+.mon-stale {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted);
 }
 /* Local model servers: the action row on AI Office cards, and Settings → Local models */
 .rt-slot:empty {

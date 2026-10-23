@@ -62,11 +62,11 @@
 | id | default on | default threshold | data | may auto-pause |
 |---|---|---|---|---|
 | `daily_cost` | on if `monthlyBudgetUSD > 0` | budget ÷ 30 per day | aggregate (today's cost) | yes |
-| `month_projection` | on if budget > 0 | projection > budget | aggregate | no |
+| `month_projection` | on if budget > 0 | projection > budget, from local 00:00 on the 4th of the month | aggregate | no |
 | `cost_burn` | off | > $5 per 10 min per session | live (per-session cost in the last 10 min, from index usage rows) | yes |
 | `tool_loop` | on | a `loop` signal in the last 10 min, or > 50 tool calls in one turn | live + aggregate | yes |
 | `agent_stuck` | off | agent state working or thinking, with no new log line for 10 min | live (office snapshot) | no |
-| `accuracy_drop` | on | > 5 points below the previous 7 days | aggregate (quality accuracy) | no |
+| `accuracy_drop` | on | > 5 points below the previous 7 days, once today and the previous 7 days each have ≥ minSamples (20) tool results | aggregate (quality accuracy) | no |
 | `eval_pass_rate` | off | any evaluator < 80% over 24 h with ≥ 20 samples | evals summary | no |
 | `unsafe_content` | on | external prompt injection or a secret leak in the last hour | index signals | no |
 

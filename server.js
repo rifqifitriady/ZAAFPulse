@@ -43,7 +43,7 @@ const { createAutoAdd } = require('./lib/datasets/auto');
 const { createMonitorState } = require('./lib/monitors/state');
 const { createChannels, checkWebhookUrl, parseHeaders } = require('./lib/monitors/channels');
 const { createMonitorApi } = require('./lib/monitors/api');
-const { createMonitors } = require('./lib/monitors');
+const { createMonitors, createAfterRefresh } = require('./lib/monitors');
 const { createAgentControl } = require('./lib/agents/control');
 const runtimeRegistry = require('./lib/runtimes/registry');
 const { createRuntimeState, jsonFile } = require('./lib/runtimes/state');
@@ -248,6 +248,51 @@ function rawConfig() {
   }
   return rawCache.value;
 }
+// The one writer of config.json for the settings pages (gateway, evals, datasets, monitors, brain, local runtimes):
+// one top-level section is replaced and the cache is refreshed from what was written. Demo mode keeps it in memory.
+// config.json is read again here, not from the cache: rawConfig() reads a file that does not parse as {}, and saving
+// on top of that would drop every other section. Such a file (often a hand edit gone wrong) is refused and left as it
+// is. The write goes through a temp file of its own (two saves never share one) at mode 0600, then a rename. Every
+// failure throws a status-500 error whose message holds no path, so each API can pass it on.
+const CONFIG_UNSAVED = 'the settings could not be saved';
+function saveConfigSection(name, value) {
+  if (DEMO) {
+    rawCache.value = { ...rawCache.value, [name]: value };
+    return;
+  }
+  const refuse = (message, err) => {
+    console.error(`config: ${message}${err && err.code ? ` (${err.code})` : ''}`);
+    return Object.assign(new Error(message), { status: 500 });
+  };
+  let text = '';
+  try {
+    text = fs.readFileSync(CONFIG_FILE, 'utf8');
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw refuse(CONFIG_UNSAVED, e);
+  }
+  let base = {};
+  try {
+    base = text.trim() ? JSON.parse(text) : {};
+  } catch {
+    base = null;
+  }
+  if (!base || typeof base !== 'object' || Array.isArray(base))
+    throw refuse(`${CONFIG_UNSAVED}: config.json does not parse as an object; fix it by hand first`);
+  const raw = { ...base, [name]: value };
+  const tmpFile = `${CONFIG_FILE}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(tmpFile, JSON.stringify(raw, null, 2), { mode: 0o600, flag: 'wx' });
+    fs.renameSync(tmpFile, CONFIG_FILE);
+  } catch (e) {
+    fs.rmSync(tmpFile, { force: true });
+    throw refuse(CONFIG_UNSAVED, e);
+  }
+  try {
+    rawCache = { mtime: fs.statSync(CONFIG_FILE).mtimeMs, value: raw };
+  } catch {
+    rawCache = { mtime: 0, value: raw }; // saved; the next read checks the file again
+  }
+}
 // Local trace store: every gateway trace without content, under .data/traces (on unless "tracing": { "enabled":
 // false }). Retention is read at start; the on/off switch whenever config.json changes.
 const tracingCfg = () => (rawConfig() || {}).tracing || {};
@@ -296,15 +341,7 @@ const gateway = createGateway({
   dataDir: DEMO ? demoDir : path.join(DIR, '.data'),
   ...(DEMO ? { fetchImpl: demoGw.createDemoFetch(), toolsHome: demoDir } : {}),
   getConfig: rawConfig,
-  writeGatewayConfig: (g) => {
-    if (DEMO) {
-      rawCache.value = { ...rawCache.value, gateway: g };
-      return;
-    }
-    const raw = { ...rawConfig(), gateway: g };
-    fs.writeFileSync(`${CONFIG_FILE}.tmp`, JSON.stringify(raw, null, 2));
-    fs.renameSync(`${CONFIG_FILE}.tmp`, CONFIG_FILE);
-  },
+  writeGatewayConfig: (g) => saveConfigSection('gateway', g),
   secrets: createSecrets(),
   // Provider keys go to the Keychain as acc.gw-<provider id>, apart from integration keys.
   resolveSecret: (id, input, current) =>
@@ -381,16 +418,7 @@ const evalApi = createEvalApi({
   claude: claudeCli,
   settings: {
     get: () => rawConfig().evals,
-    save: (evals) => {
-      if (DEMO) {
-        rawCache.value = { ...rawCache.value, evals };
-        return;
-      }
-      const raw = { ...rawConfig(), evals };
-      fs.writeFileSync(`${CONFIG_FILE}.tmp`, JSON.stringify(raw, null, 2));
-      fs.renameSync(`${CONFIG_FILE}.tmp`, CONFIG_FILE);
-      rawCache = { mtime: fs.statSync(CONFIG_FILE).mtimeMs, value: raw };
-    },
+    save: (evals) => saveConfigSection('evals', evals),
   },
   onFeedback: (f) => datasetAuto.onFeedback(f),
 });
@@ -414,16 +442,7 @@ const datasetApi = createDatasetApi({
   contentOff,
   settings: {
     get: () => rawConfig().datasets,
-    save: (next) => {
-      if (DEMO) {
-        rawCache.value = { ...rawCache.value, datasets: next };
-        return;
-      }
-      const raw = { ...rawConfig(), datasets: next };
-      fs.writeFileSync(`${CONFIG_FILE}.tmp`, JSON.stringify(raw, null, 2));
-      fs.renameSync(`${CONFIG_FILE}.tmp`, CONFIG_FILE);
-      rawCache = { mtime: fs.statSync(CONFIG_FILE).mtimeMs, value: raw };
-    },
+    save: (next) => saveConfigSection('datasets', next),
   },
 });
 const datasetAuto = createAutoAdd({
@@ -483,7 +502,9 @@ const monitorChannels = createChannels({
 // Agent control is for the owner at this machine: off in server mode, and whenever the dashboard signs in with a
 // password (a proxy, a public URL or ZAAFPULSE_AUTH=1), since other people may reach it then. So password mode counts
 // as server mode here: the rules then never pause an agent (the settings refuse auto-pause, the listing hides it).
-const AGENTS_OFF = SERVER_MODE || auth.mode === 'password';
+// Control also needs a dashboard sign-in, so ZAAFPULSE_AUTH=none turns it off too, except in demo (which never signals).
+const AGENTS_OFF =
+  SERVER_MODE || auth.mode === 'password' ? 'server' : auth.mode === 'none' && !DEMO ? 'no-sign-in' : false;
 const agentControl = createAgentControl({ dataDir: monitorDir, serverMode: AGENTS_OFF, log: (m) => console.error(m) });
 const monitors = createMonitors({
   indexer,
@@ -549,18 +570,10 @@ const monitorApi = createMonitorApi({
     get: channelConfig,
     save: ({ desktop, webhook }) => {
       const m = rawConfig().monitors;
-      const monitorsCfg = {
+      saveConfigSection('monitors', {
         ...(m && typeof m === 'object' ? m : {}),
         channels: { desktop, ...(webhook ? { webhook } : {}) },
-      };
-      if (DEMO) {
-        rawCache.value = { ...rawCache.value, monitors: monitorsCfg };
-        return;
-      }
-      const raw = { ...rawConfig(), monitors: monitorsCfg };
-      fs.writeFileSync(`${CONFIG_FILE}.tmp`, JSON.stringify(raw, null, 2));
-      fs.renameSync(`${CONFIG_FILE}.tmp`, CONFIG_FILE);
-      rawCache = { mtime: fs.statSync(CONFIG_FILE).mtimeMs, value: raw };
+      });
     },
   },
   resolveSecret: (field, input, current) =>
@@ -574,7 +587,7 @@ const monitorApi = createMonitorApi({
 });
 // Local model servers (lib/runtimes): Start and Stop on the AI Office cards, and the owner's own runtimes in
 // config.json "localRuntimes" (Settings → Local models). Off wherever agent control is off (server mode, password
-// sign-in) and in Docker. Demo mode answers from synthetic runtimes and starts nothing.
+// sign-in, no sign-in outside demo) and in Docker. Demo mode answers from synthetic runtimes and starts nothing.
 const runtimeDir = DEMO ? demoDir : path.join(DIR, '.data');
 const runtimeEntries = () => runtimeRegistry.entries(rawConfig().localRuntimes);
 const runtimeStarted = jsonFile(path.join(runtimeDir, 'runtimes', 'started.json'));
@@ -591,6 +604,7 @@ const runtimeControl = createRuntimeControl({
   entries: runtimeEntries,
   dataDir: runtimeDir,
   started: runtimeStarted,
+  // The agents' rule: a runtime start runs a command, so it needs a sign-in just as pausing an agent does.
   serverMode: AGENTS_OFF,
   models: runtimeModels,
   log: (m) => console.error(m),
@@ -620,29 +634,7 @@ const runtimeApi = createRuntimeApi({
   control: runtimeControl,
   config: {
     list: () => rawConfig().localRuntimes,
-    // config.json is read again here, not from the cache: rawConfig() reads a file that does not parse as {}, and
-    // saving on top of that would drop everything else in it. Such a file (often a hand edit gone wrong) is refused
-    // and left as it is; the API answers 500 "the settings could not be saved", which holds no path.
-    save: (list) => {
-      let text = '';
-      try {
-        text = fs.readFileSync(CONFIG_FILE, 'utf8');
-      } catch (e) {
-        if (e.code !== 'ENOENT') throw e;
-      }
-      const base = text.trim() ? JSON.parse(text) : {};
-      if (!base || typeof base !== 'object' || Array.isArray(base)) throw new Error('config.json is not an object');
-      const raw = { ...base, localRuntimes: list };
-      const tmpFile = `${CONFIG_FILE}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
-      try {
-        fs.writeFileSync(tmpFile, JSON.stringify(raw, null, 2), { mode: 0o600, flag: 'wx' });
-        fs.renameSync(tmpFile, CONFIG_FILE);
-      } catch (e) {
-        fs.rmSync(tmpFile, { force: true });
-        throw e;
-      }
-      rawCache = { mtime: fs.statSync(CONFIG_FILE).mtimeMs, value: raw };
-    },
+    save: (list) => saveConfigSection('localRuntimes', list),
   },
   demo: DEMO ? demo.runtimesDemo() : null,
   home: os.homedir(),
@@ -652,35 +644,15 @@ const monitorTick = () =>
   Promise.resolve()
     .then(() => monitors.tickAggregate())
     .catch(() => console.error('monitors: the aggregate pass failed'));
-// The aggregate pass has to run on the refreshed index. The refresh timer is not changed: this waits for it to end.
-// One waiting poller at a time: a refresh that outlasts RESCAN_MS must not stack a poller per interval.
-let monitorTickWaiting = false;
-const monitorTickAfterIndex = () => {
-  if (monitorTickWaiting) return;
-  monitorTickWaiting = true;
-  const t = setInterval(() => {
-    if (indexer.state.indexing) return;
-    clearInterval(t);
-    monitorTickWaiting = false;
-    monitorTick();
-  }, 250);
-  t.unref();
-};
+// The aggregate pass has to run on the refreshed index: each call waits for the refresh to end (lib/monitors).
+const monitorTickAfterIndex = createAfterRefresh({ indexing: () => indexer.state.indexing, run: monitorTick });
 
 // Second brain sources: Obsidian by default, plus Logseq, Notion, Tana, Roam, mem.ai, Reflect, Heybrain,
 // PARA folders, the RAG knowledge bases and vector databases. Settings in config.json under "brain";
 // tokens in the Keychain as acc.brain-<id>.
 const brain = createBrain({
   getConfig: rawConfig,
-  writeBrainConfig: (b) => {
-    if (DEMO) {
-      rawCache.value = { ...rawCache.value, brain: b };
-      return;
-    }
-    const raw = { ...rawConfig(), brain: b };
-    fs.writeFileSync(`${CONFIG_FILE}.tmp`, JSON.stringify(raw, null, 2));
-    fs.renameSync(`${CONFIG_FILE}.tmp`, CONFIG_FILE);
-  },
+  writeBrainConfig: (b) => saveConfigSection('brain', b),
   secrets: createSecrets(),
   resolveSecret: (id, input, current) =>
     gatewaySecret(`brain-${id}`, { key: 'token', label: 'secret', required: false }, input, current),

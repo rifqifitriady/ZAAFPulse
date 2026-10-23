@@ -50,8 +50,10 @@ function setup({
     now: () => t,
     config: () => ({ monthlyBudgetUSD: 300 }),
   });
+  const keyCalls = []; // the third argument of every keyFor call
   const trace = {
-    keyFor: (source, sid) => {
+    keyFor: (source, sid, opts) => {
+      keyCalls.push(opts);
       if (source === 'claude' && sid === SID) return KEY;
       throw Object.assign(new Error('unknown session'), { status: 404 });
     },
@@ -109,6 +111,7 @@ function setup({
     },
   });
   const tests = [];
+  const resolved = []; // the fields resolveSecret was asked for, in order
   const api = createMonitorApi({
     state,
     monitors: { status: async () => ({ lastAggregate: 5, lastLive: 6, paused: await fakeControl.paused() }) },
@@ -128,8 +131,10 @@ function setup({
         channelCfg = { ...c, problem: null };
       },
     },
-    resolveSecret: (field, input, current) =>
-      resolve('monitors-webhook', { key: field, label: field, required: false }, input, current),
+    resolveSecret: (field, input, current) => {
+      resolved.push(field);
+      return resolve('monitors-webhook', { key: field, label: field, required: false }, input, current);
+    },
     checkUrl: checkWebhookUrl,
     checkHeaders: parseHeaders,
     demo,
@@ -138,6 +143,7 @@ function setup({
     notifyOff,
     home: HOME,
     platform,
+    now: () => t,
   });
   const bodies = [];
   const call = async (p, { method = 'GET', body, raw, contentType = 'application/json' } = {}) => {
@@ -162,6 +168,8 @@ function setup({
     stored,
     tests,
     bodies,
+    keyCalls,
+    resolved,
     channels: () => channelCfg,
     setChannels: (c) => (channelCfg = c),
     tick: (ms) => (t += ms),
@@ -214,6 +222,46 @@ test('monitor api: rule list shape, opaque instances and rule states', async () 
     webhook: { configured: false, headers: false, problem: null },
     sending: true,
   });
+  s.done();
+});
+
+test('monitor api: an ended live session leaves the rule row and the counts; an aggregate instance never does', async () => {
+  const s = setup();
+  // Two triggered tool_loop sessions: one last seen 61 s ago (ended), one 5 s ago.
+  s.state.apply('tool_loop', [{ instance: SID2, sessionId: SID2, state: 'triggered', value: 60, threshold: 50 }]);
+  s.state.apply('daily_cost', [{ instance: 'all', sessionId: null, state: 'ok', value: 2, threshold: 10 }]);
+  s.tick(56_000);
+  s.state.apply('tool_loop', [{ instance: SID, sessionId: SID, state: 'triggered', value: 70, threshold: 50 }]);
+  s.tick(5_000);
+  const r = await s.call('/api/monitors');
+  const loop = r.body.rules.find((x) => x.id === 'tool_loop');
+  assert.equal(loop.instances.length, 1, 'only the fresh session');
+  assert.equal(loop.instances[0].sessionKey, KEY);
+  assert.equal(loop.state, 'triggered');
+  const daily = r.body.rules.find((x) => x.id === 'daily_cost');
+  assert.equal(daily.instances.length, 1, 'an aggregate instance seen 61 s ago is still shown');
+  assert.equal(daily.state, 'ok');
+  const st = await s.call('/api/monitors/status');
+  assert.equal(st.body.counts.triggered, 1);
+  assert.equal(st.body.counts.ok, 1, 'the aggregate instance still counts');
+  // The alert history keeps the ended session.
+  assert.equal((await s.call('/api/alerts')).body.alerts.filter((a) => a.rule === 'tool_loop').length, 2);
+  s.done();
+});
+
+test('monitor api: session keys are looked up without forcing a trace rebuild', async () => {
+  const s = setup();
+  s.state.setSettings('cost_burn', { enabled: true });
+  s.state.apply('cost_burn', [
+    { instance: SID, sessionId: SID, state: 'triggered', value: 7, threshold: 5 },
+    { instance: SID2, sessionId: SID2, state: 'triggered', value: 8, threshold: 5 },
+  ]);
+  for (const p of ['/api/alerts', '/api/monitors', '/api/monitors/status']) {
+    s.keyCalls.length = 0;
+    assert.equal((await s.call(p)).status, 200, p);
+    assert.ok(s.keyCalls.length > 0, `${p} looked up a key`);
+    for (const opts of s.keyCalls) assert.deepEqual(opts, { rebuild: false }, p);
+  }
   s.done();
 });
 
@@ -361,6 +409,30 @@ test('monitor api: a failure part-way through the channel settings leaves them u
   assert.equal(s2.stored.length, 0);
   s.done();
   s2.done();
+});
+
+test('monitor api: webhook headers without a URL to come are refused before any secret is resolved', async () => {
+  const s = setup();
+  const headers = { mode: 'store', value: 'X-A: b' };
+  for (const webhookRef of [{ mode: 'keep' }, { mode: 'store', value: '' }]) {
+    const r = await s.post('/api/monitors/channels', { webhookRef, webhookHeadersRef: headers });
+    assert.equal(r.status, 400, JSON.stringify(webhookRef));
+    // An empty pasted URL is already refused by the URL check, which needs no secret store either.
+    if (webhookRef.mode === 'keep') assert.equal(r.body.error, 'set the webhook URL first');
+  }
+  assert.deepEqual(s.resolved, [], 'resolveSecret was never called');
+  assert.equal(s.stored.length, 0);
+  s.done();
+  // The headers are resolved first: when that fails, the URL is never resolved, so no new URL secret is left behind.
+  const f = setup({ failStore: (service) => service.endsWith('-headers') });
+  const r = await f.post('/api/monitors/channels', {
+    webhookRef: { mode: 'store', value: 'https://hooks.example.com/abc' },
+    webhookHeadersRef: { mode: 'store', value: 'Authorization: Bearer abc' },
+  });
+  assert.equal(r.status, 500);
+  assert.deepEqual(f.resolved, ['headers']);
+  assert.equal(f.stored.length, 0, 'no URL secret was stored');
+  f.done();
 });
 
 test('monitor api: the test button', async () => {
@@ -595,6 +667,12 @@ test('monitor api: server mode refuses agent routes; demo answers without the co
     },
   });
   assert.equal((await demo.call(`/api/agents/candidates?key=${KEY}`)).body.candidates.length, 1);
+  // A session no agent runs (a gateway one) says so in demo mode too, so the explorer stays quiet for it.
+  assert.deepEqual((await demo.call(`/api/agents/candidates?key=kiro.${'b'.repeat(32)}`)).body, {
+    candidates: [],
+    canPause: true,
+    reason: 'unsupported',
+  });
   for (const a of ['pause', 'resume', 'stop']) {
     const r = await demo.post(`/api/agents/${a}`, { key: KEY, pid: 4242, startTime: 1000, confirm: true });
     assert.equal(r.status, 200);
@@ -650,6 +728,37 @@ test('monitor api: in Docker agent control is off like server mode, with its own
   const demo = setup({ inDocker: true, demo: { candidates: () => [], paused: [] } });
   assert.equal((await demo.call('/api/monitors/status')).body.agents.available, true);
   demo.done();
+});
+
+test('monitor api: without a dashboard sign-in agent control is off, with its own reason', async () => {
+  const off = setup({ agentsOff: 'no-sign-in' });
+  assert.deepEqual((await off.call('/api/monitors/status')).body.agents, {
+    available: false,
+    pause: true,
+    reason: 'no-sign-in',
+  });
+  const cands = await off.call(`/api/agents/candidates?key=${KEY}`);
+  assert.equal(cands.status, 403);
+  assert.match(cands.body.error, /without a dashboard sign-in/);
+  for (const a of ['pause', 'resume', 'stop']) {
+    const r = await off.post(`/api/agents/${a}`, { key: KEY, pid: 4242, startTime: 1000, confirm: true });
+    assert.equal(r.status, 403, a);
+    assert.deepEqual(r.body, { error: 'agent control is off without a dashboard sign-in' });
+  }
+  const refused = await off.post('/api/monitors/cost_burn', { autoPause: true });
+  assert.equal(refused.status, 409);
+  assert.deepEqual(refused.body, { error: 'agent control is off without a dashboard sign-in' });
+  assert.equal(off.state.settings('cost_burn').autoPause, false, 'nothing was saved');
+  assert.ok((await off.call('/api/monitors')).body.rules.every((x) => x.mayAutoPause === false));
+  assert.deepEqual(off.calls, [], 'the control module was never asked');
+  off.done();
+
+  // 'server' (and true, as before) keeps the server-mode wording.
+  const server = setup({ agentsOff: 'server' });
+  assert.equal((await server.call('/api/monitors/status')).body.agents.reason, 'server');
+  const r = await server.post('/api/agents/pause', { key: KEY, pid: 4242, startTime: 1000 });
+  assert.deepEqual([r.status, r.body.error], [403, 'agent control is off in server mode']);
+  server.done();
 });
 
 // ---- a spawned server ----
@@ -766,6 +875,9 @@ test('monitors over HTTP: demo data, demo actions, validation', async () => {
     }
     assert.equal((await c.post('/api/monitors/test', { kind: 'desktop' })).json.demo, true);
     const status = await c.call('/api/monitors/status');
+    // Demo signals nothing, so with no sign-in it keeps the controls shown.
+    assert.equal(status.json.agents.available, true);
+    assert.equal(status.json.agents.reason, null);
     assert.equal(status.json.paused.length, 1);
     assert.equal(status.json.paused[0].sessionKey, key);
 
@@ -815,6 +927,23 @@ test('monitors over HTTP: the webhook is saved as a secret reference, and a plai
     assert.match(t.json.error, /off/);
     assert.equal((await c.post('/api/monitors/channels', { webhookRef: 'https://x.example.com' })).status, 400);
     for (const b of c.bodies) assert.doesNotMatch(b, /hooks\.example\.com|plain\.example\.com/);
+    noPaths(c.bodies);
+  } finally {
+    await s.stop();
+  }
+});
+
+test('monitors over HTTP: with ZAAFPULSE_AUTH=none (no demo) agent control is off for want of a sign-in', async () => {
+  const s = await startServer({ ZAAFPULSE_AUTH: 'none' });
+  const c = client(s.base);
+  try {
+    const status = await c.call('/api/monitors/status');
+    assert.equal(status.status, 200);
+    assert.equal(status.json.agents.available, false);
+    assert.equal(status.json.agents.reason, 'no-sign-in');
+    const r = await c.post('/api/monitors/cost_burn', { autoPause: true });
+    assert.equal(r.status, 409);
+    assert.match(r.json.error, /without a dashboard sign-in/);
     noPaths(c.bodies);
   } finally {
     await s.stop();
@@ -875,10 +1004,15 @@ test('monitors over HTTP: sign-in gate, gateway keys refused, agent routes off w
       for (const a of ['pause', 'resume', 'stop']) {
         const r = await c.post(`/api/agents/${a}`, { pid: child.pid, startTime: 1, confirm: true });
         assert.equal(r.status, 403, a);
+        assert.match(r.json.error, /server mode/, a);
       }
     } finally {
       child.kill('SIGKILL');
     }
+    // The control module audits every refusal it makes: an empty log shows the API gate refused first.
+    const auditFile = path.join(data, '.data', 'agent-audit.jsonl');
+    const lines = fs.existsSync(auditFile) ? fs.readFileSync(auditFile, 'utf8').trim() : '';
+    assert.equal(lines, '', 'the control module was never reached');
     assert.equal((await c.post('/api/monitors/cost_burn', { autoPause: true })).status, 409);
     assert.ok((await c.call('/api/monitors')).json.rules.every((x) => x.mayAutoPause === false));
     for (const who of [c, anon, bearer]) noPaths(who.bodies);
@@ -886,3 +1020,57 @@ test('monitors over HTTP: sign-in gate, gateway keys refused, agent routes off w
     await s.stop();
   }
 });
+
+// saveConfigSection (server.js) is the one config.json writer of the settings pages; the monitors channels and the
+// eval settings are two of its callers.
+test('settings saves over HTTP: a config.json that does not parse is refused and left as it is', async () => {
+  const data = tmp('zp-cfg-bad-');
+  const file = path.join(data, 'config.json');
+  const broken = '{ "userName": "Kept", "gateway": { "port": 4000 }, }\n';
+  fs.writeFileSync(file, broken);
+  const s = await startServer({ ZAAFPULSE_AUTH: 'none' }, { data });
+  const c = client(s.base);
+  try {
+    const m = await c.post('/api/monitors/channels', { desktop: false });
+    assert.equal(m.status, 500);
+    assert.equal(m.json.error, 'the settings could not be saved');
+    const e = await c.post('/api/evals/settings', { dailyCap: 50 });
+    assert.equal(e.status, 500);
+    assert.match(e.json.error, /^the settings could not be saved: config\.json does not parse/);
+    assert.equal(fs.readFileSync(file, 'utf8'), broken, 'config.json is untouched');
+    assert.deepEqual(
+      fs.readdirSync(data).filter((f) => f.startsWith('config.json')),
+      ['config.json'],
+      'no temp file',
+    );
+    noPaths(c.bodies);
+  } finally {
+    await s.stop();
+  }
+});
+
+test(
+  'settings saves over HTTP: config.json is written with mode 0600',
+  { skip: process.platform === 'win32' },
+  async () => {
+    const data = tmp('zp-cfg-mode-');
+    const file = path.join(data, 'config.json');
+    fs.writeFileSync(file, JSON.stringify({ userName: 'Kept' }), { mode: 0o644 });
+    const s = await startServer({ ZAAFPULSE_AUTH: 'none' }, { data });
+    const c = client(s.base);
+    try {
+      assert.equal((await c.post('/api/monitors/channels', { desktop: false })).status, 200);
+      assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+      const cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+      assert.equal(cfg.userName, 'Kept');
+      assert.equal(cfg.monitors.channels.desktop, false);
+      assert.deepEqual(
+        fs.readdirSync(data).filter((f) => f.startsWith('config.json')),
+        ['config.json'],
+        'no temp file',
+      );
+    } finally {
+      await s.stop();
+    }
+  },
+);

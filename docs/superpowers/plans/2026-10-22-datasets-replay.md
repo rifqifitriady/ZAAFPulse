@@ -81,7 +81,7 @@ Slugs match `^[a-z0-9][a-z0-9-]{0,63}$`; `import` and `settings` are reserved. A
 
 **R9. Summary maths.** Per model and evaluator: `pass` = rows whose label is the pass label; `total` = every attempted row of that model (an errored replay or a missing verdict counts as not passing), except `reference_match`, whose `total` counts only rows of examples that have a reference; `rate = total ? pass / total : null`. Per model also `requests`, `cost`, `ms` (mean of answered rows), `errors`, `proposals`. Original outputs are shown, not scored.
 
-**R10. Stored output cap.** A result's `output.text` and `proposal.arguments` are masked and capped at 4,000 characters (head + tail). `experiments.jsonl` keeps the newest 100 records.
+**R10. Stored output cap.** A result's `output.text` and `proposal.arguments` are masked and capped at 4,000 characters (head + tail). `experiments.jsonl` keeps the newest 100 records. A stored record is bounded at 2 MB: over that, texts shorten to 1,000 then 250 characters, then go, and results are dropped from the end last; the record then carries trimmed: { textChars, droppedResults? }.
 
 ## File map
 
