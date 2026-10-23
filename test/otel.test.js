@@ -398,7 +398,7 @@ const completion = (content, extra = {}) => ({
   usage: { prompt_tokens: 100, completion_tokens: 20, prompt_tokens_details: { cached_tokens: 40 } },
   ...extra,
 });
-async function gatewaySetup(upstreamHandler, otelCfg) {
+async function gatewaySetup(upstreamHandler, otelCfg, sink = null) {
   const upstream = await fakeServer({
     'POST /chat/completions': upstreamHandler,
     'GET /models': { body: { data: [{ id: 'm' }] } },
@@ -419,7 +419,7 @@ async function gatewaySetup(upstreamHandler, otelCfg) {
     defaults: { model: 'fake/m', plannerModel: 'fake/m' },
   };
   const config = { gateway: gw, otel: otelCfg };
-  otel.init({ getConfig: () => config, secrets: secretsFor(), env: {}, refreshMs: 0, log: () => {}, version: '1.0.3' });
+  otel.init({ getConfig: () => config, secrets: secretsFor(), env: {}, refreshMs: 0, log: () => {}, version: '1.0.3', sink });
   const gateway = createGateway({
     dataDir,
     getConfig: () => config,
@@ -439,11 +439,11 @@ async function gatewaySetup(upstreamHandler, otelCfg) {
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   const { secret, key } = gateway.keys.create({ name: 'app', scopes: ['llm', 'agents'], rpm: 1000 });
-  const call = async (p, body, headers = {}) => {
+  const call = async (p, body, headers = {}, method = 'POST') => {
     const r = await fetch(base + p, {
-      method: 'POST',
+      method,
       headers: { 'content-type': 'application/json', authorization: `Bearer ${secret}`, ...headers },
-      body: JSON.stringify(body),
+      body: body === undefined ? undefined : JSON.stringify(body),
     });
     return { status: r.status, text: await r.text() };
   };
@@ -783,4 +783,113 @@ test('otel: shutdown sends what is still queued', async () => {
   o.startSpan('after').end(); // after shutdown: dropped, not sent
   assert.equal(o.status().stats.dropped, 1);
   await c.close();
+});
+
+test('otel: a collaboration run keeps one trace, and its model calls sit under the agent that made them', async () => {
+  const got = [];
+  let n = 0;
+  const t = await gatewaySetup(
+    () => {
+      n++;
+      return n === 1
+        ? {
+            body: completion(null, {
+              choices: [
+                {
+                  index: 0,
+                  finish_reason: 'tool_calls',
+                  message: {
+                    role: 'assistant',
+                    content: null,
+                    tool_calls: [
+                      {
+                        id: 't1',
+                        type: 'function',
+                        function: { name: 'zp_handoff', arguments: '{"agent":"hr-finance","note":"over limit"}' },
+                      },
+                    ],
+                  },
+                },
+              ],
+            }),
+          }
+        : { body: completion('Finance approves the refund.') };
+    },
+    { enabled: false },
+    { enabled: () => true, add: (r) => got.push(r) },
+  );
+  try {
+    const r = await t.call('/v1/collaborate', { pattern: 'handoff', agent: 'customer-service', task: 'I want a refund' });
+    assert.equal(r.status, 200, r.text);
+    await sleep(30);
+    const server = got.find((s) => s.kind === 2);
+    const root = got.find((s) => s.name === 'invoke_workflow handoff');
+    const runId = root.attributes['zaafpulse.run.id'];
+    const run = t.gateway.trace.run(runId);
+    assert.deepEqual(run.otel, { traceId: server.traceId, spanId: server.spanId, sampled: true });
+    for (const s of got) assert.equal(s.traceId, server.traceId, s.name);
+    const agents = new Set(got.filter((s) => s.attributes['gen_ai.operation.name'] === 'invoke_agent').map((s) => s.spanId));
+    const rtChats = new Set(run.trace.filter((s) => /^chat /.test(s.name)).map((s) => otel.runSpanId(runId, s.id)));
+    const chats = got.filter((s) => s.name === 'chat fake/m');
+    assert.equal(chats.length, n);
+    for (const ch of chats) {
+      assert.ok(agents.has(ch.parentSpanId), 'a model call sits under its agent');
+      assert.ok(rtChats.has(ch.spanId), "it takes the run's own chat span id");
+    }
+  } finally {
+    await t.close();
+  }
+});
+
+test('otel: a standalone agent run has an invoke_agent span with its model call under it', async () => {
+  const got = [];
+  const t = await gatewaySetup(() => ({ body: completion('Here is the refund policy.') }), { enabled: false }, {
+    enabled: () => true,
+    add: (r) => got.push(r),
+  });
+  try {
+    const r = await t.call('/v1/agents/customer-service/run', { input: 'refund policy?' });
+    assert.equal(r.status, 200, r.text);
+    await sleep(30);
+    const server = got.find((s) => s.kind === 2);
+    const agent = got.find((s) => s.name === 'invoke_agent customer-service');
+    assert.ok(agent, got.map((s) => s.name).join(', '));
+    assert.equal(agent.parentSpanId, server.spanId);
+    const chat = got.find((s) => s.name === 'chat fake/m');
+    assert.equal(chat.parentSpanId, agent.spanId);
+  } finally {
+    await t.close();
+  }
+});
+
+test('otel: replies carry no trace id (a return-channel capability); the usage entry keeps it on the server', async () => {
+  const got = [];
+  const t = await gatewaySetup(() => ({ body: completion('Here is the refund policy.') }), { enabled: false }, {
+    enabled: () => true,
+    add: (r) => got.push(r),
+  });
+  try {
+    const agent = await t.call('/v1/agents/customer-service/run', { input: 'refund policy?' });
+    assert.equal(agent.status, 200, agent.text);
+    assert.equal('span' in JSON.parse(agent.text), false);
+    const run = await t.call('/v1/collaborate', { pattern: 'handoff', agent: 'customer-service', task: 'I want a refund' });
+    assert.equal(run.status, 200, run.text);
+    const body = JSON.parse(run.text);
+    assert.equal('otel' in body, false);
+    const one = await t.call(`/v1/runs/${body.id}`, undefined, {}, 'GET');
+    assert.equal(one.status, 200, one.text);
+    assert.equal('otel' in JSON.parse(one.text), false);
+    const dash = await t.gateway.admin('collab', 'POST', { action: 'get', id: body.id });
+    assert.equal('otel' in dash.run, false);
+    await sleep(30);
+    const traces = [...new Set(got.filter((s) => s.kind === 2).map((s) => s.traceId))];
+    for (const id of traces) for (const text of [agent.text, run.text, one.text, JSON.stringify(dash)]) assert.ok(!text.includes(id));
+    // The usage log keeps each request's trace id, so the explorer lists a stored request once; the dashboard's log does not show it.
+    const entries = t.gateway.trace.requests();
+    assert.ok(entries.length && entries.every((e) => traces.includes(e.traceId)), JSON.stringify(entries.map((e) => e.traceId)));
+    const logs = await t.gateway.admin('logs', 'GET');
+    assert.ok(logs.entries.length && logs.entries.every((e) => !('traceId' in e)));
+  } finally {
+    await t.close();
+  }
 });

@@ -54,6 +54,9 @@ const register = require('./scripts/register-mcp');
 const platform = require('./lib/platform');
 const { createAuth, isLoopback, originAllowed } = require('./lib/auth');
 const otel = require('./lib/otel');
+const { createTraceStore } = require('./lib/trace/store');
+const { createRecorder } = require('./lib/trace/recorder');
+const { createReceiver } = require('./lib/trace/otlp');
 
 const PORT = Number(process.env.ZAAFPULSE_PORT || process.env.PORT) || 4777;
 const HOST = process.env.ZAAFPULSE_HOST || process.env.HOST || '127.0.0.1';
@@ -237,8 +240,49 @@ function rawConfig() {
   }
   return rawCache.value;
 }
-// OpenTelemetry trace export: off unless config.json has "otel": { "enabled": true } (see docs/otel.md).
-otel.init({ getConfig: rawConfig, secrets: createSecrets(), version: require('./package.json').version });
+// Local trace store: every gateway trace without content, under .data/traces (on unless "tracing": { "enabled":
+// false }). Retention is read at start; the on/off switch whenever config.json changes.
+const tracingCfg = () => (rawConfig() || {}).tracing || {};
+// A store that cannot open (unwritable or corrupt folder) never takes the server down: tracing is just off.
+let traceStore = null;
+try {
+  traceStore = createTraceStore({
+    dir: path.join(DEMO ? demoDir : path.join(DIR, '.data'), 'traces'),
+    retentionDays: Number(tracingCfg().retentionDays) > 0 ? Number(tracingCfg().retentionDays) : 14,
+    maxBytes: Number(tracingCfg().maxBytes) > 0 ? Number(tracingCfg().maxBytes) : 500 * 1024 * 1024,
+  });
+} catch (err) {
+  console.error('traces: the local trace store is off:', err.message);
+}
+// The on/off answer is asked several times per span: re-read config.json at most every 2 seconds.
+let tracingOnAt = 0;
+let tracingOnValue = true;
+const tracingOn = () => {
+  const now = Date.now();
+  if (now - tracingOnAt >= 2000) {
+    tracingOnAt = now;
+    // false or "false" (a hand-edited config.json) turns it off.
+    tracingOnValue = String(tracingCfg().enabled) !== 'false';
+  }
+  return tracingOnValue;
+};
+const recorder = traceStore
+  ? createRecorder({ store: traceStore, enabled: tracingOn })
+  : createRecorder({ store: { writeSpans: () => 0 }, enabled: () => false });
+// Our own OTLP export pointed back here is refused by its service name: the one export uses (otel.serviceName,
+// OTEL_SERVICE_NAME), else the configured name, else zaafpulse.
+const traceReceiver = createReceiver({
+  recorder,
+  serviceName: () => otel.status().serviceName || ((rawConfig() || {}).otel || {}).serviceName || 'zaafpulse',
+});
+// OpenTelemetry trace export: off unless config.json has "otel": { "enabled": true } (see docs/otel.md). The local
+// store is its second sink.
+otel.init({
+  getConfig: rawConfig,
+  secrets: createSecrets(),
+  version: require('./package.json').version,
+  sink: recorder,
+});
 const gatewaySecret = secretResolver({ store: DEMO ? () => {} : keychainStore });
 const gateway = createGateway({
   dataDir: DEMO ? demoDir : path.join(DIR, '.data'),
@@ -279,6 +323,7 @@ const trace = createTrace({
     : {
         indexer,
         gateway,
+        traceStore,
         roots: [...LOG_ROOTS.claude, ...LOG_ROOTS.codex],
       }),
 });
@@ -675,6 +720,17 @@ const MIME = {
   '.svg': 'image/svg+xml',
 };
 
+// Any of these on a request means it came through a proxy, even when the proxy runs on this machine.
+const TRACE_PROXY_HEADERS = [
+  'x-forwarded-for',
+  'x-forwarded-host',
+  'x-forwarded-proto',
+  'x-forwarded-port',
+  'forwarded',
+  'x-real-ip',
+  'via',
+];
+
 const handler = async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   // Reject requests addressed to other names (DNS rebinding / cross-origin writes).
@@ -731,6 +787,26 @@ const handler = async (req, res) => {
     });
 
   try {
+    // OTLP/HTTP JSON return channel (lib/trace/otlp.js): spans back from remote agents and MCP servers for traces
+    // this ZAAFPulse sent out. From this machine only; bodies over 1 MB are cut off by readBody. A reverse proxy on
+    // this host connects from loopback too, so a forwarding header or a public Host name is refused as well.
+    if (url.pathname === '/v1/traces' && req.method === 'POST') {
+      if (
+        !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress) ||
+        !isLoopback(host) ||
+        TRACE_PROXY_HEADERS.some((h) => req.headers[h] !== undefined)
+      )
+        return send(res, 403, { error: 'the trace return channel accepts calls from this machine only' });
+      if (!/^application\/json\s*(;|$)/i.test(req.headers['content-type'] || ''))
+        return send(res, 415, { error: 'send OTLP as JSON (content-type: application/json)' });
+      let body;
+      try {
+        body = JSON.parse(await readBody(req));
+      } catch (err) {
+        return err.message === 'too large' ? undefined : send(res, 400, { error: 'invalid JSON' });
+      }
+      return send(res, 200, traceReceiver.receive(body));
+    }
     // The gateway authenticates its own callers with ZAAFPulse API keys.
     if (await gateway.handle(req, res, url)) return;
     // Dashboard and /api: a signed-in session in server mode.
@@ -822,7 +898,9 @@ const handler = async (req, res) => {
       const route = url.pathname.slice('/api/trace/'.length);
       const q = url.searchParams;
       const post = route === 'reveal';
-      if (!['sources', 'settings', 'sessions', 'session', 'title', 'content', 'reveal', 'live', 'find'].includes(route))
+      if (
+        !['sources', 'settings', 'sessions', 'session', 'title', 'content', 'reveal', 'live', 'find', 'deps'].includes(route)
+      )
         return send(res, 404, { error: 'unknown route' });
       if (req.method !== (post ? 'POST' : 'GET')) return send(res, 405, { error: 'method not allowed' });
       // Nothing a client sends for a filter, a cursor or a session id is longer than this.
@@ -836,13 +914,21 @@ const handler = async (req, res) => {
         if (route === 'sessions') {
           const days = parseInt(q.get('range'), 10);
           const range = Number.isNaN(days) ? 7 : Math.min(30, Math.max(1, days));
+          const minMs = Number(q.get('minMs'));
+          const minCost = Number(q.get('minCost'));
           const rows = trace.sessions({
             range,
             source: q.get('source') || undefined,
             q: q.get('q') || undefined,
             flags: q.get('flags') || undefined,
+            minMs: Number.isFinite(minMs) && minMs > 0 ? minMs : undefined,
+            minCost: Number.isFinite(minCost) && minCost > 0 ? minCost : undefined,
           });
           return send(res, 200, { sessions: rows });
+        }
+        if (route === 'deps') {
+          const days = parseInt(q.get('range'), 10);
+          return send(res, 200, trace.deps({ range: Number.isNaN(days) ? 7 : Math.min(30, Math.max(1, days)) }));
         }
         if (route === 'session')
           return send(res, 200, await trace.session(q.get('key'), { turn: wholeParam(q.get('turn')) }));
@@ -1208,6 +1294,20 @@ server.listen(PORT, HOST, () => {
   };
   syncPrices();
   setInterval(syncPrices, 3600 * 1000).unref();
+  // Trace store: snapshot the index and apply retention now and every 5 minutes.
+  const keepTraces = () => {
+    try {
+      recorder.flush();
+      if (traceStore) {
+        traceStore.applyRetention();
+        traceStore.snapshot();
+      }
+    } catch (err) {
+      console.error('traces:', err.message);
+    }
+  };
+  keepTraces();
+  setInterval(keepTraces, 5 * 60 * 1000).unref();
   // Demo: seed the workspace, then run chats, agents, collaboration patterns and workflows once.
   if (DEMO)
     demoGw
@@ -1225,6 +1325,8 @@ for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP'])
     try {
       evalEngine.stop(); // a running judge call is cancelled, and its working folder removed
       gateway.flush();
+      recorder.flush();
+      if (traceStore) traceStore.snapshot();
     } finally {
       // Queued spans get up to 2 seconds to reach the OTLP endpoint.
       otel.shutdown(2000).finally(() => process.exit(0));
