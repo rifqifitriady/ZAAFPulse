@@ -478,22 +478,36 @@ function topoMount() {
   const root = document.querySelector('[data-topo]');
   if (!root) return;
   const meta = document.querySelector('[data-topo-meta]');
+  // A fetch that failed, or an answer the card could not draw: the last drawing stays, and the meta line says so.
+  const failed = () => {
+    TOPO.failed = true;
+    if (!root.isConnected) return;
+    if (meta) meta.textContent = '— could not load the topology';
+    root.removeAttribute('aria-busy');
+  };
   const paint = () => {
     if (!root.isConnected) return;
     if (TOPO.data) topoPaint(document, root, TOPO.data, TOPO.ui);
     if (meta) meta.textContent = TOPO.data || !TOPO.failed ? topoMetaText(TOPO.data) : '— could not load the topology';
     root.removeAttribute('aria-busy');
   };
+  const tryPaint = () => {
+    try {
+      paint();
+    } catch {
+      failed();
+    }
+  };
   const load = async () => {
     try {
       TOPO.data = await api('/api/topology');
       TOPO.failed = false;
+      paint();
     } catch {
-      TOPO.failed = true; // the last answer stays on screen
+      failed();
     }
-    paint();
   };
-  if (TOPO.data) paint();
+  if (TOPO.data) tryPaint();
   load();
   const timer = setInterval(() => {
     if (root.isConnected) load();
@@ -503,7 +517,7 @@ function topoMount() {
     typeof ResizeObserver === 'function'
       ? new ResizeObserver(() => {
           cancelAnimationFrame(frame);
-          frame = requestAnimationFrame(() => TOPO.data && paint());
+          frame = requestAnimationFrame(() => TOPO.data && tryPaint());
         })
       : null;
   if (ro) ro.observe(root);
@@ -514,4 +528,4 @@ function topoMount() {
   });
 }
 
-if (typeof module !== 'undefined') module.exports = { topoLayout, topoPaint, topoMetaText, topoAgo };
+if (typeof module !== 'undefined') module.exports = { topoLayout, topoPaint, topoMetaText, topoAgo, topoMount };
