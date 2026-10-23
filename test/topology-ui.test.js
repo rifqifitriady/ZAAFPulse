@@ -171,6 +171,9 @@ test('topoMetaText and topoAgo', () => {
     '— 2 active · 1 error',
   );
   assert.equal(topoMetaText(null), '— 0 active · 0 error');
+  // The hub is always active (it is the dashboard itself), so it is not counted.
+  const hub = { ...N('zaafpulse', 1, 'active'), kind: 'hub' };
+  assert.equal(topoMetaText({ nodes: [hub, N('a', 0, 'active')] }), '— 1 active · 0 error');
   assert.equal(topoAgo(4000), 'just now');
   assert.equal(topoAgo(42000), '42 s ago');
   assert.equal(topoAgo(5 * 60000), '5 min ago');
@@ -525,7 +528,7 @@ test('topoMount: a failed first load, a good load, a tick, a paint that throws, 
     b.answers.push(DATA);
     b.calls.intervals[0].fn();
     await settle();
-    assert.equal(b.meta.textContent, '— 2 active · 1 error');
+    assert.equal(b.meta.textContent, '— 1 active · 1 error');
     const svg = flat(b.root).find(isGraph);
     assert.ok(svg);
     const icos = flat(b.root).filter((n) => n.attrs && n.attrs.class === 'topo-ico');
@@ -537,7 +540,7 @@ test('topoMount: a failed first load, a good load, a tick, a paint that throws, 
     b.answers.push({ ...DATA, nodes: DATA.nodes.map((n) => ({ ...n, status: 'active' })) });
     b.calls.intervals[0].fn();
     await settle();
-    assert.equal(b.meta.textContent, '— 6 active · 0 error');
+    assert.equal(b.meta.textContent, '— 5 active · 0 error');
     assert.equal(flat(b.root).find(isGraph), svg);
 
     // A resize repaints on the next frame.
@@ -572,7 +575,7 @@ test('topoMount: a failed first load, a good load, a tick, a paint that throws, 
     const running = b.calls.intervals.map((_, i) => i + 1).filter((id) => !b.calls.cleared.includes(id));
     assert.deepEqual(running, [2]);
     assert.equal(b.calls.hooks.length, 1);
-    assert.equal(b.meta.textContent, '— 2 active · 1 error');
+    assert.equal(b.meta.textContent, '— 1 active · 1 error');
     assert.deepEqual(unhandled, []);
   } finally {
     b.remove();

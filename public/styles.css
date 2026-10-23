@@ -8954,9 +8954,11 @@ label.mon-cand.on {
 .topo-req-path {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Every path passes through ZAAFPulse, so it is long; it wraps rather than hide where the request went. */
+  overflow-wrap: anywhere;
+}
+.topo-req-top {
+  align-items: flex-start;
 }
 .topo-req-ago {
   flex: none;
