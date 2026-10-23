@@ -23,6 +23,7 @@ const DS_RESERVED = new Set([
 const DS_HIDDEN = '(hidden while content viewing is off)';
 const DS_OFF = 'Content viewing is off';
 const DS_IMPORT_MAX = 16 * 1024 * 1024; // R1 importBytes
+const DS_IMPORT_BIG = 'The file is too large to import: with its JSON wrapping it is over 16 MB.';
 
 function dsAgo(ts, now = Date.now()) {
   if (!Number.isFinite(ts) || ts <= 0) return 'never';
@@ -120,6 +121,21 @@ function dsSlugOf(fileName) {
   return DS_RESERVED.has(s) ? `${s}-1` : s;
 }
 
+// The import request body against the server's limit (D-T6-6): a file just under 16 MB grows past it once its
+// quotes and newlines are escaped in JSON, and the server would answer 413. Counted in bytes, as sent.
+const dsImportTooBig = (bodyText) => new Blob([String(bodyText ?? '')]).size > DS_IMPORT_MAX;
+
+// Focus kept inside a small dialog: the control Tab (or Shift-Tab, `back`) should wrap to from `active`, or null
+// when the browser's own move stays inside.
+function dsWrapFocus(controls, active, back) {
+  if (!controls.length) return null;
+  const first = controls[0];
+  const last = controls[controls.length - 1];
+  if (back && active === first) return last;
+  if (!back && active === last) return first;
+  return null;
+}
+
 // The page and the dataset a Datasets hash names: #datasets, #datasets?ds=<slug>, #datasets/experiments.
 function dsRoute(hash) {
   const [route, query = ''] = String(hash || '')
@@ -198,26 +214,22 @@ function dsResultCells(record, example, examplesState) {
   const rows = (Array.isArray(r.perExample) ? r.perExample : []).filter((x) => x && x.exampleId === id);
   const evaluators = Array.isArray(r.evaluators) ? r.evaluators : [];
   const out = example && example.output;
+  // `note` is a state, not a failure (D-T7-6): a model the run never reached, an original still loading or gone.
+  const noted = (head, note) => ({ head, text: null, labels: [], proposal: null, error: null, note });
   const cells = [
     out
-      ? { head: 'Original output', text: out.text ?? null, labels: [], proposal: null, error: null }
-      : {
-          head: 'Original output',
-          text: null,
-          labels: [],
-          proposal: null,
-          error: dsMissingOriginal(examplesState),
-        },
+      ? { head: 'Original output', text: out.text ?? null, labels: [], proposal: null, error: null, note: null }
+      : noted('Original output', dsMissingOriginal(examplesState)),
   ];
   for (const model of Array.isArray(r.models) ? r.models : []) {
     const row = rows.find((x) => x.model === model);
     if (!row) {
-      cells.push({ head: model, text: null, labels: [], proposal: null, error: 'Not run: the run stopped first' });
+      cells.push(noted(model, 'Not run: the run stopped first'));
       continue;
     }
     if (row.error || !row.output) {
       const error = row.error || 'Failed (the reason is hidden while content viewing is off)';
-      cells.push({ head: model, text: null, labels: [], proposal: null, error });
+      cells.push({ head: model, text: null, labels: [], proposal: null, error, note: null });
       continue;
     }
     // A missing verdict (the judge did not answer) shows as such; an evaluator the row lacks did not apply.
@@ -237,6 +249,7 @@ function dsResultCells(record, example, examplesState) {
       labels,
       proposal: p ? { name: String(p.name || ''), arguments: p.arguments ?? null } : null,
       error: null,
+      note: null,
     });
   }
   return cells;
@@ -388,6 +401,8 @@ function dsErrorOf(status, body) {
   }
   return Object.assign(new Error(msg), { status, reasons });
 }
+// A copy of trApi (traceview.js) that also keeps the server's `reasons`, which an import needs to say which lines
+// failed. The two read api()'s "<status> <body>" errors the same way, so a change to one must go into the other.
 async function dsApi(path, opts) {
   try {
     return await api(path, opts);
@@ -415,6 +430,22 @@ async function dsDownload(slug) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+// The Export button of a dataset row and of the examples view: off with content viewing, and a failure said in `msg`.
+function dsExportButton(slug, label, msg) {
+  const btn = dsEl('button', { type: 'button', class: 'btn ghost' }, label);
+  dsOn(btn, `Download ${slug}.jsonl`);
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    try {
+      await dsDownload(slug);
+    } catch (err) {
+      dsSay(msg, `Export failed: ${err.message}`, true);
+    } finally {
+      btn.disabled = !dsState.content;
+    }
+  });
+  return btn;
 }
 
 /* ---------- the view ---------- */
@@ -543,14 +574,21 @@ function dsPaintList(body, list, settings) {
     reader.onerror = () => dsSay(msg, 'Could not read the file', true);
     reader.onload = async () => {
       const slug = dsSlugOf(f.name);
+      const name =
+        f.name
+          .replace(/\.[^.]*$/, '')
+          .trim()
+          .slice(0, 80) || slug;
+      // The size check above is on the file; what the server limits is the request, escaped in JSON.
+      const body = JSON.stringify({ slug, name, jsonl: String(reader.result || '') });
+      if (dsImportTooBig(body)) return dsSay(msg, DS_IMPORT_BIG, true);
       dsSay(msg, `Importing into ${slug}…`);
       try {
-        const name =
-          f.name
-            .replace(/\.[^.]*$/, '')
-            .trim()
-            .slice(0, 80) || slug;
-        const r = await dsSend('POST', '/api/datasets/import', { slug, name, jsonl: String(reader.result || '') });
+        const r = await dsApi('/api/datasets/import', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body,
+        });
         await reload();
         const after = $('.ds-msg');
         if (after) dsSay(after, `Imported ${r.added} example${r.added === 1 ? '' : 's'} into ${r.dataset.name}`);
@@ -705,18 +743,7 @@ function dsListRow(r, msg, reload) {
     );
   showName();
 
-  const exportBtn = dsEl('button', { type: 'button', class: 'btn ghost' }, 'Export');
-  dsOn(exportBtn, `Download ${r.slug}.jsonl`);
-  exportBtn.addEventListener('click', async () => {
-    exportBtn.disabled = true;
-    try {
-      await dsDownload(r.slug);
-    } catch (err) {
-      dsSay(msg, `Export failed: ${err.message}`, true);
-    } finally {
-      exportBtn.disabled = !dsState.content;
-    }
-  });
+  const exportBtn = dsExportButton(r.slug, 'Export', msg);
 
   // Rename in place: Enter saves, Escape puts the name back.
   const renameBtn = dsEl('button', { type: 'button', class: 'btn ghost' }, 'Rename');
@@ -795,18 +822,7 @@ async function dsMountExamples(body, slug, live) {
   const meta = res.dataset || {};
   const examples = Array.isArray(res.examples) ? res.examples : [];
   const msg = dsEl('p', { class: 'ds-msg', role: 'status' });
-  const exportBtn = dsEl('button', { type: 'button', class: 'btn ghost' }, 'Export JSONL');
-  dsOn(exportBtn, `Download ${slug}.jsonl`);
-  exportBtn.addEventListener('click', async () => {
-    exportBtn.disabled = true;
-    try {
-      await dsDownload(slug);
-    } catch (err) {
-      dsSay(msg, `Export failed: ${err.message}`, true);
-    } finally {
-      exportBtn.disabled = !dsState.content;
-    }
-  });
+  const exportBtn = dsExportButton(slug, 'Export JSONL', msg);
 
   const head = dsEl(
     'div',
@@ -845,7 +861,7 @@ async function dsMountExamples(body, slug, live) {
           dsEl(
             'tbody',
             null,
-            examples.map((ex) => dsExampleRow(slug, ex, msg, counter)),
+            examples.map((ex, i) => dsExampleRow(slug, ex, msg, counter, i + 1)),
           ),
         ),
       )
@@ -872,7 +888,8 @@ function dsEvalTone(id, label) {
   return { tone, title: `${ev.title || id}: ${label}` };
 }
 
-function dsExampleRow(slug, ex, msg, counter) {
+// `n` is the row's number in the table, which names its tags field and Delete button for a screen reader.
+function dsExampleRow(slug, ex, msg, counter, n) {
   const path = `${dsPath(slug)}/examples/${encodeURIComponent(ex.id)}`;
   const tip = (t) => (t == null ? DS_HIDDEN : String(t).slice(0, 600));
   const msgs = (ex.input && ex.input.messages) || [];
@@ -909,7 +926,11 @@ function dsExampleRow(slug, ex, msg, counter) {
     const line = dsEl('span', { class: 'ds-text' });
     // With content off there is nothing to show or add: an empty cell, not an offer the page cannot keep.
     line.textContent = hidden ? DS_HIDDEN : has ? dsPreview(ref.text) : dsState.content ? '+ Add reference' : '—';
-    const btn = dsEl('button', { type: 'button', class: `ds-ref${has ? '' : ' none'}` }, line);
+    const btn = dsEl(
+      'button',
+      { type: 'button', class: `ds-ref${has ? '' : ' none'}`, 'aria-label': 'Edit reference' },
+      line,
+    );
     if (has) btn.title = `${tip(ref.text)}\n\nClick to edit`;
     // With content off the stored text is not on the page, so an edit would overwrite what it cannot show.
     if (!dsState.content) {
@@ -1005,7 +1026,8 @@ function dsExampleRow(slug, ex, msg, counter) {
     placeholder: 'add tags',
     autocomplete: 'off',
     spellcheck: 'false',
-    'aria-label': 'Tags, separated by spaces or commas (Enter saves)',
+    'aria-label': `Tags of example ${n}`,
+    title: 'Tags, separated by spaces or commas (Enter saves)',
   });
   const tagNote = dsEl('small', { class: 'ds-note', role: 'status' });
   tagIn.addEventListener('keydown', async (e) => {
@@ -1040,7 +1062,7 @@ function dsExampleRow(slug, ex, msg, counter) {
   const row = dsEl('tr', null, inCell, outCell, refCell, evCell, fbCell, tagCell, linkCell);
   const del = dsEl(
     'button',
-    { type: 'button', class: 'btn ghost danger', 'aria-label': 'Delete this example' },
+    { type: 'button', class: 'btn ghost danger', 'aria-label': `Delete example ${n}` },
     'Delete',
   );
   del.addEventListener('click', async () => {
@@ -1165,6 +1187,12 @@ function dsCellEl(cell, content) {
     const err = dsEl('p', { class: 'ds-cell-err' });
     err.textContent = cell.error;
     box.append(err);
+    return box;
+  }
+  if (cell.note) {
+    const note = dsEl('p', { class: 'ds-cell-note' });
+    note.textContent = cell.note;
+    box.append(note);
     return box;
   }
   if (cell.text !== '' || !cell.proposal) {
@@ -2086,6 +2114,38 @@ function dsPgSendBody(s) {
   if (!s.preview || !s.preview.body) return null;
   return JSON.stringify(dsPgFormBody(s)) === JSON.stringify(s.preview.body) ? s.preview.body : null;
 }
+// What pressing Run or Send does with the form as it is (D-T7-8): `error` (the form is not a run), `refuse` (an
+// external model with content viewing off), `preview` (an external model and no preview of this form yet) or `send`,
+// which carries the preview's `confirm` only while the preview matches the form.
+function dsPgSendPlan(s) {
+  const body = dsPgFormBody(s);
+  if (body.error) return { kind: 'error', message: body.error };
+  const external = body.models.some((n) => dsPgExternal(s, n));
+  if (external && !s.content) return { kind: 'refuse', message: DS_EXTERNAL_OFF };
+  const previewed = dsPgSendBody(s);
+  if (previewed) return { kind: 'send', body: previewed, confirm: s.preview.confirm };
+  if (external) return { kind: 'preview', body };
+  return { kind: 'send', body };
+}
+// What a refused start means for the page: `message` to say, `dropPreview`, `reload` (the model list changed under
+// the page) and `follow` (another run holds the one slot: follow it, so the page shows when this one can start).
+function dsPgOnError(s, err) {
+  const status = err && err.status;
+  if (status === 409)
+    return {
+      follow: !s.runId,
+      message: 'Another experiment is running. One runs at a time: start this one when it ends.',
+    };
+  if (status === 428)
+    return {
+      dropPreview: true,
+      reload: true,
+      message: 'Preview what will be sent first: an external model is in this run.',
+    };
+  // The server refuses the preview only while content viewing is off, whatever the page last read.
+  if (status === 403) return { dropPreview: true, message: DS_EXTERNAL_OFF };
+  return { message: (err && err.message) || 'Could not start the run' };
+}
 // One edit to the form. Any edit drops an open preview, so what is sent is always what was previewed last.
 function dsPgEdit(s, act, value, checked) {
   if (act === 'model' || act === 'ev') {
@@ -2106,30 +2166,22 @@ function dsPgEdit(s, act, value, checked) {
   return {};
 }
 
-// Starts a run, or asks for the preview first when an external model is ticked. `confirm` sends the previewed body.
-async function dsPgRun(pg, confirm) {
+// Carries out a plan from dsPgSendPlan (dsPlaygroundAct makes it): builds the preview, or starts the run with the
+// preview's confirm token when it has one. A refusal from the server is read by dsPgOnError.
+async function dsPgRun(pg, plan) {
   const s = dsPg(pg);
   if (s.busy || s.runId) return;
-  const body = confirm ? dsPgSendBody(s) : dsPgFormBody(s);
-  if (!body) {
-    s.preview = null;
-    dsPgSay(s, 'The form changed since the preview: preview again', true);
+  if (plan.kind !== 'preview' && plan.kind !== 'send') {
+    dsPgSay(s, plan.message, true);
     return s.repaint();
   }
-  if (body.error) {
-    dsPgSay(s, body.error, true);
-    return s.repaint();
-  }
-  const external = body.models.some((n) => dsPgExternal(s, n));
-  if (external && !s.content) {
-    dsPgSay(s, DS_EXTERNAL_OFF, true);
-    return s.repaint();
-  }
+  const { body } = plan;
+  const previewing = plan.kind === 'preview';
   s.busy = true;
-  dsPgSay(s, external && !confirm ? 'Building the preview…' : 'Starting…');
+  dsPgSay(s, previewing ? 'Building the preview…' : 'Starting…');
   s.repaint();
   try {
-    if (external && !confirm) {
+    if (previewing) {
       const r = await dsSend('POST', '/api/experiments', { ...body, preview: true });
       s.preview = {
         items: Array.isArray(r.preview) ? r.preview : [],
@@ -2140,7 +2192,7 @@ async function dsPgRun(pg, confirm) {
       dsPgSay(s, '');
       s.focus = 'preview';
     } else {
-      const r = await dsSend('POST', '/api/experiments', confirm ? { ...body, confirm: s.preview.confirm } : body);
+      const r = await dsSend('POST', '/api/experiments', plan.confirm ? { ...body, confirm: plan.confirm } : body);
       s.preview = null;
       s.record = null;
       s.runId = r.id;
@@ -2151,22 +2203,17 @@ async function dsPgRun(pg, confirm) {
       dsPgSay(s, '');
     }
   } catch (e) {
-    if (e.status === 409) {
-      // Another run holds the one slot: say so and follow it, so the page shows when this one can start.
-      dsPgSay(s, 'Another experiment is running. One runs at a time: start this one when it ends.', true);
+    const next = dsPgOnError(s, e);
+    if (next.dropPreview) s.preview = null;
+    if (next.reload) s.loaded = false;
+    dsPgSay(s, next.message, true);
+    if (next.follow) {
       const r = await dsApi('/api/experiments').catch(() => null);
       if (r && r.running && !s.runId) {
         s.runId = r.running.id;
         s.progress = r.running;
       }
-    } else if (e.status === 428) {
-      s.preview = null;
-      s.loaded = false; // the model list changed under the page: read it again, then preview
-      dsPgSay(s, 'Preview what will be sent first: an external model is in this run.', true);
-    } else if (e.status === 403) {
-      s.preview = null;
-      dsPgSay(s, DS_EXTERNAL_OFF, true);
-    } else dsPgSay(s, e.message, true);
+    }
   } finally {
     s.busy = false;
     s.repaint();
@@ -2185,7 +2232,8 @@ function dsPlaygroundAct(event, pg, repaint) {
     if (cost && cost.value !== s.maxCostUSD) dsPgEdit(s, 'cost', cost.value);
     if (req && req.value !== s.maxRequests) dsPgEdit(s, 'req', req.value);
     s.focus = 'run';
-    return void dsPgRun(pg);
+    // Run starts over, so an external run is previewed again (the button is off while a preview is open).
+    return void dsPgRun(pg, dsPgSendPlan({ ...s, preview: null }));
   }
   const el = event.target && event.target.closest ? event.target.closest('[data-dspg]') : null;
   if (!el) return;
@@ -2212,7 +2260,14 @@ function dsPlaygroundAct(event, pg, repaint) {
     s.focus = el.dataset.dsfocus;
     return void repaint();
   }
-  if (act === 'send') return void dsPgRun(pg, true);
+  if (act === 'send') {
+    // Send goes only with a preview that still matches the form; otherwise the preview goes and is asked for again.
+    const plan = dsPgSendPlan(s);
+    if (plan.kind === 'send' && plan.confirm) return void dsPgRun(pg, plan);
+    s.preview = null;
+    dsPgSay(s, plan.message || 'The form changed since the preview: preview again', true);
+    return void repaint();
+  }
   if (act === 'stop') return void dsPgCancel(pg);
   if (act === 'back') {
     s.preview = null;
@@ -2285,11 +2340,21 @@ function dsAddPicker(anchorEl, items, { onAdded, verb = 'Add', heading } = {}) {
   const onDown = (e) => {
     if (!el.contains(e.target) && !anchorEl.contains(e.target)) dsClosePicker();
   };
+  // Escape closes and gives focus back to the opener; Tab stays inside the picker, wrapping at either end (D-T6-7).
   const onKey = (e) => {
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
       dsClosePicker(true);
+    } else if (e.key === 'Tab') {
+      const controls = [...el.querySelectorAll('select, input, button')].filter(
+        (c) => !c.disabled && !c.closest('[hidden]'),
+      );
+      const to = dsWrapFocus(controls, document.activeElement, e.shiftKey);
+      if (to) {
+        e.preventDefault();
+        to.focus();
+      }
     }
   };
   document.addEventListener('pointerdown', onDown, true);
@@ -2535,4 +2600,9 @@ if (typeof module !== 'undefined')
     dsPollDelay,
     dsDeltaText,
     dsResultsEl,
+    dsImportTooBig,
+    dsMountExamples,
+    dsWrapFocus,
+    dsPgSendPlan,
+    dsPgOnError,
   };

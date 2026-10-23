@@ -35,6 +35,11 @@ const {
   dsPollDelay,
   dsDeltaText,
   dsResultsEl,
+  dsImportTooBig,
+  dsMountExamples,
+  dsWrapFocus,
+  dsPgSendPlan,
+  dsPgOnError,
 } = require('../public/datasetview');
 
 const SRC = path.join(__dirname, '..', 'public', 'datasetview.js');
@@ -300,7 +305,7 @@ const RECORD = {
 test('dsResultCells: the original first, then each model in record order, with errors and proposals', () => {
   const example = { id: 'ex_1', output: { text: 'The original answer.', model: 'claude-opus' } };
   assert.deepEqual(dsResultCells(RECORD, example), [
-    { head: 'Original output', text: 'The original answer.', labels: [], proposal: null, error: null },
+    { head: 'Original output', text: 'The original answer.', labels: [], proposal: null, error: null, note: null },
     {
       head: 'ollama/qwen3-coder:30b',
       text: 'Fixed the redirect.',
@@ -310,8 +315,9 @@ test('dsResultCells: the original first, then each model in record order, with e
       ],
       proposal: null,
       error: null,
+      note: null,
     },
-    { head: 'lmstudio/mistral-small', text: null, labels: [], proposal: null, error: 'connection refused' },
+    { head: 'lmstudio/mistral-small', text: null, labels: [], proposal: null, error: 'connection refused', note: null },
     {
       head: 'anthropic/claude-haiku-5-5',
       text: '',
@@ -322,6 +328,7 @@ test('dsResultCells: the original first, then each model in record order, with e
       ],
       proposal: { name: 'Bash', arguments: '{"command":"npm test"}' },
       error: null,
+      note: null,
     },
   ]);
   // Content off: texts are null and an error's reason is gone; a model the run never reached says so.
@@ -330,10 +337,10 @@ test('dsResultCells: the original first, then each model in record order, with e
   assert.equal(two[1].text, null);
   assert.equal(two[1].error, null);
   assert.match(two[2].error, /hidden/);
-  assert.match(two[3].error, /not run/i);
+  assert.match(two[3].note, /not run/i);
   // An example since deleted from the dataset keeps its replayed cells.
   const gone = dsResultCells(RECORD, { id: 'ex_1' }, 'ready');
-  assert.match(gone[0].error, /no longer/i);
+  assert.match(gone[0].note, /no longer/i);
   assert.equal(gone[1].text, 'Fixed the redirect.');
 });
 
@@ -480,6 +487,7 @@ function fakeDoc() {
   const el = (tag) => {
     const node = { tag, children: [], className: '', attrs: {}, textContent: '', classList: { add() {}, toggle() {} } };
     node.append = (...c) => node.children.push(...c);
+    node.replaceChildren = (...c) => (node.children = c);
     node.setAttribute = (k, v) => (node.attrs[k] = String(v));
     node.addEventListener = () => {};
     Object.defineProperty(node, 'innerHTML', {
@@ -673,9 +681,9 @@ test('dsPollDelay: 2 s doubling per failure, at most 30 s', () => {
 
 test('dsResultCells: a missing example is only "no longer in the dataset" once the dataset is read', () => {
   const ex = { id: 'ex_1' };
-  assert.equal(dsResultCells(RECORD, ex, 'loading')[0].error, 'Loading the dataset…');
-  assert.equal(dsResultCells(RECORD, ex, 'error')[0].error, 'Could not read the dataset');
-  assert.equal(dsResultCells(RECORD, ex, 'ready')[0].error, 'No longer in the dataset');
+  assert.equal(dsResultCells(RECORD, ex, 'loading')[0].note, 'Loading the dataset…');
+  assert.equal(dsResultCells(RECORD, ex, 'error')[0].note, 'Could not read the dataset');
+  assert.equal(dsResultCells(RECORD, ex, 'ready')[0].note, 'No longer in the dataset');
 });
 
 test('dsDeltaText: rounded points, ±0 for less than half a point', () => {
@@ -695,4 +703,143 @@ test('the content-off notice of a run names what is hidden', () => {
     );
     assert.ok(texts.some((t) => t.includes('proposal arguments')));
   });
+});
+
+test('dsSlugOf derives the slug the server would, or one it accepts (D-T6-3)', () => {
+  const { slugify, validSlug } = require('../lib/datasets/shape');
+  for (const name of ['Auth regressions', 'CON', 'import', '  ', 'Ünïcode name', 'a'.repeat(80)]) {
+    const server = slugify(name);
+    const page = dsSlugOf(name);
+    // Where the server makes a slug from the name, the page names the same one; where it refuses (a reserved word,
+    // nothing left), the page's pick must be one the server takes.
+    if (server) assert.equal(page, server, JSON.stringify(name));
+    else assert.ok(validSlug(page), `${JSON.stringify(name)}: the page picks "${page}", which the server refuses`);
+  }
+});
+
+test('dsImportTooBig: the JSON body, not the file, against the 16 MB import limit (D-T6-6)', () => {
+  const MAX = 16 * 1024 * 1024;
+  assert.equal(dsImportTooBig('a'.repeat(MAX + 1)), true, 'just over');
+  assert.equal(dsImportTooBig('a'.repeat(MAX - 1)), false, 'just under');
+  assert.equal(dsImportTooBig('€'.repeat(6 * 1024 * 1024)), true, 'bytes count, not characters');
+});
+
+test('the examples view labels the reference button and each row by its number (D-T6-7)', async () => {
+  const savedDoc = global.document;
+  const savedApi = global.api;
+  global.document = fakeDoc();
+  const ex = (n) => ({
+    id: `ex_000000000000000${n}`,
+    input: { messages: [{ role: 'user', text: `question ${n}` }] },
+    output: { text: `answer ${n}` },
+    reference: n === 1 ? { text: 'the wanted answer' } : null,
+    tags: ['auth', 'regression'],
+  });
+  global.api = async () => ({ dataset: { slug: 'auth', name: 'Auth' }, examples: [ex(1), ex(2)] });
+  try {
+    const body = fakeDoc().createElement('div');
+    await dsMountExamples(body, 'auth', () => true);
+    const nodes = walkAll(body);
+    const refs = nodes.filter((n) => n && n.tag === 'button' && /\bds-ref\b/.test(n.className));
+    assert.equal(refs.length, 2);
+    for (const b of refs) assert.equal(b.attrs['aria-label'], 'Edit reference');
+    const tags = nodes.filter((n) => n && n.tag === 'input' && /\bds-tags\b/.test(n.className));
+    assert.deepEqual(
+      tags.map((n) => n.attrs['aria-label']),
+      ['Tags of example 1', 'Tags of example 2'],
+    );
+    const dels = nodes.filter((n) => n && n.tag === 'button' && textOf(n) === 'Delete');
+    assert.deepEqual(
+      dels.map((n) => n.attrs['aria-label']),
+      ['Delete example 1', 'Delete example 2'],
+    );
+  } finally {
+    if (savedDoc === undefined) delete global.document;
+    else global.document = savedDoc;
+    if (savedApi === undefined) delete global.api;
+    else global.api = savedApi;
+  }
+});
+
+test('dsWrapFocus: Tab past the last control of the picker goes to the first, Shift-Tab back to the last', () => {
+  const [a, b, c] = ['select', 'go', 'cancel'];
+  assert.equal(dsWrapFocus([a, b, c], c, false), a);
+  assert.equal(dsWrapFocus([a, b, c], a, true), c);
+  assert.equal(dsWrapFocus([a, b, c], b, false), null, 'inside the list the browser moves focus');
+  assert.equal(dsWrapFocus([a, b, c], a, false), null);
+  assert.equal(dsWrapFocus([], a, false), null);
+});
+
+test('dsResultCells: "not run" and the original-cell states are notes, not errors (D-T7-6)', () => {
+  const two = dsResultCells(RECORD, { id: 'ex_2', output: { text: null } });
+  assert.equal(two[3].note, 'Not run: the run stopped first');
+  assert.equal(two[3].error, null);
+  for (const state of ['loading', 'error', 'ready']) {
+    const [orig] = dsResultCells(RECORD, { id: 'ex_1' }, state);
+    assert.equal(orig.error, null, state);
+    assert.ok(orig.note, state);
+  }
+  // A failed replay is still an error.
+  assert.equal(dsResultCells(RECORD, { id: 'ex_1', output: { text: 'x' } })[2].error, 'connection refused');
+});
+
+test('the Playground decisions: dsPgSendPlan and dsPgOnError (D-T7-8)', () => {
+  const models = [
+    { name: 'ollama/qwen3-coder:30b', tier: 'private' },
+    { name: 'anthropic/claude-haiku-5-5', tier: 'external', label: 'Anthropic' },
+  ];
+  const form = (picked, extra = {}) =>
+    Object.assign(dsPg({}), {
+      slug: 'auth',
+      ex: '',
+      models,
+      picked,
+      evs: ['secret_leak'],
+      maxCostUSD: '0.5',
+      maxRequests: '100',
+      ...extra,
+    });
+  const EXT = ['ollama/qwen3-coder:30b', 'anthropic/claude-haiku-5-5'];
+
+  const off = form(EXT, { content: false });
+  assert.deepEqual(dsPgSendPlan(off), {
+    kind: 'refuse',
+    message: 'External models need content viewing on, because what is sent must be previewed first.',
+  });
+
+  const pv = dsPgSendPlan(form(EXT));
+  assert.equal(pv.kind, 'preview');
+  assert.deepEqual(pv.body.models, EXT);
+
+  // A preview of the form as it is: sent with its confirm token.
+  const open = form(EXT);
+  open.preview = { items: [], confirm: 'tok', body: dsPgFormBody(open), providers: ['Anthropic'] };
+  assert.deepEqual(dsPgSendPlan(open), { kind: 'send', body: open.preview.body, confirm: 'tok' });
+
+  // The form changed since the preview (an external model dropped): sent as the form is, without the token.
+  open.picked = ['ollama/qwen3-coder:30b'];
+  const plan = dsPgSendPlan(open);
+  assert.equal(plan.kind, 'send');
+  assert.deepEqual(plan.body.models, ['ollama/qwen3-coder:30b']);
+  assert.ok(!('confirm' in plan));
+  // ... and with an external model still in it, previewed again rather than sent.
+  const stale = form(EXT);
+  stale.preview = { items: [], confirm: 'tok', body: dsPgFormBody(stale), providers: ['Anthropic'] };
+  stale.maxCostUSD = '0.05';
+  assert.equal(dsPgSendPlan(stale).kind, 'preview');
+
+  const s = form(EXT);
+  const busy = dsPgOnError(s, Object.assign(new Error('another experiment is running'), { status: 409 }));
+  assert.equal(busy.follow, true);
+  assert.match(busy.message, /another experiment is running/i);
+  const need = dsPgOnError(s, Object.assign(new Error('preview what will be sent first'), { status: 428 }));
+  assert.equal(need.dropPreview, true);
+  assert.match(need.message, /^Preview what will be sent first/);
+  const refused = dsPgOnError(form(EXT, { content: false }), Object.assign(new Error('x'), { status: 403 }));
+  assert.equal(
+    refused.message,
+    'External models need content viewing on, because what is sent must be previewed first.',
+  );
+  assert.equal(refused.dropPreview, true);
+  assert.deepEqual(dsPgOnError(s, Object.assign(new Error('bad model'), { status: 400 })), { message: 'bad model' });
 });

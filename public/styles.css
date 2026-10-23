@@ -7362,6 +7362,17 @@ svg.tr-wires {
   height: 30px;
   font-size: 12px;
 }
+/* Two tags fit at 1280 px (D-T6-9): the tags column takes a little from the input and output columns. */
+.ds-examples th.ds-c0,
+.ds-examples td.ds-c0,
+.ds-examples th.ds-c1,
+.ds-examples td.ds-c1 {
+  width: 20%;
+}
+.ds-examples th.ds-c5,
+.ds-examples td.ds-c5 {
+  width: 15%;
+}
 .ds-note {
   display: block;
   min-height: 1em;
@@ -7756,6 +7767,13 @@ svg.tr-wires {
   margin: 0;
   font-size: 12px;
   color: #ff8aa3;
+  overflow-wrap: anywhere;
+}
+/* A state, not a failure (D-T7-6): not run, or the original still loading or gone. No red border, muted text. */
+.ds-cell-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--h-muted);
   overflow-wrap: anywhere;
 }
 .ds-proposal {
