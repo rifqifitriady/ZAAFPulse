@@ -24,7 +24,7 @@ Stop asks first: "Stop Ollama? Models it has loaded are unloaded." While a reque
 
 A program is looked up on `PATH`, then in `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `~/.lmstudio/bin` and `~/.local/bin`. Apps are looked up in `/Applications` and `~/Applications`.
 
-A server counts as up when its URL answers within 1.5 seconds. LM Studio counts as running only while its URL answers, because its app stays open when the server is off.
+A server counts as running while its process is there, and as answering when its URL answers within 1.5 seconds; a running server that does not answer shows "not answering". LM Studio counts as running only while its URL answers, because its app stays open when the server is off.
 
 The processes a server starts for its models (Ollama's runners and `llama-server`) count toward that server and are shown as its model processes. They are never stopped on their own: the server stops them.
 
@@ -44,7 +44,7 @@ A runtime with its own stop command (LM Studio's `lms server stop`) is stopped w
 
 An entry of your own is stopped only while it is approved (see [Your own runtimes](#your-own-runtimes)). Stopping an unapproved entry is refused with 403.
 
-A second Start or Stop on a runtime while one is still in progress is refused with 409: "a start is still in progress; try again shortly".
+A second Start or Stop on a runtime while one is still in progress is refused with 409: "a start is still in progress; try again shortly" (or "a stop …").
 
 ## What Start does
 
@@ -68,7 +68,7 @@ Add a server of your own in **Settings → Local models**, for example `llama-se
 |---|---|
 | `id` | 1 to 40 lowercase letters, digits or dashes; not a preset's id (`ollama`, `lmstudio`, `llamacpp`, `jan`, `localai`) and not used twice |
 | `name` | shown on the card (optional) |
-| `command` | the program and its arguments, one string each, at most 1,000 characters each. In Settings you type one argument per line. `~/` at the start of an argument is your home folder |
+| `command` | the program and its arguments, one string each, at most 1,000 characters each. In Settings you type one argument per line, and Settings turns `~/` at the start of an argument into your home folder when you save. In a `config.json` edited by hand, use absolute paths: `~/` is not expanded there |
 | `port` | 1 to 65535 |
 | `health` | optional; `http://127.0.0.1:<port>/` when left out. Must be an `http://` URL on this machine |
 
@@ -86,7 +86,7 @@ Your entry's server is found by its program name and, when the command names the
 - The routes are behind the dashboard sign-in. Gateway API keys, MCP tools and A2A cannot reach them.
 - Control is **off in server mode, with password sign-in and in Docker**, the same as agent control ([docs/monitors.md](monitors.md#where-control-is-off)). Start, Stop, Approve, and save and delete in Settings are then refused with 403. The cards hide the buttons and say why. Settings shows the reason, hides the commands, and disables its form and buttons.
 - Stop checks the pid and start time the card was shown. If the server was restarted in between, the stop is refused with "the process changed; refresh".
-- Every action, refused or not, is written to `.data/agent-audit.jsonl` with `kind: "runtime"`. That covers start, stop, approve, save and delete: the time, the action, the runtime id, the result and, for start and stop, the pid, start time and how it was stopped. It holds no command, path or log text.
+- Every action that reaches control, refused or not, is written to `.data/agent-audit.jsonl` with `kind: "runtime"`. That covers start, stop, approve, save and delete: the time, the action, the runtime id, the result and, for start and stop, the pid, start time and how it was stopped. It holds no command, path or log text. A request rejected before that (a malformed body, not JSON) is not audited.
 - No error or log line the dashboard gets holds a file path. Settings shows your own commands with your home folder as `~` and secrets masked.
 
 Demo mode shows synthetic runtimes. Its Start, Stop and Approve change only what the page shows, and save and delete are refused: nothing is started, stopped or saved.
@@ -112,7 +112,7 @@ Errors are `{ error }` with 400, 403, 404, 409 or 502 (a failed save can also be
 | Unknown runtime | 404 | `unknown runtime` |
 | Not installed | 409 | `not installed` |
 | Already running, already stopped | 409 | `already running`, `already stopped` |
-| A start or stop is still in progress for this runtime | 409 | `a start is still in progress; try again shortly` |
+| A start or stop is still in progress for this runtime | 409 | `a start is still in progress; try again shortly`, `a stop is still in progress; try again shortly` |
 | The server was restarted since the card was drawn | 409 | `the process changed; refresh` |
 | Your entry is not approved (Start or Stop) | 403 | `approve it in Settings first` |
 | Control is off (Start, Stop, Approve, save, delete) | 403 | `runtime control is off on this server`, `runtime control is off in Docker` |
