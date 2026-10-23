@@ -1020,3 +1020,57 @@ test('monitors over HTTP: sign-in gate, gateway keys refused, agent routes off w
     await s.stop();
   }
 });
+
+// saveConfigSection (server.js) is the one config.json writer of the settings pages; the monitors channels and the
+// eval settings are two of its callers.
+test('settings saves over HTTP: a config.json that does not parse is refused and left as it is', async () => {
+  const data = tmp('zp-cfg-bad-');
+  const file = path.join(data, 'config.json');
+  const broken = '{ "userName": "Kept", "gateway": { "port": 4000 }, }\n';
+  fs.writeFileSync(file, broken);
+  const s = await startServer({ ZAAFPULSE_AUTH: 'none' }, { data });
+  const c = client(s.base);
+  try {
+    const m = await c.post('/api/monitors/channels', { desktop: false });
+    assert.equal(m.status, 500);
+    assert.equal(m.json.error, 'the settings could not be saved');
+    const e = await c.post('/api/evals/settings', { dailyCap: 50 });
+    assert.equal(e.status, 500);
+    assert.match(e.json.error, /^the settings could not be saved: config\.json does not parse/);
+    assert.equal(fs.readFileSync(file, 'utf8'), broken, 'config.json is untouched');
+    assert.deepEqual(
+      fs.readdirSync(data).filter((f) => f.startsWith('config.json')),
+      ['config.json'],
+      'no temp file',
+    );
+    noPaths(c.bodies);
+  } finally {
+    await s.stop();
+  }
+});
+
+test(
+  'settings saves over HTTP: config.json is written with mode 0600',
+  { skip: process.platform === 'win32' },
+  async () => {
+    const data = tmp('zp-cfg-mode-');
+    const file = path.join(data, 'config.json');
+    fs.writeFileSync(file, JSON.stringify({ userName: 'Kept' }), { mode: 0o644 });
+    const s = await startServer({ ZAAFPULSE_AUTH: 'none' }, { data });
+    const c = client(s.base);
+    try {
+      assert.equal((await c.post('/api/monitors/channels', { desktop: false })).status, 200);
+      assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+      const cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+      assert.equal(cfg.userName, 'Kept');
+      assert.equal(cfg.monitors.channels.desktop, false);
+      assert.deepEqual(
+        fs.readdirSync(data).filter((f) => f.startsWith('config.json')),
+        ['config.json'],
+        'no temp file',
+      );
+    } finally {
+      await s.stop();
+    }
+  },
+);

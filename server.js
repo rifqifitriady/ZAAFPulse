@@ -246,17 +246,50 @@ function rawConfig() {
   }
   return rawCache.value;
 }
-// The one writer of config.json for the settings pages: one top-level section is replaced, through a temp file and a
-// rename, and the cache is refreshed from the new file. Demo mode keeps it in memory and never touches the file.
+// The one writer of config.json for the settings pages (gateway, evals, datasets, monitors, brain, local runtimes):
+// one top-level section is replaced and the cache is refreshed from what was written. Demo mode keeps it in memory.
+// config.json is read again here, not from the cache: rawConfig() reads a file that does not parse as {}, and saving
+// on top of that would drop every other section. Such a file (often a hand edit gone wrong) is refused and left as it
+// is. The write goes through a temp file of its own (two saves never share one) at mode 0600, then a rename. Every
+// failure throws a status-500 error whose message holds no path, so each API can pass it on.
+const CONFIG_UNSAVED = 'the settings could not be saved';
 function saveConfigSection(name, value) {
   if (DEMO) {
     rawCache.value = { ...rawCache.value, [name]: value };
     return;
   }
-  const raw = { ...rawConfig(), [name]: value };
-  fs.writeFileSync(`${CONFIG_FILE}.tmp`, JSON.stringify(raw, null, 2));
-  fs.renameSync(`${CONFIG_FILE}.tmp`, CONFIG_FILE);
-  rawCache = { mtime: fs.statSync(CONFIG_FILE).mtimeMs, value: raw };
+  const refuse = (message, err) => {
+    console.error(`config: ${message}${err && err.code ? ` (${err.code})` : ''}`);
+    return Object.assign(new Error(message), { status: 500 });
+  };
+  let text = '';
+  try {
+    text = fs.readFileSync(CONFIG_FILE, 'utf8');
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw refuse(CONFIG_UNSAVED, e);
+  }
+  let base = {};
+  try {
+    base = text.trim() ? JSON.parse(text) : {};
+  } catch {
+    base = null;
+  }
+  if (!base || typeof base !== 'object' || Array.isArray(base))
+    throw refuse(`${CONFIG_UNSAVED}: config.json does not parse as an object; fix it by hand first`);
+  const raw = { ...base, [name]: value };
+  const tmpFile = `${CONFIG_FILE}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(tmpFile, JSON.stringify(raw, null, 2), { mode: 0o600, flag: 'wx' });
+    fs.renameSync(tmpFile, CONFIG_FILE);
+  } catch (e) {
+    fs.rmSync(tmpFile, { force: true });
+    throw refuse(CONFIG_UNSAVED, e);
+  }
+  try {
+    rawCache = { mtime: fs.statSync(CONFIG_FILE).mtimeMs, value: raw };
+  } catch {
+    rawCache = { mtime: 0, value: raw }; // saved; the next read checks the file again
+  }
 }
 // Local trace store: every gateway trace without content, under .data/traces (on unless "tracing": { "enabled":
 // false }). Retention is read at start; the on/off switch whenever config.json changes.
@@ -599,29 +632,7 @@ const runtimeApi = createRuntimeApi({
   control: runtimeControl,
   config: {
     list: () => rawConfig().localRuntimes,
-    // config.json is read again here, not from the cache: rawConfig() reads a file that does not parse as {}, and
-    // saving on top of that would drop everything else in it. Such a file (often a hand edit gone wrong) is refused
-    // and left as it is; the API answers 500 "the settings could not be saved", which holds no path.
-    save: (list) => {
-      let text = '';
-      try {
-        text = fs.readFileSync(CONFIG_FILE, 'utf8');
-      } catch (e) {
-        if (e.code !== 'ENOENT') throw e;
-      }
-      const base = text.trim() ? JSON.parse(text) : {};
-      if (!base || typeof base !== 'object' || Array.isArray(base)) throw new Error('config.json is not an object');
-      const raw = { ...base, localRuntimes: list };
-      const tmpFile = `${CONFIG_FILE}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
-      try {
-        fs.writeFileSync(tmpFile, JSON.stringify(raw, null, 2), { mode: 0o600, flag: 'wx' });
-        fs.renameSync(tmpFile, CONFIG_FILE);
-      } catch (e) {
-        fs.rmSync(tmpFile, { force: true });
-        throw e;
-      }
-      rawCache = { mtime: fs.statSync(CONFIG_FILE).mtimeMs, value: raw };
-    },
+    save: (list) => saveConfigSection('localRuntimes', list),
   },
   demo: DEMO ? demo.runtimesDemo() : null,
   home: os.homedir(),
