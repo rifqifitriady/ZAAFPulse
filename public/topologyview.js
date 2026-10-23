@@ -428,6 +428,7 @@ function topoWire(ui) {
   });
   svg.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
+    ui.dragged = false; // a drag released off the graph has no click to clear it
     ui.drag = { x: e.clientX, y: e.clientY, cx: ui.cx, cy: ui.cy, moved: false, id: e.pointerId };
   });
   svg.addEventListener('pointermove', (e) => {
