@@ -794,6 +794,7 @@ docs/datasets.md       datasets, replay and the CI gate: shapes, limits, privacy
 docs/release-hardening.md tag ruleset and immutable releases
 docs/monitors.md       monitors, alerts, webhook, pausing an agent: rules, channels, limits, API
 docs/local-models.md   starting and stopping local model servers: runtimes, your own entries, safety, API
+docs/topology.md       the Overview's provider topology: layers, colours, sources, tool routing, privacy
 docs/assets/           README banner, diagrams, screenshots and GIFs
 ```
 </details>

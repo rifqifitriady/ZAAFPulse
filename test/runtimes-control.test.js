@@ -113,7 +113,9 @@ async function realSetup({ mode, approve = true, healthWaitMs = 10000, extra = {
         /* gone */
       }
     }
-    fs.rmSync(dir, { recursive: true, force: true });
+    // On Windows a server that was just sent SIGTERM still holds its working folder and log open for a moment:
+    // removing the folder then fails with EPERM or EBUSY, which rmSync retries.
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   };
   return { ctl, state, started, approvals, audit, spawned, dataDir, port, config, cleanup };
 }
@@ -774,12 +776,22 @@ test('list rows carry models for Ollama and LM Studio, null otherwise; status on
   };
   const rows = await mk([item(), lmsItem, janItem], fakeModels({ status })).list();
   assert.deepEqual(rows.map((r) => [r.id, r.models]), [
-    ['ollama', { remembered: ['llama3.2:3b', 'qwen3:8b'], ...status }],
-    ['lmstudio', { remembered: [], loading: false, loaded: [], failed: [] }],
+    ['ollama', { remembered: ['llama3.2:3b', 'qwen3:8b'], ...status, current: null }],
+    ['lmstudio', { remembered: [], loading: false, loaded: [], failed: [], current: null }],
     ['jan', null],
   ]);
   const [stopped] = await mk([stoppedOllama()], fakeModels({ status })).list();
-  assert.deepEqual(stopped.models, { remembered: ['llama3.2:3b', 'qwen3:8b'], loading: false, loaded: [], failed: [] });
+  assert.deepEqual(stopped.models, {
+    remembered: ['llama3.2:3b', 'qwen3:8b'],
+    loading: false,
+    loaded: [],
+    failed: [],
+    current: null,
+  });
+  // What is loaded now comes from the memory's last read, and only while the runtime runs.
+  const withCurrent = { ...fakeModels({ status }), current: (id) => (id === 'ollama' ? ['llama3.2:3b'] : null) };
+  assert.deepEqual((await mk([item()], withCurrent).list())[0].models.current, ['llama3.2:3b']);
+  assert.equal((await mk([stoppedOllama()], withCurrent).list())[0].models.current, null);
   const [without] = await mk([item()]).list();
   assert.equal(without.models, null, 'no memory given: null');
 });
