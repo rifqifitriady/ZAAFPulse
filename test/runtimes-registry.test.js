@@ -80,6 +80,27 @@ test('owner entries: a valid entry gets its start command, a default health URL 
   assert.deepEqual(entries({ not: 'a list' }).length, 5);
 });
 
+test('owner entries: a command without its port matches only the same program with the same arguments', () => {
+  const [py] = ownerEntries([{ id: 'py', command: ['python3', 'serve.py'], port: 8000 }]);
+  assert.ok(py.match(row('/usr/bin/python3 serve.py')), 'the exact command, no argv');
+  assert.ok(py.match(row('/usr/bin/python3 serve.py', ['/usr/bin/python3', 'serve.py'])), 'the exact command, argv');
+  assert.ok(!py.match(row('/usr/bin/python3 manage.py runserver')), 'another script, no argv');
+  assert.ok(!py.match(row('/usr/bin/python3 manage.py runserver', ['/usr/bin/python3', 'manage.py', 'runserver'])));
+  assert.ok(!py.match(row('/usr/bin/python3 serve.py --debug')), 'an extra argument');
+  assert.ok(!py.match(row('/usr/bin/python3', ['/usr/bin/python3'])), 'no arguments');
+  const [node] = ownerEntries([{ id: 'srv', command: ['node', 'srv.js'], port: 3000 }]);
+  assert.ok(node.match(row('/opt/homebrew/bin/node srv.js', ['/opt/homebrew/bin/node', 'srv.js'])));
+  assert.ok(!node.match(row('node /Users/me/.npm/bin/claude')), 'an unrelated node process');
+  assert.ok(!node.match(row('node /Users/me/.npm/bin/claude', ['node', '/Users/me/.npm/bin/claude'])));
+  // Windows: argv holds the program only; the arguments come from the command line after it.
+  const winNode = 'C:\\Program Files\\nodejs\\node.exe';
+  assert.ok(node.match(row(`"${winNode}" srv.js`, [winNode])));
+  assert.ok(!node.match(row(`"${winNode}" other.js`, [winNode])));
+  // A command that names its port is still matched by program and port, whatever its other arguments.
+  const [q] = ownerEntries([QWEN]);
+  assert.ok(q.match(row('/opt/homebrew/bin/llama-server --port 8081 -m /models/qwen.gguf')));
+});
+
 test('owner entries: invalid ones keep their reason and cannot start', () => {
   const err = (raw) => ownerEntries([raw])[0].error;
   assert.match(err({ ...QWEN, id: 'Bad Id' }), /id must be/);
