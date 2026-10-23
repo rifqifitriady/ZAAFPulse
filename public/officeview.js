@@ -171,7 +171,7 @@ function viewSquad() {
     </div>
 
     <div class="section-head"><h2>Installed AI tools</h2><span class="meta">— ${s.total} detected · ${s.running} running now · usage for the ${rangeText()}</span></div>
-    <div class="grid squad">${s.html}</div>
+    <div class="grid squad" data-rt-grid>${s.html}</div>
   </div>`;
 }
 
@@ -807,6 +807,7 @@ function mountSquad() {
   const canvas = $('#of-scene');
   if (!canvas) return;
   monPaintStrips(); // paused agents, with Resume and Stop
+  rtMount(); // Start and Stop for the local model servers, on the Installed AI tools cards
   if (office) paintOffice();
   pollOffice();
   const timer = setInterval(() => {
