@@ -374,7 +374,8 @@ document.addEventListener('click', (e) => {
   }
 });
 document.addEventListener('submit', (e) => {
-  if (e.target.id !== 'brain-src-form') return;
+  // The attribute, not e.target.id: the form's "id" field shadows that property.
+  if (e.target.getAttribute('id') !== 'brain-src-form') return;
   e.preventDefault();
   const f = e.target;
   const ed = brainUi.editing;
