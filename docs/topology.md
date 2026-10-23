@@ -22,6 +22,11 @@ A row holds at most 12 nodes: the 11 busiest, plus "+N more", whose tooltip name
 | green | Active | the newest request through it succeeded and is at most 5 minutes old; a running tool is active too, unless it has a recent error |
 | orange | Recent | the newest request succeeded and is at most 60 minutes old |
 | red | Error | the newest request failed and is at most 60 minutes old; also a router whose health check fails, or a router connection that is inactive or failing its test |
+
+What counts as a failed request:
+- **Logs:** a real API error that Claude Code or Codex logged (overloaded, a 5xx, an auth failure). It is drawn on the tool and the provider of its model, or the tool's own provider (Anthropic, OpenAI) when no model is named. A turn whose tool calls failed, such as a Bash command or a missing file, still counts as ok, because the provider answered.
+- **Gateway:** a status of 400 or more, or an error.
+- **Router:** a status of 400 or more. A call with no status, still in flight or from an older OmniRoute, is ok.
 | grey | Idle | nothing in the last hour |
 
 An edge gets the status of the newest request that passed along it. Active edges move.
@@ -42,13 +47,18 @@ An edge gets the status of the newest request that passed along it. Active edges
 |---|---|
 | running apps (`/api/live`) | which tools are installed and running |
 | Claude Code and Codex logs | the turns of the last 3 hours: model, tokens, time, tool errors |
-| Agent Gateway | its providers, its recent requests and its key names |
-| OmniRoute | health, provider connections and call logs |
+| Agent Gateway | its provider list (from its config), its recent requests and its key names |
+| OmniRoute | health, provider connections and call logs, for the first enabled OmniRoute connector only; a second OmniRoute or a 9router is drawn without them |
 | local runtimes | which runtimes run, on which port, and their models |
 
-- Each source gets 2 seconds; a source that fails or is slow is left empty, and a failing router is drawn red.
+- Each asynchronous source (the running apps, the local runtimes and OmniRoute) gets 2 seconds. A source that fails or is slow is left empty, and a failing router is drawn red. The log tail and the gateway lists are read synchronously, so the cap cannot cut them short; the log read is reused for 10 seconds.
 - The answer is cached for 5 seconds.
 - Recent requests holds the 20 newest, merged from the logs, the gateway and the router. A turn that went through the gateway or a router is listed once, by that hop.
+
+Who sent a request (the first name in its path, and its client):
+- **Logs:** Claude Code or Codex, whichever wrote the log.
+- **Gateway:** the gateway makes one key per connected tool, named `tool:<id>`. A request made with that key is credited to that tool: `tool:claude-code` to Claude Code, `tool:codex` to Codex, and any other tool key to its app when that app is drawn. The dashboard's own calls (agents, collab, the evals judge, RAG) are credited to ZAAFPulse. Any other request shows its key name, or else its agent.
+- **Router:** an OmniRoute call log does not say who sent the call. It is credited to the tool routed to that router, when exactly one tool is.
 - Demo mode (`DEMO=1`) answers with a synthetic graph and calls nothing.
 
 ## How tool routing is detected

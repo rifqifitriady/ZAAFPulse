@@ -124,7 +124,8 @@ A layer with more than 12 nodes keeps the 11 busiest and adds one `more` node: "
 ## `GET /api/topology` (server.js, behind the dashboard sign-in)
 
 - It answers `buildTopology(...)`. The answer is cached for 5 s.
-- Each source is awaited with a 2 s cap, and a failure leaves that source empty.
+- Each source is awaited with a 2 s cap, and a failure leaves that source empty. The cap only limits asynchronous work: the log tail and the gateway lists are read synchronously.
+- Only the first enabled OmniRoute connector (`router.id()`) gets health, connections and call logs; another router is drawn without them.
 - A router that failed shows as `error`, and the rest of the graph is still drawn.
 - `reqlogs.logs()` reads files from disk, so its result is reused for 10 s.
 - **Demo mode:** `demo.topologyDemo()` gives a synthetic graph:
