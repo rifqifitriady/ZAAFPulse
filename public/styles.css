@@ -7870,6 +7870,116 @@ svg.tr-wires {
   }
 }
 
+/* Datasets: the auto-add rule under the list, and Stop on a run in progress */
+#ds-body > .ds-panel + .ds-panel {
+  margin-top: 14px;
+}
+.ds-panel > .ds-off {
+  margin: 0 0 12px;
+}
+.ds-auto {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 560px;
+  font-size: 13px;
+}
+.ds-auto-switch,
+.ds-auto .ds-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+.ds-auto-switch {
+  font-weight: 600;
+}
+.ds-auto .ds-check {
+  font-size: 12.5px;
+}
+.ds-auto-ds {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.ds-auto-ds .input {
+  max-width: 360px;
+  font-weight: 400;
+}
+.ds-auto-ds .input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.ds-auto-when {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 8px 12px 10px;
+  border: 1px solid var(--h-edge);
+  border-radius: 10px;
+}
+.ds-auto-when legend {
+  padding: 0 4px;
+  font-size: 12px;
+  color: var(--h-muted);
+}
+.ds-auto .ds-msg {
+  margin: 0;
+}
+.ds-switch {
+  appearance: none;
+  flex: none;
+  position: relative;
+  width: 34px;
+  height: 20px;
+  margin: 0;
+  border: 1px solid var(--h-edge);
+  border-radius: 999px;
+  background: rgba(8, 10, 34, 0.7);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.ds-switch::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #b9c1ec;
+  transition: transform 0.15s;
+}
+.ds-switch:checked {
+  border-color: var(--h-cyan);
+  background: rgba(77, 232, 255, 0.35);
+}
+.ds-switch:checked::before {
+  transform: translateX(14px);
+  background: var(--h-cyan);
+}
+.ds-switch:focus-visible {
+  outline: 2px solid var(--h-cyan);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ds-switch,
+  .ds-switch::before {
+    transition: none;
+  }
+}
+.ds-msg.ds-wait {
+  color: #b9c1ec;
+}
+.ds-pg-run .ds-pg-stop {
+  padding: 5px 12px;
+  font-size: 12px;
+}
+
 /* Monitors: the alerts bell and drawer, paused-agent banners, agent controls and Settings → Monitors */
 .mon-bell {
   position: relative;
