@@ -18,7 +18,7 @@ const { createBrain } = require('./lib/brain');
 const office = require('./lib/office');
 const { insights } = require('./lib/insights');
 const reqlogs = require('./lib/reqlogs');
-const { buildTopology } = require('./lib/topology');
+const { buildTopology, readGateway } = require('./lib/topology');
 const { readToolRoutes, routeOf } = require('./lib/toolroutes');
 const timeline = require('./lib/timeline');
 const { createOmniRoute } = require('./lib/omniroute');
@@ -768,18 +768,7 @@ async function buildTopologyNow() {
       }
       return topoLogs.value;
     }, {}),
-    topoSource(async () => {
-      const [admin, usage, keys] = await Promise.all([
-        gateway.admin('', 'GET'),
-        gateway.usage.recent(200),
-        gateway.keys.list(),
-      ]);
-      return {
-        providers: admin.providers,
-        usage,
-        keys: (keys || []).map((k) => ({ id: k.id, name: k.name })),
-      };
-    }, {}),
+    topoSource(() => readGateway(gateway), {}),
     topoSource(() => runtimeControl.list(), []),
   ]);
   // Only the connector OmniRoute's reader uses has a management API; other routers are drawn without health or calls.

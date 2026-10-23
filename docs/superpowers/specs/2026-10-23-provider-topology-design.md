@@ -20,7 +20,7 @@ The Overview shows how AI traffic on this machine flows, in the style of the "Pr
 |---|---|---|
 | Running apps | `processes.snapshot()` (`/api/live`) | which AI apps run now (`apps[].id`) and which are installed (`installed`) |
 | Log turns | `reqlogs.logs()` (lib/reqlogs.js) | `requests[]` from the last 3 h of Claude Code and Codex: `{ ts, source, model, input, output, durationMs, toolErrors }`; `errors[]`: `{ ts, source, kind }`, plus `tool` on an API error |
-| Agent Gateway | `gateway.admin('', 'GET').providers`, `gateway.usage.recent(n)`, `gateway.keys.list()` | providers `{ id, preset, baseUrl, enabled }`; requests `{ ts, keyId, agent, provider, model, status, ms, input, output, error }` |
+| Agent Gateway | `readGateway(gateway)` in lib/topology.js: `gateway.providers.list()` (the config only, not the whole `admin('', 'GET')` page), `gateway.usage.recent(200)`, `gateway.keys.list()` | providers `{ id, preset, baseUrl, enabled }`; requests `{ ts, keyId, agent, provider, model, status, ms, input, output, error }` |
 | OmniRoute | `router` (lib/omniroute.js): `configured()`, `id()`, `providerStats()`, `callLogs()`, plus `health()` (`/api/health`) and `providers()` (`/api/providers`, the `PROVIDER_FIELDS` of lib/connectors/router.js, emails masked), added in this work | health, provider connections `{ provider, name, isActive, testStatus }`, calls `{ ts, status, model, provider, durationMs, tokens }` |
 | Local runtimes | `runtimeControl.list()` | `{ id, name, running, healthy, models: { loaded, remembered } }` for Ollama and LM Studio |
 | Tool routing | **new** `lib/toolroutes.js` | the base-URL origin Claude Code and Codex are pointed at (below) |

@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { buildTopology, providerOf, PROVIDER_LABELS } = require('../lib/topology');
+const { buildTopology, providerOf, readGateway, PROVIDER_LABELS } = require('../lib/topology');
 
 const NOW = Date.parse('2026-10-23T12:00:00Z');
 const MIN = 60 * 1000;
@@ -956,4 +956,45 @@ test('real model names survive the scrub: Ollama tags, Vertex @versions, dated t
     now,
   );
   assert.equal(hostile.requests[0].model, 'm');
+});
+
+test('readGateway reads the provider list, not the whole Gateway page, and keeps only what the graph needs', async () => {
+  const gw = {
+    admin: () => {
+      throw new Error('admin() builds the whole Gateway page');
+    },
+    providers: {
+      list: () => [
+        { id: 'anth', preset: 'anthropic', baseUrl: 'https://api.anthropic.com/v1', apiKey: 'secret:anth' },
+        { id: 'off', preset: 'openai', enabled: false, apiKey: 'sk-abcdefghijkl' },
+        { id: 'local', preset: 'ollama', enabled: true },
+      ],
+    },
+    usage: { recent: (n) => [{ n }] },
+    keys: { list: async () => [{ id: 'k1', name: 'laptop', hash: 'h', scopes: ['llm'] }] },
+  };
+  const r = await readGateway(gw);
+  assert.deepEqual(r, {
+    providers: [
+      { id: 'anth', preset: 'anthropic', baseUrl: 'https://api.anthropic.com/v1', enabled: true },
+      { id: 'off', preset: 'openai', baseUrl: undefined, enabled: false },
+      { id: 'local', preset: 'ollama', baseUrl: undefined, enabled: true },
+    ],
+    usage: [{ n: 200 }],
+    keys: [{ id: 'k1', name: 'laptop' }],
+  });
+  // A disabled provider is still honoured: with only that one there is no gateway.
+  const t = buildTopology(
+    input({ gateway: await readGateway({ ...gw, providers: { list: () => [r.providers[1]] } }) }),
+  );
+  assert.equal(node(t, 'gateway'), undefined);
+  // Missing parts give empty lists.
+  assert.deepEqual(
+    await readGateway({ providers: { list: () => null }, usage: { recent: () => null }, keys: { list: () => null } }),
+    {
+      providers: [],
+      usage: [],
+      keys: [],
+    },
+  );
 });
