@@ -106,6 +106,47 @@ test('a server run from a shell is a process; the oldest of two servers is the o
   assert.equal(o.pid, 801);
 });
 
+test('a server ZAAFPulse started is chosen over an older foreign server of the same runtime', async () => {
+  const rows = [row(710, 1, '/usr/local/bin/ollama serve', 900), row(711, 1, '/usr/local/bin/ollama serve', 100)];
+  const { st } = stateOf(rows, { started: { ollama: { pid: 711, startTime: startOf(100) } } });
+  const o = byId(await st.list()).ollama;
+  assert.equal(o.pid, 711);
+  assert.equal(o.how, 'zaafpulse');
+});
+
+test('launchctl is not asked when the parent pid is not 1', async () => {
+  const rows = [row(1, 0, '/sbin/launchd'), row(720, 800, '/opt/homebrew/bin/ollama serve'), row(800, 1, '-zsh')];
+  const jobs = new Map([['homebrew.mxcl.ollama', 720]]);
+  const x = stateOf(rows, { jobs });
+  assert.equal(byId(await x.st.list()).ollama.how, 'process');
+  assert.equal(x.launchctlCalls(), 0);
+});
+
+test('app is judged by the program, not by a path somewhere in the arguments', async () => {
+  const note = '--note /Applications/Ollama.app/Contents/MacOS/x';
+  const plain = stateOf([row(730, 1, `/usr/local/bin/ollama serve ${note}`)]);
+  assert.equal(byId(await plain.st.list()).ollama.how, 'process');
+  const argv = { ...row(731, 1, `/usr/local/bin/ollama serve ${note}`), argv: ['/usr/local/bin/ollama', 'serve', '--note', '/Applications/Ollama.app/Contents/MacOS/x'] };
+  assert.equal(byId(await stateOf([argv]).st.list()).ollama.how, 'process');
+  // The app's own program above the server still counts, with or without argv.
+  const app = row(732, 1, '/Applications/Ollama.app/Contents/MacOS/Ollama');
+  const srv = row(733, 732, '/usr/local/bin/ollama serve');
+  assert.equal(byId(await stateOf([app, srv]).st.list()).ollama.how, 'app');
+  const withArgv = [{ ...app, argv: ['/Applications/Ollama.app/Contents/MacOS/Ollama'] }, srv];
+  assert.equal(byId(await stateOf(withArgv).st.list()).ollama.how, 'app');
+});
+
+test('a runtime that answers its health URL with no matching process has no how and no pid', async () => {
+  const apps = tmp('zp-rt-lms-');
+  fs.mkdirSync(path.join(apps, 'LM Studio.app'));
+  const st = stateOf([], { answers: ['http://127.0.0.1:1234/v1/models'], extra: { appDirs: [apps] } }).st;
+  const x = byId(await st.list()).lmstudio;
+  fs.rmSync(apps, { recursive: true, force: true });
+  assert.equal(x.running, true);
+  assert.equal(x.how, null);
+  assert.equal(x.pid, null);
+});
+
 test('Linux: a systemd system unit is "system"; a user unit or a terminal is a process', async () => {
   const rows = [row(901, 1, '/usr/local/bin/ollama serve')];
   const sys = stateOf(rows, { platform: 'linux', readCgroup: () => '0::/system.slice/ollama.service\n' });
@@ -203,6 +244,28 @@ test('findBin: absolute paths as given, PATH then the usual folders, never a rel
   fs.rmSync(d, { recursive: true, force: true });
 });
 
+test('findBin: a binary writable by everyone, or in such a folder, is not found; an owner path is taken as given', { skip: process.platform === 'win32' }, () => {
+  const bad = tmp('zp-rt-bad-');
+  const f = exe(bad, 'tool');
+  fs.chmodSync(f, 0o777);
+  const open = tmp('zp-rt-open-');
+  const g = exe(open, 'tool');
+  fs.chmodSync(open, 0o777);
+  const ok = tmp('zp-rt-ok-');
+  const h = exe(ok, 'tool');
+  const opts = (d) => ({ env: { PATH: d }, platform: 'darwin', dirs: [] });
+  assert.equal(findBin('tool', opts(bad)), null);
+  assert.equal(findBin('tool', opts(open)), null);
+  assert.equal(findBin('tool', { env: { PATH: '' }, platform: 'darwin', dirs: [bad] }), null, 'the usual folders too');
+  assert.equal(findBin('tool', opts(`${bad}:${ok}`)), h, 'the next trusted match is used');
+  assert.equal(findBin(f, { platform: 'darwin' }), f, 'an absolute program is as the owner gave it');
+  assert.equal(findBin(g, { platform: 'darwin' }), g);
+  for (const d of [bad, open, ok]) {
+    fs.chmodSync(d, 0o700);
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
 test('parseLaunchctlList and systemUnit', () => {
   const jobs = parseLaunchctlList('PID\tStatus\tLabel\n601\t0\thomebrew.mxcl.ollama\n-\t0\thomebrew.mxcl.redis\n');
   assert.deepEqual([...jobs], [['homebrew.mxcl.ollama', 601]]);
@@ -218,6 +281,16 @@ test('jsonFile: mode 0600, written whole, an unreadable file reads as {}', () =>
   assert.deepEqual(f.read(), {});
   f.write({ ollama: { pid: 5, startTime: 1 } });
   assert.deepEqual(f.read(), { ollama: { pid: 5, startTime: 1 } });
+  if (process.platform !== 'win32') assert.equal(fs.statSync(f.file).mode & 0o777, 0o600);
+  // A stale, world-readable temp file (or a link in its place) is not reused.
+  const stale = `${f.file}.${process.pid}.tmp`;
+  const other = path.join(d, 'other');
+  fs.writeFileSync(other, 'keep');
+  fs.writeFileSync(stale, 'old', { mode: 0o644 });
+  fs.rmSync(stale);
+  fs.symlinkSync(other, stale);
+  f.write({ a: 1 });
+  assert.equal(fs.readFileSync(other, 'utf8'), 'keep', 'a link at the temp path is not written through');
   if (process.platform !== 'win32') assert.equal(fs.statSync(f.file).mode & 0o777, 0o600);
   fs.writeFileSync(f.file, '[1,2]');
   assert.deepEqual(f.read(), {});
