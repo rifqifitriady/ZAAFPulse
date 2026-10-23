@@ -276,6 +276,9 @@ function monAfterAction(t, c, action, r) {
   if (!t || !c || !r || r.demo) return;
   if (action === 'stop') {
     if (r.exited === true) t.cands = t.cands.filter((x) => x !== c);
+    // Not ended: the server continued a paused process (SIGCONT) so it could handle the interrupt, so it runs now.
+    // Windows (taskkill) has no pause, so the same holds there.
+    else c.paused = false;
   } else if (action === 'pause' || action === 'resume') c.paused = action === 'pause';
 }
 

@@ -347,6 +347,15 @@ test('monAfterAction: a stop removes the process only when it exited; a demo ans
   assert.equal(run('pause', { demo: true }).c.paused, false);
   const resumed = run('resume', {}).c;
   assert.equal(resumed.paused, false);
+  // The server continues a paused process (SIGCONT) before it handles the interrupt, so one a Stop did not end runs.
+  const stopPaused = (r) => {
+    const c = { pid: 9, startTime: 1, paused: true };
+    monAfterAction({ cands: [c] }, c, 'stop', r);
+    return c.paused;
+  };
+  assert.equal(stopPaused({ signal: 'SIGTERM', exited: false }), false, 'asked to quit and still running');
+  assert.equal(stopPaused({ signal: 'SIGINT', exited: null }), false, 'not checked, but continued');
+  assert.equal(stopPaused({ demo: true, exited: false }), true, 'a demo answer changes nothing');
 });
 
 // A refused parameter stayed in the input as if saved (M-T7-5); it goes back to what the card shows for the saved rule.
