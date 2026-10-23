@@ -167,3 +167,12 @@ test('the per-runtime UI state has no prototype, so an id such as constructor st
   assert.equal(RT.ui.constructor, undefined);
   assert.equal(RT.ui.__proto__, undefined);
 });
+
+test('styles: hidden wins over .btn in the runtimes form, and the command box shows several lines', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
+  assert.match(css, /\.rt-form \[hidden\] \{\s*display: none;\s*\}/, 'Cancel stays hidden in "Add a runtime" mode');
+  const m = /\.rt-form textarea\.input \{([^}]*)\}/.exec(css);
+  assert.ok(m, 'a rule for the command textarea');
+  assert.match(m[1], /height: auto;/);
+  assert.match(m[1], /min-height: 7\.5em;/);
+});
