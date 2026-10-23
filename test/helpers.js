@@ -64,13 +64,15 @@ const secretsFor = (env = {}) =>
 // must not reach the machine's own ones, so tests point both at a closed port (9, discard) with these.
 // The Claude Code judge is looked for on PATH and in the usual install folders; a spawned server.js is pointed at a
 // file that does not exist, so it never finds (or starts) the machine's own claude.
-// A spawned server.js also runs the monitors, whose alerts would show desktop notifications for real: off here.
+// A spawned server.js also runs the monitors, whose alerts would show desktop notifications for real: off here. It
+// would also read the loaded models of this machine's Ollama every 30 s (lib/runtimes/models.js): off too.
 const NO_CLAUDE = path.join(__dirname, 'fixtures', 'no-claude-here', 'claude');
 const NO_JUDGE_PORTS = {
   ZAAFPULSE_OLLAMA_URL: 'http://127.0.0.1:9',
   ZAAFPULSE_LMSTUDIO_URL: 'http://127.0.0.1:9',
   ZAAFPULSE_CLAUDE_BIN: NO_CLAUDE,
   ZAAFPULSE_NOTIFY: 'off',
+  ZAAFPULSE_RUNTIME_WATCH: 'off',
 };
 
 // A stand-in for the Claude Code CLI. FAKE_CLAUDE_MODE picks what it does, FAKE_CLAUDE_LOG (a file outside its working

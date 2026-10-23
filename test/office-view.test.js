@@ -99,3 +99,62 @@ test('placeLabels never covers an overlay box such as the page heading', () => {
     assert.ok(!hit, `callout at ${l.x},${l.y} covers the heading`);
   }
 });
+
+// The Installed AI tools cards: their status line and CPU, memory and uptime follow the live data every poll, so a
+// server started from the card's own Start button shows as running without a page reload.
+const { squadLive, squadPatch } = vm.runInNewContext(
+  `${fs.readFileSync(path.join(__dirname, '..', 'public', 'officeview.js'), 'utf8')}\n;({ squadLive, squadPatch })`,
+  { ago: () => '5m ago', fmtN: (n) => String(n), dur: (s) => `${s}s` },
+);
+
+test('squadLive: running, idle with logs, installed, and stats only for a tool without logs', () => {
+  const r = { processes: 2, cpu: 1.25, memMB: 26, uptimeSec: 89 };
+  assert.deepEqual(JSON.parse(JSON.stringify(squadLive(r, true, null))), {
+    cls: 'running',
+    text: 'Running now · 2 processes',
+    stats: ['1.3%', '26 MB', '89s'],
+  });
+  assert.equal(squadLive({ ...r, processes: 1 }, true, null).text, 'Running now · 1 process');
+  assert.deepEqual(JSON.parse(JSON.stringify(squadLive(null, true, null))), {
+    cls: 'idle',
+    text: 'Installed · not running',
+    stats: ['—', '—', '—'],
+  });
+  const t = { lastActive: 1 };
+  assert.equal(squadLive(null, true, t).text, 'Idle · last active 5m ago');
+  assert.equal(squadLive(null, true, t).stats, null);
+  assert.equal(squadLive(null, false, null).cls, 'off');
+});
+
+// A stand-in card: a status line (an <i> and a text node) and three stat values.
+function fakeCard(id) {
+  const text = { nodeType: 3, nodeValue: 'Installed · not running' };
+  const status = { className: 'status idle', lastChild: text };
+  const bs = [0, 1, 2].map(() => ({ textContent: '—' }));
+  return {
+    dataset: { appCard: id },
+    querySelector: (s) => (s === '.status' ? status : null),
+    querySelectorAll: (s) => (s === '.agent-stats b' ? bs : []),
+    status,
+    text,
+    bs,
+  };
+}
+
+test('squadPatch: a card follows the live data in place, as text', () => {
+  const ollama = fakeCard('ollama');
+  const claude = fakeCard('claude');
+  const root = { querySelectorAll: (s) => (s === '[data-app-card]' ? [ollama, claude] : []) };
+  const data = { apps: [{ id: 'ollama', processes: 1, cpu: 0, memMB: 26, uptimeSec: 89 }], installed: ['ollama', 'claude'] };
+  squadPatch(root, data, [{ id: 'claude', lastActive: 1 }]);
+  assert.equal(ollama.status.className, 'status running');
+  assert.equal(ollama.text.nodeValue, 'Running now · 1 process');
+  assert.deepEqual(ollama.bs.map((b) => b.textContent), ['0.0%', '26 MB', '89s']);
+  assert.equal(claude.text.nodeValue, 'Idle · last active 5m ago');
+  assert.deepEqual(claude.bs.map((b) => b.textContent), ['—', '—', '—'], 'a tool with logs keeps its own stats');
+  squadPatch(root, { apps: [], installed: ['ollama'] }, []);
+  assert.equal(ollama.status.className, 'status idle');
+  assert.equal(ollama.text.nodeValue, 'Installed · not running');
+  assert.deepEqual(ollama.bs.map((b) => b.textContent), ['—', '—', '—']);
+  squadPatch(root, null, null); // no live data yet: nothing throws
+});

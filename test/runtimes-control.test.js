@@ -295,7 +295,7 @@ const item = (over = {}) => ({
   tableError: null,
   ...over,
 });
-function stopSetup({ x = item(), killer = fakeKill(), platform = 'darwin', probe = async () => false, runCode = 0 } = {}) {
+function stopSetup({ x = item(), killer = fakeKill(), platform = 'darwin', probe = async () => false, runCode = 0, extra = {} } = {}) {
   const ran = [];
   const audit = recorder();
   const dir = tmp('zp-rt-stop-');
@@ -317,6 +317,7 @@ function stopSetup({ x = item(), killer = fakeKill(), platform = 'darwin', probe
     graceMs: 40,
     stopWaitMs: 120,
     pollMs: 5,
+    ...extra,
   });
   return { ctl, ran, audit, killer, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
@@ -588,4 +589,203 @@ test('a stop command that never exits resolves as a failure after its own timer'
   });
   await rejects(ctl.stop({ id: 'ollama', ...SRV }), 502, /stop command failed/);
   assert.deepEqual(killed, ['SIGTERM']);
+});
+
+// ---- the models a runtime last had loaded (lib/runtimes/models.js), with a fake memory ----
+function fakeModels({ observe = async () => ['llama3.2:3b'], names = ['llama3.2:3b'], status = null, all = false } = {}) {
+  const calls = [];
+  return {
+    calls,
+    supports: (id) => all || id === 'ollama' || id === 'lmstudio',
+    observe: (x) => (calls.push(['observe', x.entry.id]), observe(x)),
+    reload: (x) => (calls.push(['reload', x]), names),
+    cancel: (id) => calls.push(['cancel', id]),
+    remembered: (id) => (id === 'ollama' ? ['llama3.2:3b', 'qwen3:8b'] : []),
+    status: (id) => (id === 'ollama' ? status : null),
+  };
+}
+
+test('stop observes the loaded models first, then cancels a reload, then signals', async (t) => {
+  const killer = fakeKill({ exitOn: 'SIGINT' });
+  const seen = [];
+  const models = fakeModels({ observe: async () => (seen.push(killer.calls.length), ['a']) });
+  const s = stopSetup({ killer, extra: { models } });
+  t.after(s.cleanup);
+  assert.deepEqual(await s.ctl.stop({ id: 'ollama', ...SRV }), { state: 'stopped' });
+  assert.deepEqual(seen, [0], 'nothing was signalled before the observe');
+  assert.deepEqual(models.calls, [
+    ['observe', 'ollama'],
+    ['cancel', 'ollama'],
+  ]);
+  assert.deepEqual(killer.sent(), ['SIGINT']);
+  // A stop command (LM Studio's lms server stop) also runs after the observe.
+  const ran = [];
+  const lmsModels = fakeModels({ observe: async () => (ran.push(lms.ran.length), []) });
+  const lms = stopSetup({
+    x: item({ entry: LMSTUDIO, how: 'app', stopArgv: ['/x/lms', 'server', 'stop'] }),
+    extra: { models: lmsModels },
+  });
+  t.after(lms.cleanup);
+  await lms.ctl.stop({ id: 'lmstudio', ...SRV });
+  assert.deepEqual(ran, [0]);
+  assert.deepEqual(lms.ran, [['/x/lms', 'server', 'stop']]);
+  assert.deepEqual(lmsModels.calls.map((c) => c[0]), ['observe', 'cancel']);
+});
+
+test('a rejecting, throwing or hanging observe never blocks or fails the stop', async (t) => {
+  for (const observe of [
+    async () => {
+      throw new Error('no /Users/x');
+    },
+    () => {
+      throw new Error('sync');
+    },
+    () => new Promise(() => {}), // never answers: the cap ends the wait
+  ]) {
+    const models = fakeModels({ observe });
+    const s = stopSetup({ killer: fakeKill({ exitOn: 'SIGINT' }), extra: { models, observeTimeoutMs: 30 } });
+    t.after(s.cleanup);
+    const t0 = Date.now();
+    assert.deepEqual(await s.ctl.stop({ id: 'ollama', ...SRV }), { state: 'stopped' });
+    assert.ok(Date.now() - t0 < 1000);
+    assert.deepEqual(s.killer.sent(), ['SIGINT']);
+    assert.ok(s.audit.lines.every((l) => l.ok === true), 'no failure is audited');
+  }
+});
+
+test('stop of an unsupported runtime or a refused stop does not observe', async (t) => {
+  const models = fakeModels();
+  const jan = stopSetup({
+    x: item({ entry: entries([]).find((e) => e.id === 'jan') }),
+    killer: fakeKill({ exitOn: 'SIGINT' }),
+    extra: { models },
+  });
+  t.after(jan.cleanup);
+  await jan.ctl.stop({ id: 'jan', ...SRV });
+  const refused = stopSetup({ extra: { models } });
+  t.after(refused.cleanup);
+  await rejects(refused.ctl.stop({ id: 'ollama', pid: SRV.pid + 1, startTime: SRV.startTime }), 409);
+  assert.deepEqual(models.calls, []);
+});
+
+// A start of a preset with a fake spawn: `one` answers each item in turn (before the start, then after it answered).
+function startSetup({ items, models, probe = async () => true, healthWaitMs = 1000 }) {
+  const dir = tmp('zp-rt-reload-');
+  const audit = recorder();
+  let n = 0;
+  const ctl = createRuntimeControl({
+    state: {
+      one: async () => {
+        const x = items[Math.min(n++, items.length - 1)];
+        if (x instanceof Error) throw x;
+        return x;
+      },
+      list: async () => items.filter((x) => !(x instanceof Error)),
+    },
+    entries: () => entries([]),
+    dataDir: dir,
+    audit,
+    spawn: () => {
+      const c = new EventEmitter();
+      c.pid = 4321;
+      c.unref = () => {};
+      process.nextTick(() => c.emit('spawn'));
+      return c;
+    },
+    probe,
+    inDocker: false,
+    healthWaitMs,
+    pollMs: 10,
+    models,
+  });
+  return { ctl, audit, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+}
+const stoppedOllama = () => item({ running: false, healthy: false, pid: null, startTime: null, how: null });
+
+test('a start that answers running reloads with the item read after the server answered', async (t) => {
+  const after = item({ how: 'zaafpulse', bin: '/after/ollama' });
+  const models = fakeModels();
+  const s = startSetup({ items: [stoppedOllama(), after], models });
+  t.after(s.cleanup);
+  assert.deepEqual(await s.ctl.start('ollama'), { state: 'running', reloading: ['llama3.2:3b'] });
+  assert.deepEqual(models.calls, [['reload', after]]);
+  // Nothing remembered: the answer has no `reloading`.
+  const none = startSetup({ items: [stoppedOllama(), after], models: fakeModels({ names: [] }) });
+  t.after(none.cleanup);
+  assert.deepEqual(await none.ctl.start('ollama'), { state: 'running' });
+});
+
+test('a start that answers starting, or of an owner entry, does not reload', async (t) => {
+  const models = fakeModels({ all: true });
+  const slow = startSetup({ items: [stoppedOllama()], models, probe: async () => false, healthWaitMs: 50 });
+  t.after(slow.cleanup);
+  assert.equal((await slow.ctl.start('ollama')).state, 'starting');
+  const s = await realSetup({
+    extra: {
+      models,
+      probe: async () => true,
+      spawn: () => {
+        const c = new EventEmitter();
+        c.pid = 4321;
+        c.unref = () => {};
+        process.nextTick(() => c.emit('spawn'));
+        return c;
+      },
+    },
+  });
+  t.after(s.cleanup);
+  assert.deepEqual(await s.ctl.start('fake-rt'), { state: 'running' });
+  assert.deepEqual(models.calls, []);
+});
+
+test('a reload that cannot begin leaves the start answer as running', async (t) => {
+  const throwing = fakeModels();
+  throwing.reload = () => {
+    throw new Error('boom');
+  };
+  const a = startSetup({ items: [stoppedOllama(), item()], models: throwing });
+  t.after(a.cleanup);
+  assert.deepEqual(await a.ctl.start('ollama'), { state: 'running' });
+  const models = fakeModels();
+  const b = startSetup({ items: [stoppedOllama(), new Error('table')], models });
+  t.after(b.cleanup);
+  assert.deepEqual(await b.ctl.start('ollama'), { state: 'running' });
+  assert.deepEqual(models.calls, []);
+  for (const s of [a, b]) assert.ok(!s.audit.lines.some((l) => l.ok === false));
+});
+
+test('list rows carry models for Ollama and LM Studio, null otherwise; status only while running', async (t) => {
+  const status = { loading: true, loaded: ['llama3.2:3b'], failed: [{ name: 'qwen3:8b', error: 'not found' }] };
+  const lmsItem = item({ entry: LMSTUDIO, running: false, pid: null, startTime: null, how: null });
+  const janItem = item({ entry: entries([]).find((e) => e.id === 'jan') });
+  const mk = (x, models) => {
+    const dir = tmp('zp-rt-view-');
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    return createRuntimeControl({ state: { list: async () => x }, dataDir: dir, audit: recorder(), inDocker: false, models });
+  };
+  const rows = await mk([item(), lmsItem, janItem], fakeModels({ status })).list();
+  assert.deepEqual(rows.map((r) => [r.id, r.models]), [
+    ['ollama', { remembered: ['llama3.2:3b', 'qwen3:8b'], ...status }],
+    ['lmstudio', { remembered: [], loading: false, loaded: [], failed: [] }],
+    ['jan', null],
+  ]);
+  const [stopped] = await mk([stoppedOllama()], fakeModels({ status })).list();
+  assert.deepEqual(stopped.models, { remembered: ['llama3.2:3b', 'qwen3:8b'], loading: false, loaded: [], failed: [] });
+  const [without] = await mk([item()]).list();
+  assert.equal(without.models, null, 'no memory given: null');
+});
+
+test('reloaded writes one audit line with counts and no names', async (t) => {
+  const s = stopSetup();
+  t.after(s.cleanup);
+  s.ctl.reloaded('ollama', { loaded: ['llama3.2:3b', 'qwen3:8b'], failed: [{ name: 'gemma3', error: 'not found' }] });
+  s.ctl.reloaded('lmstudio', { loaded: ['q'], failed: [], cancelled: true });
+  s.ctl.reloaded('ollama', null);
+  const lines = s.audit.lines.map(({ ts, ...l }) => l);
+  assert.deepEqual(lines, [
+    { kind: 'runtime', action: 'reload', id: 'ollama', by: 'owner', ok: false, loaded: 2, failed: 1 },
+    { kind: 'runtime', action: 'reload', id: 'lmstudio', by: 'owner', ok: true, loaded: 1, failed: 0, cancelled: true },
+    { kind: 'runtime', action: 'reload', id: 'ollama', by: 'owner', ok: true, loaded: 0, failed: 0 },
+  ]);
+  assert.doesNotMatch(JSON.stringify(s.audit.lines), /llama3|qwen3|gemma|not found/);
 });
