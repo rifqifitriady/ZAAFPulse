@@ -61,13 +61,40 @@ function rtButton(r, busy) {
   return null;
 }
 
-const rtConfirmText = (r) => `Stop ${rtText(r && r.name, 60) || 'this server'}? Models it has loaded are unloaded.`;
+// A runtime whose models are loaded again on Start (Ollama, LM Studio) says so before it is stopped.
+const rtConfirmText = (r) =>
+  `Stop ${rtText(r && r.name, 60) || 'this server'}? ${
+    r && r.models ? 'Its models are unloaded now and loaded again on the next Start.' : 'Models it has loaded are unloaded.'
+  }`;
+
+// Model names as text: "a", "a and b", "a, b and 2 more".
+function rtNames(list) {
+  const xs = (Array.isArray(list) ? list : []).map((n) => rtText(n, 200)).filter(Boolean);
+  if (xs.length <= 1) return xs[0] || '';
+  if (xs.length === 2) return `${xs[0]} and ${xs[1]}`;
+  return `${xs[0]}, ${xs[1]} and ${xs.length - 2} more`;
+}
+
+// The line under the action row about the models a Start loads again: what it will reload while stopped, then
+// what is loading, what loaded and what could not; '' when there is nothing to say.
+function rtModelsText(r) {
+  const m = r && r.models;
+  if (!m || typeof m !== 'object') return '';
+  if (!r.running) return rtNames(m.remembered) ? `Start reloads ${rtNames(m.remembered)}` : '';
+  if (m.loading) return rtNames(m.remembered) ? `Loading ${rtNames(m.remembered)}…` : '';
+  const out = [];
+  const loaded = Array.isArray(m.loaded) ? m.loaded : [];
+  if (loaded.length) out.push(`Model${loaded.length === 1 ? '' : 's'} loaded: ${rtNames(loaded)}`);
+  for (const f of Array.isArray(m.failed) ? m.failed.slice(0, 3) : [])
+    if (f && rtText(f.name, 200)) out.push(`Could not load ${rtText(f.name, 200)} (${rtText(f.error, 60) || 'failed'})`);
+  return out.join('. ');
+}
 
 // What happened, from the answer of /api/runtimes/start or /stop.
 function rtResultText(action, res) {
   if (!res || typeof res !== 'object') return '';
   if (res.demo) return `Demo mode: nothing was ${action === 'stop' ? 'stopped' : 'started'}.`;
-  if (res.state === 'running') return 'Started.';
+  if (res.state === 'running') return rtNames(res.reloading) ? `Started. Loading ${rtNames(res.reloading)}…` : 'Started.';
   if (res.state === 'starting') return `${rtCap(rtText(res.note)) || 'Started, not answering yet'}.`;
   if (res.state === 'stopped') return 'Stopped.';
   if (res.state === 'stopping') return `${rtCap(rtText(res.note)) || 'Still shutting down'}.`;
@@ -122,6 +149,8 @@ function rtActionRow(doc, r, ui = {}) {
   const how = rtHowNote(r);
   if (how) row.appendChild(rtEl(doc, 'span', 'rt-how', how));
   box.appendChild(row);
+  const models = rtModelsText(r);
+  if (models) box.appendChild(rtEl(doc, 'p', 'mon-note rt-models', models));
   if (!b && r.reason) box.appendChild(rtEl(doc, 'p', 'mon-note off', rtCap(rtText(r.reason))));
   if (ui.msg) {
     const m = rtEl(doc, 'p', `mon-msg rt-msg ${ui.tone || ''}`, ui.msg);
@@ -492,6 +521,7 @@ if (typeof module !== 'undefined')
     rtCardPlan,
     rtActionRow,
     rtCard,
+    rtModelsText,
     rtEntryFromForm,
     rtFormFromEntry,
     rtEntryRow,
