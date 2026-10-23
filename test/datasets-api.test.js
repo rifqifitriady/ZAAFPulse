@@ -124,11 +124,10 @@ function fakeRunner() {
   };
 }
 
-function setup({ contentOff = false } = {}) {
+function setup({ contentOff = false, runner = fakeRunner() } = {}) {
   const dir = tmp('zp-ds-api-');
   const datasets = createDatasetStore({ dir: path.join(dir, 'datasets') });
   const experiments = createExperimentStore({ file: path.join(dir, 'experiments.jsonl') });
-  const runner = fakeRunner();
   let stored = {};
   const settings = { get: () => stored, save: (next) => (stored = next) };
   const logs = [];
@@ -173,6 +172,51 @@ function setup({ contentOff = false } = {}) {
     done: () => fs.rmSync(dir, { recursive: true, force: true }),
   };
 }
+
+// A runner that makes one call per example and model, each waiting on a deferred the test releases, and that checks
+// `signal` before every call the way the real runner does (a cancel never interrupts the call in flight).
+function steppedRunner() {
+  const waiting = [];
+  const calls = [];
+  return {
+    calls,
+    waiting,
+    async run(opts) {
+      calls.push(opts);
+      const perExample = [];
+      let stopped = null;
+      outer: for (const example of opts.examples) {
+        for (const model of opts.models) {
+          if (opts.signal && opts.signal.aborted) {
+            stopped = 'cancelled';
+            break outer;
+          }
+          await new Promise((resolve) => waiting.push(resolve));
+          const output = { text: 'ok', proposal: null };
+          perExample.push({ exampleId: example.id, model, output, error: null, labels: {}, cost: 0, ms: 1 });
+          const done = perExample.length;
+          opts.onProgress({ done, total: opts.examples.length * opts.models.length, requests: done, cost: 0 });
+        }
+      }
+      return {
+        id: opts.id,
+        dataset: opts.dataset.slug,
+        datasetName: opts.dataset.name,
+        models: opts.models,
+        evaluators: opts.evaluators,
+        startedAt: 1,
+        endedAt: 2,
+        status: stopped ? 'stopped' : 'done',
+        stopped,
+        caps: { maxCostUSD: opts.maxCostUSD, maxRequests: opts.maxRequests },
+        usage: { requests: perExample.length, cost: 0 },
+        perExample,
+        summary: { models: {} },
+      };
+    },
+  };
+}
+const tick = () => new Promise((r) => setImmediate(r));
 
 // A dataset with one example from the fake trace.
 async function withExample(s, slug = 'auth') {
@@ -561,6 +605,143 @@ test('datasets api: an experiment starts in the background, one at a time, and i
     assert.equal(failed.stopped, 'error');
     assert.equal(s.logs.length, 1);
     assert.doesNotMatch(s.logs[0], /\/Users\//);
+  } finally {
+    s.done();
+  }
+});
+
+test('datasets api: a cancel stops the run before its next call and lets the call in flight finish', async () => {
+  const s = setup({ runner: steppedRunner() });
+  try {
+    await withExample(s);
+    const second = await s.call('POST', '/api/datasets/auth/examples', { items: [{ key: 'claude.k1', turn: 1 }] });
+    assert.equal(second.body.added.length, 1);
+    const body = { dataset: 'auth', models: ['ollama/qwen3'], evaluators: ['secret_leak'] };
+    const started = await s.call('POST', '/api/experiments', body);
+    assert.equal(started.status, 202);
+    const id = started.body.id;
+    for (let i = 0; i < 100 && !s.runner.waiting.length; i++) await tick();
+    assert.equal(s.runner.waiting.length, 1, 'the first call is in flight');
+    assert.ok(s.runner.calls[0].signal instanceof AbortSignal);
+
+    const cancel = await s.call('POST', `/api/experiments/${id}/cancel`, {});
+    assert.deepEqual([cancel.status, cancel.body], [202, { id, status: 'cancelling' }]);
+    const again = await s.call('POST', `/api/experiments/${id}/cancel`, {});
+    assert.deepEqual([again.status, again.body], [202, { id, status: 'cancelling' }], 'idempotent');
+    const running = (await s.call('GET', `/api/experiments/${id}`)).body;
+    assert.equal(running.status, 'running');
+    assert.equal(running.progress.cancelling, true);
+    assert.equal((await s.call('GET', '/api/experiments')).body.running.cancelling, true);
+
+    s.runner.waiting[0](); // the call in flight answers
+    await s.idle();
+    assert.equal(s.api.running(), null);
+    assert.equal(s.runner.waiting.length, 1, 'no further call was made');
+    const rec = (await s.call('GET', `/api/experiments/${id}`)).body;
+    assert.equal(rec.status, 'stopped');
+    assert.equal(rec.stopped, 'cancelled');
+    assert.equal(rec.perExample.length, 1, 'the call in flight is recorded');
+
+    const late = await s.call('POST', `/api/experiments/${id}/cancel`, {});
+    assert.deepEqual([late.status, late.body], [409, { error: 'the run has already ended' }]);
+    const unknown = await s.call('POST', '/api/experiments/exp_00000000000000ff/cancel', {});
+    assert.deepEqual([unknown.status, unknown.body], [404, { error: 'unknown experiment' }]);
+    assert.equal((await s.call('POST', '/api/experiments/not-an-id/cancel', {})).status, 400);
+    assert.equal((await s.call('POST', `/api/experiments/${id}/cancel`, { force: true })).status, 400);
+    const form = await s.call('POST', `/api/experiments/${id}/cancel`, 'a=1', {
+      type: 'application/x-www-form-urlencoded',
+    });
+    assert.equal(form.status, 415);
+    assert.equal((await s.call('GET', `/api/experiments/${id}/cancel`)).status, 405);
+  } finally {
+    s.done();
+  }
+});
+
+test('datasets api: ?view=preview cuts the long texts of each row and keeps the rest whole', async () => {
+  const s = setup();
+  try {
+    s.datasets.create({ name: 'Long', slug: 'long' });
+    s.datasets.add('long', [
+      {
+        source: null,
+        input: {
+          system: 's'.repeat(700),
+          messages: [
+            { role: 'user', text: 'u'.repeat(800) },
+            { role: 'tool', name: 'Bash', text: 'short tool output' },
+          ],
+          tools: [{ name: 'Read', description: 'Read a file from the disk' }],
+        },
+        output: { text: 'o'.repeat(5000), model: 'm1' },
+        reference: { text: 'r'.repeat(900) },
+        tags: ['slow'],
+        feedback: 'good',
+      },
+      { source: null, input: { messages: [{ role: 'user', text: 'hi' }] }, output: { text: 'hello' } },
+    ]);
+    const full = await s.call('GET', '/api/datasets/long');
+    assert.equal(full.status, 200);
+    assert.equal(full.body.examples[0].output.text.length, 5000);
+    assert.equal(Object.hasOwn(full.body.examples[0], 'cut'), false, 'the default view is unchanged');
+
+    const light = await s.call('GET', '/api/datasets/long', undefined, { query: 'view=preview' });
+    assert.equal(light.status, 200);
+    assert.deepEqual(light.body.dataset, full.body.dataset);
+    const [row, small] = light.body.examples;
+    assert.equal(row.output.text.length, 600);
+    assert.equal(row.output.model, 'm1');
+    assert.equal(row.input.system.length, 600);
+    assert.equal(row.input.messages[0].text.length, 600);
+    assert.equal(row.input.messages[1].text, 'short tool output');
+    assert.equal(row.input.messages[1].name, 'Bash');
+    assert.deepEqual(row.input.tools, [{ name: 'Read', description: '' }]);
+    assert.equal(row.reference.text.length, 900, 'the reference is whole');
+    assert.deepEqual(row.tags, ['slow']);
+    assert.equal(row.feedback, 'good');
+    assert.equal(row.cut, true);
+    assert.equal(small.output.text, 'hello');
+    assert.equal(Object.hasOwn(small, 'cut'), false, 'nothing was cut');
+
+    const bad = await s.call('GET', '/api/datasets/long', undefined, { query: 'view=x' });
+    assert.deepEqual([bad.status, bad.body], [400, { error: 'view must be preview' }]);
+
+    // R7 still holds in the light view: no text with content viewing off.
+    const off = createDatasetApi({
+      datasets: s.datasets,
+      experiments: s.experiments,
+      runner: s.runner,
+      replay: fakeReplay(),
+      trace: fakeTrace(),
+      contentOff: true,
+      settings: { get: () => ({}), save: () => {} },
+    });
+    const query = new URLSearchParams('view=preview');
+    const hidden = await off.route({ method: 'GET', path: '/api/datasets/long', query });
+    const h = hidden.body.examples[0];
+    assert.equal(h.output.text, null);
+    assert.equal(h.input.system, null);
+    assert.equal(h.reference.text, null);
+    assert.ok(h.input.messages.every((m) => m.text === null));
+  } finally {
+    s.done();
+  }
+});
+
+test('datasets api: an import reports how many links it kept and dropped', async () => {
+  const s = setup();
+  try {
+    const line = (key, turn) =>
+      JSON.stringify({
+        input: { messages: [{ role: 'user', text: `turn ${turn}` }] },
+        output: { text: 'a' },
+        source: { source: 'claude', key, turn, span: null },
+      });
+    const jsonl = [line('claude.k1', 0), line(`claude.${'f'.repeat(32)}`, 1)].join('\n');
+    const r = await s.call('POST', '/api/datasets/import', { slug: 'links', jsonl });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.added, 2);
+    assert.deepEqual(r.body.links, { kept: 1, dropped: 1 });
   } finally {
     s.done();
   }

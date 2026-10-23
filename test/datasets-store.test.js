@@ -336,12 +336,38 @@ test('files stay private after a rewrite (POSIX)', { skip: process.platform === 
   const s = createDatasetStore({ dir });
   s.create({ name: 'a' });
   const [e] = s.add('a', [ex()]).added;
-  fs.chmodSync(path.join(dir, 'a.jsonl'), 0o644);
+  const file = path.join(dir, 'a.jsonl');
+  const mode = () => fs.statSync(file).mode & 0o777;
+  // Loosened before each rewrite, so each one is shown to put 0600 back on its own.
+  fs.chmodSync(file, 0o644);
   s.update('a', e.id, { tags: ['x'] });
-  assert.equal(fs.statSync(path.join(dir, 'a.jsonl')).mode & 0o777, 0o600);
+  assert.equal(mode(), 0o600, 'after update');
+  fs.chmodSync(file, 0o644);
   s.importJsonl({ slug: 'a', jsonl: JSON.stringify(ex({ source: null })) });
-  assert.equal(fs.statSync(path.join(dir, 'a.jsonl')).mode & 0o777, 0o600);
+  assert.equal(mode(), 0o600, 'after importJsonl');
+  fs.chmodSync(file, 0o644);
   s.removeExample('a', e.id);
-  assert.equal(fs.statSync(path.join(dir, 'a.jsonl')).mode & 0o777, 0o600);
+  assert.equal(mode(), 0o600, 'after removeExample');
   assert.equal(fs.statSync(path.join(dir, 'index.json')).mode & 0o777, 0o600);
+});
+
+test('source.turn must be a whole number from 0', () => {
+  const at = (turn) => cleanExample(ex({ source: { source: 'claude', session: 's1', turn, span: null } }));
+  for (const turn of [1.5, -3]) {
+    assert.deepEqual(at(turn), { ok: false, reason: 'source.turn must be a whole number from 0' }, String(turn));
+  }
+  assert.equal(at(0).ok, true);
+  assert.equal(at(0).example.source.turn, 0);
+});
+
+test('a tag that fits the tag pattern but is a live key is refused', () => {
+  const { TAG } = require('../lib/datasets/shape');
+  const sig = require('../lib/signals');
+  // Built at runtime: an AWS-style access key id (not the documented example key, which the placeholder check skips).
+  const ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const k = 'AKIA' + Array.from({ length: 16 }, (_, i) => ALNUM[(i * 7 + 3) % 36]).join('');
+  assert.ok(k.length <= 40);
+  assert.ok(TAG.test(k), 'the pattern alone would let it through');
+  assert.equal(sig.secretSpans(k).length, 1, 'it reads as a live secret');
+  assert.equal(cleanExample(ex({ tags: [k] })).ok, false);
 });
