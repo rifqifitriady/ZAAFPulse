@@ -325,7 +325,7 @@ test('the gateway goes to a running runtime by port, and to the provider otherwi
   assert.equal(node(u, 'gateway'), undefined);
 });
 
-test('gateway usage: path, ok, key name or agent as the client, and the one routed tool when exactly one is', () => {
+test('gateway usage: path, ok, and the key name or agent as the client', () => {
   const gateway = {
     providers: [
       { id: 'anth', preset: 'anthropic', baseUrl: 'https://api.anthropic.com/v1', enabled: true },
@@ -386,18 +386,75 @@ test('gateway usage: path, ok, key name or agent as the client, and the one rout
   assert.ok(node(t, 'provider:openai'), 'a provider seen in a request is drawn');
   assert.ok(t.edges.some((e) => e.id === 'gateway>provider:openai'));
 
-  // Exactly one tool routed to the gateway: it is the client.
+  // One tool routed to the gateway does not make it the client of every request: the key says who sent it.
   const one = buildTopology(input({ ...base, routes: { claude: 'gateway', codex: null } }), NOW);
   const r = one.requests.find((x) => x.source === 'gateway');
-  assert.deepEqual(r.path, ['claude', 'gateway', 'provider:anthropic']);
-  assert.equal(r.client, 'Claude Code');
+  assert.deepEqual(r.path, ['gateway', 'provider:anthropic']);
+  assert.equal(r.client, 'laptop');
   assert.ok(one.edges.some((e) => e.id === 'claude>gateway'));
+});
 
-  // Two tools routed there: back to the key name.
-  const two = buildTopology(input({ ...base, routes: { claude: 'gateway', codex: 'gateway' } }), NOW);
-  const s = two.requests.find((x) => x.source === 'gateway');
-  assert.deepEqual(s.path, ['gateway', 'provider:anthropic']);
-  assert.equal(s.client, 'laptop');
+test('gateway usage: a tool key names its tool, the dashboard is ZAAFPulse, any other key or agent is the client', () => {
+  const use = (ago, keyId, extra = {}) => ({
+    ts: NOW - ago * MIN,
+    keyId,
+    provider: 'anth',
+    model: 'claude-sonnet-5',
+    status: 200,
+    ...extra,
+  });
+  const gateway = {
+    providers: [{ id: 'anth', preset: 'anthropic', enabled: true }],
+    usage: [
+      use(1, 'kc'),
+      use(2, 'kx', { model: 'gpt-5' }),
+      use(3, 'kcur'),
+      use(4, 'kg'),
+      use(5, 'dashboard', { agent: 'judge' }),
+      use(6, 'k1'),
+      use(7, 'kp'),
+      use(8, 'gone', { agent: 'researcher' }),
+    ],
+    keys: [
+      { id: 'kc', name: 'tool:claude-code' },
+      { id: 'kx', name: 'tool:codex' },
+      { id: 'kcur', name: 'tool:cursor' },
+      { id: 'kg', name: 'tool:gemini-cli' },
+      { id: 'k1', name: 'laptop' },
+      { id: 'kp', name: 'tool:__proto__' },
+    ],
+  };
+  const live = { apps: [], installed: ['claude', 'codex', 'cursor'] };
+  const t = buildTopology(input({ live, gateway, routes: { claude: 'gateway', codex: 'gateway' } }), NOW);
+  const g = t.requests.filter((q) => q.source === 'gateway');
+  assert.deepEqual(
+    g.map((q) => [q.path.join(' '), q.client]),
+    [
+      ['claude gateway provider:anthropic', 'Claude Code'],
+      ['codex gateway provider:anthropic', 'Codex'],
+      ['cursor gateway provider:anthropic', 'Cursor'],
+      ['gateway provider:anthropic', 'tool:gemini-cli'], // its app (Antigravity) is not drawn
+      ['gateway provider:anthropic', 'ZAAFPulse'], // the dashboard's own calls: agents, collab, evals, RAG
+      ['gateway provider:anthropic', 'laptop'],
+      ['gateway provider:anthropic', 'tool:__proto__'],
+      ['gateway provider:anthropic', 'researcher'],
+    ],
+  );
+  for (const e of ['claude>gateway', 'codex>gateway', 'cursor>gateway'])
+    assert.ok(
+      t.edges.some((x) => x.id === e),
+      e,
+    );
+  assert.equal(t.edges.find((x) => x.id === 'claude>gateway').status, 'active', 'its edge takes the request status');
+  // Gemini CLI is part of the Antigravity app; with that drawn, its key names it.
+  const u = buildTopology(
+    input({ live: { apps: [], installed: ['antigravity'] }, gateway: { ...gateway, usage: [use(1, 'kg')] } }),
+    NOW,
+  );
+  assert.deepEqual(u.requests[0].path, ['antigravity', 'gateway', 'provider:anthropic']);
+  // A tool key is the client even when that tool is not routed to the gateway (it was pointed there by hand).
+  const v = buildTopology(input({ live, gateway: { ...gateway, usage: [use(1, 'kx')] } }), NOW);
+  assert.deepEqual(v.requests[0].path, ['codex', 'gateway', 'provider:anthropic']);
 });
 
 test('requests from every source are merged newest first and capped at 20', () => {
