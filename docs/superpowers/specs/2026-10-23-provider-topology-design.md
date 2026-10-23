@@ -19,7 +19,7 @@ The Overview shows how AI traffic on this machine flows, in the style of the "Pr
 | Source | Function | Gives |
 |---|---|---|
 | Running apps | `processes.snapshot()` (`/api/live`) | which AI apps run now (`apps[].id`) and which are installed (`installed`) |
-| Log turns | `reqlogs.logs()` (lib/reqlogs.js) | `requests[]` from the last 3 h of Claude Code and Codex: `{ ts, source, model, input, output, durationMs, toolErrors }`; `errors[]`: `{ ts, source, kind }` |
+| Log turns | `reqlogs.logs()` (lib/reqlogs.js) | `requests[]` from the last 3 h of Claude Code and Codex: `{ ts, source, model, input, output, durationMs, toolErrors }`; `errors[]`: `{ ts, source, kind }`, plus `tool` on an API error |
 | Agent Gateway | `gateway.admin('', 'GET').providers`, `gateway.usage.recent(n)`, `gateway.keys.list()` | providers `{ id, preset, baseUrl, enabled }`; requests `{ ts, keyId, agent, provider, model, status, ms, input, output, error }` |
 | OmniRoute | `router` (lib/omniroute.js): `configured()`, `id()`, `providerStats()`, `callLogs()`, plus `health()` (`/api/health`) and `providers()` (`/api/providers`, the `PROVIDER_FIELDS` of lib/connectors/router.js, emails masked), added in this work | health, provider connections `{ provider, name, isActive, testStatus }`, calls `{ ts, status, model, provider, durationMs, tokens }` |
 | Local runtimes | `runtimeControl.list()` | `{ id, name, running, healthy, models: { loaded, remembered } }` for Ollama and LM Studio |
@@ -86,8 +86,13 @@ The 20 newest, merged and sorted by `ts`, newest first. Each is:
 They are built from:
 - **Log turns** of a tool whose route is `null` (direct):
   - path `[tool, provider:<providerOf(model)>]`;
-  - `ok` is false when the turn has `toolErrors > 0`;
+  - `ok` is true: the provider answered. A turn with `toolErrors > 0` is still ok, since a failed Bash command or a missing file says nothing about the provider;
   - turns of tools routed through the gateway or a router are left out here, because that hop reports them.
+- **API errors from the logs** (`logs.errors` with `kind: 'api'`: overloaded, 5xx, auth) of a direct tool:
+  - lib/reqlogs.js records the tool on the entry (`tool: 'claude' | 'codex'`);
+  - path `[tool, provider:<providerOf(model)>]` when the entry names a model, else the tool's own provider;
+  - `ok` is false, with `tokens` 0 and `ms` null. The error text is not copied;
+  - errors of tools routed through the gateway or a router are left out, as for turns.
 - **Gateway usage:**
   - path `[client?, 'gateway', provider:<…> | runtime:<id>]`;
   - the gateway makes one key per connected tool, named `tool:<lib/gateway/tools.js id>`. A request made with such a key starts at that tool and has it as `client`, when the tool is a node: `tool:claude-code` is `claude`, `tool:gemini-cli` is `antigravity`, and any other id is its own APPS id (`tool:codex` is `codex`);
