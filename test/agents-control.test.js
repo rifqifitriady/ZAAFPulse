@@ -147,6 +147,27 @@ test('no SIGTERM when the pid was reused by another process during the grace per
   assert.deepEqual(k.sent(), [[4242, 'SIGINT']]);
 });
 
+test('no SIGTERM when the pid runs another program after SIGINT (same pid and start time, exec in place)', async () => {
+  // The check before SIGINT sees Claude Code; the re-check before SIGTERM sees the same pid and start time running
+  // a launcher's helper that is no agent program, then a plain shell.
+  for (const later of [`${DISCLAIMER} ${DESKTOP_CLAUDE}`, '/bin/zsh -l']) {
+    let reads = 0;
+    const k = fakeKill();
+    const { ctl, audit } = control({
+      processes: fakeTable(() => [row(4242, reads++ === 0 ? CLAUDE_ARGS : later)]),
+      killer: k,
+    });
+    const out = await ctl.stop({ pid: 4242, startTime: startOf(600) }, { by: 'owner' });
+    assert.ok(reads >= 2);
+    assert.equal(out.signal, 'SIGINT');
+    assert.deepEqual(k.sent(), [[4242, 'SIGINT']], later);
+    assert.deepEqual(
+      audit.entries.map((e) => e.signal),
+      ['SIGINT'],
+    );
+  }
+});
+
 test('stop does not hang on a fixed clock: the grace wait runs on the injected sleep, then SIGTERM', async () => {
   const fixed = Date.now();
   const slept = [];
@@ -657,6 +678,22 @@ test('a process this server paused can be resumed even when its argv cannot be r
     (e) => e.status === 403 && /not an AI agent/.test(e.message),
   );
   assert.equal(k.sent().length, 2);
+});
+
+test('a process this server paused, with argv unreadable, still gets SIGTERM when it outlives the grace period', async () => {
+  let rows = [row(4242, CLAUDE_ARGS)];
+  const { ctl, k } = control({ processes: fakeTable(() => rows) });
+  const target = { pid: 4242, startTime: startOf(600) };
+  await ctl.pause(target, { by: 'owner' });
+  rows = [row(4242, CLAUDE_ARGS, { argv: undefined })];
+  const out = await ctl.stop(target, { by: 'owner' });
+  assert.equal(out.signal, 'SIGTERM');
+  assert.deepEqual(k.sent(), [
+    [4242, 'SIGSTOP'],
+    [4242, 'SIGINT'],
+    [4242, 'SIGCONT'],
+    [4242, 'SIGTERM'],
+  ]);
 });
 
 test('paused(): after a restart, a stopped wrapper is not listed; a stopped agent binary is', async () => {
