@@ -273,6 +273,9 @@ function viewOverview() {
   <div class="section-head"><h2>AI quality & safety</h2><span class="meta">— signals from your local logs · click a card for details</span><a class="link" href="#quality">Quality & safety ↗</a></div>
   ${qualityKpis()}
 
+  <div class="section-head"><h2>Provider topology</h2><span class="meta" data-topo-meta>— loading…</span></div>
+  <div class="card topo" data-topo aria-busy="true"></div>
+
   <div class="section-head"><h2>AI Office</h2><span class="meta">— ${squad.total} detected · ${squad.running} running now</span><a class="link" href="#squad">View all ↗</a></div>
   <div class="grid squad">${squad.html}</div>
 
@@ -426,6 +429,7 @@ function drawCity(g) {
 function mountOverview() {
   const canvas = $('#ov-scene');
   if (canvas && state.data) isoStage(canvas, { draw: drawCity, fit: [13.4, 8.9], origin: [0.46, 0.62] });
+  if (typeof topoMount === 'function') topoMount(); // public/topologyview.js: polls /api/topology on its own
 }
 
 if (typeof module !== 'undefined') module.exports = { emptyLogsNote, liveNoteStep };
