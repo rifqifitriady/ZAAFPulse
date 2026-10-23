@@ -40,7 +40,7 @@ const { createAutoAdd } = require('./lib/datasets/auto');
 const { createMonitorState } = require('./lib/monitors/state');
 const { createChannels, checkWebhookUrl, parseHeaders } = require('./lib/monitors/channels');
 const { createMonitorApi } = require('./lib/monitors/api');
-const { createMonitors } = require('./lib/monitors');
+const { createMonitors, createAfterRefresh } = require('./lib/monitors');
 const { createAgentControl } = require('./lib/agents/control');
 const { isRef } = require('./lib/secrets');
 const { createPriceSync } = require('./lib/price-sync');
@@ -240,6 +240,18 @@ function rawConfig() {
   }
   return rawCache.value;
 }
+// The one writer of config.json for the settings pages: one top-level section is replaced, through a temp file and a
+// rename, and the cache is refreshed from the new file. Demo mode keeps it in memory and never touches the file.
+function saveConfigSection(name, value) {
+  if (DEMO) {
+    rawCache.value = { ...rawCache.value, [name]: value };
+    return;
+  }
+  const raw = { ...rawConfig(), [name]: value };
+  fs.writeFileSync(`${CONFIG_FILE}.tmp`, JSON.stringify(raw, null, 2));
+  fs.renameSync(`${CONFIG_FILE}.tmp`, CONFIG_FILE);
+  rawCache = { mtime: fs.statSync(CONFIG_FILE).mtimeMs, value: raw };
+}
 // Local trace store: every gateway trace without content, under .data/traces (on unless "tracing": { "enabled":
 // false }). Retention is read at start; the on/off switch whenever config.json changes.
 const tracingCfg = () => (rawConfig() || {}).tracing || {};
@@ -288,15 +300,7 @@ const gateway = createGateway({
   dataDir: DEMO ? demoDir : path.join(DIR, '.data'),
   ...(DEMO ? { fetchImpl: demoGw.createDemoFetch(), toolsHome: demoDir } : {}),
   getConfig: rawConfig,
-  writeGatewayConfig: (g) => {
-    if (DEMO) {
-      rawCache.value = { ...rawCache.value, gateway: g };
-      return;
-    }
-    const raw = { ...rawConfig(), gateway: g };
-    fs.writeFileSync(`${CONFIG_FILE}.tmp`, JSON.stringify(raw, null, 2));
-    fs.renameSync(`${CONFIG_FILE}.tmp`, CONFIG_FILE);
-  },
+  writeGatewayConfig: (g) => saveConfigSection('gateway', g),
   secrets: createSecrets(),
   // Provider keys go to the Keychain as acc.gw-<provider id>, apart from integration keys.
   resolveSecret: (id, input, current) =>
@@ -373,16 +377,7 @@ const evalApi = createEvalApi({
   claude: claudeCli,
   settings: {
     get: () => rawConfig().evals,
-    save: (evals) => {
-      if (DEMO) {
-        rawCache.value = { ...rawCache.value, evals };
-        return;
-      }
-      const raw = { ...rawConfig(), evals };
-      fs.writeFileSync(`${CONFIG_FILE}.tmp`, JSON.stringify(raw, null, 2));
-      fs.renameSync(`${CONFIG_FILE}.tmp`, CONFIG_FILE);
-      rawCache = { mtime: fs.statSync(CONFIG_FILE).mtimeMs, value: raw };
-    },
+    save: (evals) => saveConfigSection('evals', evals),
   },
   onFeedback: (f) => datasetAuto.onFeedback(f),
 });
@@ -406,16 +401,7 @@ const datasetApi = createDatasetApi({
   contentOff,
   settings: {
     get: () => rawConfig().datasets,
-    save: (next) => {
-      if (DEMO) {
-        rawCache.value = { ...rawCache.value, datasets: next };
-        return;
-      }
-      const raw = { ...rawConfig(), datasets: next };
-      fs.writeFileSync(`${CONFIG_FILE}.tmp`, JSON.stringify(raw, null, 2));
-      fs.renameSync(`${CONFIG_FILE}.tmp`, CONFIG_FILE);
-      rawCache = { mtime: fs.statSync(CONFIG_FILE).mtimeMs, value: raw };
-    },
+    save: (next) => saveConfigSection('datasets', next),
   },
 });
 const datasetAuto = createAutoAdd({
@@ -543,18 +529,10 @@ const monitorApi = createMonitorApi({
     get: channelConfig,
     save: ({ desktop, webhook }) => {
       const m = rawConfig().monitors;
-      const monitorsCfg = {
+      saveConfigSection('monitors', {
         ...(m && typeof m === 'object' ? m : {}),
         channels: { desktop, ...(webhook ? { webhook } : {}) },
-      };
-      if (DEMO) {
-        rawCache.value = { ...rawCache.value, monitors: monitorsCfg };
-        return;
-      }
-      const raw = { ...rawConfig(), monitors: monitorsCfg };
-      fs.writeFileSync(`${CONFIG_FILE}.tmp`, JSON.stringify(raw, null, 2));
-      fs.renameSync(`${CONFIG_FILE}.tmp`, CONFIG_FILE);
-      rawCache = { mtime: fs.statSync(CONFIG_FILE).mtimeMs, value: raw };
+      });
     },
   },
   resolveSecret: (field, input, current) =>
@@ -571,35 +549,15 @@ const monitorTick = () =>
   Promise.resolve()
     .then(() => monitors.tickAggregate())
     .catch(() => console.error('monitors: the aggregate pass failed'));
-// The aggregate pass has to run on the refreshed index. The refresh timer is not changed: this waits for it to end.
-// One waiting poller at a time: a refresh that outlasts RESCAN_MS must not stack a poller per interval.
-let monitorTickWaiting = false;
-const monitorTickAfterIndex = () => {
-  if (monitorTickWaiting) return;
-  monitorTickWaiting = true;
-  const t = setInterval(() => {
-    if (indexer.state.indexing) return;
-    clearInterval(t);
-    monitorTickWaiting = false;
-    monitorTick();
-  }, 250);
-  t.unref();
-};
+// The aggregate pass has to run on the refreshed index: each call waits for the refresh to end (lib/monitors).
+const monitorTickAfterIndex = createAfterRefresh({ indexing: () => indexer.state.indexing, run: monitorTick });
 
 // Second brain sources: Obsidian by default, plus Logseq, Notion, Tana, Roam, mem.ai, Reflect, Heybrain,
 // PARA folders, the RAG knowledge bases and vector databases. Settings in config.json under "brain";
 // tokens in the Keychain as acc.brain-<id>.
 const brain = createBrain({
   getConfig: rawConfig,
-  writeBrainConfig: (b) => {
-    if (DEMO) {
-      rawCache.value = { ...rawCache.value, brain: b };
-      return;
-    }
-    const raw = { ...rawConfig(), brain: b };
-    fs.writeFileSync(`${CONFIG_FILE}.tmp`, JSON.stringify(raw, null, 2));
-    fs.renameSync(`${CONFIG_FILE}.tmp`, CONFIG_FILE);
-  },
+  writeBrainConfig: (b) => saveConfigSection('brain', b),
   secrets: createSecrets(),
   resolveSecret: (id, input, current) =>
     gatewaySecret(`brain-${id}`, { key: 'token', label: 'secret', required: false }, input, current),

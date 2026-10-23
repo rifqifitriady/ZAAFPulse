@@ -50,8 +50,10 @@ function setup({
     now: () => t,
     config: () => ({ monthlyBudgetUSD: 300 }),
   });
+  const keyCalls = []; // the third argument of every keyFor call
   const trace = {
-    keyFor: (source, sid) => {
+    keyFor: (source, sid, opts) => {
+      keyCalls.push(opts);
       if (source === 'claude' && sid === SID) return KEY;
       throw Object.assign(new Error('unknown session'), { status: 404 });
     },
@@ -109,6 +111,7 @@ function setup({
     },
   });
   const tests = [];
+  const resolved = []; // the fields resolveSecret was asked for, in order
   const api = createMonitorApi({
     state,
     monitors: { status: async () => ({ lastAggregate: 5, lastLive: 6, paused: await fakeControl.paused() }) },
@@ -128,8 +131,10 @@ function setup({
         channelCfg = { ...c, problem: null };
       },
     },
-    resolveSecret: (field, input, current) =>
-      resolve('monitors-webhook', { key: field, label: field, required: false }, input, current),
+    resolveSecret: (field, input, current) => {
+      resolved.push(field);
+      return resolve('monitors-webhook', { key: field, label: field, required: false }, input, current);
+    },
     checkUrl: checkWebhookUrl,
     checkHeaders: parseHeaders,
     demo,
@@ -138,6 +143,7 @@ function setup({
     notifyOff,
     home: HOME,
     platform,
+    now: () => t,
   });
   const bodies = [];
   const call = async (p, { method = 'GET', body, raw, contentType = 'application/json' } = {}) => {
@@ -162,6 +168,8 @@ function setup({
     stored,
     tests,
     bodies,
+    keyCalls,
+    resolved,
     channels: () => channelCfg,
     setChannels: (c) => (channelCfg = c),
     tick: (ms) => (t += ms),
@@ -214,6 +222,46 @@ test('monitor api: rule list shape, opaque instances and rule states', async () 
     webhook: { configured: false, headers: false, problem: null },
     sending: true,
   });
+  s.done();
+});
+
+test('monitor api: an ended live session leaves the rule row and the counts; an aggregate instance never does', async () => {
+  const s = setup();
+  // Two triggered tool_loop sessions: one last seen 61 s ago (ended), one 5 s ago.
+  s.state.apply('tool_loop', [{ instance: SID2, sessionId: SID2, state: 'triggered', value: 60, threshold: 50 }]);
+  s.state.apply('daily_cost', [{ instance: 'all', sessionId: null, state: 'ok', value: 2, threshold: 10 }]);
+  s.tick(56_000);
+  s.state.apply('tool_loop', [{ instance: SID, sessionId: SID, state: 'triggered', value: 70, threshold: 50 }]);
+  s.tick(5_000);
+  const r = await s.call('/api/monitors');
+  const loop = r.body.rules.find((x) => x.id === 'tool_loop');
+  assert.equal(loop.instances.length, 1, 'only the fresh session');
+  assert.equal(loop.instances[0].sessionKey, KEY);
+  assert.equal(loop.state, 'triggered');
+  const daily = r.body.rules.find((x) => x.id === 'daily_cost');
+  assert.equal(daily.instances.length, 1, 'an aggregate instance seen 61 s ago is still shown');
+  assert.equal(daily.state, 'ok');
+  const st = await s.call('/api/monitors/status');
+  assert.equal(st.body.counts.triggered, 1);
+  assert.equal(st.body.counts.ok, 1, 'the aggregate instance still counts');
+  // The alert history keeps the ended session.
+  assert.equal((await s.call('/api/alerts')).body.alerts.filter((a) => a.rule === 'tool_loop').length, 2);
+  s.done();
+});
+
+test('monitor api: session keys are looked up without forcing a trace rebuild', async () => {
+  const s = setup();
+  s.state.setSettings('cost_burn', { enabled: true });
+  s.state.apply('cost_burn', [
+    { instance: SID, sessionId: SID, state: 'triggered', value: 7, threshold: 5 },
+    { instance: SID2, sessionId: SID2, state: 'triggered', value: 8, threshold: 5 },
+  ]);
+  for (const p of ['/api/alerts', '/api/monitors', '/api/monitors/status']) {
+    s.keyCalls.length = 0;
+    assert.equal((await s.call(p)).status, 200, p);
+    assert.ok(s.keyCalls.length > 0, `${p} looked up a key`);
+    for (const opts of s.keyCalls) assert.deepEqual(opts, { rebuild: false }, p);
+  }
   s.done();
 });
 
@@ -361,6 +409,30 @@ test('monitor api: a failure part-way through the channel settings leaves them u
   assert.equal(s2.stored.length, 0);
   s.done();
   s2.done();
+});
+
+test('monitor api: webhook headers without a URL to come are refused before any secret is resolved', async () => {
+  const s = setup();
+  const headers = { mode: 'store', value: 'X-A: b' };
+  for (const webhookRef of [{ mode: 'keep' }, { mode: 'store', value: '' }]) {
+    const r = await s.post('/api/monitors/channels', { webhookRef, webhookHeadersRef: headers });
+    assert.equal(r.status, 400, JSON.stringify(webhookRef));
+    // An empty pasted URL is already refused by the URL check, which needs no secret store either.
+    if (webhookRef.mode === 'keep') assert.equal(r.body.error, 'set the webhook URL first');
+  }
+  assert.deepEqual(s.resolved, [], 'resolveSecret was never called');
+  assert.equal(s.stored.length, 0);
+  s.done();
+  // The headers are resolved first: when that fails, the URL is never resolved, so no new URL secret is left behind.
+  const f = setup({ failStore: (service) => service.endsWith('-headers') });
+  const r = await f.post('/api/monitors/channels', {
+    webhookRef: { mode: 'store', value: 'https://hooks.example.com/abc' },
+    webhookHeadersRef: { mode: 'store', value: 'Authorization: Bearer abc' },
+  });
+  assert.equal(r.status, 500);
+  assert.deepEqual(f.resolved, ['headers']);
+  assert.equal(f.stored.length, 0, 'no URL secret was stored');
+  f.done();
 });
 
 test('monitor api: the test button', async () => {

@@ -8,7 +8,7 @@ const os = require('os');
 const net = require('net');
 const path = require('path');
 const { spawn } = require('child_process');
-const { createMonitors } = require('../lib/monitors');
+const { createMonitors, createAfterRefresh } = require('../lib/monitors');
 const { createMonitorState } = require('../lib/monitors/state');
 const { NO_JUDGE_PORTS } = require('./helpers');
 
@@ -59,7 +59,7 @@ function setup({ results = [], agents = [], settings = {}, candidates = [], budg
   const first = newState();
   for (const [id, s] of Object.entries(settings)) first.setSettings(id, s);
   const sent = [];
-  const calls = { candidates: [], pause: [], resume: [], stop: [], paused: 0 };
+  const calls = { candidates: [], pause: [], resume: [], stop: [], paused: 0, snapshot: 0 };
   const logs = [];
   const data = { results, agents, candidates };
   const control = {
@@ -85,7 +85,10 @@ function setup({ results = [], agents = [], settings = {}, candidates = [], budg
     },
   };
   const office = {
-    snapshot: () => ({ ts: clock.t, agents: data.agents }),
+    snapshot: () => {
+      calls.snapshot++;
+      return { ts: clock.t, agents: data.agents };
+    },
     demoSnapshot: () => ({ ts: clock.t, agents: data.agents }),
   };
   const boot = (state) =>
@@ -899,6 +902,101 @@ test('engine: a pass still running is joined, not run twice', async () => {
     assert.equal(reads, 1);
   } finally {
     e.cleanup();
+  }
+});
+
+test('engine: status counts leave out a live session not seen for a minute, never an aggregate instance', async () => {
+  const e = setup({ budget: 300 });
+  try {
+    const t0 = e.clock.t;
+    e.state.apply('tool_loop', [{ instance: 'old', sessionId: 'old', state: 'triggered', value: 60, threshold: 50 }]);
+    e.state.apply('daily_cost', [{ instance: 'all', sessionId: null, state: 'ok', value: 1, threshold: 10 }]);
+    e.clock.t = t0 + 56_000;
+    e.state.apply('tool_loop', [{ instance: 'new', sessionId: 'new', state: 'triggered', value: 70, threshold: 50 }]);
+    e.clock.t = t0 + 61_000;
+    const st = await e.monitors.status();
+    assert.equal(st.counts.triggered, 1, 'the ended session is not counted');
+    assert.equal(st.counts.ok, 1, 'the aggregate instance still is');
+  } finally {
+    e.cleanup();
+  }
+});
+
+test('engine: the live pass reads the office only when a live rule or an auto-pause needs it', async () => {
+  const LIVE_OFF = { tool_loop: { enabled: false }, cost_burn: { enabled: false }, agent_stuck: { enabled: false } };
+  const off = setup({ settings: LIVE_OFF });
+  try {
+    await off.monitors.tickLive();
+    assert.equal(off.calls.snapshot, 0, 'nothing needs the live sessions');
+    assert.equal(off.monitors.snapshot().liveTs, null);
+    assert.equal((await off.monitors.status()).lastLive, null);
+  } finally {
+    off.cleanup();
+  }
+  const burn = setup({ settings: { ...LIVE_OFF, cost_burn: { enabled: true } } });
+  try {
+    await burn.monitors.tickLive();
+    assert.equal(burn.calls.snapshot, 1);
+  } finally {
+    burn.cleanup();
+  }
+  // daily_cost is an aggregate rule, but its pause looks for the running session in the live pass.
+  const daily = setup({ settings: { ...LIVE_OFF, daily_cost: { enabled: true, autoPause: true } } });
+  try {
+    await daily.monitors.tickLive();
+    assert.equal(daily.calls.snapshot, 1);
+  } finally {
+    daily.cleanup();
+  }
+});
+
+test('engine: the after-refresh pass waits for the index, runs once, and swallows a failure', async () => {
+  const timers = [];
+  const fake = {
+    setInterval: (fn, ms) => {
+      const t = { fn, ms, cleared: false, unrefs: 0, unref: () => t.unrefs++ };
+      timers.push(t);
+      return t;
+    },
+    clearInterval: (t) => {
+      t.cleared = true;
+    },
+  };
+  let indexing = true;
+  let runs = 0;
+  const after = createAfterRefresh({ indexing: () => indexing, run: () => runs++, pollMs: 250, timers: fake });
+  for (let i = 0; i < 5; i++) after();
+  assert.equal(timers.length, 1, 'one waiting poller');
+  assert.equal(timers[0].ms, 250);
+  assert.equal(timers[0].unrefs, 1, 'it does not keep the process alive');
+  timers[0].fn();
+  timers[0].fn();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(runs, 0, 'not while the index is refreshing');
+  indexing = false;
+  timers[0].fn();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(runs, 1);
+  assert.equal(timers[0].cleared, true);
+  after();
+  assert.equal(timers.length, 2, 'a later refresh waits again');
+
+  // A failing pass is caught: no unhandled rejection.
+  const unhandled = [];
+  const onUnhandled = (err) => unhandled.push(err);
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    const failing = createAfterRefresh({
+      indexing: () => false,
+      run: () => Promise.reject(new Error('pass failed')),
+      timers: fake,
+    });
+    failing();
+    timers[timers.length - 1].fn();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
   }
 });
 

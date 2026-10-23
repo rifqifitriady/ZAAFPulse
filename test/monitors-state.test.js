@@ -114,9 +114,15 @@ test('a triggered instance re-alerts at most every 30 minutes', () => {
 test('instances of one live rule are tracked apart', () => {
   const { state } = make();
   const first = state.apply('cost_burn', [live('s1', 'triggered'), live('s2', 'ok')]);
-  assert.deepEqual(first.map((a) => a.instance), ['s1']);
+  assert.deepEqual(
+    first.map((a) => a.instance),
+    ['s1'],
+  );
   const second = state.apply('cost_burn', [live('s1', 'triggered'), live('s2', 'triggered')]);
-  assert.deepEqual(second.map((a) => a.instance), ['s2']);
+  assert.deepEqual(
+    second.map((a) => a.instance),
+    ['s2'],
+  );
   assert.equal(state.states().length, 2);
 });
 
@@ -161,7 +167,10 @@ test('a live rule that returns only an all/no_data result changes nothing', () =
   assert.equal(JSON.stringify(state.states()), before);
   // The next real result still sees s1 as triggered, so there is no new alert for it.
   const next = state.apply('cost_burn', [live('s1', 'triggered', 9), live('s2', 'ok')]);
-  assert.deepEqual(next.map((a) => a.instance), ['s1']);
+  assert.deepEqual(
+    next.map((a) => a.instance),
+    ['s1'],
+  );
 });
 
 test('an aggregate rule keeps its single no_data result as data', () => {
@@ -176,7 +185,16 @@ test('an instance missing from a later result is neither resolved nor dropped at
   state.apply('cost_burn', [live('s1', 'triggered', 9), live('s2', 'ok')]);
   clock.t += HOUR;
   assert.deepEqual(state.apply('cost_burn', [live('s2', 'ok')]), []);
-  assert.deepEqual(state.states().map((s) => [s.instance, s.state]).sort(), [['s1', 'triggered'], ['s2', 'ok']]);
+  assert.deepEqual(
+    state
+      .states()
+      .map((s) => [s.instance, s.state])
+      .sort(),
+    [
+      ['s1', 'triggered'],
+      ['s2', 'ok'],
+    ],
+  );
 });
 
 test('instances not seen for 24 hours are pruned', () => {
@@ -187,14 +205,20 @@ test('instances not seen for 24 hours are pruned', () => {
   assert.equal(state.states().length, 2, 'just under 24 h');
   clock.t += 2;
   state.apply('cost_burn', [live('stays', 'ok')]);
-  assert.deepEqual(state.states().map((s) => s.instance), ['stays']);
+  assert.deepEqual(
+    state.states().map((s) => s.instance),
+    ['stays'],
+  );
   // Pruned means forgotten: the same session coming back is a first sight.
   assert.equal(state.apply('cost_burn', [live('gone', 'triggered', 9)])[0].previous, null);
   // Pruning is across rules.
   state.apply('daily_cost', [agg('ok')]);
   clock.t += 25 * HOUR;
   state.apply('tool_loop', [live('x', 'ok')]);
-  assert.deepEqual(state.states().map((s) => s.rule), ['tool_loop']);
+  assert.deepEqual(
+    state.states().map((s) => s.rule),
+    ['tool_loop'],
+  );
 });
 
 test('snooze for an hour silences an instance, then it is evaluated afresh', () => {
@@ -229,7 +253,10 @@ test('snoozing a rule with a null instance covers its present and future instanc
   state.snooze('cost_burn', null, 24 * HOUR);
   assert.deepEqual(state.apply('cost_burn', [live('s1', 'triggered', 9), live('new', 'triggered', 9)]), []);
   assert.deepEqual(
-    state.states().filter((s) => s.rule === 'cost_burn').map((s) => s.state),
+    state
+      .states()
+      .filter((s) => s.rule === 'cost_burn')
+      .map((s) => s.state),
     ['snoozed', 'snoozed'],
   );
   assert.equal(state.apply('daily_cost', [agg('triggered', 12)]).length, 1, 'other rules are unaffected');
@@ -349,10 +376,19 @@ test('alerts come newest first, filtered by since and limited', () => {
     clock.t += 1000;
   }
   const all = state.alerts({});
-  assert.deepEqual(all.map((a) => a.instance), ['s4', 's3', 's2', 's1', 's0']);
-  assert.deepEqual(state.alerts({ limit: 2 }).map((a) => a.instance), ['s4', 's3']);
+  assert.deepEqual(
+    all.map((a) => a.instance),
+    ['s4', 's3', 's2', 's1', 's0'],
+  );
+  assert.deepEqual(
+    state.alerts({ limit: 2 }).map((a) => a.instance),
+    ['s4', 's3'],
+  );
   const since = all[2].ts;
-  assert.deepEqual(state.alerts({ since }).map((a) => a.instance), ['s4', 's3']);
+  assert.deepEqual(
+    state.alerts({ since }).map((a) => a.instance),
+    ['s4', 's3'],
+  );
   assert.deepEqual(state.alerts().length, 5);
   assert.equal(state.alerts({ limit: 'many' }).length, 5, 'a bad limit falls back');
 });
@@ -364,8 +400,14 @@ test('the alerts file is capped by compacting to the newest', () => {
     clock.t += 1000;
     assert.ok(lines(files.alertsFile).length <= 5);
   }
-  assert.deepEqual(lines(files.alertsFile).map((l) => JSON.parse(l).instance), ['s7', 's8', 's9', 's10', 's11']);
-  assert.deepEqual(state.alerts({}).map((a) => a.instance), ['s11', 's10', 's9', 's8', 's7']);
+  assert.deepEqual(
+    lines(files.alertsFile).map((l) => JSON.parse(l).instance),
+    ['s7', 's8', 's9', 's10', 's11'],
+  );
+  assert.deepEqual(
+    state.alerts({}).map((a) => a.instance),
+    ['s11', 's10', 's9', 's8', 's7'],
+  );
   // One apply that raises more alerts than the cap keeps the newest.
   const many = Array.from({ length: 9 }, (_, i) => live('b' + i, 'triggered', i));
   assert.equal(state.apply('tool_loop', many).length, 9, 'every alert is still returned to send');
@@ -387,7 +429,10 @@ test('a torn last line in the alerts file is skipped and the next alert starts o
   const again = createMonitorState({ ...files, now: () => clock.t });
   assert.equal(again.alerts({}).length, 1);
   again.apply('cost_burn', [live('s1', 'triggered')]);
-  assert.deepEqual(again.alerts({}).map((a) => a.instance), ['s1', 's0']);
+  assert.deepEqual(
+    again.alerts({}).map((a) => a.instance),
+    ['s1', 's0'],
+  );
   assert.equal(createMonitorState({ ...files, now: () => clock.t }).alerts({}).length, 2);
 });
 
@@ -413,7 +458,12 @@ test('a corrupt or foreign state file starts empty instead of throwing', (t) => 
       ],
     }),
   );
-  assert.deepEqual(build().states().map((s) => s.instance), ['s1']);
+  assert.deepEqual(
+    build()
+      .states()
+      .map((s) => s.instance),
+    ['s1'],
+  );
 });
 
 test('a failed write does not lose the alert', (t) => {
@@ -448,7 +498,7 @@ test('the state and alerts files are mode 0600', { skip: process.platform === 'w
   assert.equal(fs.statSync(files.file).mode & 0o777, 0o600);
 });
 
-test('parameter names are the rule\'s own keys, not inherited ones', () => {
+test("parameter names are the rule's own keys, not inherited ones", () => {
   const { state, files, build } = make();
   for (const name of ['constructor', 'toString', 'hasOwnProperty', 'valueOf']) {
     assert.throws(() => state.setSettings('cost_burn', { params: { [name]: 1 } }), { status: 400 }, name);
@@ -458,7 +508,7 @@ test('parameter names are the rule\'s own keys, not inherited ones', () => {
     assert.throws(() => state.setSettings('cost_burn', { params: JSON.parse(body) }), { status: 400 }, body);
   }
   assert.deepEqual(state.settings('cost_burn').params, {});
-  assert.equal(({}).maxUSD, undefined, 'Object.prototype is untouched');
+  assert.equal({}.maxUSD, undefined, 'Object.prototype is untouched');
   // The same names in an edited file are dropped on load.
   state.setSettings('cost_burn', { enabled: true });
   const j = JSON.parse(fs.readFileSync(files.file, 'utf8'));
@@ -578,7 +628,11 @@ test('an unexpired snooze outlives the pruning of its instance', () => {
   state.snooze('cost_burn', 'gone', 48 * HOUR);
   clock.t += 25 * HOUR;
   state.apply('cost_burn', [live('stays', 'ok')]);
-  assert.deepEqual(state.states().map((s) => s.instance), ['stays'], 'the entry is pruned');
+  assert.deepEqual(
+    state.states().map((s) => s.instance),
+    ['stays'],
+    'the entry is pruned',
+  );
   assert.deepEqual(state.apply('cost_burn', [live('gone', 'triggered', 9)]), [], 'but the snooze still holds');
   assert.equal(state.states().find((s) => s.instance === 'gone').state, 'snoozed');
   clock.t += 24 * HOUR;
@@ -591,6 +645,43 @@ test('only the newest maxAlerts rows are kept when the alerts file is loaded', (
   const rows = Array.from({ length: 8 }, (_, i) => ({ id: 'a' + i, ts: 1000 + i, rule: 'cost_burn' }));
   fs.writeFileSync(files.alertsFile, rows.map((r) => JSON.stringify(r) + '\n').join(''));
   const s = build({ maxAlerts: 5 });
-  assert.deepEqual(s.alerts({ limit: 100 }).map((a) => a.id), ['a7', 'a6', 'a5', 'a4', 'a3']);
+  assert.deepEqual(
+    s.alerts({ limit: 100 }).map((a) => a.id),
+    ['a7', 'a6', 'a5', 'a4', 'a3'],
+  );
   assert.equal(lines(files.alertsFile).length, 5);
+});
+
+// M-T5-2: the auto-pause mark through a snooze. A short ok blip is not a resolution, so the episode stays acted on;
+// only an ok held for the resolution hold ends it.
+test('a short ok blip inside a snooze keeps the acted-on mark; the episode is not pending again after it', () => {
+  const { state, clock } = make();
+  state.apply('cost_burn', [live('s1', 'triggered', 9)]);
+  assert.equal(state.markActed('cost_burn', 's1'), true);
+  state.snooze('cost_burn', 's1', HOUR);
+  clock.t += 10 * MIN;
+  state.apply('cost_burn', [live('s1', 'ok')]);
+  clock.t += 2 * MIN; // less than RESOLVE_HOLD_MS
+  state.apply('cost_burn', [live('s1', 'triggered', 9)]);
+  clock.t += HOUR; // the snooze is over, the instance is still triggered
+  state.apply('cost_burn', [live('s1', 'triggered', 9)]);
+  assert.equal(state.states().find((s) => s.instance === 's1').state, 'triggered');
+  assert.deepEqual(state.pending('cost_burn'), [], 'the mark is kept');
+});
+
+test('an ok held for the resolution hold inside a snooze ends the episode; the next trigger is pending', () => {
+  const { state, clock } = make();
+  state.apply('cost_burn', [live('s1', 'triggered', 9)]);
+  assert.equal(state.markActed('cost_burn', 's1'), true);
+  state.snooze('cost_burn', 's1', HOUR);
+  clock.t += 10 * MIN;
+  state.apply('cost_burn', [live('s1', 'ok')]);
+  clock.t += 5 * MIN; // RESOLVE_HOLD_MS
+  state.apply('cost_burn', [live('s1', 'ok')]);
+  clock.t += HOUR;
+  state.apply('cost_burn', [live('s1', 'triggered', 9)]);
+  assert.deepEqual(
+    state.pending('cost_burn').map((p) => p.instance),
+    ['s1'],
+  );
 });
