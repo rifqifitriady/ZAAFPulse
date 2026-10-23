@@ -7,6 +7,7 @@ const http = require('http');
 const { fakeServer, secretsFor } = require('./helpers');
 const { createGateway } = require('../lib/gateway');
 const { finalOf, cluster, decide } = require('../lib/gateway/collab');
+const otel = require('../lib/otel');
 
 const reply = (content, extra = {}) => ({
   body: {
@@ -749,6 +750,33 @@ test('trace explorer: a tool-using agent step links to its last chat round, and 
     assert.ok(t.gateway.trace.requests().every((q) => q.runId === run.id));
     assert.deepEqual(adapter.sessions().map((x) => x.id), [`run:${run.id}`]);
   } finally {
+    await t.close();
+  }
+});
+
+test('trace: rt.within marks a run\'s tool span as a tool context, and nothing else', async () => {
+  // setup sits above the wrapper so that a failed setup never leaves otel.within replaced.
+  const t = await setup(
+    (r) => (toolMsgs(r).length ? 'done' : toolCall('acc_usage_summary', {})),
+    { tools: [{ name: 'acc_usage_summary', description: 'usage', inputSchema: { type: 'object', properties: {} } }] },
+  );
+  const seen = [];
+  const real = otel.within;
+  otel.within = (parent, fn, chatSpanId, opts) => {
+    seen.push({ spanId: parent.spanId, inTool: !!(opts && opts.inTool) });
+    return real(parent, fn, chatSpanId, opts);
+  };
+  try {
+    const { run } = await t.collab.run({ pattern: 'agent', agent: 'hr-finance', task: 'usage this month' });
+    const tools = run.trace.filter((s) => s.name.startsWith('execute_tool '));
+    assert.ok(tools.length >= 1);
+    for (const sp of run.trace) {
+      const c = seen.find((x) => x.spanId === otel.runSpanId(run.id, sp.id));
+      if (sp.name.startsWith('execute_tool ')) assert.equal(c && c.inTool, true);
+      else if (c) assert.equal(c.inTool, false);
+    }
+  } finally {
+    otel.within = real;
     await t.close();
   }
 });

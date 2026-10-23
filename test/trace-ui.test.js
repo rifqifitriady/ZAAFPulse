@@ -18,6 +18,12 @@ const {
   trColor,
   trSrc,
   trBadges,
+  trCritical,
+  trCpMs,
+  trSpanFacts,
+  trCause,
+  trAncestors,
+  trDepRows,
   trOffNote,
   trStartCollapsed,
   trNameParts,
@@ -141,6 +147,17 @@ test('mapNodes: five identical Read calls in a row fold into one node with a cou
   assert.deepEqual(read.ids, ['read1', 'read2', 'read3', 'read4', 'read5']);
   assert.equal(read.start, t0 + 11);
   assert.equal(read.end, t0 + 16);
+});
+
+test('mapNodes: an agent\'s tool count leaves out a nested integration span', () => {
+  const sp = (id, parent, kind, name, extra = {}) => ({ id, parent, kind, name, start: 1, end: 2, ...extra });
+  const nodes = mapNodes([
+    sp('r', null, 'session', 'invoke_workflow w'),
+    sp('a', 'r', 'agent', 'invoke_agent a'),
+    sp('t1', 'a', 'tool', 'execute_tool web', { tool: { name: 'web' } }),
+    sp('t2', 't1', 'tool', 'execute_tool web', { tool: { name: 'web' }, nested: true }),
+  ]);
+  assert.equal(nodes.find((n) => n.kind === 'agent').tools, 1);
 });
 
 test('mapNodes: the demo turn folds only repeats in a row, keeps failures apart and leaves subagent spans out', () => {
@@ -673,6 +690,74 @@ test('trMarkQueue: a key in flight is not asked twice; a refresh during the flig
   q.refresh('b');
   assert.deepEqual(q.take(1), ['b'], 'a refresh outside a flight just queues');
   assert.equal(q.take(50).length, 0);
+});
+
+test('analysis helpers: critical path, span facts, cause and dependency rows', () => {
+  const an = {
+    rootSpanId: 'r',
+    criticalPath: [
+      { spanId: 'r', start: 0, end: 100 },
+      { spanId: 'b', start: 100, end: 1600 },
+    ],
+    selfTime: { r: 100, b: 1500 },
+    rollup: { r: { tokensIn: 12000, tokensOut: 800, costUSD: 0.25, spans: 4, errors: 1 }, b: { tokensIn: 0, tokensOut: 0, costUSD: 0, spans: 1, errors: 1 } },
+    rootCause: { spanId: 'b', name: 'execute_tool Bash', error: 'Exit code 1', onCriticalPath: true },
+  };
+  assert.deepEqual([...trCritical(an)], ['r', 'b']);
+  assert.equal(trCritical(null).size, 0);
+  assert.equal(trCpMs(an), 1600);
+  assert.equal(trCpMs(null), 0);
+  assert.deepEqual(trSpanFacts(an, 'r'), ['self 100 ms', 'branch $0.25 12k → 800 tok 1 error', 'on the critical path']);
+  assert.deepEqual(trSpanFacts(an, 'b'), ['self 1.5 s', 'on the critical path']);
+  assert.deepEqual(trSpanFacts(null, 'b'), []);
+  const spans = new Map([['b', { id: 'b', kind: 'tool', name: 'execute_tool Bash' }]]);
+  assert.deepEqual(trCause(an, spans), { id: 'b', line: 'Likely cause: execute_tool · Bash: Exit code 1 (on the critical path)' });
+  assert.equal(trCause({ ...an, rootCause: null }, spans), null);
+  assert.deepEqual(
+    trDepRows({
+      nodes: [
+        { id: 'agent:a', kind: 'agent', label: 'a', count: 1 },
+        { id: 'model:m', kind: 'model', label: 'm', count: 1 },
+      ],
+      edges: [{ from: 'agent:a', to: 'model:m', count: 3, errors: 1, p95Ms: 2300 }],
+    }),
+    [['agent a', 'model m', '3', '1', '2.3 s']],
+  );
+  assert.deepEqual(trDepRows(null), []);
+});
+
+test('the analysis UI fills the cause and the dependency table with text only (S1)', () => {
+  const src = fs.readFileSync(SRC, 'utf8');
+  assert.match(src, /\$\('#tr-cause-msg'\)\.textContent = /);
+  assert.match(src, /insertCell\(\)\.textContent = /);
+  assert.doesNotMatch(src, /innerHTML[^;\n]*\b(trDepRows|trCause|cells)\b/);
+});
+
+test('trAncestors lists the ids above a span and survives cycles', () => {
+  const m = new Map([
+    ['a', { id: 'a', parent: null }],
+    ['b', { id: 'b', parent: 'a' }],
+    ['c', { id: 'c', parent: 'b' }],
+    ['x', { id: 'x', parent: 'y' }],
+    ['y', { id: 'y', parent: 'x' }],
+    ['o', { id: 'o', parent: 'gone' }],
+  ]);
+  assert.deepEqual(trAncestors(m, 'c'), ['b', 'a']);
+  assert.deepEqual(trAncestors(m, 'a'), []);
+  assert.deepEqual(trAncestors(m, 'nope'), []);
+  assert.deepEqual(trAncestors(m, 'x'), ['y']);
+  assert.deepEqual(trAncestors(m, 'o'), ['gone']);
+});
+
+test('audit: Show opens collapsed ancestors, live adopt refreshes the analysis, deps ignore stale replies', () => {
+  const src = fs.readFileSync(SRC, 'utf8');
+  assert.match(src, /trAncestors\(S\.spans, id\)\.filter\(\(a\) => S\.collapsed\.delete\(a\)\)/);
+  const live = src.slice(src.indexOf('async function pollLive'));
+  assert.match(live, /S\.an = r\.skeleton\.analysis \|\| null;\s+S\.cp = trCritical\(S\.an\);[\s\S]*?paintCause\(\);/);
+  const at = src.indexOf('async function loadDeps');
+  const deps = src.slice(at, src.indexOf('// The session', at));
+  assert.match(deps, /const my = \+\+S\.dreq/);
+  assert.equal((deps.match(/my === S\.dreq|my !== S\.dreq/g) || []).length, 2);
 });
 
 test('trSelToggle: adds and removes a turn by key and turn, at most 50', () => {

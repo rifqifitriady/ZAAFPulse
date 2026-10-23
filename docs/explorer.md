@@ -16,7 +16,7 @@ does not read them again.
 |---|---|---|---|---|
 | **Claude Code** | the log index of every Claude Code log folder (`~/.claude/projects` by default; see [Where the logs are read from](install.md#where-the-logs-are-read-from)) | session, turn, model call, tool call, subagent (with its own tree) | yes | prompts, replies, tool inputs and outputs, including tool output Claude Code saved to a file |
 | **Codex** | the log index of `~/.codex/sessions`, or `$CODEX_HOME/sessions` | session, turn, model call, tool call | yes | prompts, replies, tool inputs and outputs |
-| **Agent Gateway** | this gateway's own request log and collaboration runs | plain requests: metadata only (one session per conversation). Collaboration runs: the full span tree | yes | collaboration run steps and answers only; the gateway never stores request text |
+| **Agent Gateway** | the local trace store (`.data/traces`), and for older traffic this gateway's own request log and collaboration runs | every request, model call, agent, tool call and remote call as one trace (metadata only); older plain requests: metadata only, one session per conversation; older collaboration runs: the full span tree | yes | collaboration run steps and answers only; the gateway never stores request text |
 | **Kiro** | `~/.kiro/sessions/<workspace>/<session>/` | tool calls | none: Kiro stores no usage | no |
 | **Gemini CLI** | `~/.gemini/tmp/<project>/chats/*.json` | one model call per Gemini message, its tool calls | tokens, when the chat file has them | no |
 | **Antigravity** | `conversation_summaries.db` under `~/.gemini/antigravity` and `~/.gemini/antigravity-ide` | the conversation, with one agent span per sub-conversation and its step count | no | no |
@@ -31,6 +31,13 @@ Notes per source:
 - **Codex** logs often carry a single `token_count` for the whole file instead of one per request. Every model
   call still shows as a chat span (a run of output up to the next tool result), and the calls nothing measured
   have no tokens and no cost; the one `token_count` is counted once, on the call it follows.
+- **Agent Gateway** traces from the local trace store show as gateway sessions. A collaboration run keeps its
+  own row (the one evals, feedback and links use): when the store holds its trace, its tree comes from the store,
+  completed from `runs.json` with the agent and tool spans that are stored only when the run ends, so a run that
+  is still going (or stopped half-way) shows its real tree. A request whose trace the store holds is listed once,
+  from the store; every other request (from before the upgrade, not sampled by the caller's `traceparent`, lost
+  to a full buffer or a failed write, or made while tracing was off) still comes from the request log. Everything
+  is metadata only.
 - **Agent Gateway** requests are metadata only. Titles hold the pattern, state, model and counts, never a task
   or a prompt, so they stay visible even when content is off.
 - **Kiro** stores tool calls and their results but no usage and no user message. A turn starts at a user
@@ -48,9 +55,48 @@ Notes per source:
 On the page: choose 24 h, 7 d or 30 d, search by title, project or branch, filter by source or by sessions
 with errors, and drag the splitter between the tree and the map. A session opens on its last turn; the turn
 buttons switch turns. Search never reads a transcript: it matches the titles the list has already read (a
-Claude Code or Codex title is read when its row comes into view), the project and the branch. Under 1100 px of
+Claude Code or Codex title is read when its row comes into view), the project and the branch, and for a stored
+gateway trace its agents, models and tools. Under 1100 px of
 window width the two halves stack, the map below the explorer. In demo mode, links from the Sessions and AI
 Office pages open the synthetic session of their tool.
+
+## Analysis
+
+Every session you open, from any source, comes with an analysis of the turn on show (after Jaeger):
+
+- **Critical path**: the chain of spans that decided how long the turn took. Their bars are outlined, and the
+  tree header shows its length. A span that ran in parallel and finished earlier is not on it.
+- **Self time and branch totals**: a span's detail line shows the time it spent itself (without its children)
+  and, for a span with children, the cost, tokens and errors of everything below it. Tokens and cost are added
+  up from model calls only, so nothing is counted twice.
+- **Likely cause**: when something failed, a red notice names the deepest failed span on the critical path (or
+  the first failure when none is on it); **Show** selects it.
+- **Dependencies**: the right half's **Dependencies** switch shows which agents called which models, tools,
+  agents and remote services over the chosen time range, with calls, failures and the 95th percentile duration.
+  It covers Agent Gateway traces.
+
+In a turn that is still running, a span without an end counts as ending at the latest end seen, and it is not
+clock-corrected. When a remote service sent spans back, only its spans are moved into their parent's time
+window, and only where the two services differ.
+
+Search also matches the agents, models and tools of a stored gateway trace, and `/api/trace/sessions` takes
+`minMs` and `minCost` to find slow or expensive sessions.
+
+## The local trace store
+
+The Agent Gateway keeps every trace it makes in `.data/traces/`: one file per day plus an index, files readable
+by your account only. It holds span names, times, statuses, models, token counts, costs and error messages
+(masked, at most 200 characters), and **no prompt, reply, tool argument or tool result**, whatever the OTLP
+export settings say. Traces older than 14 days, or beyond 500 MB in total, are deleted a whole day at a time.
+
+```json
+"tracing": { "enabled": true, "retentionDays": 14, "maxBytes": 524288000 }
+```
+
+`"enabled": false` stops recording (traces already stored stay until retention removes them). The switch is read
+within about 2 seconds of a change to `config.json`; retention is read when ZAAFPulse starts. If the traces
+folder cannot be opened, the server keeps running without the store and logs
+`traces: the local trace store is off: …`.
 
 ## Privacy
 
@@ -138,9 +184,10 @@ All routes sit behind the dashboard sign-in. Ids are opaque and valid only for t
 |---|---|
 | `GET /api/trace/sources` | the six sources in a fixed order, each with `id`, `ok`, `reason` and `count` |
 | `GET /api/trace/settings` | `{ "content": true }` or `{ "content": false }`: whether text can be shown at all |
-| `GET /api/trace/sessions?range=1..30&source=…&q=…&flags=errors` | up to 500 sessions, newest first: `key`, `title`, `source`, `project`, `branch`, `start`, `end`, `turns`, `tools`, `errors`, `cost`, `flags`. `range` is days (default 7) |
+| `GET /api/trace/sessions?range=1..30&source=…&q=…&flags=errors&minMs=…&minCost=…` | up to 500 sessions, newest first: `key`, `title`, `source`, `project`, `branch`, `start`, `end`, `turns`, `tools`, `errors`, `cost`, `flags`. `range` is days (default 7); `minMs` and `minCost` keep only sessions that lasted at least that many milliseconds or cost at least that much |
 | `GET /api/trace/title?key=…` | `{ "title": … }`, read from the first prompt and masked; `null` with content off |
-| `GET /api/trace/session?key=…&turn=N` | the spans of one turn (the last when `turn` is left out) and the list of turns. Text and results are content ids |
+| `GET /api/trace/session?key=…&turn=N` | the spans of one turn (the last when `turn` is left out) and the list of turns, plus `"analysis": { rootSpanId, criticalPath, selfTime, rollup, rootCause }` (null when it could not be computed). Text and results are content ids |
+| `GET /api/trace/deps?range=1..30` | `{ "nodes": [{ id, kind, label, count }], "edges": [{ from, to, count, errors, p95Ms }] }` over stored gateway traces. Node ids are `kind:maskedName`. A remote service is counted once per call. The map is cached for about 30 seconds |
 | `GET /api/trace/content?id=…&offset=N` | one page of text (`text`, `masked`, `offset`, `next`, `total`, `truncated`) with secrets replaced by labels |
 | `POST /api/trace/reveal` | JSON `{ "id", "index", "offset" }`; returns `{ "value" }` for one masked value |
 | `GET /api/trace/live?key=…&cursor=…` | `{ "changed": false, "cursor" }` or `{ "changed": true, "cursor", "skeleton" }` for a growing Claude Code or Codex session. The `cursor` is opaque: send back the last one |
@@ -165,6 +212,16 @@ reads nothing under your home folder.
   scope can call, **never** returns a transcript-derived title, whatever `ZAAFPULSE_CONTENT` says.
 - **Keys** are made per process. A key from the stdio MCP server is not valid anywhere else. A key from the
   gateway's `/mcp` is valid in the same ZAAFPulse server's dashboard (`/api/trace/*`), until that server restarts.
+
+`acc_trace_get` reads one of those sessions in small views, so an AI client can look at structure before
+details: `topology` (span ids, parents, kinds, names, durations, statuses), `critical_path`, `errors` (failed
+spans and the likely cause) and `span` (one span's model, tool name, tokens, cost, self time and branch totals).
+Arguments: `key`, `view`, and `turn` and `span` where needed. A turn that is not a whole number of zero or more
+is an error; a turn past the last one is not (Claude Code and Codex then read their last turn). A large view is cut to fit the MCP result, and then says `truncated: true`. It never returns text,
+content ids, tool targets or paths.
+
+The gateway's `/mcp` endpoint exposes the `acc_*` tools, `acc_trace_sessions` and `acc_trace_get` included, to
+any gateway API key with the `mcp` scope.
 
 ## Troubleshooting
 

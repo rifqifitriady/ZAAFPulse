@@ -66,6 +66,7 @@ test('mcp.js lists acc and configured tools and reports status', async () => {
     'acc_live_apps',
     'acc_integrations_status',
     'acc_trace_sessions',
+    'acc_trace_get',
     'acc_evals',
     'extra_ping',
   ])

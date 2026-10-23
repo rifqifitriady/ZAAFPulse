@@ -1262,6 +1262,41 @@ test('material: a turn of 300 calls keeps the first 50 and the last 150, and ava
   assert.ok(m.available.includes('LateTool') && m.available.includes('FinalTool') && m.available.includes('Bash'));
 });
 
+test('registry: an opened skeleton carries its analysis, rooted at the turn', async () => {
+  const t = createTrace({ demo: true });
+  const row = t.sessions({ range: 30 }).find((r) => r.source === 'claude');
+  const sk = await t.session(row.key);
+  const turn = sk.spans.find((s) => s.kind === 'turn');
+  assert.equal(sk.analysis.rootSpanId, turn.id);
+  assert.ok(sk.analysis.criticalPath.length > 0);
+  assert.equal(sk.analysis.rootCause.name, 'execute_tool Bash');
+  assert.ok(sk.analysis.rollup[turn.id].costUSD > 0);
+  // Filters on duration and cost.
+  assert.equal(t.sessions({ range: 30, minCost: 1000 }).length, 0);
+  assert.ok(t.sessions({ range: 30, minMs: 1 }).length >= 3);
+  assert.equal(t.sessions({ range: 30, minMs: 1e12 }).length, 0);
+  // Demo dependencies are a fixed sample.
+  assert.ok(t.deps({ range: 7 }).edges.length > 0);
+});
+
+test('registry: deps are cached for 30 s per range and refreshed when the store changes', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-regdeps-'));
+  const store = require('../lib/trace/store').createTraceStore({ dir });
+  let reads = 0;
+  const getSpans = store.getSpans;
+  store.getSpans = (id) => (reads++, getSpans(id));
+  const now = Date.now();
+  const span = (t, s) => ({ t, s, p: null, n: 'invoke_agent a', k: 'internal', st: (now - 1000) * 1000, d: 5000, ok: true, src: 'gateway', svc: 'zaafpulse', a: { 'gen_ai.operation.name': 'invoke_agent', 'gen_ai.agent.id': 'a' } });
+  store.writeSpans([span('a'.repeat(32), '1'.repeat(16))]);
+  const t = createTrace({ indexer: { entries: () => [] }, light: [], roots: [], traceStore: store });
+  assert.equal(t.deps({ range: 7 }).nodes[0].count, 1);
+  const first = reads;
+  assert.equal(t.deps({ range: 7 }).nodes[0].count, 1);
+  assert.equal(reads, first, 'unchanged store: served from memory');
+  store.writeSpans([span('b'.repeat(32), '2'.repeat(16))]);
+  assert.equal(t.deps({ range: 7 }).nodes[0].count, 2, 'a new trace gives a fresh result');
+});
+
 // ---- dataset example (server-side only: the API decides whether a viewer may add it) ----
 
 test('example: the Claude turn as prompt, tool results, answer and model, with its source', async () => {

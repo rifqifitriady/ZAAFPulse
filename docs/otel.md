@@ -18,7 +18,7 @@ No extra software is needed: ZAAFPulse writes OTLP itself (binary protobuf by de
 | `plan`, `judge` | INTERNAL | the planner and the vote judge |
 | `execute_tool {integration tool}` | CLIENT | every call to an integration tool (Dynatrace, n8n, MCP servers …), from agents, the MCP server or the dashboard |
 
-A collaboration run's spans sit in the same trace as the request that started it. Model calls inside a run appear once, as the gateway's `chat` spans (with `gen_ai.agent.id`), so tokens and cost are never counted twice.
+A collaboration run's spans sit in the same trace as the request that started it. Model calls inside a run appear once, as the gateway's `chat` spans (with `gen_ai.agent.id`), so tokens and cost are never counted twice. Replies do not carry the run's trace id: it lets its holder send spans into that trace (see [Spans coming back](#spans-coming-back)), so it stays on the server.
 
 ### Attributes
 
@@ -117,6 +117,42 @@ A client that sends `traceparent` (and `tracestate`) to the gateway gets its tra
 ### Delivery
 
 Spans wait in a bounded queue and go out in batches (when 512 are waiting, or every 5 seconds). One export is in flight at a time. `429`, `502`, `503`, `504` and network errors are retried with exponential backoff and jitter, honouring `Retry-After` (up to twice `maxBackoffMs`); other errors are not retried. When the queue is full, new spans are dropped and counted, never blocking a request. On shutdown (Ctrl-C, `zaafpulse stop`, launchd) queued spans get up to 2 seconds to go out.
+
+### Local store
+
+The same spans also go to ZAAFPulse's own trace store (see [explorer.md](explorer.md#the-local-trace-store)),
+whether export is on or off. Content attributes never go there.
+
+### Calls to remote agents and MCP servers
+
+- A remote A2A agent is called inside a CLIENT span `a2a {agent id}` (`rpc.system: a2a`, `server.address`), and
+  the request carries its `traceparent`.
+- A call to an MCP server over Streamable HTTP carries the `traceparent` of its `execute_tool` span, as a header
+  and as `params._meta.traceparent`.
+
+### Spans coming back
+
+A remote agent or MCP server **on this machine** that exports OpenTelemetry can send its spans back as OTLP/HTTP
+JSON (`content-type: application/json`) to `http://127.0.0.1:<port>/v1/traces`. They show in the same trace.
+
+- Only from this machine: the connection must come from loopback, with a loopback `Host` and no forwarding
+  header (`x-forwarded-*`, `forwarded`, `x-real-ip`, `via`). Do not put a reverse proxy in front of this path.
+- Only for traces whose `traceparent` ZAAFPulse itself sent to an MCP server or a remote A2A agent in the last
+  24 hours. Spans of any other trace are dropped.
+- At most 2,000 spans per trace. A body over 1 MB is cut off and the connection is closed.
+- A span needs a valid start and end. It keeps only these attributes: `gen_ai.operation.name`,
+  `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.provider.name`, `gen_ai.agent.id`, `gen_ai.agent.name`,
+  `gen_ai.tool.name`, `gen_ai.tool.type`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `rpc.system`,
+  `rpc.method`, `server.address`, `server.port`, `http.request.method`, `http.response.status_code`, `http.route`,
+  `error.type` and `mcp.method.name`. Everything else is dropped, so no prompt or reply text is stored under any
+  convention's keys (OpenTelemetry GenAI, OpenInference, OpenLLMetry), and no `zaafpulse.*` attribute comes from
+  outside. Numbers that are not finite are dropped too.
+- A resource whose `service.name` is the one ZAAFPulse's own export uses (`otel.serviceName` or
+  `OTEL_SERVICE_NAME`, default `zaafpulse`) is refused, so pointing the OTLP export back at this server is
+  ignored.
+- Returned spans add no tokens or cost to a trace's totals, and never replace one of ZAAFPulse's own spans.
+
+The reply's `partialSuccess.rejectedSpans` counts what was dropped.
 
 ## Backends
 
