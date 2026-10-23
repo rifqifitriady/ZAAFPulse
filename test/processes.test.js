@@ -100,7 +100,7 @@ async function onFakeMac(fn) {
       cmd === 'lsof'
         ? 'p4242\nfcwd\nn/home/u/work\n'
         : args[0] === '-axo'
-          ? '4242 1.0 1024 10:00 S /home/u/.local/bin/claude --resume\n'
+          ? '4242 1 1.0 1024 10:00 S /home/u/.local/bin/claude --resume\n'
           : '4242 /home/u/.local/bin/claude\n';
     setImmediate(() => cb(null, out, ''));
   };
