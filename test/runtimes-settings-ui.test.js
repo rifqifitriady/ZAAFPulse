@@ -2,7 +2,7 @@
 // document that refuses innerHTML (S1).
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { rtEntryFromForm, rtEntryRow } = require('../public/runtimesview');
+const { rtEntryFromForm, rtEntryRow, rtFormFromEntry } = require('../public/runtimesview');
 
 // A tiny stand-in for `document` that records how nodes are filled and refuses innerHTML.
 function fakeDoc() {
@@ -84,4 +84,35 @@ test('rtEntryRow: no command (control off) draws no command line and a masked ar
   assert.equal(flat(off).filter((x) => x.tag === 'code').length, 0);
   const masked = rtEntryRow(fakeDoc(), { ...base, command: ['srv', '--token', '‹GitHub token hidden›'] });
   assert.ok(texts(masked).includes('srv --token ‹GitHub token hidden›'));
+});
+
+test('rtFormFromEntry: Edit fills the health field only with a URL the owner gave, never the default', () => {
+  const e = {
+    id: 'qwen-local',
+    name: 'Qwen',
+    command: ['llama-server', '--port', '8081'],
+    port: 8081,
+    health: null,
+    healthUsed: 'http://127.0.0.1:8081/',
+  };
+  assert.deepEqual(rtFormFromEntry(e), {
+    id: 'qwen-local',
+    name: 'Qwen',
+    port: '8081',
+    health: '',
+    command: 'llama-server\n--port\n8081',
+    was: 'qwen-local',
+  });
+  assert.equal(rtFormFromEntry({ ...e, health: 'http://localhost:8081/h' }).health, 'http://localhost:8081/h');
+  assert.deepEqual(rtFormFromEntry({ id: 'a', command: null, port: null }), {
+    id: 'a',
+    name: '',
+    port: '',
+    health: '',
+    command: '',
+    was: 'a',
+  });
+  // The row shows the URL that is checked, the default included.
+  const row = rtEntryRow(fakeDoc(), { ...e, approved: true, error: null });
+  assert.ok(texts(row).includes('qwen-local · port 8081 · http://127.0.0.1:8081/'));
 });

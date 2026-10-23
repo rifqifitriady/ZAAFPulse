@@ -145,7 +145,7 @@ test('runtimes over HTTP: an owner entry is saved to config.json, listed, and st
     assert.equal(saved.status, 200);
     const cfg = JSON.parse(fs.readFileSync(path.join(data, 'config.json'), 'utf8'));
     assert.equal(cfg.userName, 'Kept');
-    assert.deepEqual(cfg.localRuntimes, [{ ...entry, health: 'http://127.0.0.1:18081/' }]);
+    assert.deepEqual(cfg.localRuntimes, [entry], 'the default health URL is not stored');
     const row = (await c.call('/api/runtimes')).json.find((r) => r.id === 'fake-llm');
     assert.equal(row.installed, false);
     assert.equal(row.canStart, false);

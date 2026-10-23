@@ -289,6 +289,19 @@ function rtEntryFromForm(f) {
   return { entry };
 }
 
+// The Settings form filled from an entry for Edit. The health field gets only a URL the owner gave: the default
+// (`healthUsed`) is derived from the port, and filling it in would pin it to the old port after a port change.
+function rtFormFromEntry(e) {
+  return {
+    id: e.id,
+    name: e.name || '',
+    port: Number.isInteger(e.port) ? String(e.port) : '',
+    health: typeof e.health === 'string' ? e.health : '',
+    command: (e.command || []).join('\n'),
+    was: e.id,
+  };
+}
+
 // One owner entry in Settings: name, command, port, approval and its buttons.
 function rtEntryRow(doc, e) {
   const row = rtEl(doc, 'div', 'rt-entry');
@@ -299,7 +312,8 @@ function rtEntryRow(doc, e) {
   if (Array.isArray(e.command))
     main.appendChild(rtEl(doc, 'code', 'rt-cmd', e.command.join(' ').slice(0, 1000)));
   const port = Number.isInteger(e.port) ? ` · port ${e.port}` : '';
-  main.appendChild(rtEl(doc, 'small', '', `${rtText(e.id, 40)}${port}${e.health ? ` · ${rtText(e.health, 200)}` : ''}`));
+  const health = e.healthUsed || e.health; // the URL that is checked, the default included
+  main.appendChild(rtEl(doc, 'small', '', `${rtText(e.id, 40)}${port}${health ? ` · ${rtText(health, 200)}` : ''}`));
   if (e.error) main.appendChild(rtEl(doc, 'p', 'mon-msg bad', rtCap(rtText(e.error))));
   row.appendChild(main);
   const acts = rtEl(doc, 'div', 'mon-acts rt-entry-acts');
@@ -420,12 +434,7 @@ async function mountRuntimesSettings() {
     const act = b.dataset.rtEntryAct;
     if (act === 'edit') {
       const f = form.elements;
-      f.id.value = e.id;
-      f.name.value = e.name || '';
-      f.port.value = Number.isInteger(e.port) ? String(e.port) : '';
-      f.health.value = e.health || '';
-      f.command.value = (e.command || []).join('\n');
-      f.was.value = e.id;
+      for (const [k, v] of Object.entries(rtFormFromEntry(e))) f[k].value = v;
       document.getElementById('rt-form-title').textContent = `Edit ${rtText(e.name, 60) || e.id}`;
       sec.querySelector('[data-rt-cancel]').hidden = false;
       say('');
@@ -477,5 +486,6 @@ if (typeof module !== 'undefined')
     rtActionRow,
     rtCard,
     rtEntryFromForm,
+    rtFormFromEntry,
     rtEntryRow,
   };
