@@ -98,8 +98,12 @@ function monMeasure(rule, value, threshold) {
 }
 
 // Why agent control is off, from /api/monitors/status agents.reason, as the end of a sentence.
-const MON_OFF = { server: 'agent control is off on this server', docker: 'agent control is off in Docker' };
-const monOffText = (reason) => (reason === 'docker' ? MON_OFF.docker : MON_OFF.server);
+const MON_OFF = {
+  server: 'agent control is off on this server',
+  'no-sign-in': 'agent control is off without a dashboard sign-in',
+  docker: 'agent control is off in Docker',
+};
+const monOffText = (reason) => (Object.hasOwn(MON_OFF, reason || '') ? MON_OFF[reason] : MON_OFF.server);
 
 /** One alert as lines of text: rule title, the change, value against threshold, session, trace link and time.
  *  `agents` is the status's agents block: while control is off, "no candidate" is worded as that. */
@@ -216,6 +220,14 @@ function candidateLabel(c, fmt = monClock) {
   };
 }
 
+// A parameter value as its input shows it: a share as a percentage, nothing for "not set".
+function monShow(k, v) {
+  const spec = Object.hasOwn(MON_PARAMS, k) ? MON_PARAMS[k] : {};
+  return monNum(v) ? String(spec.pct ? Math.round(v * 1000) / 10 : v) : '';
+}
+/** What the input of parameter `k` shows for the rule as saved: where a refused value goes back to. */
+const monParamShown = (rule, k) => monShow(k, rule && rule.params ? rule.params[k] : null);
+
 // A parameter as typed: empty is "back to the default" (null), anything else a number from 0 up.
 function monParamValue(k, raw) {
   const s = String(raw == null ? '' : raw).trim();
@@ -229,8 +241,11 @@ function monParamValue(k, raw) {
 }
 
 // Why there is nothing to pause, resume or stop, in the owner's words; '' when there is something.
-// `off` is the status's agents.reason ('server' or 'docker'); `reason` is the candidates' own ('not-indexed', …).
+// `off` is the status's agents.reason ('server', 'no-sign-in' or 'docker');
+// `reason` is the candidates' own ('not-indexed', …).
 function monAgentNote({ available, off, pause, reason, candidates } = {}) {
+  if (available === false && off === 'no-sign-in')
+    return 'Agent control is off because this dashboard runs without sign-in (ZAAFPULSE_AUTH=none), so any program on this machine could use it. Start it with the default sign-in to pause, resume or stop agents.';
   if (available === false && off === 'docker')
     return 'Agent control is off in Docker: a container cannot see or signal the agent processes on your machine. Run the dashboard on the same machine as the agent to pause, resume or stop it.';
   if (available === false)
@@ -255,10 +270,76 @@ function monActionError(e) {
   return st ? `${said} (${st})` : said;
 }
 
+/** The target after an action's answer. A stop takes the process off the list only when it is known to have exited:
+ *  SIGTERM sent (exited false) or not checked (null) leaves it there to stop again. A demo answer changes nothing. */
+function monAfterAction(t, c, action, r) {
+  if (!t || !c || !r || r.demo) return;
+  if (action === 'stop') {
+    if (r.exited === true) t.cands = t.cands.filter((x) => x !== c);
+  } else if (action === 'pause' || action === 'resume') c.paused = action === 'pause';
+}
+
+// The control a focus key finds again after a repaint: the first of these attributes the focused element has.
+const MON_FOCUS_ATTRS = ['data-mon-act', 'data-mon-pick', 'data-mon-choose', 'data-mon-param'];
+const monAttrValue = (v) => String(v).replace(/["\\]/g, '\\$&');
+function monFocusKey(a) {
+  if (!a || typeof a.getAttribute !== 'function') return null;
+  for (const n of MON_FOCUS_ATTRS) {
+    const v = a.getAttribute(n);
+    if (v === null || v === undefined) continue;
+    // A radio button is told apart by its value (the process it picks); the others by the attribute's own value.
+    if (n === 'data-mon-pick') return `[${n}][value="${monAttrValue(a.value == null ? '' : a.value)}"]`;
+    return v ? `[${n}="${monAttrValue(v)}"]` : `[${n}]`;
+  }
+  return null;
+}
+const MON_WRITTEN = new WeakMap(); // element -> { html, dom }: what this file last wrote there
+/** Writes markup built by this file into `el` only when it changed, and gives keyboard focus back to the same control
+ *  when the write replaced the focused one. A repaint every few seconds would otherwise throw focus to the page. */
+function monWriteHtml(el, html) {
+  if (!el) return false;
+  const last = MON_WRITTEN.get(el);
+  // The drawer body is shared with other drawers: what is there now must still be what was written.
+  if (last && last.html === html && el.innerHTML === last.dom) return false;
+  const doc = typeof document !== 'undefined' ? document : null;
+  const active = doc && doc.activeElement;
+  const key = active && el.contains(active) ? monFocusKey(active) : null;
+  el.innerHTML = html;
+  MON_WRITTEN.set(el, { html, dom: el.innerHTML });
+  if (key) {
+    const next = el.querySelector(key);
+    if (next && typeof next.focus === 'function') next.focus({ preventScroll: true });
+  }
+  return true;
+}
+
+const monHHMM = (ts) => new Date(ts).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+
+/** The list part of the alerts drawer: the rows, or why there are none, and what a failed poll means for them. */
+function monAlertsBody({ alerts, loaded, error, readAt, rules = null, agents = null, read = 0 } = {}) {
+  const err = monText(error);
+  if (!loaded && err)
+    return `<div class="empty mon-err" role="status">${esc(`Could not read the alerts: ${err}. Trying again every 15 s.`)}</div>`;
+  if (!loaded) return '<div class="empty">Reading the alerts…</div>';
+  const lines = (Array.isArray(alerts) ? alerts : []).map((a) => alertLine(a, rules, agents)).filter(Boolean);
+  const rows = lines.map((l) => monAlertRow(l, monNum(l.ts) && l.ts > read)).join('');
+  const at = monNum(readAt) ? ` These are the alerts read at ${monHHMM(readAt)}.` : '';
+  const stale = err
+    ? `<p class="mon-stale" role="status">${esc(`Could not refresh the alerts (${err}).${at}`)}</p>`
+    : '';
+  return `${stale}${
+    rows
+      ? `<div class="mon-alerts" role="list">${rows}</div>`
+      : '<div class="empty">No alerts yet. The monitors look every minute and on the live snapshot.</div>'
+  }`;
+}
+
 /* ---------- browser side ---------- */
 const MON = {
   alerts: [], // newest first
   loaded: false,
+  error: '', // why the last alerts poll failed; '' after a good one
+  readAt: 0, // when the alerts were last read
   busy: false,
   timer: 0,
   rules: null, // from /api/monitors, for rule titles
@@ -373,9 +454,12 @@ async function monPoll() {
     const r = await monApi(`/api/alerts${q}`);
     monMerge(r.alerts);
     MON.loaded = true;
+    MON.error = '';
+    MON.readAt = Date.now();
     if (monNeedsStatus()) await monLoadStatus(true).catch(() => null);
-  } catch {
-    /* an older server or a restart: the bell stays as it was */
+  } catch (e) {
+    // An older server or a restart: the bell stays as it was, and the drawer says the list may be old.
+    MON.error = monText(e && e.message) || 'the server did not answer';
   } finally {
     MON.busy = false;
   }
@@ -420,13 +504,15 @@ function monOpenDrawer(kind, opener) {
   if (!state.data) monPaintDrawer();
   if (kind === 'alerts' && !MON.status) monLoadStatus().then(monRepaint, () => {});
 }
+// The alerts and agent drawers repaint themselves (app.js paintDrawer hands them here), so focus and scroll stay.
 function monPaintDrawer() {
-  if (state.data) return paintDrawer(false);
-  if (!drawer.kind || !DRILLS[drawer.kind]) return;
-  const v = DRILLS[drawer.kind]();
+  if (!drawer.kind || !Object.hasOwn(MONITOR_DRILLS, drawer.kind)) return;
+  const v = MONITOR_DRILLS[drawer.kind]();
   $('#drawer-eyebrow').textContent = v.eyebrow;
   $('#drawer-title').textContent = v.title;
-  $('#drawer-body').innerHTML = v.body;
+  const body = $('#drawer-body');
+  const scroll = body.scrollTop;
+  if (monWriteHtml(body, v.body)) body.scrollTop = scroll;
 }
 
 function monAlertRow(l, unread) {
@@ -466,9 +552,16 @@ const MONITOR_DRILLS = {
   alerts() {
     const read = monLastRead();
     const agents = MON.status && MON.status.agents;
-    const lines = MON.alerts.map((a) => alertLine(a, MON.rules, agents)).filter(Boolean);
     const unread = unreadCount(MON.alerts, read);
-    const rows = lines.map((l) => monAlertRow(l, monNum(l.ts) && l.ts > read)).join('');
+    const list = monAlertsBody({
+      alerts: MON.alerts,
+      loaded: MON.loaded,
+      error: MON.error,
+      readAt: MON.readAt,
+      rules: MON.rules,
+      agents,
+      read,
+    });
     const counts = MON.status && MON.status.counts;
     const now =
       counts && monNum(counts.triggered)
@@ -480,11 +573,7 @@ const MONITOR_DRILLS = {
       body: `<div class="mon-dhead"><span>${unread ? `${esc(unread)} unread` : 'All read'}${now ? ` · ${esc(now)}` : ''}</span>
         <button type="button" class="btn ghost mon-sm" data-mon-read ${unread ? '' : 'disabled'}>Mark all read</button></div>
         ${monBannersHtml()}
-        ${
-          rows
-            ? `<div class="mon-alerts" role="list">${rows}</div>`
-            : `<div class="empty">${MON.loaded ? 'No alerts yet. The monitors look every minute and on the live snapshot.' : 'Reading the alerts…'}</div>`
-        }
+        ${list}
         <p class="drawer-note">An alert is written when a rule changes state. "Mark all read" is kept in this browser only.</p>
         <a class="btn ghost" href="#settings/monitors">Monitor settings →</a>`,
     };
@@ -604,9 +693,7 @@ async function monAct(t, action, repaint) {
     const r = await monApi(`/api/agents/${action}`, body);
     t.tone = 'good';
     t.msg = monDoneText(action, r);
-    // A demo answer changes nothing, so the paused mark follows real answers only.
-    if (!r.demo && action !== 'stop') c.paused = action === 'pause';
-    if (!r.demo && action === 'stop') t.cands = t.cands.filter((x) => x !== c);
+    monAfterAction(t, c, action, r);
   } catch (e) {
     t.tone = 'bad';
     t.msg = monActionError(e);
@@ -637,7 +724,8 @@ function monAgentHtml(t, mode) {
   if (t.off) return note(monAgentNote({ available: false, off: monOffReason() }), 'off');
   if (t.error) return note(t.error, 'bad');
   const why = monAgentNote({ available: true, pause: t.canPause, reason: t.reason, candidates: t.cands.length });
-  if (!t.cands.length) return full || !t.canPause ? note(why, 'off') : '';
+  // Inline, a session with no process says why; only a session no agent can run (a gateway one) stays quiet.
+  if (!t.cands.length) return full || t.reason !== 'unsupported' ? note(why, 'off') : '';
   const c = monPicked(t);
   const paused = monPausedEntry(c);
   const busy = t.busy ? 'disabled' : '';
@@ -744,9 +832,10 @@ function monTracePaint() {
   const btn = document.querySelector('#tr-app [data-sub="3"]');
   if (!t || !box) return;
   const html = monAgentHtml(t, 'inline');
-  box.innerHTML = html;
+  monWriteHtml(box, html);
   box.hidden = !html;
-  box.classList.toggle('off', t.off || !t.canPause);
+  // Nothing to act on (control off, Windows, or no process) is the quiet style.
+  box.classList.toggle('off', t.off || !t.canPause || !t.cands.length);
   box.classList.toggle('paused', !!monPausedEntry(monPicked(t)));
   if (btn) {
     const c = monPicked(t);
@@ -839,16 +928,19 @@ function monRuleNow(r) {
 function monRuleCard(r, opts) {
   const st = Object.hasOwn(MON_STATE, r.state) ? r.state : 'no_data';
   const params = Object.keys(r.defaults || r.params || {})
-    .filter((k) => Object.hasOwn(MON_PARAMS, k))
+    // maxCalls is accepted by the API but not measured yet: an input for it would look like it works.
+    .filter((k) => Object.hasOwn(MON_PARAMS, k) && k !== 'maxCalls')
     .map((k) => {
       const spec = MON_PARAMS[k];
-      const show = (v) => (monNum(v) ? String(spec.pct ? Math.round(v * 1000) / 10 : v) : '');
-      const cur = r.params ? r.params[k] : null;
       const def = r.defaults ? r.defaults[k] : null;
-      const ph = show(def) || spec.empty || '';
-      return `<label class="mon-param">${esc(spec.label)}<input class="input" type="number" min="0" step="${esc(spec.step)}" inputmode="decimal" data-mon-param="${esc(k)}" value="${esc(show(cur))}" placeholder="${esc(ph)}" aria-label="${esc(r.title + ': ' + spec.label)}"></label>`;
+      const ph = monShow(k, def) || spec.empty || '';
+      return `<label class="mon-param">${esc(spec.label)}<input class="input" type="number" min="0" step="${esc(spec.step)}" inputmode="decimal" data-mon-param="${esc(k)}" value="${esc(monParamShown(r, k))}" placeholder="${esc(ph)}" aria-label="${esc(r.title + ': ' + spec.label)}"></label>`;
     })
     .join('');
+  const unmeasured =
+    r.id === 'tool_loop'
+      ? '<p class="mon-note off">Too many tool calls in one turn: not measured yet, so only loop signals trigger this rule.</p>'
+      : '';
   const snoozed = monNum(r.snoozedUntil) && r.snoozedUntil > Date.now();
   const snooze = snoozed
     ? `<span class="mon-snoozed">Snoozed until ${esc(monClock(r.snoozedUntil))}</span><button type="button" class="btn ghost mon-sm" data-mon-snooze="off">Unsnooze</button>`
@@ -862,7 +954,7 @@ function monRuleCard(r, opts) {
       <span class="mon-state ${esc(st)}">${esc(MON_STATE[st])}</span></div>
     <p class="mon-desc">${esc(r.describe)}</p>
     <p class="mon-now">${esc(monRuleNow(r))}</p>
-    ${params ? `<div class="mon-params">${params}</div>` : ''}
+    ${params ? `<div class="mon-params">${params}</div>` : ''}${unmeasured}
     <div class="mon-rule-foot">${auto}<span class="mon-snooze">${snooze}</span></div>
     <span class="saved mon-saved" data-mon-saved role="status"></span></article>`;
 }
@@ -997,6 +1089,15 @@ async function mountMonitorsSettings() {
       const r = S.rules.find((x) => x.id === id);
       if (r && patch.enabled !== undefined) card.querySelector('[data-mon-enable]').checked = r.enabled;
       if (r && patch.autoPause !== undefined) card.querySelector('[data-mon-autopause]').checked = r.autoPause;
+      if (r && patch.params) monRevertParams(card, r, Object.keys(patch.params));
+    }
+  }
+
+  // A refused value goes back to what is saved, so the input never shows a limit that is not in force.
+  function monRevertParams(card, r, keys) {
+    for (const k of keys) {
+      const input = card.querySelector(`[data-mon-param="${CSS.escape(k)}"]`);
+      if (input) input.value = monParamShown(r, k);
     }
   }
 
@@ -1012,7 +1113,11 @@ async function mountMonitorsSettings() {
     if (card && e.target.matches('[data-mon-param]')) {
       const k = e.target.dataset.monParam;
       const v = monParamValue(k, e.target.value);
-      if (v.error) return say(card.querySelector('[data-mon-saved]'), v.error, true);
+      if (v.error) {
+        const r = S.rules.find((x) => x.id === card.dataset.monRule);
+        if (r) monRevertParams(card, r, [k]);
+        return say(card.querySelector('[data-mon-saved]'), v.error, true);
+      }
       return void saveRule(card, { params: { [k]: v.value } });
     }
     if (e.target.matches('[data-mon-desktop]')) return void saveChannels({ desktop: e.target.checked }, 'desktop');
@@ -1136,4 +1241,10 @@ if (typeof module !== 'undefined')
     monMeasure,
     monSameProc,
     pausedEntryFor,
+    monAgentHtml,
+    monRuleCard,
+    monWriteHtml,
+    monAlertsBody,
+    monAfterAction,
+    monParamShown,
   };
