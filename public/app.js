@@ -752,6 +752,7 @@ async function viewSettings(el) {
   </div>
   ${evalsSettingsShell()}
   ${monitorsSettingsShell()}
+  ${runtimesSettingsShell()}
   <section class="holo panel" id="prices-panel" style="margin-top:16px"><div class="skeleton" style="height:220px"></div></section></div>`;
 
   $('#profile-form').onsubmit = async (e) => {
@@ -774,6 +775,7 @@ async function viewSettings(el) {
   };
   mountEvalsSettings();
   mountMonitorsSettings();
+  mountRuntimesSettings();
   loadPrices().catch((err) => {
     $('#prices-panel').innerHTML = holoEmpty(`Could not load prices: ${esc(err.message)}`);
   });

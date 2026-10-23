@@ -269,6 +269,194 @@ function rtMount() {
   onUnmount(() => clearInterval(timer));
 }
 
+/* ---------- Settings → Local models ---------- */
+// The Settings form as an entry for /api/runtimes/save, or { error }. The command is one argument per line.
+function rtEntryFromForm(f) {
+  const v = (k) => String((f && f[k]) || '').trim();
+  const id = v('id');
+  if (!RT_ID_RE.test(id)) return { error: 'Id: 1 to 40 lowercase letters, digits or dashes.' };
+  const command = String((f && f.command) || '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (!command.length) return { error: 'Command: one argument per line, starting with the program.' };
+  const port = Number(v('port'));
+  if (!v('port') || !Number.isInteger(port) || port < 1 || port > 65535)
+    return { error: 'Port: a whole number from 1 to 65535.' };
+  const entry = { id, command, port };
+  if (v('name')) entry.name = v('name').slice(0, 60);
+  if (v('health')) entry.health = v('health');
+  return { entry };
+}
+
+// One owner entry in Settings: name, command, port, approval and its buttons.
+function rtEntryRow(doc, e) {
+  const row = rtEl(doc, 'div', 'rt-entry');
+  row.setAttribute('data-rt-entry', e.id);
+  const main = rtEl(doc, 'div', 'rt-entry-main');
+  main.appendChild(rtEl(doc, 'b', '', rtText(e.name, 60) || e.id));
+  // The command is null while control is off (server mode, Docker): nothing to show.
+  if (Array.isArray(e.command))
+    main.appendChild(rtEl(doc, 'code', 'rt-cmd', e.command.join(' ').slice(0, 1000)));
+  const port = Number.isInteger(e.port) ? ` · port ${e.port}` : '';
+  main.appendChild(rtEl(doc, 'small', '', `${rtText(e.id, 40)}${port}${e.health ? ` · ${rtText(e.health, 200)}` : ''}`));
+  if (e.error) main.appendChild(rtEl(doc, 'p', 'mon-msg bad', rtCap(rtText(e.error))));
+  row.appendChild(main);
+  const acts = rtEl(doc, 'div', 'mon-acts rt-entry-acts');
+  acts.appendChild(rtEl(doc, 'span', `rt-approval ${e.approved ? 'good' : ''}`, e.approved ? 'Approved' : 'Not approved'));
+  const btn = (act, label, cls = 'btn ghost mon-sm') => {
+    const b = rtEl(doc, 'button', cls, label);
+    b.type = 'button';
+    b.setAttribute('data-rt-entry-act', act);
+    acts.appendChild(b);
+  };
+  if (!e.approved && !e.error) btn('approve', 'Approve', 'btn mon-sm');
+  btn('edit', 'Edit');
+  btn('delete', 'Delete', 'btn ghost mon-sm danger');
+  row.appendChild(acts);
+  return row;
+}
+
+function runtimesSettingsShell() {
+  return `<section class="card rt-settings" id="rt-settings" aria-labelledby="rt-set-title">
+    <div class="card-head"><h3 id="rt-set-title">Local models</h3><span class="meta">your own model servers · Start and Stop in AI Office · stored in config.json</span></div>
+    <p class="mon-desc">Ollama, LM Studio, llama.cpp server, Jan and LocalAI need nothing here. Add a server of your own, such as <code>llama-server</code> with a model file, then approve it: ZAAFPulse only starts a command you approved, and asks again after you edit it. The command runs without a shell.</p>
+    <p class="mon-note off" id="rt-off" hidden></p>
+    <div class="rt-entries" id="rt-entries"><div class="skeleton" style="height:64px"></div></div>
+    <form class="rt-form" id="rt-form" novalidate>
+      <h4 id="rt-form-title">Add a runtime</h4>
+      <fieldset class="rt-fields" id="rt-fields" style="border:0;margin:0;padding:0;min-width:0">
+      <div class="rt-form-grid">
+        <label>Id<input class="input" name="id" maxlength="40" placeholder="qwen-local" autocomplete="off" spellcheck="false"></label>
+        <label>Name<input class="input" name="name" maxlength="60" placeholder="Qwen (llama.cpp)"></label>
+        <label>Port<input class="input" name="port" type="number" min="1" max="65535" step="1" placeholder="8081"></label>
+        <label>Health URL <small>optional</small><input class="input" name="health" placeholder="http://127.0.0.1:8081/" autocomplete="off" spellcheck="false"></label>
+        <label class="rt-wide">Command <small>one argument per line</small><textarea class="input mono" name="command" rows="5" spellcheck="false" placeholder="llama-server&#10;-m&#10;~/models/qwen.gguf&#10;--port&#10;8081"></textarea></label>
+      </div>
+      <input type="hidden" name="was">
+      <div class="mon-acts"><button class="btn mon-sm" type="submit">Save</button><button class="btn ghost mon-sm" type="button" data-rt-cancel hidden>Cancel</button><span class="saved" id="rt-form-msg" role="status"></span></div>
+      </fieldset>
+    </form></section>`;
+}
+
+async function mountRuntimesSettings() {
+  const sec = document.getElementById('rt-settings');
+  if (!sec) return;
+  const form = document.getElementById('rt-form');
+  const S = { entries: [], off: null };
+  const say = (msg, bad = false) => {
+    const out = document.getElementById('rt-form-msg');
+    if (!out) return;
+    out.textContent = msg;
+    out.classList.toggle('bad', bad);
+  };
+  // While control is off the server refuses every change: show why and keep the form and the buttons disabled.
+  const paint = () => {
+    const box = document.getElementById('rt-entries');
+    if (!box) return;
+    const note = document.getElementById('rt-off');
+    note.textContent = S.off || '';
+    note.hidden = !S.off;
+    document.getElementById('rt-fields').disabled = !!S.off;
+    if (!S.entries.length) box.replaceChildren(rtEl(document, 'p', 'mon-note off', 'No runtimes of your own yet.'));
+    else box.replaceChildren(...S.entries.map((e) => rtEntryRow(document, e)));
+    if (S.off) for (const b of box.querySelectorAll('button')) b.disabled = true;
+  };
+  const take = (res) => {
+    S.entries = Array.isArray(res.entries) ? res.entries : [];
+    S.off = typeof res.off === 'string' && res.off ? rtText(res.off, 300) : null;
+  };
+  const reset = () => {
+    form.reset();
+    form.elements.was.value = '';
+    document.getElementById('rt-form-title').textContent = 'Add a runtime';
+    sec.querySelector('[data-rt-cancel]').hidden = true;
+  };
+  const load = async () => {
+    try {
+      take(await rtApi('/api/runtimes/config'));
+    } catch (e) {
+      const box = document.getElementById('rt-entries');
+      if (box) box.replaceChildren(rtEl(document, 'p', 'mon-msg bad', `Could not read the runtimes: ${rtErrorText(e)}`));
+      return;
+    }
+    paint();
+  };
+  await load();
+
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    if (S.off) return;
+    const f = form.elements;
+    const draft = rtEntryFromForm({
+      id: f.id.value,
+      name: f.name.value,
+      command: f.command.value,
+      port: f.port.value,
+      health: f.health.value,
+    });
+    if (draft.error) return say(draft.error, true);
+    say('Saving…');
+    try {
+      // Arguments the owner did not touch are still the masked text the page showed; the server keeps the stored ones.
+      const body = { entry: draft.entry, ...(f.was.value ? { was: f.was.value } : {}) };
+      take(await rtApi('/api/runtimes/save', body));
+      paint();
+      reset();
+      say('Saved. Approve it before it can start.');
+    } catch (e) {
+      say(rtErrorText(e), true);
+    }
+  });
+
+  sec.addEventListener('click', async (ev) => {
+    if (S.off) return;
+    if (ev.target.closest('[data-rt-cancel]')) return void (reset(), say(''));
+    const b = ev.target.closest('[data-rt-entry-act]');
+    const row = b && b.closest('[data-rt-entry]');
+    if (!row) return;
+    const e = S.entries.find((x) => x.id === row.dataset.rtEntry);
+    if (!e) return;
+    const act = b.dataset.rtEntryAct;
+    if (act === 'edit') {
+      const f = form.elements;
+      f.id.value = e.id;
+      f.name.value = e.name || '';
+      f.port.value = Number.isInteger(e.port) ? String(e.port) : '';
+      f.health.value = e.health || '';
+      f.command.value = (e.command || []).join('\n');
+      f.was.value = e.id;
+      document.getElementById('rt-form-title').textContent = `Edit ${rtText(e.name, 60) || e.id}`;
+      sec.querySelector('[data-rt-cancel]').hidden = false;
+      say('');
+      f.id.focus();
+      return;
+    }
+    if (act === 'delete' && !confirm(`Delete ${rtText(e.name, 60) || e.id}? Its approval goes too.`)) return;
+    if (
+      act === 'approve' &&
+      !confirm(`Approve this command?\n\n${(e.command || []).join(' ')}\n\nZAAFPulse runs exactly this, without a shell, when you press Start.`)
+    )
+      return;
+    b.disabled = true;
+    try {
+      if (act === 'delete') {
+        take(await rtApi('/api/runtimes/delete', { id: e.id }));
+        if (form.elements.was.value === e.id) reset();
+      }
+      if (act === 'approve') {
+        await rtApi('/api/runtimes/approve', { id: e.id });
+        await load();
+      }
+      paint();
+      say(act === 'approve' ? `Approved ${rtText(e.name, 60) || e.id}. Start it from AI Office.` : 'Deleted.');
+    } catch (err) {
+      b.disabled = false;
+      say(rtErrorText(err), true);
+    }
+  });
+}
+
 /* ---------- page-wide clicks ---------- */
 if (typeof document !== 'undefined')
   document.addEventListener('click', (e) => {
@@ -288,4 +476,6 @@ if (typeof module !== 'undefined')
     rtCardPlan,
     rtActionRow,
     rtCard,
+    rtEntryFromForm,
+    rtEntryRow,
   };
