@@ -71,16 +71,61 @@ test('procRows: argv keeps each argument whole, spaces included', () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-// macOS: ps comm is the executable's full path, so a path with a space is read whole.
-test('parsePsComm and argvFrom: the executable path whole, then the other arguments', () => {
+// macOS: ps comm is argv[0] as the process was started (or rewrote it), read whole: a full path when it was run by
+// one, so a path with a space stays one word, or a bare name such as `node` when it was run from PATH.
+test('parsePsComm and argvFrom: argv[0] whole, then the other arguments', () => {
   const exe = '/Users/u/Library/Application Support/Claude/claude-code/2.1.308/a9/claude.app/Contents/MacOS/claude';
-  const node = '/Users/u/.nvm/versions/node/v24.16.0/bin/node';
-  const exes = parsePsComm(`41415 ${exe}\n  1128 ${node}\n\ngarbage\n`);
+  const exes = parsePsComm(`41415 ${exe}\n  1128 node\n\ngarbage\n`);
   assert.equal(exes.get(41415), exe);
-  assert.equal(exes.get(1128), node);
+  assert.equal(exes.get(1128), 'node');
   assert.equal(exes.size, 2);
   assert.deepEqual(argvFrom(`${exe} --output-format stream-json`, exe), [exe, '--output-format', 'stream-json']);
-  // Run by another name (node from PATH): the first word is that name, the executable is the real path.
-  assert.deepEqual(argvFrom('node /usr/local/bin/claude -c', node), [node, '/usr/local/bin/claude', '-c']);
+  // Run from PATH as `node`: comm is that same first word, and the script follows it.
+  assert.deepEqual(argvFrom('node /usr/local/bin/claude -c', 'node'), ['node', '/usr/local/bin/claude', '-c']);
   assert.deepEqual(argvFrom(exe, exe), [exe]);
+});
+
+// lib/processes takes execFile when it loads and reads the platform when it runs: a fresh copy is loaded with a
+// recording execFile, on a pretend macOS, so nothing real is spawned.
+async function onFakeMac(fn) {
+  const cp = require('child_process');
+  const file = require.resolve('../lib/processes');
+  const cached = require.cache[file];
+  const realExecFile = cp.execFile;
+  const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+  const spawned = [];
+  cp.execFile = (cmd, args, opts, cb) => {
+    spawned.push(cmd);
+    const out =
+      cmd === 'lsof'
+        ? 'p4242\nfcwd\nn/home/u/work\n'
+        : args[0] === '-axo'
+          ? '4242 1.0 1024 10:00 S /home/u/.local/bin/claude --resume\n'
+          : '4242 /home/u/.local/bin/claude\n';
+    setImmediate(() => cb(null, out, ''));
+  };
+  delete require.cache[file];
+  try {
+    const fresh = require('../lib/processes');
+    cp.execFile = realExecFile;
+    Object.defineProperty(process, 'platform', { ...realPlatform, value: 'darwin' });
+    return await fn(fresh, spawned);
+  } finally {
+    cp.execFile = realExecFile;
+    Object.defineProperty(process, 'platform', realPlatform);
+    require.cache[file] = cached;
+  }
+}
+
+test('rows({ cwds: false }) reads argv but never runs lsof; rows() does', async () => {
+  await onFakeMac(async (fresh, spawned) => {
+    const [light] = await fresh.rows({ cwds: false });
+    assert.deepEqual(spawned, ['ps', 'ps']);
+    assert.deepEqual(light.argv, ['/home/u/.local/bin/claude', '--resume']);
+    assert.equal(light.cwd, undefined);
+    spawned.length = 0;
+    const [full] = await fresh.rows();
+    assert.deepEqual(spawned, ['ps', 'lsof', 'ps']);
+    assert.equal(full.cwd, '/home/u/work');
+  });
 });

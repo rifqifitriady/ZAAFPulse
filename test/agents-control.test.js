@@ -611,6 +611,78 @@ test('paused(): after a restart, agents the OS reports as stopped are listed aga
   assert.deepEqual(await ctl.paused(), []);
 });
 
+// The Claude desktop app's launcher and a ChatGPT helper: the live page counts them as Claude Desktop and Codex, but
+// neither is the agent's own program.
+const WRAPPER = [DISCLAIMER, '--pgroup', '--', DESKTOP_CLAUDE, ...DESKTOP_FLAGS];
+const HELPER = CODEX_HELPERS[0];
+const DESKTOP = [DESKTOP_CLAUDE, ...DESKTOP_FLAGS];
+const argvRow = (pid, argv, extra = {}) => row(pid, argv.join(' '), { argv, ...extra });
+
+test('the pre-signal check refuses a launcher wrapper and an app helper; the agent itself is accepted', async () => {
+  const rows = [argvRow(40, WRAPPER), argvRow(50, HELPER), argvRow(41, DESKTOP)];
+  const { ctl, audit, k } = control({ processes: fakeTable(rows) });
+  for (const pid of [40, 50])
+    await assert.rejects(
+      ctl.pause({ pid, startTime: startOf(600) }, { by: 'owner' }),
+      (e) => e.status === 403 && /not an AI agent/.test(e.message),
+    );
+  assert.deepEqual(k.calls, []);
+  assert.deepEqual(
+    audit.entries.map((e) => [e.action, e.pid, e.ok, e.status, e.error]),
+    [
+      ['pause', 40, false, 403, 'not an AI agent process'],
+      ['pause', 50, false, 403, 'not an AI agent process'],
+    ],
+  );
+  const out = await ctl.pause({ pid: 41, startTime: startOf(600) }, { by: 'owner' });
+  assert.equal(out.app, 'claude-desktop');
+  assert.deepEqual(k.sent(), [[41, 'SIGSTOP']]);
+});
+
+test('a process this server paused can be resumed even when its argv cannot be read', async () => {
+  let rows = [row(4242, CLAUDE_ARGS)];
+  const { ctl, k } = control({ processes: fakeTable(() => rows) });
+  const target = { pid: 4242, startTime: startOf(600) };
+  await ctl.pause(target, { by: 'owner' });
+  rows = [row(4242, CLAUDE_ARGS, { argv: undefined })];
+  const out = await ctl.resume(target, { by: 'owner' });
+  assert.deepEqual([out.ok, out.action], [true, 'resume']);
+  assert.deepEqual(k.sent(), [
+    [4242, 'SIGSTOP'],
+    [4242, 'SIGCONT'],
+  ]);
+  // Resumed, it is no longer one we paused: without a readable program it cannot be paused again.
+  await assert.rejects(
+    ctl.pause(target, { by: 'owner' }),
+    (e) => e.status === 403 && /not an AI agent/.test(e.message),
+  );
+  assert.equal(k.sent().length, 2);
+});
+
+test('paused(): after a restart, a stopped wrapper is not listed; a stopped agent binary is', async () => {
+  const rows = [argvRow(40, WRAPPER, { stopped: true }), row(4242, CLAUDE_ARGS, { stopped: true })];
+  const { ctl } = control({ processes: fakeTable(rows) });
+  assert.deepEqual(
+    (await ctl.paused()).map((p) => [p.pid, p.app]),
+    [[4242, 'claude']],
+  );
+});
+
+test('the paused list and the pre-signal check read the table without working folders; candidates with them', async (t) => {
+  const work = tmp('zp-agent-opts-');
+  t.after(() => fs.rmSync(work, { recursive: true, force: true }));
+  const seen = [];
+  const processes = { rows: async (opts) => (seen.push(opts), [row(4242, CLAUDE_ARGS, { cwd: work })]) };
+  const { ctl } = control({ processes });
+  await ctl.paused();
+  await ctl.pause({ pid: 4242, startTime: startOf(600) }, { by: 'owner' });
+  assert.deepEqual(seen, [{ cwds: false }, { cwds: false }]);
+  seen.length = 0;
+  assert.equal((await ctl.candidates({ cwd: work, firstTs: Date.now(), source: 'claude' })).length, 1);
+  assert.equal(seen.length, 1);
+  assert.ok(seen[0] === undefined || seen[0].cwds === true, 'candidates need the working folders');
+});
+
 test('the default audit log is agent-audit.jsonl in the data folder, mode 0600', async () => {
   const dir = tmp('zp-agent-audit-');
   const ctl = createAgentControl({

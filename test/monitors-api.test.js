@@ -652,6 +652,37 @@ test('monitor api: in Docker agent control is off like server mode, with its own
   demo.done();
 });
 
+test('monitor api: without a dashboard sign-in agent control is off, with its own reason', async () => {
+  const off = setup({ agentsOff: 'no-sign-in' });
+  assert.deepEqual((await off.call('/api/monitors/status')).body.agents, {
+    available: false,
+    pause: true,
+    reason: 'no-sign-in',
+  });
+  const cands = await off.call(`/api/agents/candidates?key=${KEY}`);
+  assert.equal(cands.status, 403);
+  assert.match(cands.body.error, /without a dashboard sign-in/);
+  for (const a of ['pause', 'resume', 'stop']) {
+    const r = await off.post(`/api/agents/${a}`, { key: KEY, pid: 4242, startTime: 1000, confirm: true });
+    assert.equal(r.status, 403, a);
+    assert.deepEqual(r.body, { error: 'agent control is off without a dashboard sign-in' });
+  }
+  const refused = await off.post('/api/monitors/cost_burn', { autoPause: true });
+  assert.equal(refused.status, 409);
+  assert.deepEqual(refused.body, { error: 'agent control is off without a dashboard sign-in' });
+  assert.equal(off.state.settings('cost_burn').autoPause, false, 'nothing was saved');
+  assert.ok((await off.call('/api/monitors')).body.rules.every((x) => x.mayAutoPause === false));
+  assert.deepEqual(off.calls, [], 'the control module was never asked');
+  off.done();
+
+  // 'server' (and true, as before) keeps the server-mode wording.
+  const server = setup({ agentsOff: 'server' });
+  assert.equal((await server.call('/api/monitors/status')).body.agents.reason, 'server');
+  const r = await server.post('/api/agents/pause', { key: KEY, pid: 4242, startTime: 1000 });
+  assert.deepEqual([r.status, r.body.error], [403, 'agent control is off in server mode']);
+  server.done();
+});
+
 // ---- a spawned server ----
 
 const freePort = () =>
@@ -766,6 +797,9 @@ test('monitors over HTTP: demo data, demo actions, validation', async () => {
     }
     assert.equal((await c.post('/api/monitors/test', { kind: 'desktop' })).json.demo, true);
     const status = await c.call('/api/monitors/status');
+    // Demo signals nothing, so with no sign-in it keeps the controls shown.
+    assert.equal(status.json.agents.available, true);
+    assert.equal(status.json.agents.reason, null);
     assert.equal(status.json.paused.length, 1);
     assert.equal(status.json.paused[0].sessionKey, key);
 
@@ -815,6 +849,23 @@ test('monitors over HTTP: the webhook is saved as a secret reference, and a plai
     assert.match(t.json.error, /off/);
     assert.equal((await c.post('/api/monitors/channels', { webhookRef: 'https://x.example.com' })).status, 400);
     for (const b of c.bodies) assert.doesNotMatch(b, /hooks\.example\.com|plain\.example\.com/);
+    noPaths(c.bodies);
+  } finally {
+    await s.stop();
+  }
+});
+
+test('monitors over HTTP: with ZAAFPULSE_AUTH=none (no demo) agent control is off for want of a sign-in', async () => {
+  const s = await startServer({ ZAAFPULSE_AUTH: 'none' });
+  const c = client(s.base);
+  try {
+    const status = await c.call('/api/monitors/status');
+    assert.equal(status.status, 200);
+    assert.equal(status.json.agents.available, false);
+    assert.equal(status.json.agents.reason, 'no-sign-in');
+    const r = await c.post('/api/monitors/cost_burn', { autoPause: true });
+    assert.equal(r.status, 409);
+    assert.match(r.json.error, /without a dashboard sign-in/);
     noPaths(c.bodies);
   } finally {
     await s.stop();
@@ -875,10 +926,15 @@ test('monitors over HTTP: sign-in gate, gateway keys refused, agent routes off w
       for (const a of ['pause', 'resume', 'stop']) {
         const r = await c.post(`/api/agents/${a}`, { pid: child.pid, startTime: 1, confirm: true });
         assert.equal(r.status, 403, a);
+        assert.match(r.json.error, /server mode/, a);
       }
     } finally {
       child.kill('SIGKILL');
     }
+    // The control module audits every refusal it makes: an empty log shows the API gate refused first.
+    const auditFile = path.join(data, '.data', 'agent-audit.jsonl');
+    const lines = fs.existsSync(auditFile) ? fs.readFileSync(auditFile, 'utf8').trim() : '';
+    assert.equal(lines, '', 'the control module was never reached');
     assert.equal((await c.post('/api/monitors/cost_burn', { autoPause: true })).status, 409);
     assert.ok((await c.call('/api/monitors')).json.rules.every((x) => x.mayAutoPause === false));
     for (const who of [c, anon, bearer]) noPaths(who.bodies);

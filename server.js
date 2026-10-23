@@ -475,7 +475,9 @@ const monitorChannels = createChannels({
 // Agent control is for the owner at this machine: off in server mode, and whenever the dashboard signs in with a
 // password (a proxy, a public URL or ZAAFPULSE_AUTH=1), since other people may reach it then. So password mode counts
 // as server mode here: the rules then never pause an agent (the settings refuse auto-pause, the listing hides it).
-const AGENTS_OFF = SERVER_MODE || auth.mode === 'password';
+// Control also needs a dashboard sign-in, so ZAAFPULSE_AUTH=none turns it off too, except in demo (which never signals).
+const AGENTS_OFF =
+  SERVER_MODE || auth.mode === 'password' ? 'server' : auth.mode === 'none' && !DEMO ? 'no-sign-in' : false;
 const agentControl = createAgentControl({ dataDir: monitorDir, serverMode: AGENTS_OFF, log: (m) => console.error(m) });
 const monitors = createMonitors({
   indexer,
