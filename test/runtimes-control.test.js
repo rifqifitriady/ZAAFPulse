@@ -105,6 +105,7 @@ async function realSetup({ mode, approve = true, healthWaitMs = 10000, extra = {
   });
   const cleanup = () => {
     for (const c of spawned) {
+      if (c.exitCode !== null || c.signalCode !== null) continue; // never signal a pid that may be reused
       try {
         process.kill(c.pid, 'SIGTERM');
       } catch {
@@ -377,9 +378,154 @@ test('stop follows how the server runs: own stop command, quit the app, brew ser
   const winOk = stopSetup({ platform: 'win32', killer: fakeKill({ gone: new Set([SRV.pid]) }) });
   t.after(winOk.cleanup);
   await winOk.ctl.stop({ id: 'ollama', ...SRV });
-  assert.deepEqual(winOk.ran, [['taskkill', '/PID', String(SRV.pid)]], 'no /F');
+  assert.deepEqual(winOk.ran, [[path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe'), '/PID', String(SRV.pid)]], 'absolute path, no /F');
   const winBad = stopSetup({ platform: 'win32', runCode: 128 });
   t.after(winBad.cleanup);
   await rejects(winBad.ctl.stop({ id: 'ollama', ...SRV }), 502, /taskkill/);
   for (const s of [lms, app, svc, winOk]) assert.deepEqual(s.killer.sent(), [], 'no signal when a command stops it');
+});
+
+// ---- review fixes ----
+test('stop refuses an unapproved owner entry, audited, without any signal; the list offers no stop', async (t) => {
+  const owner = { id: 'sshd-ish', name: 'Owner entry', command: ['/usr/sbin/sshd'], port: 2222 };
+  const x = item({ entry: entries([owner]).find((e) => e.id === 'sshd-ish') });
+  const s = stopSetup({ x });
+  t.after(s.cleanup);
+  await rejects(s.ctl.stop({ id: 'sshd-ish', ...SRV }), 403, /approve it in Settings first/);
+  assert.deepEqual(s.killer.calls, []);
+  assert.deepEqual(s.audit.lines.map((l) => [l.action, l.ok, l.status]), [['stop', false, 403]]);
+  const [row] = await s.ctl.list();
+  assert.equal(row.canStop, false);
+  assert.equal(row.reason, 'approve it in Settings first');
+});
+
+test('two concurrent stops for one id: the second is a 409, audited', async (t) => {
+  const s = stopSetup({ killer: fakeKill({ exitOn: 'SIGINT' }) });
+  t.after(s.cleanup);
+  const first = s.ctl.stop({ id: 'ollama', ...SRV });
+  const second = s.ctl.stop({ id: 'ollama', ...SRV });
+  await rejects(second, 409, /already in progress/);
+  assert.deepEqual(await first, { state: 'stopped' });
+  assert.deepEqual(s.killer.sent(), ['SIGINT']);
+  assert.ok(s.audit.lines.some((l) => l.ok === false && l.status === 409));
+  // the guard is released afterwards
+  const later = await s.ctl.stop({ id: 'ollama', ...SRV }).then(() => null, (e) => e);
+  assert.notEqual(later && later.status, 409, 'not stuck in progress');
+});
+
+test('an unexpected failure inside stop or approve is audited with status 500 and rethrown', async (t) => {
+  const dir = tmp('zp-rt-500-');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const audit = recorder();
+  const boom = () => {
+    throw new Error('disk on fire at /Users/x');
+  };
+  const ctl = createRuntimeControl({
+    state: { one: boom, list: boom },
+    entries: () => entries([{ id: 'mine', name: 'Mine', command: ['/bin/true'], port: 9 }]),
+    dataDir: dir,
+    approvals: { read: () => ({}), write: boom },
+    audit,
+    inDocker: false,
+  });
+  await assert.rejects(ctl.stop({ id: 'ollama', ...SRV }), /disk on fire/);
+  await assert.rejects(ctl.start('ollama'), /disk on fire/);
+  await assert.rejects(ctl.approve('mine'), /disk on fire/);
+  assert.deepEqual(audit.lines.map((l) => [l.action, l.ok, l.status, l.error]), [
+    ['stop', false, 500, 'internal error'],
+    ['start', false, 500, 'internal error'],
+    ['approve', false, 500, 'internal error'],
+  ]);
+});
+
+test('a symlinked log is not written through, not read through, and a start is refused', { skip: !POSIX }, async (t) => {
+  const s = await realSetup();
+  t.after(s.cleanup);
+  const victim = path.join(s.dataDir, 'victim.txt');
+  fs.mkdirSync(path.join(s.dataDir, 'runtimes'), { recursive: true });
+  fs.writeFileSync(victim, 'secret line\n');
+  fs.symlinkSync(victim, path.join(s.dataDir, 'runtimes', 'fake-rt.log'));
+  assert.deepEqual(s.ctl.logTail('fake-rt'), [], 'not read through');
+  await rejects(s.ctl.start('fake-rt'), 502, /log file is not a regular file/);
+  assert.equal(fs.readFileSync(victim, 'utf8'), 'secret line\n', 'not written through');
+  assert.equal(s.spawned.length, 0);
+  assert.equal(s.audit.lines.at(-1).status, 502);
+});
+
+test('only a direct server start is recorded; a failed start leaves no record', async (t) => {
+  const mk = (extra) =>
+    realSetup({
+      extra: {
+        probe: async () => true,
+        spawn: () => {
+          const c = new EventEmitter();
+          c.pid = 4321;
+          c.unref = () => {};
+          process.nextTick(() => c.emit('spawn'));
+          return c;
+        },
+        ...extra,
+      },
+    });
+  const direct = await mk();
+  t.after(direct.cleanup);
+  await direct.ctl.start('fake-rt');
+  assert.equal(direct.started.read()['fake-rt'].pid, 4321);
+  const launcher = await mk({
+    state: {
+      one: async () => item({ entry: LMSTUDIO, running: false, pid: null, startTime: null, how: null, startArgv: ['/x/lms', 'server', 'start'], stopArgv: ['/x/lms', 'server', 'stop'] }),
+    },
+  });
+  t.after(launcher.cleanup);
+  await launcher.ctl.start('lmstudio');
+  assert.deepEqual(launcher.started.read(), {});
+  const open = await mk({
+    state: { one: async () => item({ running: false, pid: null, startTime: null, how: null, startArgv: ['/usr/bin/open', '-a', '/Applications/Ollama.app'] }) },
+  });
+  t.after(open.cleanup);
+  await open.ctl.start('ollama');
+  assert.deepEqual(open.started.read(), {});
+  const bad = await realSetup({ mode: '--fail' });
+  t.after(bad.cleanup);
+  await rejects(bad.ctl.start('fake-rt'), 502, /exited with code 3/);
+  assert.deepEqual(bad.started.read(), {});
+});
+
+test('ZAAFPULSE_* is not passed on to a started runtime', { skip: !POSIX }, async (t) => {
+  process.env.ZAAFPULSE_TEST_SECRET = 'hunter2';
+  t.after(() => delete process.env.ZAAFPULSE_TEST_SECRET);
+  const seen = [];
+  const s = await realSetup({
+    extra: {
+      probe: async () => true,
+      spawn: (cmd, args, opts) => {
+        seen.push(opts.env);
+        const c = new EventEmitter();
+        c.pid = 4321;
+        c.unref = () => {};
+        process.nextTick(() => c.emit('spawn'));
+        return c;
+      },
+    },
+  });
+  t.after(s.cleanup);
+  await s.ctl.start('fake-rt');
+  assert.ok(seen[0].PATH !== undefined || process.env.PATH === undefined);
+  assert.ok(!Object.keys(seen[0]).some((k) => k.startsWith('ZAAFPULSE_')));
+});
+
+test('a stop command that never exits resolves as a failure after its own timer', async (t) => {
+  const dir = tmp('zp-rt-hang-');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const killed = [];
+  const ctl = createRuntimeControl({
+    state: { one: async () => item({ stopArgv: ['/x/ollama', 'stop'] }), list: async () => [] },
+    dataDir: dir,
+    audit: recorder(),
+    spawn: () => Object.assign(new EventEmitter(), { kill: () => killed.push('SIGTERM') }), // never closes
+    inDocker: false,
+    commandTimeoutMs: 30,
+  });
+  await rejects(ctl.stop({ id: 'ollama', ...SRV }), 502, /stop command failed/);
+  assert.deepEqual(killed, ['SIGTERM']);
 });
