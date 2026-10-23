@@ -404,13 +404,48 @@ test('two concurrent stops for one id: the second is a 409, audited', async (t) 
   t.after(s.cleanup);
   const first = s.ctl.stop({ id: 'ollama', ...SRV });
   const second = s.ctl.stop({ id: 'ollama', ...SRV });
-  await rejects(second, 409, /already in progress/);
+  await rejects(second, 409, /^a stop is still in progress; try again shortly$/);
   assert.deepEqual(await first, { state: 'stopped' });
   assert.deepEqual(s.killer.sent(), ['SIGINT']);
   assert.ok(s.audit.lines.some((l) => l.ok === false && l.status === 409));
   // the guard is released afterwards
   const later = await s.ctl.stop({ id: 'ollama', ...SRV }).then(() => null, (e) => e);
   assert.notEqual(later && later.status, 409, 'not stuck in progress');
+});
+
+test('a start that is still running makes a second start a 409 that names the start', async (t) => {
+  const s = await realSetup();
+  t.after(s.cleanup);
+  const first = s.ctl.start('fake-rt');
+  await rejects(s.ctl.start('fake-rt'), 409, /^a start is still in progress; try again shortly$/);
+  assert.deepEqual(await first, { state: 'running' });
+});
+
+test('stop commands run with the same environment as the started runtime', async (t) => {
+  process.env.ZAAFPULSE_TEST_SECRET = 'hunter2';
+  t.after(() => delete process.env.ZAAFPULSE_TEST_SECRET);
+  const seen = [];
+  const dir = tmp('zp-rt-stopenv-');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const ctl = createRuntimeControl({
+    state: { one: async () => item({ stopArgv: ['/x/lms', 'server', 'stop'], entry: LMSTUDIO, how: 'app' }), list: async () => [] },
+    dataDir: dir,
+    audit: recorder(),
+    spawn: (cmd, args, opts) => {
+      seen.push(opts.env);
+      const c = new EventEmitter();
+      process.nextTick(() => c.emit('close', 0));
+      return c;
+    },
+    probe: async () => false,
+    inDocker: false,
+    graceMs: 20,
+    stopWaitMs: 40,
+    pollMs: 5,
+  });
+  await ctl.stop({ id: 'lmstudio', ...SRV });
+  assert.equal(seen.length, 1);
+  assert.ok(!Object.keys(seen[0]).some((k) => k.startsWith('ZAAFPULSE_')));
 });
 
 test('an unexpected failure inside stop or approve is audited with status 500 and rethrown', async (t) => {
@@ -450,6 +485,30 @@ test('a symlinked log is not written through, not read through, and a start is r
   assert.equal(fs.readFileSync(victim, 'utf8'), 'secret line\n', 'not written through');
   assert.equal(s.spawned.length, 0);
   assert.equal(s.audit.lines.at(-1).status, 502);
+});
+
+test('a FIFO at the log path is never opened: logTail returns at once', { skip: !POSIX, timeout: 2000 }, async (t) => {
+  const s = await realSetup();
+  t.after(s.cleanup);
+  const log = path.join(s.dataDir, 'runtimes', 'fake-rt.log');
+  fs.mkdirSync(path.dirname(log), { recursive: true });
+  const made = require('child_process').spawnSync('mkfifo', [log]);
+  if (made.error || made.status !== 0) return t.skip('mkfifo is not available');
+  assert.deepEqual(s.ctl.logTail('fake-rt'), [], 'no hang on a FIFO');
+});
+
+test('a hard-linked log is not read, and a start is refused', { skip: !POSIX }, async (t) => {
+  const s = await realSetup();
+  t.after(s.cleanup);
+  const victim = path.join(s.dataDir, 'victim.txt');
+  const log = path.join(s.dataDir, 'runtimes', 'fake-rt.log');
+  fs.mkdirSync(path.dirname(log), { recursive: true });
+  fs.writeFileSync(victim, 'secret line\n');
+  fs.linkSync(victim, log);
+  assert.deepEqual(s.ctl.logTail('fake-rt'), [], 'not read');
+  await rejects(s.ctl.start('fake-rt'), 502, /log file is not a regular file/);
+  assert.equal(fs.readFileSync(victim, 'utf8'), 'secret line\n', 'not written');
+  assert.equal(s.spawned.length, 0);
 });
 
 test('only a direct server start is recorded; a failed start leaves no record', async (t) => {
