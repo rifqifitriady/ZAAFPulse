@@ -791,7 +791,7 @@ test('wrong types, missing fields and { error } objects in place of lists give a
   assert.equal(codex.model, null);
   const call = u.requests.find((r) => r.source === 'router');
   assert.deepEqual(call.path, ['router:omniroute', 'provider:other']);
-  assert.equal(call.ok, false, 'a status that is not a number is not ok');
+  assert.equal(call.ok, true, 'a status that is not a number is not a failure');
 });
 
 const HOSTILE = [
@@ -871,6 +871,42 @@ test('a string status counts as a number', () => {
     NOW,
   );
   assert.ok(t.requests.length === 2 && t.requests.every((q) => q.ok));
+});
+
+test('a router call or gateway request with no status is ok, as on the Squad page', () => {
+  const t = buildTopology(
+    input({
+      gateway: {
+        providers: [{ id: 'a', preset: 'anthropic', enabled: true }],
+        usage: [
+          { ts: NOW - MIN, provider: 'a', model: 'claude-3' },
+          { ts: NOW - 2 * MIN, provider: 'a', model: 'claude-3', error: 'boom' },
+        ],
+      },
+      routers: [
+        omni({
+          calls: [
+            { ts: NOW - 3 * MIN, model: 'gpt-5', provider: 'openai' },
+            { ts: NOW - 4 * MIN, status: '', model: 'gpt-5', provider: 'openai' },
+            { ts: NOW - 5 * MIN, status: 502, model: 'gpt-5', provider: 'openai' },
+          ],
+        }),
+      ],
+    }),
+    NOW,
+  );
+  assert.deepEqual(
+    t.requests.map((q) => [q.source, q.ok]),
+    [
+      ['gateway', true],
+      ['gateway', false],
+      ['router', true],
+      ['router', true],
+      ['router', false],
+    ],
+  );
+  assert.equal(node(t, 'router:omniroute').status, 'active');
+  assert.equal(node(t, 'provider:openai').status, 'active');
 });
 
 test('a tool routed to a hop that is not a node falls back to direct', () => {
