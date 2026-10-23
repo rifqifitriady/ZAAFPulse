@@ -42,6 +42,10 @@ const { createChannels, checkWebhookUrl, parseHeaders } = require('./lib/monitor
 const { createMonitorApi } = require('./lib/monitors/api');
 const { createMonitors } = require('./lib/monitors');
 const { createAgentControl } = require('./lib/agents/control');
+const runtimeRegistry = require('./lib/runtimes/registry');
+const { createRuntimeState, jsonFile } = require('./lib/runtimes/state');
+const { createRuntimeControl } = require('./lib/runtimes/control');
+const { createRuntimeApi } = require('./lib/runtimes/api');
 const { isRef } = require('./lib/secrets');
 const { createPriceSync } = require('./lib/price-sync');
 const { createOpenRouter } = require('./lib/openrouter');
@@ -564,6 +568,34 @@ const monitorApi = createMonitorApi({
   notifyOff: NOTIFY_OFF,
   home: os.homedir(),
 });
+// Local model servers (lib/runtimes): Start and Stop on the AI Office cards, and the owner's own runtimes in
+// config.json "localRuntimes" (Settings → Local models). Off wherever agent control is off (server mode, password
+// sign-in) and in Docker. Demo mode answers from synthetic runtimes and starts nothing.
+const runtimeDir = DEMO ? demoDir : path.join(DIR, '.data');
+const runtimeEntries = () => runtimeRegistry.entries(rawConfig().localRuntimes);
+const runtimeStarted = jsonFile(path.join(runtimeDir, 'runtimes', 'started.json'));
+const runtimeControl = createRuntimeControl({
+  state: createRuntimeState({ entries: runtimeEntries, started: runtimeStarted }),
+  entries: runtimeEntries,
+  dataDir: runtimeDir,
+  started: runtimeStarted,
+  serverMode: AGENTS_OFF,
+  log: (m) => console.error(m),
+});
+const runtimeApi = createRuntimeApi({
+  control: runtimeControl,
+  config: {
+    list: () => rawConfig().localRuntimes,
+    save: (list) => {
+      const raw = { ...rawConfig(), localRuntimes: list };
+      fs.writeFileSync(`${CONFIG_FILE}.tmp`, JSON.stringify(raw, null, 2));
+      fs.renameSync(`${CONFIG_FILE}.tmp`, CONFIG_FILE);
+      rawCache = { mtime: fs.statSync(CONFIG_FILE).mtimeMs, value: raw };
+    },
+  },
+  demo: DEMO ? demo.runtimesDemo() : null,
+  home: os.homedir(),
+});
 // Each pass catches its own failures; this catch is the last line, so a pass can never break a refresh.
 const monitorTick = () =>
   Promise.resolve()
@@ -986,6 +1018,16 @@ const handler = async (req, res) => {
         method: req.method,
         path: url.pathname,
         query: url.searchParams,
+        contentType: req.headers['content-type'],
+        readBody: () => readBody(req),
+      });
+      if (hit) return send(res, hit.status, hit.body);
+    }
+    // Local model servers: Start, Stop and the owner's entries, behind the same sign-in. Only ids reach the server.
+    {
+      const hit = await runtimeApi.route({
+        method: req.method,
+        path: url.pathname,
         contentType: req.headers['content-type'],
         readBody: () => readBody(req),
       });
