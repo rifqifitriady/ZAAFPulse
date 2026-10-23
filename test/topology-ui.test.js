@@ -433,4 +433,8 @@ test('the Overview holds the section above AI Office and the page loads the scri
   for (const s of ['active', 'recent', 'error', 'idle']) assert.match(css, new RegExp(`--topo-${s}: var\\(--`));
   for (const s of ['active', 'recent', 'error']) assert.match(css, new RegExp(`\\.topo-node\\.topo-${s} \\.topo-box`));
   assert.match(css, /@media \(max-width: 900px\)[^{]*\{[^}]*\.topo\b/);
+  // `inherit` is valid in the font shorthand only alone; `font: 600 16px/1 inherit` drops the whole declaration.
+  for (const [, v] of css.matchAll(/(?:^|[;{\s])font:\s*([^;}]+)/g))
+    if (/\binherit\b/.test(v)) assert.equal(v.trim(), 'inherit', `font: ${v}`);
+  assert.match(css, /\.topo-zbtn \{[^}]*font-family: inherit;[^}]*\}/);
 });
