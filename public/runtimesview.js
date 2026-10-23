@@ -171,7 +171,9 @@ function rtCard(doc, r, ui = {}, iconHtml = '') {
 }
 
 /* ---------- browser side ---------- */
-const RT = { list: null, ui: {}, err: '' };
+// `ui` holds each runtime's busy flag and message by id. No prototype: an id such as `constructor` passes the id
+// pattern and must get a slot of its own, not the inherited Object function.
+const RT = { list: null, ui: Object.create(null), err: '' };
 
 // fetch with the server's { error, log } and status kept, so a failed start can show its log lines.
 async function rtApi(path, body) {
@@ -488,4 +490,5 @@ if (typeof module !== 'undefined')
     rtEntryFromForm,
     rtFormFromEntry,
     rtEntryRow,
+    RT,
   };

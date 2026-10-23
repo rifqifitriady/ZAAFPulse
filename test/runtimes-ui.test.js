@@ -160,3 +160,10 @@ test('runtimesview.js builds no HTML from server text (S1)', () => {
     assert.doesNotMatch(t, /\$\{/, `a template with markup takes a value: ${t.slice(0, 60)}`);
   assert.match(src, /\.textContent = text/);
 });
+
+test('the per-runtime UI state has no prototype, so an id such as constructor stays its own slot', () => {
+  const { RT } = require('../public/runtimesview');
+  assert.equal(Object.getPrototypeOf(RT.ui), null);
+  assert.equal(RT.ui.constructor, undefined);
+  assert.equal(RT.ui.__proto__, undefined);
+});
