@@ -667,6 +667,12 @@ test('monitor api: server mode refuses agent routes; demo answers without the co
     },
   });
   assert.equal((await demo.call(`/api/agents/candidates?key=${KEY}`)).body.candidates.length, 1);
+  // A session no agent runs (a gateway one) says so in demo mode too, so the explorer stays quiet for it.
+  assert.deepEqual((await demo.call(`/api/agents/candidates?key=kiro.${'b'.repeat(32)}`)).body, {
+    candidates: [],
+    canPause: true,
+    reason: 'unsupported',
+  });
   for (const a of ['pause', 'resume', 'stop']) {
     const r = await demo.post(`/api/agents/${a}`, { key: KEY, pid: 4242, startTime: 1000, confirm: true });
     assert.equal(r.status, 200);
