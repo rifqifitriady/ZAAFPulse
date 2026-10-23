@@ -413,7 +413,7 @@ test('owner entries: invalid ones keep their reason and cannot start', () => {
 });
 
 test('commandHash changes with the command; storedEntry keeps only the stored fields', () => {
-  const a = commandHash(QWEN.command);
+  const a = commandHash(QWEN);
   assert.match(a, /^[0-9a-f]{64}$/);
   assert.equal(commandHash([...QWEN.command]), a);
   assert.notEqual(commandHash([...QWEN.command.slice(0, -1), '8082']), a);
@@ -1356,7 +1356,7 @@ async function realSetup({ mode, approve = true, healthWaitMs = 10000, extra = {
   const dataDir = path.join(dir, '.data');
   const started = jsonFile(path.join(dataDir, 'runtimes', 'started.json'));
   const approvals = jsonFile(path.join(dataDir, 'runtimes', 'approved.json'));
-  if (approve) approvals.write({ 'fake-rt': commandHash(config[0].command) });
+  if (approve) approvals.write({ 'fake-rt': commandHash(config[0]) });
   const spawned = [];
   const spawn = (...a) => {
     const c = realSpawn(...a);
@@ -1533,7 +1533,7 @@ test('refusals: unknown, unapproved, server mode, Docker, not installed; each is
   assert.equal(row.reason, 'approve it in Settings first');
   // Approving stores a hash of the command; a changed command asks again.
   assert.deepEqual(await s.ctl.approve('fake-rt'), { approved: true });
-  assert.equal(s.approvals.read()['fake-rt'], commandHash(s.config[0].command));
+  assert.equal(s.approvals.read()['fake-rt'], commandHash(s.config[0]));
   assert.equal((await s.ctl.list())[0].canStart, true);
   s.config[0].command = [...s.config[0].command, '--verbose'];
   assert.equal((await s.ctl.list())[0].approved, false);
@@ -1555,7 +1555,7 @@ test('refusals: unknown, unapproved, server mode, Docker, not installed; each is
   const missing = await realSetup();
   t.after(missing.cleanup);
   missing.config[0].command = [path.join(os.tmpdir(), 'zp-no-such-runtime'), '--port', String(missing.port)];
-  missing.approvals.write({ 'fake-rt': commandHash(missing.config[0].command) });
+  missing.approvals.write({ 'fake-rt': commandHash(missing.config[0]) });
   await rejects(missing.ctl.start('fake-rt'), 409, /not installed/);
   for (const a of [s, server, docker, missing])
     for (const l of a.audit.lines) {
@@ -1800,7 +1800,7 @@ function createRuntimeControl({
       ...extra,
     });
 
-  const approved = (e) => e.preset || (!e.error && approvedFile.read()[e.id] === commandHash(e.command));
+  const approved = (e) => e.preset || (!e.error && approvedFile.read()[e.id] === commandHash(e));
   const logFile = (id) => path.join(dir, `${id}.log`);
 
   // The last lines of a runtime's log, masked; [] when there is none.
@@ -2082,7 +2082,7 @@ function createRuntimeControl({
     if (e.preset) throw refuse(400, 'a preset needs no approval');
     if (e.error) throw refuse(409, `the entry is not valid: ${e.error}`);
     const ok = approvedFile.read();
-    ok[e.id] = commandHash(e.command);
+    ok[e.id] = commandHash(e);
     approvedFile.write(ok);
     record('approve', e.id, { ok: true });
     return { approved: true };
