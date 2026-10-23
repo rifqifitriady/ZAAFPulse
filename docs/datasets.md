@@ -252,7 +252,8 @@ task_completion  local/qwen3  66.7% (8/12)   >= 0.70   FAIL
 - `--model` may repeat, up to 3 times. `--max-cost` and `--max-requests` take the ranges of the caps above.
 - `--require` takes `>=` or `>` and a number from 0 to 1. **Quote every `--require`**: an unquoted `>` is a shell
   redirect and would write a file instead of passing the requirement. With no `--require`, only the free code
-  evaluators run (`reference_match`, `secret_leak`, `risky_command`) and nothing is gated.
+  evaluators run (`reference_match`, `secret_leak`, `risky_command`) and no pass rate is gated; `--ci` still exits 1
+  when the run stops early or every replay of a model failed.
 - A value flag with no value (for example a trailing `--require`, or `--dataset --ci`) is a configuration error, not a
   pass.
 - `--data DIR` is the data folder (the one that holds `config.json` and `.data/`), as for `zaafpulse start`. Without it
