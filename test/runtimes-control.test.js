@@ -113,7 +113,9 @@ async function realSetup({ mode, approve = true, healthWaitMs = 10000, extra = {
         /* gone */
       }
     }
-    fs.rmSync(dir, { recursive: true, force: true });
+    // On Windows a server that was just sent SIGTERM still holds its working folder and log open for a moment:
+    // removing the folder then fails with EPERM or EBUSY, which rmSync retries.
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   };
   return { ctl, state, started, approvals, audit, spawned, dataDir, port, config, cleanup };
 }
