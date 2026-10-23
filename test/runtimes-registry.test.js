@@ -116,3 +116,59 @@ test('commandHash changes with the command; storedEntry keeps only the stored fi
   assert.deepEqual(storedEntry(e), { ...QWEN, health: 'http://127.0.0.1:8081/' });
   assert.deepEqual(storedEntry({ ...e, health: null }), QWEN);
 });
+
+test('presets match the program, not a word in the arguments', () => {
+  const m = (id, ...rows) => rows.map((r) => preset(id).match(r));
+  const none = (id, ...rows) => assert.deepEqual(m(id, ...rows), rows.map(() => false), `${id}: ${rows.map((r) => r.args)}`);
+  none('ollama', row('vim /Users/u/dev/ollama serve'), row('sudo /usr/local/bin/ollama serve'), row('env FOO=1 ollama serve'),
+    row('nohup ollama serve'), row('/bin/zsh -c ollama serve'), row('tail -f /var/log/ollama serve'), row('ollama serve-me'));
+  none('llamacpp', row('code /Users/u/dev/llama-server'), row('tail -f /var/log/llama-server'),
+    row('/usr/bin/vim /opt/homebrew/bin/llama-server'), row('sudo llama-server -m /m.gguf'));
+  none('localai', row('vim /x/local-ai'), row('/Applications/Visual Studio Code.app/Contents/MacOS/Electron /Users/u/Github/local-ai'),
+    row('sudo local-ai run'));
+  none('lmstudio', row('vim /Applications/LM Studio.app/Contents/MacOS/LM Studio'),
+    row('/usr/bin/open /Applications/LM Studio.app/Contents/MacOS/LM Studio'), row('less /Users/u/.lmstudio/bin/llmster'));
+  none('jan', row('vim /Applications/Jan.app/Contents/MacOS/Jan'));
+  // With argv the program is argv[0] whole, spaces included; the same rules hold.
+  const lms = '/Applications/LM Studio.app/Contents/MacOS/LM Studio';
+  assert.ok(preset('lmstudio').match(row(lms, [lms])));
+  none('lmstudio', row(`vim ${lms}`, ['vim', lms]));
+  assert.ok(preset('ollama').match(row('/opt/homebrew/bin/ollama serve', ['/opt/homebrew/bin/ollama', 'serve'])));
+  none('ollama', row('sudo /usr/local/bin/ollama serve', ['sudo', '/usr/local/bin/ollama', 'serve']),
+    row('/opt/homebrew/bin/ollama runner', ['/opt/homebrew/bin/ollama', 'runner']));
+  assert.ok(preset('ollama').match(row('C:\\Program Files\\Ollama\\ollama.exe serve')), 'a Windows path with spaces');
+  assert.ok(preset('ollama').match(row('/opt/homebrew/bin/ollama serve')));
+  assert.ok(preset('localai').match(row('/usr/local/bin/local-ai', ['/usr/local/bin/local-ai'])));
+});
+
+test('presets: start and stop commands cannot be changed', () => {
+  assert.throws(() => preset('ollama').start.push('x'), TypeError);
+  assert.throws(() => preset('lmstudio').stop.push('x'), TypeError);
+  assert.deepEqual(preset('ollama').start, ['ollama', 'serve']);
+});
+
+test('owner entries: an empty program, a non-string id, and control characters are errors', () => {
+  const err = (raw) => ownerEntries([raw])[0].error;
+  assert.match(err({ ...QWEN, command: ['/'] }), /start with a program/);
+  assert.match(err({ ...QWEN, command: ['foo/'] }), /start with a program/);
+  assert.match(err({ ...QWEN, command: ['C:\\bin\\'] }), /start with a program/);
+  assert.match(err({ ...QWEN, command: ['llama-server', 'a\nb'] }), /line break or a NUL/);
+  assert.match(err({ ...QWEN, command: ['llama-server', 'a\rb'] }), /line break or a NUL/);
+  assert.match(err({ ...QWEN, command: ['llama-server', 'a\0b'] }), /line break or a NUL/);
+  assert.match(err({ ...QWEN, id: ['ollama'] }), /id must be/);
+  assert.match(err({ ...QWEN, id: 5 }), /id must be/);
+  assert.match(err({ ...QWEN, id: ['qwen-local'] }), /id must be/);
+  assert.equal(ownerEntries([{ ...QWEN, id: ['x'] }])[0].id, 'entry-1');
+});
+
+test('commandHash covers the command, the port and the health URL of an entry', () => {
+  const [e] = ownerEntries([QWEN]);
+  const base = commandHash(e);
+  assert.match(base, /^[0-9a-f]{64}$/);
+  assert.equal(commandHash(QWEN), base, 'the raw config object and the checked entry agree');
+  assert.equal(commandHash({ ...QWEN, health: 'http://127.0.0.1:8081/' }), base, 'the default health URL is the same as none');
+  assert.notEqual(commandHash({ ...QWEN, command: [...QWEN.command, '-v'] }), base);
+  assert.notEqual(commandHash({ ...QWEN, port: 8082 }), base);
+  assert.notEqual(commandHash({ ...QWEN, health: 'http://127.0.0.1:8081/health' }), base);
+  assert.notEqual(commandHash(QWEN.command), base, 'a bare command is not an entry');
+});
