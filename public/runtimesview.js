@@ -344,7 +344,7 @@ function rtEntryRow(doc, e) {
   row.setAttribute('data-rt-entry', e.id);
   const main = rtEl(doc, 'div', 'rt-entry-main');
   main.appendChild(rtEl(doc, 'b', '', rtText(e.name, 60) || e.id));
-  // The command is null while control is off (server mode, Docker): nothing to show.
+  // The command is null while control is off (server mode, no sign-in, Docker): nothing to show.
   if (Array.isArray(e.command))
     main.appendChild(rtEl(doc, 'code', 'rt-cmd', e.command.join(' ').slice(0, 1000)));
   const port = Number.isInteger(e.port) ? ` · port ${e.port}` : '';

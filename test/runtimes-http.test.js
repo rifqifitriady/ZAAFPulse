@@ -1,5 +1,5 @@
-// /api/runtimes through a spawned server.js: demo data and demo actions, the owner's entries saved to config.json,
-// the sign-in gate (gateway keys refused) and control off with password sign-in. Nothing here starts a runtime: the
+// /api/runtimes through a spawned server.js: demo data and demo actions, the owner's entries saved to config.json
+// (local sign-in), the sign-in gate (gateway keys refused) and control off with password sign-in and without sign-in. Nothing here starts a runtime: the
 // only start is in demo mode, and the real server is asked to start an entry that is not approved.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -10,6 +10,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { createGateway } = require('../lib/gateway');
 const { detectDocker } = require('../lib/agents/control');
+const { localLoginCode } = require('../lib/auth');
 const { secretsFor, NO_JUDGE_PORTS } = require('./helpers');
 
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
@@ -105,6 +106,14 @@ function client(base, headers = {}) {
   const post = (p, body, extra = JSON_HEADERS) => call(p, { method: 'POST', body, extra });
   return { call, post, bodies };
 }
+// Runtime control needs a sign-in: local sign-in, with a one-time code written into the server's data folder as
+// `zaafpulse open` does, swapped for the cookie.
+const LOCAL = { ZAAFPULSE_AUTH: 'local' };
+async function signedIn(s) {
+  const r = await fetch(`${s.base}/auth/local?code=${localLoginCode(s.data)}`, { redirect: 'manual' });
+  assert.equal(r.status, 200, 'local sign-in');
+  return client(s.base, { cookie: r.headers.get('set-cookie').split(';')[0] });
+}
 
 test('runtimes over HTTP: demo runtimes, demo start and stop, approve, nothing saved', async () => {
   const s = await startServer({ DEMO: '1', ZAAFPULSE_AUTH: 'none' });
@@ -142,8 +151,8 @@ test('runtimes over HTTP: demo runtimes, demo start and stop, approve, nothing s
 test('runtimes over HTTP: an owner entry is saved to config.json, listed, and starts only once approved', async () => {
   const data = tmp('zp-rt-http-cfg-');
   fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ userName: 'Kept' }));
-  const s = await startServer({ ZAAFPULSE_AUTH: 'none' }, { data });
-  const c = client(s.base);
+  const s = await startServer(LOCAL, { data });
+  const c = await signedIn(s);
   try {
     const entry = { id: 'fake-llm', name: 'Fake', command: ['zp-no-such-program', '--port', '18081'], port: 18081 };
     const saved = await c.post('/api/runtimes/save', { entry });
@@ -186,8 +195,8 @@ test('runtimes over HTTP: a config.json that does not parse is refused, never ov
   const file = path.join(data, 'config.json');
   const broken = '{ "userName": "Kept", "gateway": { "port": 4000 }, }\n';
   fs.writeFileSync(file, broken);
-  const s = await startServer({ ZAAFPULSE_AUTH: 'none' }, { data });
-  const c = client(s.base);
+  const s = await startServer(LOCAL, { data });
+  const c = await signedIn(s);
   try {
     const entry = { id: 'fake-llm', command: ['zp-no-such-program', '--port', '18081'], port: 18081 };
     const saved = await c.post('/api/runtimes/save', { entry });
@@ -204,8 +213,8 @@ test('runtimes over HTTP: a config.json that does not parse is refused, never ov
 test('runtimes over HTTP: a save writes config.json with mode 0600', { skip: process.platform === 'win32' }, async () => {
   const data = tmp('zp-rt-http-mode-');
   fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ userName: 'Kept' }), { mode: 0o644 });
-  const s = await startServer({ ZAAFPULSE_AUTH: 'none' }, { data });
-  const c = client(s.base);
+  const s = await startServer(LOCAL, { data });
+  const c = await signedIn(s);
   try {
     const entry = { id: 'fake-llm', command: ['zp-no-such-program', '--port', '18081'], port: 18081 };
     assert.equal((await c.post('/api/runtimes/save', { entry })).status, 200);
@@ -261,6 +270,46 @@ test('runtimes over HTTP: sign-in only, gateway keys refused, control off with p
     assert.equal((await c.post('/api/runtimes/stop', { id: 'ollama', pid: 4242, startTime: 1 })).status, 403);
     assert.equal((await c.post('/api/runtimes/approve', { id: 'ollama' })).status, 403);
     for (const who of [c, anon, bearer]) noPaths(who.bodies);
+  } finally {
+    await s.stop();
+  }
+});
+
+test('runtimes over HTTP: without sign-in (ZAAFPULSE_AUTH=none, no demo) runtime control is off', async () => {
+  const data = tmp('zp-rt-http-none-');
+  const file = path.join(data, 'config.json');
+  const qwen = { id: 'qwen-local', command: ['llama-server', '-m', 'qwen.gguf', '--port', '18082'], port: 18082 };
+  const before = JSON.stringify({ userName: 'Kept', localRuntimes: [qwen] });
+  fs.writeFileSync(file, before);
+  const s = await startServer({ ZAAFPULSE_AUTH: 'none' }, { data });
+  const c = client(s.base);
+  const OFF = 'runtime control is off because this dashboard runs without sign-in';
+  try {
+    const entry = { id: 'evil', command: ['zp-no-such-program', '--port', '18081'], port: 18081 };
+    for (const [p, body] of [
+      ['/api/runtimes/save', { entry }],
+      ['/api/runtimes/delete', { id: 'qwen-local' }],
+      ['/api/runtimes/approve', { id: 'qwen-local' }],
+      ['/api/runtimes/start', { id: 'qwen-local' }],
+      ['/api/runtimes/stop', { id: 'qwen-local', pid: 4242, startTime: 1 }],
+    ]) {
+      const r = await c.post(p, body);
+      assert.equal(r.status, 403, p);
+      assert.equal(r.json.error, OFF, p);
+    }
+    assert.equal(fs.readFileSync(file, 'utf8'), before, 'config.json is untouched');
+    const list = await c.call('/api/runtimes');
+    assert.equal(list.status, 200);
+    assert.ok(list.json.length > 0);
+    for (const r of list.json) {
+      assert.equal(r.canStart, false);
+      assert.equal(r.canStop, false);
+      assert.equal(r.reason, OFF);
+    }
+    const cfg = (await c.call('/api/runtimes/config')).json;
+    assert.equal(cfg.off, OFF);
+    assert.equal(cfg.entries[0].command, null, 'the commands are hidden');
+    noPaths(c.bodies);
   } finally {
     await s.stop();
   }
