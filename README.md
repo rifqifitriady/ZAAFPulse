@@ -793,6 +793,7 @@ docs/evals.md          local evals and feedback: evaluators, local judge, caps, 
 docs/datasets.md       datasets, replay and the CI gate: shapes, limits, privacy, API, recipes
 docs/release-hardening.md tag ruleset and immutable releases
 docs/monitors.md       monitors, alerts, webhook, pausing an agent: rules, channels, limits, API
+docs/local-models.md   starting and stopping local model servers: runtimes, your own entries, safety, API
 docs/assets/           README banner, diagrams, screenshots and GIFs
 ```
 </details>
@@ -825,6 +826,7 @@ Apart from the sign-in routes in the first row, every `/api` route needs a signe
 | `GET /api/trace/sources` · `sessions` · `title` · `session` · `content` · `live` · `find` · `POST /api/trace/reveal` | the Trace explorer: sessions of every source, one turn as spans, and their text on request, masked; see [docs/explorer.md](docs/explorer.md#http-api) |
 | `GET /api/evals` · `summary` · `status` · `evaluators` · `settings` · `POST /api/evals/run` · `settings` · `preview` · `GET /api/feedback` · `sessions` · `POST /api/feedback` | local evals and feedback: results per session, trends and judge agreement, the judge's status, settings, the external preview, and your ratings and notes; see [docs/evals.md](docs/evals.md#http-api) |
 | `GET /api/datasets` · `POST /api/datasets` · `/api/datasets/<slug>` · `…/examples` · `…/export` · `POST /api/datasets/import` · `/api/datasets/settings` · `GET /api/experiments` · `POST /api/experiments` | datasets of saved turns, import and export, the auto-add rule, and replay experiments; see [docs/datasets.md](docs/datasets.md#http-api) |
+| `GET /api/runtimes` · `/api/runtimes/config` · `POST /api/runtimes/start` · `stop` · `approve` · `save` · `delete` | local model servers: Start and Stop in AI Office and your own runtimes in Settings; see [docs/local-models.md](docs/local-models.md#api) |
 | `POST /api/rescan` | re-index changed log files now |
 | `GET /api/integrations` | integration health, client registration and recent MCP tool calls |
 | `POST /api/integrations/test` | fresh health check of one integration (`{ "id": "..." }`) |

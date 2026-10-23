@@ -665,7 +665,7 @@ function squadCards(limit) {
     return `<div class="card agent">
       <div class="agent-top"><span class="agent-icon chip ${meta.chip}">${icon(meta.icon, 18)}</span>
         <div><div class="agent-name">${meta.name}</div><div class="agent-role">${meta.role}</div></div></div>
-      <div class="status ${statusCls}"><i></i>${statusText}</div>
+      <div class="status ${statusCls}"><i></i>${statusText}</div>${RT_CARD_IDS.includes(id) ? `<div class="rt-slot" data-rt-slot="${id}"></div>` : ''}
       <p class="agent-desc">${meta.desc}</p>${tags}
       <div class="agent-stats">${stats}</div></div>`;
   });
@@ -752,6 +752,7 @@ async function viewSettings(el) {
   </div>
   ${evalsSettingsShell()}
   ${monitorsSettingsShell()}
+  ${runtimesSettingsShell()}
   <section class="holo panel" id="prices-panel" style="margin-top:16px"><div class="skeleton" style="height:220px"></div></section></div>`;
 
   $('#profile-form').onsubmit = async (e) => {
@@ -774,6 +775,7 @@ async function viewSettings(el) {
   };
   mountEvalsSettings();
   mountMonitorsSettings();
+  mountRuntimesSettings();
   loadPrices().catch((err) => {
     $('#prices-panel').innerHTML = holoEmpty(`Could not load prices: ${esc(err.message)}`);
   });
