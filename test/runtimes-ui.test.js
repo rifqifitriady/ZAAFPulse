@@ -15,6 +15,7 @@ const {
   rtCardPlan,
   rtActionRow,
   rtCard,
+  rtModelsText,
 } = require('../public/runtimesview');
 
 const SRC = path.join(__dirname, '..', 'public', 'runtimesview.js');
@@ -175,4 +176,46 @@ test('styles: hidden wins over .btn in the runtimes form, and the command box sh
   assert.ok(m, 'a rule for the command textarea');
   assert.match(m[1], /height: auto;/);
   assert.match(m[1], /min-height: 7\.5em;/);
+});
+
+// Models are loaded again on Start (lib/runtimes/models.js): the line under the action row says which.
+const M = (over = {}) => ({ remembered: ['llama3.2:3b'], loading: false, loaded: [], failed: [], ...over });
+
+test('rtModelsText: what a Start reloads, what is loading, what loaded and what could not', () => {
+  const stopped = (models) => R({ running: false, canStart: true, models });
+  assert.equal(rtModelsText(stopped(M())), 'Start reloads llama3.2:3b');
+  assert.equal(rtModelsText(stopped(M({ remembered: ['a', 'b'] }))), 'Start reloads a and b');
+  assert.equal(rtModelsText(stopped(M({ remembered: ['a', 'b', 'c', 'd'] }))), 'Start reloads a, b and 2 more');
+  assert.equal(rtModelsText(stopped(M({ remembered: [] }))), '');
+  assert.equal(rtModelsText(R({ models: M({ loading: true }) })), 'Loading llama3.2:3b…');
+  assert.equal(rtModelsText(R({ models: M({ loaded: ['llama3.2:3b'] }) })), 'Model loaded: llama3.2:3b');
+  assert.equal(rtModelsText(R({ models: M({ loaded: ['a', 'b'] }) })), 'Models loaded: a and b');
+  assert.equal(
+    rtModelsText(R({ models: M({ loaded: ['a'], failed: [{ name: 'b', error: 'not found' }] }) })),
+    'Model loaded: a. Could not load b (not found)',
+  );
+  assert.equal(rtModelsText(R({ models: M() })), '', 'running with nothing reloaded says nothing');
+  assert.equal(rtModelsText(R({ models: null })), '');
+  assert.equal(rtModelsText(R()), '');
+  assert.equal(rtModelsText(null), '');
+});
+
+test('the start result and the Stop confirmation name the reload', () => {
+  // The models line says what is loading and stays current; the result does not repeat it and go stale.
+  assert.equal(rtResultText('start', { state: 'running', reloading: ['llama3.2:3b'] }), 'Started.');
+  assert.equal(rtResultText('start', { state: 'running', reloading: [] }), 'Started.');
+  assert.equal(
+    rtConfirmText(R({ models: M() })),
+    'Stop Ollama? Its models are unloaded now and loaded again on the next Start.',
+  );
+  assert.equal(rtConfirmText(R({ models: null })), 'Stop Ollama? Models it has loaded are unloaded.');
+});
+
+test('the action row shows the models line as text', () => {
+  const evil = '<b>x</b>';
+  const row = rtActionRow(fakeDoc(), R({ running: false, canStart: true, models: M({ remembered: [evil] }) }));
+  const line = flat(row).find((n) => n.className && n.className.includes('rt-models'));
+  assert.equal(line.textContent, `Start reloads ${evil}`);
+  const none = rtActionRow(fakeDoc(), R({ models: null }));
+  assert.ok(!flat(none).some((n) => n.className && n.className.includes('rt-models')));
 });

@@ -142,6 +142,38 @@ function floorAgents() {
 }
 
 /* ---------- page ---------- */
+// The live part of an Installed AI tools card: its status line and, for a tool without logs, CPU, memory and uptime
+// (a tool with logs shows its sessions, tokens and cost instead: stats is null). r is its row of the live apps.
+function squadLive(r, installed, t) {
+  return {
+    cls: r ? 'running' : installed ? 'idle' : 'off',
+    text: r
+      ? `Running now · ${r.processes} process${r.processes === 1 ? '' : 'es'}`
+      : t && t.lastActive
+        ? `Idle · last active ${ago(t.lastActive)}`
+        : 'Installed · not running',
+    stats: t ? null : [r ? r.cpu.toFixed(1) + '%' : '—', r ? fmtN(r.memMB) + ' MB' : '—', r ? dur(r.uptimeSec) : '—'],
+  };
+}
+
+// Brings the drawn cards under `root` up to date with the live data, in place and as text: the page is drawn once,
+// but a server started or stopped from a card (or outside) changes what it should say.
+function squadPatch(root, live, tools) {
+  if (!root || !live) return;
+  const running = Object.fromEntries((live.apps || []).map((a) => [a.id, a]));
+  for (const card of root.querySelectorAll('[data-app-card]')) {
+    const id = card.dataset.appCard;
+    const s = squadLive(running[id], (live.installed || []).includes(id), (tools || []).find((x) => x.id === id));
+    const status = card.querySelector('.status');
+    if (status) {
+      status.className = `status ${s.cls}`;
+      if (status.lastChild && status.lastChild.nodeType === 3) status.lastChild.nodeValue = s.text;
+    }
+    const bs = card.querySelectorAll('.agent-stats b');
+    if (s.stats && bs.length === 3) s.stats.forEach((v, i) => (bs[i].textContent = v));
+  }
+}
+
 function viewSquad() {
   const s = squadCards(99);
   return `<div class="holo-deck">${subTabs('squad')}
