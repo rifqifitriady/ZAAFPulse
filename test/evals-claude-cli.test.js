@@ -183,7 +183,7 @@ test('call: it runs in a fresh empty folder that is gone afterwards', async () =
 test('call: structured_output, or result alone, is the text; usage, cost and model are reported', async () => {
   const t = rig();
   const r = await judge(t);
-  assert.deepEqual(r.usage, { input: 1602, output: 40, cost: 0.0005 });
+  assert.deepEqual(r.usage, { input: 1602, output: 40, cost: 0.0005, cacheRead: 100, cacheWrite: 1500 });
   assert.equal(r.model, 'claude-haiku-5-5', 'the model that cost the most');
 
   const res = await judge(rig('result'));
