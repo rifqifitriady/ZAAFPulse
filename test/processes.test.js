@@ -56,6 +56,24 @@ test('isOwn: this process, anything run from the ZAAFPulse folder and the judge 
   );
 });
 
+test('groupApps: Kiro CLI.app and its kiro_cli programs count as Kiro; look-alike paths do not', () => {
+  const r = (pid, args) => ({ pid, cpu: 1, rssKB: 1024, upSec: 5, args });
+  const id = (args) => (groupApps([r(8, args)])[0] || {}).id || null;
+  assert.equal(id('/Applications/Kiro CLI.app/Contents/MacOS/kiro_cli_desktop'), 'kiro');
+  assert.equal(id('/Users/u/Applications/Kiro CLI.app/Contents/MacOS/kiro_cli_desktop --hidden'), 'kiro');
+  assert.equal(id('/Applications/Kiro CLI.app/Contents/Frameworks/Kiro Helper.app/Contents/MacOS/Kiro Helper'), 'kiro');
+  assert.equal(id('/usr/local/bin/kiro_cli chat'), 'kiro');
+  assert.equal(id('kiro_cli_desktop'), 'kiro');
+  assert.equal(id('/Applications/Kiro.app/Contents/MacOS/Kiro'), 'kiro');
+  assert.equal(id('/opt/homebrew/bin/kiro-cli chat'), 'kiro');
+  assert.equal(id('/Applications/NotKiro CLI.app/Contents/MacOS/x'), null);
+  assert.equal(id('/Users/u/code/my-kiro_cli-fork/run.sh'), null);
+  assert.equal(id('vim /Users/u/notes/kiro_cli_notes.md'), null);
+  assert.equal(id('/usr/bin/python3 /srv/mykiro_cli/app.py'), null);
+  const { APPS } = require('../lib/processes');
+  assert.ok(APPS.find((a) => a.id === 'kiro').paths.includes('/Applications/Kiro CLI.app'));
+});
+
 test('procRows: argv keeps each argument whole, spaces included', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-procargv-'));
   fs.writeFileSync(path.join(root, 'uptime'), '1000.00 900.00');
