@@ -162,50 +162,71 @@ function makeUnreadable(file) {
   };
 }
 
-test('store: a month that does not read is never written; the others load and flush; it catches up once it reads', () => {
+const unreadCode = (e) => e.code === L.UNREAD;
+
+test('store: a month that does not read is unavailable: it throws, is never written, and the others still work', () => {
   const dir = path.join(tmp(), 'cost');
   const seed = L.createLedgerStore({ dir });
   seed.load();
-  for (const d of ['01', '02', '03']) seed.put(row(`2026-09-${d}`));
+  for (const d of ['01', '02']) seed.put(row(`2026-09-${d}`));
   for (const d of ['01', '02']) seed.put(row(`2026-10-${d}`));
   seed.flush();
   const sep = path.join(dir, 'ledger-2026-09.jsonl');
   const oct = path.join(dir, 'ledger-2026-10.jsonl');
+  const octBytes = fs.readFileSync(oct);
   const lineCount = (f) => fs.readFileSync(f, 'utf8').trim().split('\n').length;
-  const u = makeUnreadable(sep);
+  const u = makeUnreadable(oct);
   try {
     const s = L.createLedgerStore({ dir });
     assert.throws(
       () => s.load(),
-      (e) => !e.message.includes(dir) && !e.message.includes('ledger-2026'),
+      (e) => unreadCode(e) && e.message === 'ledger month 2026-10 could not be read' && !e.message.includes(dir),
     );
-    assert.equal(s.day('2026-10-01').length, 1, 'the month after the failed one still loads');
-    assert.deepEqual(s.unread(), ['2026-09']);
-    s.put(row('2026-09-04'));
-    s.remove(row('2026-09-01'));
-    s.put(row('2026-10-03'));
-    assert.throws(() => s.flush(), 'the error stays while a month is unread');
-    assert.equal(lineCount(oct), 3, 'a month that read is written');
+    assert.deepEqual(s.unread(), ['2026-10']);
+    assert.throws(() => s.put(row('2026-10-03')), unreadCode);
+    assert.throws(() => s.get(row('2026-10-01')), unreadCode, 'not answered from an empty memory');
+    assert.throws(() => s.day('2026-10-01'), unreadCode);
+    assert.throws(() => s.remove(row('2026-10-01')), unreadCode);
+    s.put(row('2026-09-03'));
+    assert.throws(() => s.flush(), unreadCode, 'the error stays while a month is unavailable');
+    assert.equal(lineCount(sep), 3, 'a readable month is written');
+    // The reader view skips the month and says so, so the dashboard still shows the others.
+    const v = s.view('2026-09-01', '2026-10-31');
+    assert.deepEqual(v.map((r) => r.day).sort(), ['2026-09-01', '2026-09-02', '2026-09-03']);
+    assert.deepEqual(v.unread, ['2026-10']);
+    assert.deepEqual(L.groupRows(v, { groupBy: ['day'] }).unread, ['2026-10']);
+    assert.deepEqual(s.view('2026-09-01', '2026-09-30').unread, []);
+    assert.equal(s.earliestDay('claude'), '2026-09-01', 'a later unavailable month cannot hold an earlier day');
+    assert.throws(() => s.earliestDay('codex'), unreadCode, 'it could, when nothing earlier was found');
+    const before = { listUSD: 1, billedUSD: 1, priceVersion: 1, center: 'unassigned', unpriced: false };
+    const c = (day) => ({
+      ts: 1,
+      from: day,
+      to: day,
+      reason: 'r',
+      priceVersion: 2,
+      rows: [{ key: L.rowKey(row(day)), before, after: { ...before, listUSD: 2, priceVersion: 2 } }],
+    });
+    assert.throws(() => s.addCorrection(c('2026-10-01')), unreadCode, 'a restate over a partial view is refused');
+    s.addCorrection(c('2026-09-01'));
+    if (!u.byMode) assert.ok(fs.statSync(oct).isDirectory());
     u.restore();
-    assert.equal(lineCount(sep), 3, 'the blocked month is unchanged on disk');
-    s.flush(); // it reads now: the held put and remove land on top of the file
+    assert.deepEqual(fs.readFileSync(oct), octBytes, 'the unavailable month is byte-identical on disk');
+    s.flush(); // reads it now: nothing was held, so nothing is replayed
     assert.deepEqual(s.unread(), []);
+    assert.equal(s.day('2026-10-01').length, 1);
+    s.put(row('2026-10-03'));
+    s.flush();
     const again = L.createLedgerStore({ dir });
     again.load();
-    assert.deepEqual(
-      again
-        .range('2026-09-01', '2026-09-30')
-        .map((r) => r.day)
-        .sort(),
-      ['2026-09-02', '2026-09-03', '2026-09-04'],
-    );
     assert.equal(again.range('2026-10-01', '2026-10-31').length, 3);
+    assert.equal(again.range('2026-09-01', '2026-09-30').length, 3);
   } finally {
-    if (u.byMode) fs.chmodSync(sep, 0o600); // so the temp folder can be cleaned up
+    if (u.byMode && fs.existsSync(oct)) fs.chmodSync(oct, 0o600); // so the temp folder can be cleaned up
   }
 });
 
-test('store: a flush before any load reads the folder first, so the rows on disk are kept', () => {
+test('store: before a load every month is unavailable; a flush lists the folder and then it works', () => {
   const dir = path.join(tmp(), 'cost');
   const seed = L.createLedgerStore({ dir });
   seed.load();
@@ -213,12 +234,61 @@ test('store: a flush before any load reads the folder first, so the rows on disk
   seed.put(row('2026-10-02'));
   seed.flush();
   const s = L.createLedgerStore({ dir });
+  assert.throws(
+    () => s.put(row('2026-10-03')),
+    (e) => unreadCode(e) && e.message === 'the ledger folder could not be read',
+  );
+  assert.deepEqual(s.unread(), ['folder', 'corrections']);
+  assert.deepEqual(s.view('2026-09-30', '2026-10-31').unread, ['2026-09', '2026-10', 'corrections']);
+  s.flush();
+  assert.deepEqual(s.unread(), []);
   s.put(row('2026-10-03'));
-  // flush reads the folder first, so the held put lands on top of the two rows on disk.
   s.flush();
   const again = L.createLedgerStore({ dir });
   again.load();
   assert.equal(again.range('2026-10-01', '2026-10-31').length, 3);
+});
+
+test('store: corrections that do not read refuse a new correction but leave the months writable', () => {
+  const dir = path.join(tmp(), 'cost');
+  const seed = L.createLedgerStore({ dir });
+  seed.load();
+  const base = row('2026-10-01');
+  seed.put(base);
+  seed.flush();
+  const before = { listUSD: 1, billedUSD: 1, priceVersion: 1, center: 'unassigned', unpriced: false };
+  const c = {
+    ts: 1,
+    from: '2026-10-01',
+    to: '2026-10-01',
+    reason: 'r',
+    priceVersion: 2,
+    rows: [{ key: L.rowKey(base), before, after: { ...before, listUSD: 2, priceVersion: 2 } }],
+  };
+  seed.addCorrection(c);
+  const file = path.join(dir, 'corrections.jsonl');
+  const u = makeUnreadable(file);
+  try {
+    const s = L.createLedgerStore({ dir });
+    assert.throws(
+      () => s.load(),
+      (e) => e.code === L.CORRECTIONS_UNREAD && !e.message.includes(dir),
+    );
+    assert.deepEqual(s.unread(), ['corrections']);
+    assert.deepEqual(s.view('2026-10-01', '2026-10-01').unread, ['corrections']);
+    s.put(row('2026-10-02'));
+    s.flush(); // the months are safe to write
+    assert.throws(
+      () => s.addCorrection(c),
+      (e) => e.code === L.CORRECTIONS_UNREAD,
+    );
+    u.restore();
+    s.flush();
+    assert.deepEqual(s.unread(), []);
+    assert.equal(s.view('2026-10-01', '2026-10-01')[0].listUSD, 2, 'the earlier restate shows once it reads');
+  } finally {
+    if (u.byMode && fs.existsSync(file)) fs.chmodSync(file, 0o600);
+  }
 });
 
 test('store: a second load before a flush does not set the same bad lines aside again', () => {
