@@ -292,3 +292,39 @@ test('readNew: a first line longer than 4096 bytes still names the file, so its 
     [2, 3],
   );
 });
+
+test('readNew: on the first run, a rotation between the current file and .1 does not read one generation twice', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-cost-first-'));
+  const f = path.join(dir, 'log.jsonl');
+  const L = (n) => JSON.stringify({ n }) + '\n';
+  fs.writeFileSync(f + '.1', L(1) + L(2));
+  fs.writeFileSync(f, L(3) + L(4));
+  // The rotation happens as the reader opens .1: the current file (3, 4) becomes .1, replacing (1, 2) on disk.
+  const real = fs.openSync;
+  let fired = false;
+  fs.openSync = (p, ...rest) => {
+    if (!fired && p === f + '.1') {
+      fired = true;
+      fs.renameSync(f, f + '.1');
+      fs.writeFileSync(f, L(5));
+    }
+    return real(p, ...rest);
+  };
+  let r;
+  try {
+    r = C.readNew(f, undefined);
+  } finally {
+    fs.openSync = real;
+  }
+  assert.ok(fired, 'the rotation happened during the pass');
+  const seen = r.rows.map((x) => x.n);
+  for (const more of [L(6), L(7)]) {
+    fs.appendFileSync(f, more);
+    r = C.readNew(f, r.cursor);
+    seen.push(...r.rows.map((x) => x.n));
+  }
+  r = C.readNew(f, r.cursor);
+  seen.push(...r.rows.map((x) => x.n));
+  // 1 and 2 were deleted by the rotation before they could be read; every line still on disk comes out once.
+  assert.deepEqual(seen, [3, 4, 5, 6, 7]);
+});
