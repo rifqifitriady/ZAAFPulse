@@ -348,7 +348,6 @@ test('an unreadable month stops every pass that needs it: no cursor moves, the f
     assert.doesNotMatch(JSON.stringify(st), /Users|zp-cost-pass/);
     const after = cursorsOf(r.costDir);
     assert.deepEqual(after.gateway, before.gateway, 'the gateway cursor stays before the lines that were not stored');
-    assert.deepEqual(after.plans, before.plans);
     assert.deepEqual(again.ledger({ from: '2026-10-01', to: '2026-10-31' }).unread, ['2026-10']);
   } finally {
     u.restore();
@@ -367,7 +366,12 @@ test('an unreadable month stops every pass that needs it: no cursor moves, the f
   const fresh = r.make();
   fresh.update();
   assert.deepEqual(requestsBy(fresh, '2026-10-22', 'source'), want);
-  assert.equal(stored(r.costDir).filter((x) => x.kind === 'plan').length, 1);
+  assert.equal(stored(r.costDir).filter((x) => x.kind === 'plan').length, 0, 'plan rows are never stored');
+  const plans = rowsOf(fresh, '2026-10-22', '2026-10-22', ['source', 'kind']).filter((x) => x.kind === 'plan');
+  assert.deepEqual(
+    plans.map((x) => [x.source, x.billedUSD]),
+    [['codex', 1]],
+  );
 });
 
 test('an unreadable past month stops only the collector that needs it, and all of its lines wait together', () => {
@@ -559,7 +563,7 @@ test('a retag merges rows that come to share a key without losing any', () => {
   assert.equal(r.cost.status().ledger.error, null);
 });
 
-test('usage on a day the server was off is not billed for a plan even when the plan step cannot run yet', () => {
+test('usage on a day the server was off is not billed for a plan, also while a month does not read', () => {
   const sepAt = (d) => new Date(2026, 8, d, 12).getTime();
   const r = rig({ settings: { billing: { claude: { mode: 'plan', plan: 'Max', feeUSD: 300, period: 'month' } } } });
   r.st.t = sepAt(29);
@@ -581,4 +585,157 @@ test('usage on a day the server was off is not billed for a plan even when the p
   again.update();
   for (const d of ['2026-09-30', '2026-10-01', '2026-10-02']) assert.equal(planOf(again, d, 'claude').length, 1, d);
   assert.equal(useOf(again, '2026-10-01', 'claude').billedUSD, 0);
+});
+
+// Billed once, per source per day: a plan day has exactly one plan row and its usage is billed 0; a metered day has
+// no plan row and its usage is billed at list. Returns { day: { source: 'plan' | 'metered' } } for days with either.
+function billedOnce(cost, from, to) {
+  const rows = rowsOf(cost, from, to, ['day', 'source', 'kind']);
+  const out = {};
+  for (const x of rows) (out[x.day] = out[x.day] || {})[x.source] = null;
+  for (const [day, bySource] of Object.entries(out))
+    for (const source of Object.keys(bySource)) {
+      const mine = rows.filter((x) => x.day === day && x.source === source);
+      const plans = mine.filter((x) => x.kind === 'plan');
+      assert.ok(plans.length <= 1, `${day} ${source}: ${plans.length} plan rows`);
+      for (const u of mine.filter((x) => x.kind !== 'plan'))
+        if (plans.length) assert.equal(u.billedUSD, 0, `${day} ${source}: usage billed on a plan day`);
+        else near(u.billedUSD, u.listUSD);
+      bySource[source] = plans.length ? 'plan' : 'metered';
+    }
+  return out;
+}
+const MAX = { mode: 'plan', plan: 'Max', feeUSD: 310, period: 'month' };
+
+test('a first pass whose log index fails, recovered on a later day: every day of use is billed once, on the plan', () => {
+  const r = rig({ settings: { billing: { claude: MAX } }, day: 20 });
+  r.st.entries = {
+    [Symbol.iterator]() {
+      throw Object.assign(new Error('index'), { code: 'EIO' });
+    },
+  };
+  r.cost.update();
+  r.st.t = at(21);
+  r.st.entries = [file('a', [ev(at(18), 'm1'), ev(at(20), 'm2'), ev(at(21), 'm3')])];
+  r.cost.update();
+  const b = billedOnce(r.cost, '2026-10-18', '2026-10-21');
+  for (const d of ['2026-10-18', '2026-10-19', '2026-10-20', '2026-10-21']) assert.equal(b[d].claude, 'plan', d);
+  near(r.cost.ledger({ from: '2026-10-18', to: '2026-10-21' }).totals.billedUSD, 40);
+});
+
+test('a late event on a backfilled day is billed with the billing that day had', () => {
+  const r = rig({ settings: { billing: { claude: MAX } } });
+  r.st.entries.push(file('a', [ev(at(15), 'm1')]));
+  r.cost.update(); // first run: the plan applies from the first use, the 15th
+  r.st.t = at(23);
+  r.st.entries.push(file('late', [ev(at(10), 'm9'), ev(at(15, 18), 'm8')]));
+  r.cost.update();
+  const b = billedOnce(r.cost, '2026-10-10', '2026-10-23');
+  assert.equal(b['2026-10-10'].claude, 'metered', 'before the plan was recorded');
+  near(useOf(r.cost, '2026-10-10', 'claude').billedUSD, 0.003);
+  assert.equal(b['2026-10-15'].claude, 'plan');
+  assert.equal(useOf(r.cost, '2026-10-15', 'claude').requests, 2);
+
+  const m = rig(); // metered history, then a switch to a plan
+  m.st.entries.push(file('a', [ev(at(15), 'm1')]));
+  m.cost.update();
+  m.st.t = at(23);
+  m.st.settings = { billing: { claude: MAX } };
+  m.st.entries.push(file('late', [ev(at(15, 18), 'm8')]));
+  m.cost.update();
+  const mb = billedOnce(m.cost, '2026-10-15', '2026-10-23');
+  assert.equal(mb['2026-10-15'].claude, 'metered');
+  near(useOf(m.cost, '2026-10-15', 'claude').billedUSD, 0.006);
+  assert.equal(mb['2026-10-23'].claude, 'plan');
+  assert.equal(planOf(m.cost, '2026-10-22', 'claude').length, 0, 'the switch applies from the day it was seen');
+});
+
+test('a plan changed while a month could not be read: each day is billed once, by the billing it had', () => {
+  const sepAt = (d) => new Date(2026, 8, d, 12).getTime();
+  const r = rig({ settings: { billing: { claude: MAX } } });
+  r.st.t = sepAt(29);
+  r.st.entries.push(file('a', [ev(sepAt(29), 'm1')]));
+  r.cost.update();
+  r.st.t = at(2);
+  r.st.entries = [file('off', [ev(at(1), 'm2')])];
+  const u = makeUnreadable(path.join(r.costDir, 'ledger-2026-09.jsonl'));
+  let again;
+  try {
+    again = r.make();
+    again.update();
+  } finally {
+    u.restore();
+  }
+  r.st.settings = {}; // switched to metered on the 2nd
+  r.st.entries.push(file('today', [ev(at(2, 13), 'm3')]));
+  again.update();
+  const b = billedOnce(again, '2026-09-29', '2026-10-02');
+  for (const d of ['2026-09-29', '2026-09-30', '2026-10-01']) assert.equal(b[d].claude, 'plan', d);
+  assert.equal(b['2026-10-02'].claude, 'metered');
+  assert.equal(useOf(again, '2026-10-01', 'claude').billedUSD, 0);
+});
+
+test('a switch saved shortly before midnight bills that day by the new setting, with no pass in between', () => {
+  for (const [before, after, want] of [
+    [{ claude: MAX }, {}, 'metered'],
+    [{}, { claude: MAX }, 'plan'],
+  ]) {
+    const r = rig({ settings: { billing: before } });
+    r.st.t = at(22, 23, 50);
+    r.st.entries.push(file('a', [ev(at(21), 'm1'), ev(at(22), 'm2')]));
+    r.cost.update();
+    r.st.settings = { billing: after };
+    r.st.t = at(22, 23, 55);
+    r.cost.retag();
+    r.st.t = at(23, 0, 5);
+    r.cost.update();
+    const b = billedOnce(r.cost, '2026-10-21', '2026-10-23');
+    assert.equal(b['2026-10-22'].claude, want, JSON.stringify(after));
+    assert.equal(b['2026-10-21'].claude, before.claude ? 'plan' : 'metered', 'the day before keeps its billing');
+    assert.equal(planOf(r.cost, '2026-10-23', 'claude').length, want === 'plan' ? 1 : 0);
+  }
+});
+
+test('a billing restate re-bills its range when read; the rest keeps its billing', () => {
+  const r = rig();
+  r.st.entries.push(file('a', [ev(at(20), 'm1'), ev(at(21), 'm2'), ev(at(22), 'm3')]));
+  r.cost.update();
+  r.cost.addBillingOverride({ source: 'claude', from: '2026-10-20', to: '2026-10-21', billing: MAX });
+  assert.throws(() => r.cost.addBillingOverride({ source: 'claude', from: '2026-10-21', to: '2026-10-20', billing: MAX }), TypeError);
+  for (const c of [r.cost, r.make()]) {
+    const b = billedOnce(c, '2026-10-20', '2026-10-22');
+    assert.deepEqual([b['2026-10-20'].claude, b['2026-10-21'].claude, b['2026-10-22'].claude], ['plan', 'plan', 'metered']);
+    near(c.ledger({ from: '2026-10-20', to: '2026-10-22' }).totals.billedUSD, 20.003);
+    assert.equal(c.billingHistory().overrides.length, 1);
+  }
+});
+
+test('plan rows in storage (an older format) are ignored: plans come from the billing history only', () => {
+  const L = require('../lib/cost/ledger');
+  const r = rig();
+  r.st.entries.push(file('a', [ev(at(21), 'm1')]));
+  r.cost.update();
+  const old = L.planRow('2026-10-21', 'claude', MAX, false);
+  fs.appendFileSync(path.join(r.costDir, 'ledger-2026-10.jsonl'), JSON.stringify(old) + '\n');
+  const c = r.make();
+  c.update();
+  assert.equal(planOf(c, '2026-10-21', 'claude').length, 0);
+  near(useOf(c, '2026-10-21', 'claude').billedUSD, 0.003);
+  assert.equal(c.status().backfill.rows, 1);
+});
+
+test('invalid saved settings do not rewrite the billing history', () => {
+  const r = rig({ settings: { billing: { claude: MAX } } });
+  r.st.entries.push(file('a', [ev(at(22), 'm1')]));
+  r.cost.update();
+  r.st.settings = { billing: { claude: { mode: 'plan' } } }; // a hand edit that does not validate
+  r.st.t = at(23);
+  assert.match(r.cost.update().settings.error, /invalid/);
+  r.cost.retag();
+  const claude = r.cost.billingHistory().entries.filter((e) => e.source === 'claude');
+  assert.deepEqual(
+    claude.map((e) => [e.from, e.billing.mode]),
+    [['2026-10-22', 'plan']],
+  );
+  assert.equal(billedOnce(r.cost, '2026-10-22', '2026-10-23')['2026-10-23'].claude, 'plan');
 });
