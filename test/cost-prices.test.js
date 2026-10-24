@@ -23,7 +23,11 @@ test('observe: the first prices are version 1; equal prices add nothing; a chang
   t = 2000;
   const v2 = p.observe({ m: { input: 1, output: 3 }, n: { input: 5 } }, '2026-10-22');
   assert.deepEqual([v2.id, v2.from, v2.at, v2.changed, v2.changedCount], [2, '2026-10-22', 2000, ['m', 'n'], 2]);
-  assert.equal(p.versionFor('2026-10-01').id, 1, 'before the first version: the first (history priced on the first run)');
+  assert.equal(
+    p.versionFor('2026-10-01').id,
+    1,
+    'before the first version: the first (history priced on the first run)',
+  );
   assert.equal(p.versionFor('2026-10-21').id, 1);
   assert.equal(p.versionFor('2026-10-22').id, 2);
   assert.equal(p.versionFor('2026-12-01').id, 2);
@@ -83,4 +87,65 @@ test('writePrivate: 0600, replaces the file, and leaves no temp file', () => {
   assert.deepEqual(fs.readdirSync(dir), ['x.json']);
   if (process.platform !== 'win32') assert.equal(mode(file), 0o600);
   assert.equal(hashOf({ a: 1, b: 2 }), hashOf({ b: 2, a: 1 }), 'key order does not change the hash');
+});
+
+test('writePrivate tightens an existing looser folder to 0700', { skip: process.platform === 'win32' }, () => {
+  const dir = path.join(tmp(), 'prices');
+  fs.mkdirSync(dir, { mode: 0o755 });
+  fs.chmodSync(dir, 0o755);
+  createPriceVersions({ dir }).observe({ m: { input: 1 } }, '2026-10-21');
+  assert.equal(mode(dir), 0o700);
+});
+
+test('a corrupt versions.json is kept aside and rebuilt from the bodies; ids never reuse a body file', () => {
+  const dir = path.join(tmp(), 'prices');
+  const p = createPriceVersions({ dir });
+  p.observe({ m: { input: 1 } }, '2026-10-20');
+  p.observe({ m: { input: 2 } }, '2026-10-21');
+  const before = [1, 2].map((i) => fs.readFileSync(path.join(dir, `${i}.json`), 'utf8'));
+  fs.writeFileSync(path.join(dir, 'versions.json'), '{ truncated');
+  const again = createPriceVersions({ dir });
+  assert.deepEqual(
+    again.list().map((v) => [v.id, v.from, v.changed]),
+    [
+      [1, '2026-10-20', []],
+      [2, '2026-10-21', ['m']],
+    ],
+  );
+  assert.ok(fs.existsSync(path.join(dir, 'versions.json.bad')));
+  assert.equal(again.problems().length, 1);
+  assert.ok(!again.problems().join('').includes(dir), 'no path in the report');
+  assert.equal(again.observe({ m: { input: 3 } }, '2026-10-22').id, 3);
+  assert.deepEqual(
+    [1, 2].map((i) => fs.readFileSync(path.join(dir, `${i}.json`), 'utf8')),
+    before,
+  );
+  fs.writeFileSync(path.join(dir, 'versions.json'), '[1]');
+  createPriceVersions({ dir });
+  assert.ok(fs.existsSync(path.join(dir, 'versions.json.bad.1')), 'a unique name when .bad exists');
+});
+
+test('unusable bodies and entries are dropped and reported; nothing throws', () => {
+  const dir = path.join(tmp(), 'prices');
+  const p = createPriceVersions({ dir });
+  p.observe({ m: { input: 1 } }, '2026-10-20');
+  p.observe({ m: { input: 2 } }, '2026-10-21');
+  p.observe({ m: { input: 3 } }, '2026-10-22');
+  p.observe({ m: { input: 4 } }, '2026-10-23');
+  fs.writeFileSync(path.join(dir, '2.json'), 'null');
+  fs.rmSync(path.join(dir, '3.json'));
+  const idx = JSON.parse(fs.readFileSync(path.join(dir, 'versions.json'), 'utf8'));
+  delete idx.versions[3].changed;
+  fs.writeFileSync(path.join(dir, 'versions.json'), JSON.stringify(idx));
+  const again = createPriceVersions({ dir });
+  assert.deepEqual(
+    again.list().map((v) => v.id),
+    [1, 4],
+  );
+  assert.ok(Array.isArray(again.list()[1].changed));
+  assert.equal(again.versionFor('2026-10-22').id, 1, 'falls back to the previous usable version');
+  assert.equal(again.problems().length, 2);
+  assert.ok(!again.problems().join('').includes(dir));
+  near(sum(again.pricerFor(1).parts('m', 1000, 0, 0, 0, 0, null)), 0.001);
+  assert.equal(again.observe({ m: { input: 5 } }, '2026-10-24').id, 5);
 });
