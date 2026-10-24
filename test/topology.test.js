@@ -198,6 +198,29 @@ test('the local runtimes are drawn as runtimes, not as tools', () => {
   assert.ok(edge(t, 'zaafpulse>runtime:ollama'), 'a running runtime hangs off the hub');
 });
 
+test('a desktop app runtime (kind app) is not drawn as a runtime: it stays a tool', () => {
+  const t = buildTopology(
+    input({
+      live: { apps: [{ id: 'claude-desktop' }], installed: ['claude-desktop', 'chatgpt'] },
+      runtimes: [
+        { id: 'ollama', kind: 'server', name: 'Ollama', running: true, healthy: true, port: 11434, models: null },
+        { id: 'claude-desktop', kind: 'app', name: 'Claude Desktop', running: true, healthy: true, port: null, models: null },
+        { id: 'chatgpt', kind: 'app', name: 'ChatGPT', running: false, healthy: false, port: null, models: null },
+      ],
+    }),
+    NOW,
+  );
+  assert.deepEqual(
+    t.nodes.filter((n) => n.layer === 0).map((n) => n.id),
+    ['claude-desktop', 'chatgpt'],
+  );
+  assert.equal(node(t, 'claude-desktop').status, 'active', 'a running tool');
+  assert.equal(node(t, 'runtime:claude-desktop'), undefined);
+  assert.equal(node(t, 'runtime:chatgpt'), undefined);
+  assert.ok(node(t, 'runtime:ollama'));
+  assert.equal(node(t, HUB).note, '1 runtime');
+});
+
 test('Codex pointed at OmniRoute goes through the hub to the router, and its log turns are left out of the requests', () => {
   const t = buildTopology(
     input({

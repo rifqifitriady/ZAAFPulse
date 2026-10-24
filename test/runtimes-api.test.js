@@ -12,6 +12,7 @@ const QWEN = {
 const ROW = {
   id: 'ollama',
   name: 'Ollama',
+  kind: 'server',
   preset: true,
   installed: true,
   running: true,
@@ -80,6 +81,18 @@ test('GET /api/runtimes lists the runtimes with the fields the page uses', async
   assert.equal((await call('GET', '/api/runtimes/nope')).status, 404);
   assert.equal((await call('POST', '/api/runtimes')).status, 405);
   assert.equal((await call('GET', '/api/runtimes/start')).status, 405);
+});
+
+test('a row passes on kind: app for a desktop app, server otherwise', async () => {
+  const app = { ...ROW, id: 'claude-desktop', name: 'Claude Desktop', kind: 'app', port: null };
+  const odd = { ...ROW, id: 'odd', kind: 'something else' };
+  const noKind = { ...ROW, id: 'nokind', kind: undefined };
+  const r = await setup({ list: [app, odd, noKind] }).call('GET', '/api/runtimes');
+  assert.deepEqual(r.body.map((x) => [x.id, x.kind]), [
+    ['claude-desktop', 'app'],
+    ['odd', 'server'],
+    ['nokind', 'server'],
+  ]);
 });
 
 test('POST needs JSON, a JSON object and only known fields', async () => {

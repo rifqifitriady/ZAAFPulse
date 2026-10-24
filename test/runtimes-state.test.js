@@ -314,3 +314,60 @@ test('probe: an answer below 500 within the time counts; 503, a closed port and 
   await new Promise((r) => server.close(r));
   assert.equal(await probe(`${base}/api/version`), false);
 });
+
+// ---- the desktop apps (kind 'app'): installed from a fake app folder, running from fake rows ----
+test('an app is installed from a fake app folder; Kiro.app wins over Kiro CLI.app; Start opens the bundle found', { skip: process.platform === 'win32' }, async () => {
+  const apps = tmp('zp-rt-apps-');
+  for (const b of ['Claude.app', 'Kiro CLI.app', 'Kiro.app']) fs.mkdirSync(path.join(apps, b));
+  const { st } = stateOf([], { extra: { appDirs: [apps] } });
+  const x = byId(await st.list());
+  assert.equal(x['claude-desktop'].installed, true);
+  assert.deepEqual(x['claude-desktop'].startArgv, ['/usr/bin/open', '-a', path.join(apps, 'Claude.app')]);
+  assert.equal(x['claude-desktop'].running, false);
+  assert.equal(x['claude-desktop'].healthy, false);
+  assert.equal(x.chatgpt.installed, false);
+  assert.equal(x.chatgpt.startArgv, null);
+  assert.deepEqual(x.kiro.startArgv, ['/usr/bin/open', '-a', path.join(apps, 'Kiro.app')], 'Kiro.app first');
+  fs.rmSync(path.join(apps, 'Kiro.app'), { recursive: true });
+  const y = byId(await st.list());
+  assert.deepEqual(y.kiro.startArgv, ['/usr/bin/open', '-a', path.join(apps, 'Kiro CLI.app')], 'else Kiro CLI.app');
+  // A second app folder: the bundle order decides, not the folder order.
+  const home = tmp('zp-rt-home-apps-');
+  fs.mkdirSync(path.join(home, 'Kiro.app'));
+  const both = stateOf([], { extra: { appDirs: [apps, home] } });
+  assert.deepEqual(byId(await both.st.list()).kiro.startArgv, ['/usr/bin/open', '-a', path.join(home, 'Kiro.app')]);
+  // Off macOS no app is installed.
+  const linux = stateOf([], { platform: 'linux', extra: { appDirs: [apps] } });
+  assert.equal(byId(await linux.st.list())['claude-desktop'].installed, false);
+  for (const d of [apps, home]) fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('an app runs while its main process is there: healthy equals running, its helpers are children, no health URL is asked', async () => {
+  const asked = [];
+  const rows = [
+    row(84551, 1, '/Applications/Claude.app/Contents/MacOS/Claude', 900),
+    row(84581, 84551, '/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=utility'),
+    row(59799, 84551, '/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer) --type=renderer'),
+    row(3224, 1, '/Applications/Kiro CLI.app/Contents/MacOS/kiro_cli_desktop', 300),
+    row(4000, 1, '/Users/u/.local/bin/kiro-cli chat'),
+  ];
+  const { st } = stateOf(rows, { extra: { probe: async (u) => (asked.push(u), false) } });
+  const x = byId(await st.list());
+  const c = x['claude-desktop'];
+  assert.equal(c.running, true);
+  assert.equal(c.healthy, true, 'no health URL: healthy is running');
+  assert.equal(c.how, 'app');
+  assert.equal(c.appBundle, 'Claude.app');
+  assert.equal(c.pid, 84551);
+  assert.equal(c.startTime, startOf(900));
+  assert.equal(c.children, 2);
+  const k = x.kiro;
+  assert.equal(k.running, true);
+  assert.equal(k.pid, 3224, 'the app, not a kiro-cli session');
+  assert.equal(k.how, 'app');
+  assert.equal(k.appBundle, 'Kiro CLI.app', 'the bundle the running process is from');
+  assert.equal(x.chatgpt.running, false);
+  assert.equal(x.chatgpt.healthy, false);
+  assert.equal(x.chatgpt.appBundle, null);
+  assert.deepEqual(asked.filter((u) => !/^http:\/\/127\.0\.0\.1:(11434|1234|1337|8080)\//.test(u)), [], 'only model servers are probed');
+});
