@@ -148,3 +148,28 @@ test('plan fee per day, and the rate of a day', () => {
   assert.equal(R.rateFor(cur, '2026-09-30'), null);
   assert.equal(R.rateFor(null, '2026-10-22'), null);
 });
+
+test('globs: a pathological glob is matched in linear time', () => {
+  const long = '~/' + 'a/'.repeat(200) + 'b';
+  for (const glob of ['~/' + '**/'.repeat(20) + 'x', '~/' + '*a'.repeat(30), '~/' + '*a'.repeat(30) + '/**']) {
+    const re = R.globToRegExp(glob, { nocase: false });
+    const t0 = Date.now();
+    assert.equal(re.test(long), false);
+    assert.ok(Date.now() - t0 < 50, `${glob.slice(0, 20)} took ${Date.now() - t0} ms`);
+  }
+});
+
+test('validate: names that clash with object internals are rejected', () => {
+  const r = R.validate({
+    centers: [
+      { id: 'constructor', name: 'x' },
+      { id: 'a', name: 'A' },
+    ],
+    keyCenters: { ['__proto__']: 'a' },
+  });
+  assert.equal(r.ok, false);
+  assert.ok(r.errors.includes('centers[0].id: constructor is reserved'), r.errors.join('\n'));
+  const k = R.validate(JSON.parse('{"centers":[{"id":"a","name":"A"}],"keyCenters":{"__proto__":"a"}}'));
+  assert.equal(k.ok, false);
+  assert.ok(k.errors.includes('keyCenters: bad key id __proto__'), k.errors.join('\n'));
+});
