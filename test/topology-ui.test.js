@@ -72,12 +72,108 @@ test('topoLayout: an empty layer is skipped, a crowded one widens the drawing, j
   );
 });
 
+// The demo's shape: two tools, the hub, a router and a runtime, three providers and a model. The hub reaches Anthropic
+// and Google directly, past the router row.
+const HUB_NODES = [
+  N('claude', 0, 'active', { kind: 'tool' }),
+  N('codex', 0, 'active', { kind: 'tool' }),
+  N('zaafpulse', 1, 'active', { kind: 'hub' }),
+  N('router:omniroute', 2, 'error', { kind: 'router' }),
+  N('runtime:ollama', 2, 'active', { kind: 'runtime' }),
+  N('provider:anthropic', 3),
+  N('provider:openai', 3),
+  N('provider:google', 3),
+  N('model:ollama:llama', 3, 'idle', { kind: 'model' }),
+];
+const HUB_EDGES = [
+  E('claude', 'zaafpulse'),
+  E('codex', 'zaafpulse'),
+  E('zaafpulse', 'router:omniroute'),
+  E('zaafpulse', 'runtime:ollama'),
+  E('zaafpulse', 'provider:anthropic'),
+  E('router:omniroute', 'provider:openai'),
+  E('zaafpulse', 'provider:google'),
+  E('runtime:ollama', 'model:ollama:llama'),
+];
+
+test('topoLayout: four layers, with the hub wide, centred and alone in its row', () => {
+  for (const width of [1100, 390]) {
+    const out = topoLayout(HUB_NODES, HUB_EDGES, width, width > 900 ? 420 : 340);
+    const at = Object.fromEntries(out.nodes.map((n) => [n.id, n]));
+    const mid = (n) => n.x + n.w / 2;
+    const cy = (n) => n.y + n.h / 2;
+    assert.ok(cy(at.claude) < cy(at.zaafpulse), `${width}: tools above the hub`);
+    assert.ok(cy(at.zaafpulse) < cy(at['router:omniroute']), `${width}: the hub above the routers`);
+    assert.ok(cy(at['router:omniroute']) < cy(at['provider:openai']), `${width}: routers above the providers`);
+    assert.equal(cy(at['router:omniroute']), cy(at['runtime:ollama']));
+    const hub = at.zaafpulse;
+    const node = at.claude;
+    assert.ok(hub.w >= 1.5 * node.w, `${width}: the hub is about 1.6× as wide (${hub.w} vs ${node.w})`);
+    assert.ok(hub.h >= node.h, `${width}: and at least as tall`);
+    assert.ok(Math.abs(mid(hub) - out.width / 2) <= 1, `${width}: the hub sits in the middle`);
+    for (const n of out.nodes) {
+      assert.ok(n.x >= 0 && n.x + n.w <= out.width, `${width}: ${n.id} inside the width`);
+      assert.ok(n.y >= 0 && n.y + n.h <= out.height, `${width}: ${n.id} inside the height`);
+    }
+    // No two nodes of a row overlap.
+    for (const a of out.nodes)
+      for (const b of out.nodes)
+        if (a !== b && cy(a) === cy(b)) assert.ok(a.x + a.w <= b.x || b.x + b.w <= a.x, `${a.id} and ${b.id}`);
+  }
+});
+
+test('topoLayout: edges meet the hub on its top and bottom, spread apart, and pass the router row between nodes', () => {
+  const out = topoLayout(HUB_NODES, HUB_EDGES, 1100, 420);
+  const at = Object.fromEntries(out.nodes.map((n) => [n.id, n]));
+  const hub = at.zaafpulse;
+  const pts = (d) => [...d.matchAll(/(-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)/g)].map((m) => [Number(m[1]), Number(m[2])]);
+  const ends = Object.fromEntries(
+    out.edges.map((e) => {
+      const p = pts(e.d);
+      return [e.id, { first: p[0], last: p[p.length - 1], all: p }];
+    }),
+  );
+  // Tools arrive on the hub's top edge, everything else leaves from its bottom edge, each at its own point.
+  const into = ['claude>zaafpulse', 'codex>zaafpulse'].map((id) => ends[id].last);
+  for (const [x, y] of into) {
+    assert.equal(y, hub.y);
+    assert.ok(x > hub.x && x < hub.x + hub.w);
+  }
+  assert.notEqual(into[0][0], into[1][0], 'two tools arrive at two points');
+  assert.ok(into[0][0] < into[1][0], 'in the order of the tools, so the lines do not cross');
+  const out4 = ['router:omniroute', 'runtime:ollama', 'provider:anthropic', 'provider:google'].map(
+    (to) => ends[`zaafpulse>${to}`].first,
+  );
+  for (const [x, y] of out4) {
+    assert.equal(y, hub.y + hub.h);
+    assert.ok(x > hub.x && x < hub.x + hub.w);
+  }
+  assert.equal(new Set(out4.map(([x]) => x)).size, 4, 'four points on the bottom edge');
+  // A hub edge to a provider crosses the router row in a lane: no node of that row is in its way.
+  const row = [at['router:omniroute'], at['runtime:ollama']];
+  for (const to of ['provider:anthropic', 'provider:google']) {
+    const e = ends[`zaafpulse>${to}`];
+    assert.equal(e.last[1], at[to].y, `${to}: ends on the provider's top`);
+    const inRow = e.all.filter(([, y]) => y >= row[0].y && y <= row[0].y + row[0].h);
+    assert.ok(inRow.length >= 2, `${to}: the edge goes straight through the row`);
+    for (const [x] of inRow) for (const n of row) assert.ok(x < n.x || x > n.x + n.w, `${to} passes ${n.id} at x ${x}`);
+  }
+  // The providers sit under what feeds them: OpenAI on OmniRoute's side, the model on Ollama's.
+  const mid = (n) => n.x + n.w / 2;
+  assert.ok(mid(at['router:omniroute']) < mid(at['runtime:ollama']));
+  assert.ok(mid(at['provider:openai']) < mid(at['provider:anthropic']));
+  assert.ok(mid(at['provider:google']) < mid(at['model:ollama:llama']));
+});
+
 test('topoMetaText and topoAgo', () => {
   assert.equal(
     topoMetaText({ nodes: [N('a', 0, 'active'), N('b', 1, 'active'), N('c', 2, 'error')] }),
     '— 2 active · 1 error',
   );
   assert.equal(topoMetaText(null), '— 0 active · 0 error');
+  // The hub is always active (it is the dashboard itself), so it is not counted.
+  const hub = { ...N('zaafpulse', 1, 'active'), kind: 'hub' };
+  assert.equal(topoMetaText({ nodes: [hub, N('a', 0, 'active')] }), '— 1 active · 0 error');
   assert.equal(topoAgo(4000), 'just now');
   assert.equal(topoAgo(42000), '42 s ago');
   assert.equal(topoAgo(5 * 60000), '5 min ago');
@@ -129,20 +225,33 @@ const cls = (n) => (n.ns ? n.attrs.class || '' : n.className);
 const isGraph = (n) => n.tag === 'svg' && /\btopo-svg\b/.test(cls(n));
 
 const EVIL = '<img src=x onerror=alert(1)>';
+const HUB = {
+  id: 'zaafpulse',
+  layer: 1,
+  kind: 'hub',
+  label: 'ZAAFPulse',
+  status: 'active',
+  note: 'gateway · 1 router · 1 runtime',
+};
 const DATA = {
   ts: 1_000_000,
   nodes: [
-    { id: 'claude', layer: 0, kind: 'tool', label: 'Claude Code', status: 'active', note: null },
-    { id: 'router:omniroute', layer: 1, kind: 'router', label: 'OmniRoute', status: 'error', note: 'timed out' },
-    { id: 'runtime:x', layer: 1, kind: 'runtime', label: EVIL, status: 'recent', note: EVIL },
-    { id: 'provider:anthropic', layer: 2, kind: 'provider', label: 'Anthropic', status: 'idle', note: null },
-    { id: 'provider:odd', layer: 2, kind: 'provider', label: 'Odd', status: '<b>', note: null },
+    { id: 'claude', layer: 0, kind: 'tool', label: 'Claude Code', status: 'active', note: null, via: null },
+    HUB,
+    { id: 'router:omniroute', layer: 2, kind: 'router', label: 'OmniRoute', status: 'error', note: 'timed out' },
+    { id: 'runtime:x', layer: 2, kind: 'runtime', label: EVIL, status: 'recent', note: EVIL },
+    { id: 'provider:anthropic', layer: 3, kind: 'provider', label: 'Anthropic', status: 'idle', note: null },
+    { id: 'provider:odd', layer: 3, kind: 'provider', label: 'Odd', status: '<b>', note: null },
   ],
-  edges: [E('claude', 'router:omniroute', 'error'), E('router:omniroute', 'provider:anthropic', 'recent')],
+  edges: [
+    E('claude', 'zaafpulse', 'error'),
+    E('zaafpulse', 'router:omniroute', 'recent'),
+    E('router:omniroute', 'provider:anthropic', 'recent'),
+  ],
   requests: [
     {
       ts: 1_000_000 - 120000,
-      path: ['claude', 'router:omniroute', 'provider:anthropic'],
+      path: ['claude', 'zaafpulse', 'router:omniroute', 'provider:anthropic'],
       client: 'Claude Code',
       model: EVIL,
       tokens: 5840,
@@ -164,15 +273,17 @@ test('topoPaint: an SVG made with createElementNS, labels and request rows as te
   assert.equal(svg.ns, 'http://www.w3.org/2000/svg');
   assert.match(svg.attrs.viewBox, /^-?\d+(\.\d+)? -?\d+(\.\d+)? \d+(\.\d+)? \d+(\.\d+)?$/);
   const nodes = all.filter((n) => n.attrs && n.attrs['data-topo-node']);
-  assert.equal(nodes.length, 5);
+  assert.equal(nodes.length, 6);
   const byId = Object.fromEntries(nodes.map((n) => [n.attrs['data-topo-node'], n]));
   assert.match(cls(byId.claude), /\btopo-active\b/);
+  assert.match(cls(byId.zaafpulse), /\btopo-hub\b/);
+  assert.doesNotMatch(cls(byId.claude), /\btopo-hub\b/);
   assert.match(cls(byId['router:omniroute']), /\btopo-error\b/);
   assert.match(cls(byId['runtime:x']), /\btopo-recent\b/);
   assert.match(cls(byId['provider:anthropic']), /\btopo-idle\b/);
   assert.match(cls(byId['provider:odd']), /\btopo-idle\b/, 'an unknown status is idle');
   const edges = all.filter((n) => n.tag === 'path' && /\btopo-edge\b/.test(cls(n)));
-  assert.equal(edges.length, 2);
+  assert.equal(edges.length, 3);
   assert.match(cls(edges[0]), /\btopo-error\b/);
   assert.match(cls(edges[1]), /\btopo-recent\b/);
   // The hostile label stays literal text, in the label and in the tooltip.
@@ -188,13 +299,74 @@ test('topoPaint: an SVG made with createElementNS, labels and request rows as te
   const rowText = flat(rows[0])
     .map((n) => n.textContent)
     .filter(Boolean);
-  assert.ok(rowText.includes('Claude Code → OmniRoute → Anthropic'));
+  assert.ok(rowText.includes('Claude Code → ZAAFPulse → OmniRoute → Anthropic'), 'the hub is in the path');
   assert.ok(
     rowText.some((t) => t.includes(EVIL)),
     'the model is literal text',
   );
   assert.ok(rowText.includes('2 min ago'));
   assert.ok(flat(rows[0]).some((n) => /\btopo-bad\b/.test(cls(n))));
+});
+
+test('topoPaint: the hub is drawn wide with its summary, and a tool says how it is connected', () => {
+  const doc = fakeDoc();
+  const root = doc.createElement('div');
+  const tool = (id, label, via) => ({ id, layer: 0, kind: 'tool', label, status: 'active', note: null, via });
+  const data = {
+    ts: 1_000_000,
+    nodes: [
+      tool('claude', 'Claude Code', null),
+      tool('codex', 'Codex', 'OmniRoute'),
+      tool('gemini', 'Gemini CLI', 'gateway'),
+      tool('old', 'Old tool'), // no `via` at all
+      HUB,
+      { id: 'provider:anthropic', layer: 3, kind: 'provider', label: 'Anthropic', status: 'active', note: null },
+    ],
+    edges: [E('claude', 'zaafpulse', 'active'), E('zaafpulse', 'provider:anthropic', 'active')],
+    requests: [
+      {
+        ts: 1_000_000 - 5000,
+        path: ['claude', 'zaafpulse', 'provider:anthropic'],
+        client: 'Claude Code',
+        model: 'claude-opus',
+        ok: true,
+        source: 'log',
+      },
+      { ts: 1_000_000 - 9000, path: ['zaafpulse', 'provider:anthropic'], client: 'ZAAFPulse', ok: true },
+    ],
+  };
+  topoPaint(doc, root, data, {});
+  const all = flat(root);
+  const g = (id) => flat(root).find((n) => n.attrs && n.attrs['data-topo-node'] === id);
+  const part = (id, c) => flat(g(id)).find((n) => new RegExp(`\\b${c}\\b`).test(cls(n)));
+  assert.equal(part('claude', 'topo-kind').textContent, 'monitored');
+  assert.equal(part('codex', 'topo-kind').textContent, 'via OmniRoute');
+  // On a phone the sub-label is clipped and there is no hover: the tooltip and the label say how it connects in full.
+  assert.match(flat(g('codex')).find((n) => n.tag === 'title').textContent, /^Codex · via OmniRoute · /);
+  assert.match(g('codex').attrs['aria-label'], /via OmniRoute/);
+  assert.equal(part('gemini', 'topo-kind').textContent, 'via gateway');
+  assert.equal(part('old', 'topo-kind').textContent, 'monitored');
+  assert.equal(part('provider:anthropic', 'topo-kind').textContent, 'provider', 'other kinds keep their kind text');
+  // The hub: its own class, wider than a node, its label and its summary in full.
+  assert.match(cls(g('zaafpulse')), /\btopo-hub\b/);
+  assert.equal(part('zaafpulse', 'topo-label').textContent, 'ZAAFPulse');
+  assert.equal(part('zaafpulse', 'topo-kind').textContent, 'gateway · 1 router · 1 runtime');
+  const boxW = (id) => Number(part(id, 'topo-box').attrs.width);
+  assert.ok(boxW('zaafpulse') >= 1.5 * boxW('claude'));
+  // Request rows run through the hub; the dashboard's own call does not repeat its name as the client.
+  const rows = all.filter((n) => n.attrs && n.attrs['data-topo-req'] != null);
+  const text = (r) => flat(r).map((n) => n.textContent);
+  assert.ok(text(rows[0]).includes('Claude Code → ZAAFPulse → Anthropic'));
+  assert.ok(text(rows[1]).includes('ZAAFPulse → Anthropic'));
+  assert.ok(!text(rows[1]).some((t) => /^ZAAFPulse ·/.test(t)));
+  // A hub with no summary says what it is.
+  topoPaint(
+    doc,
+    root,
+    { ...data, nodes: data.nodes.map((n) => (n.id === 'zaafpulse' ? { ...n, note: null } : n)) },
+    {},
+  );
+  assert.equal(part('zaafpulse', 'topo-kind').textContent, 'hub');
 });
 
 test('topoPaint updates in place: the same SVG and nodes, the view and highlight kept', () => {
@@ -363,9 +535,9 @@ test('topoMount: a failed first load, a good load, a tick, a paint that throws, 
     const svg = flat(b.root).find(isGraph);
     assert.ok(svg);
     const icos = flat(b.root).filter((n) => n.attrs && n.attrs.class === 'topo-ico');
-    assert.equal(icos.length, 5);
-    for (const g of icos) assert.match(g.html, /^<svg class="i" data-i="[a-z]+" width="14"><\/svg>$/);
-    assert.deepEqual(b.calls.icons.slice(0, 2), ['terminal', 'compass']);
+    assert.equal(icos.length, 6);
+    for (const g of icos) assert.match(g.html, /^<svg class="i" data-i="[a-z]+" width="\d+"><\/svg>$/);
+    assert.deepEqual(b.calls.icons.slice(0, 3), ['terminal', 'pulse', 'compass'], "the hub has the app's own mark");
 
     // Another tick updates in place.
     b.answers.push({ ...DATA, nodes: DATA.nodes.map((n) => ({ ...n, status: 'active' })) });
@@ -469,6 +641,18 @@ test('topologyview.js builds no HTML from server text (S1)', () => {
   for (const t of [...src.matchAll(/`[^`]*`/g)].map((m) => m[0]).filter((x) => /<[a-z]/.test(x)))
     assert.doesNotMatch(t, /\$\{/, `a template with markup takes a value: ${t.slice(0, 60)}`);
   assert.match(src, /createElementNS\(TOPO_NS/);
+});
+
+test("the Overview's AI Office cards get the Start/Stop rows: a slots-only grid, filled by rtMount", () => {
+  const ov = fs.readFileSync(path.join(__dirname, '..', 'public', 'overviewview.js'), 'utf8');
+  assert.match(ov, /<div class="grid squad" data-rt-grid="slots">\$\{squad\.html\}<\/div>/);
+  const mount = /function mountOverview\(\) \{([\s\S]*?)\n\}/.exec(ov);
+  assert.ok(mount, 'mountOverview');
+  assert.match(mount[1], /rtMount\(\)/);
+  // rtMount polls only while a grid is on screen and stops on unmount, as on AI Office.
+  const rt = fs.readFileSync(path.join(__dirname, '..', 'public', 'runtimesview.js'), 'utf8');
+  assert.match(rt, /onUnmount\(\(\) => clearInterval\(timer\)\)/);
+  assert.match(rt, /dataset\.rtGrid === 'slots'/);
 });
 
 test('the Overview holds the section above AI Office and the page loads the script before overviewview.js', () => {

@@ -8734,9 +8734,35 @@ label.mon-cand.on {
 .topo-node.topo-error .topo-dot {
   fill: var(--topo-error);
 }
+/* the hub: ZAAFPulse itself, the centre every line runs through, in the app's accent whatever its status */
+.topo-node.topo-hub .topo-box {
+  fill: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
+  stroke: var(--accent);
+  stroke-width: 1.8;
+  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--accent) 40%, transparent));
+}
+.topo-node.topo-hub .topo-tile {
+  fill: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.topo-node.topo-hub .topo-ico {
+  color: var(--accent);
+}
+.topo-node.topo-hub .topo-label {
+  fill: var(--text);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+.topo-node.topo-hub .topo-kind {
+  fill: var(--text-2);
+  font-size: 11px;
+}
 .topo-node:focus-visible .topo-box {
   stroke: var(--accent);
   stroke-width: 2;
+}
+.topo-node.topo-hub:focus-visible .topo-box {
+  stroke-width: 2.8;
 }
 .topo-edge {
   fill: none;
@@ -8919,7 +8945,7 @@ label.mon-cand.on {
 }
 .topo-req-top {
   display: flex;
-  align-items: center;
+  align-items: flex-start; /* the path wraps; the dot and the time stay on its first line */
   gap: 7px;
   min-width: 0;
   font-size: 12.5px;
@@ -8928,9 +8954,8 @@ label.mon-cand.on {
 .topo-req-path {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Every path passes through ZAAFPulse, so it is long; it wraps rather than hide where the request went. */
+  overflow-wrap: anywhere;
 }
 .topo-req-ago {
   flex: none;
@@ -8948,6 +8973,7 @@ label.mon-cand.on {
 }
 .topo-rdot {
   flex: none;
+  margin-top: 5px;
   width: 7px;
   height: 7px;
   border-radius: 50%;

@@ -24,7 +24,7 @@
 what it costs, how often it is wrong, what your agents are doing right now and how your knowledge grows,<br>
 plus an agentic workspace (beta): one API for your models, 17 agents that work together, workflows, RAG, MCP and A2A.
 
-[Features](#features) · [Screenshots](#screenshots) · [Quick start](#quick-start) · [Agentic workspace](#agentic-workspace) · [OpenTelemetry](#opentelemetry-export) · [How it works](#how-it-works) · [Metrics](#what-the-quality-metrics-mean) · [Privacy](#privacy) · [Contributing](#contributing)
+[Features](#features) · [Screenshots](#screenshots) · [Quick start](#quick-start) · [Agentic workspace](#agentic-workspace) · [Topology](#provider-topology) · [Monitors](#monitors-and-alerts) · [Local models](#local-model-servers) · [OpenTelemetry](#opentelemetry-export) · [How it works](#how-it-works) · [Metrics](#what-the-quality-metrics-mean) · [Privacy](#privacy) · [Contributing](#contributing)
 
 </div>
 
@@ -44,7 +44,8 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 | **$** | *What is AI costing me?* | API-equivalent spend per day, model, project and session at **provider list prices** (checked against Anthropic's and OpenAI's own price lists, kept current from OpenRouter's public list), with each API response counted once even when a session was resumed or forked, a month-end projection, and where the money goes: input, output, cache reads, cache writes or web searches. |
 | **✓** | *Can I trust what it did?* | Tool-call accuracy that counts only failures the model caused, non-existent targets (paths, edit text, arguments, URLs, packages and commands that did not exist) and how often you had to correct it. |
 | **⚠** | *Did anything unsafe happen?* | Prompt-injection attempts in web and MCP content, secrets that surfaced in tool output, and risky commands such as `rm -rf` or force pushes. |
-| **◈** | *What are my agents doing right now?* | A live 3D office: every session and subagent walks to the room for the tool it is using, waits at the help desk when it needs you, and shows up in a request log, a stream inspector and a timeline. |
+| **◈** | *What are my agents doing right now?* | A live 3D office: every session and subagent walks to the room for the tool it is using, waits at the help desk when it needs you, and shows up in a request log, a stream inspector and a timeline. A topology on the Overview shows which tool reaches which router, runtime and provider through ZAAFPulse, and the path of each recent request. |
+| **!** | *Will I hear about it when something goes wrong?* | Monitors on daily cost, the month's projection, cost bursts, tool loops, stuck agents, accuracy, eval pass rates and unsafe content, with alerts in the dashboard, as a desktop notification or a webhook. You can pause the agent behind an alert, or let a cost or loop rule pause it. |
 | **◉** | *Is my second brain growing?* | One animated map of Obsidian, Logseq, Notion, Tana, Roam, mem.ai, Reflect, Heybrain, a PARA workspace, your RAG knowledge and vector databases: hubs, orphans, PARA lanes, a semantic map by meaning, and a replay of how it grew. |
 | **⌁** | *Can my apps and coding tools use any model through one API?* | An Agent Gateway (beta) on 127.0.0.1: API keys with scopes, budgets and rate limits; OpenAI, Anthropic, Responses and Gemini endpoints over 52 provider presets with fallback routes, quota and a token saver; Claude Code, Codex, Gemini CLI and more connected in one click. |
 | **⚙** | *Can my agents work together, safely?* | In beta: 17 domain agents, an orchestrator, seven collaboration patterns (vote, debate, review, group chat, handoff …) with budgets and traces, 24 ready-made workflows with approval gates, RAG, A2A, and Agent Skills that teach any AI to use all of it. |
@@ -70,6 +71,46 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 
 **AI Office, live**<br>
 <sub>A 3D office driven by real transcript state: who is editing, reading, running commands, browsing or delegating, who is waiting for you and who needs approval. Subagents appear next to their parent.</sub>
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**Provider topology**<br>
+<sub>ZAAFPulse as the hub of a graph on the Overview: AI tools above it, routers and local runtimes below, providers and loaded models at the bottom. Each line is coloured active, recent, error or idle. Click a recent request to light up its path, or a node to highlight its neighbours; zoom and pan.</sub>
+
+</td>
+<td valign="top">
+
+**Trace & Session Explorer**<br>
+<sub>One session of Claude Code, Codex, the Agent Gateway, Kiro, Gemini CLI or Antigravity as a tree of spans with a timeline and a map of the turn. Text is read from the original log only when you open a span, with secrets masked, and is never copied.</sub>
+
+</td>
+<td valign="top">
+
+**Monitors & alerts**<br>
+<sub>Eight rules on cost, quality and agent behaviour, with alerts in the top bar, a desktop notification or a webhook. Pause, resume or stop the agent behind a session, or let a cost or loop rule pause it (off by default). Snooze a rule for an hour or a day.</sub>
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**Local evals & feedback**<br>
+<sub>Six code checks that cost nothing, and five judge evaluators for finished turns, answered first by Ollama or LM Studio on this machine. Rate turns Good or Bad and see how often the judge agrees with you.</sub>
+
+</td>
+<td valign="top">
+
+**Datasets & replay**<br>
+<sub>Save turns from the Trace explorer, replay them on up to three models, score and compare the runs, and fail a CI build with <code>zaafpulse eval --ci</code> when a pass rate drops.</sub>
+
+</td>
+<td valign="top">
+
+**Local model servers**<br>
+<sub>Start and Stop on the AI Office cards for Ollama, LM Studio, the llama.cpp server, Jan, LocalAI and servers you add in Settings. Start loads Ollama's and LM Studio's last models again and keeps them loaded until Stop. Your own commands run only after you approve them.</sub>
 
 </td>
 </tr>
@@ -206,55 +247,95 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 ## Screenshots
 
 <details open>
-<summary><b>AI Office</b>: your agents at work in a 3D office</summary>
+<summary><b>Overview & live monitor</b>: usage, cost, the provider topology and what is running right now</summary>
+<br>
+<p align="center"><img alt="Provider topology: clicking three recent requests lights up each path in turn (Claude Code to Anthropic, Codex through OmniRoute to OpenAI, ZAAFPulse to Ollama), then the OmniRoute node with its error note" src="docs/assets/demo-topology.gif" width="88%"></p>
+<p align="center"><sub>The provider topology on the Overview. Each recent request lights up its path through ZAAFPulse; a node shows its status and note.</sub></p>
+<img alt="Overview: 3D usage city with month-to-date spend and calls by hour, KPI cards for spend, tokens, sessions and this month" src="docs/assets/screen-overview.jpg">
+<p align="center"><sub>Overview: a 3D usage city of every day, with spend, tokens, sessions and the month's projection.</sub></p>
+<table>
+<tr>
+<td width="50%"><img alt="Provider topology card: Claude Code (monitored) and Codex (via OmniRoute) above ZAAFPulse, OmniRoute in error and Ollama below it, OpenAI, Anthropic, Google and a loaded llama3.2:3b model at the bottom, with recent requests on the right" src="docs/assets/screen-topology.jpg"><br><sub>Provider topology: tools, the hub, routers and runtimes, providers and models, with recent requests.</sub></td>
+<td width="50%"><img alt="Live monitor: AI fleet in 3D with CPU and memory per app, a paused-agent banner, and telemetry tiles" src="docs/assets/screen-live.jpg"><br><sub>Live monitor: running AI apps as a 3D fleet, with CPU, memory and a paused agent.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img alt="Sessions: a constellation of every session by day and start hour, with session KPI tiles" src="docs/assets/screen-sessions.jpg"><br><sub>Sessions: every session by day and start hour.</sub></td>
+<td width="50%"><img alt="Estimated spend drill-down: in range, this month, projected month end, budget left, a month-to-date chart against the budget, and where the money goes" src="docs/assets/screen-drawer-spend.jpg"><br><sub>Drill-down: estimated spend, the projection against the budget, and where the money goes.</sub></td>
+</tr>
+</table>
+</details>
+
+<details open>
+<summary><b>AI Office</b>: your agents at work in a 3D office, and the local model servers</summary>
 <br>
 <p align="center"><img alt="Agents walk between the coding desks, library, server room, web globe and help desk as their tools change; subagents are linked to their parent" src="docs/assets/demo-office.gif" width="88%"></p>
+<p align="center"><sub>Agents walk to the room for the tool they are using.</sub></p>
 <table>
 <tr>
-<td width="50%"><img alt="Logs: request log with TTFT and duration, error traces and the stream inspector" src="docs/assets/screen-logs.jpg"></td>
-<td width="50%"><img alt="Time: a timeline of every agent and subagent with parallel work" src="docs/assets/screen-time.jpg"></td>
+<td width="50%"><img alt="The AI office: agents in a 3D office with live activity labels, counts of who is working, needs you or is a subagent, and a paused-agent banner" src="docs/assets/screen-office.jpg"><br><sub>AI Office: live activity, state counts and a paused agent.</sub></td>
+<td width="50%"><img alt="Installed AI tools cards: Ollama running with a Stop button and brew service, LM Studio and LocalAI stopped with Start, and an owner runtime Qwen (llama.cpp) waiting for approval in Settings" src="docs/assets/screen-runtimes.jpg"><br><sub>Local model servers: Start and Stop on the Installed AI tools cards.</sub></td>
 </tr>
-</table>
-<table>
 <tr>
-<td width="50%"><img alt="Proxy logs: OmniRoute upstream attempts and MCP hub calls" src="docs/assets/screen-proxy.jpg"></td>
-<td width="50%"><img alt="The AI office with roster, live activity and state counts" src="docs/assets/screen-office.jpg"></td>
+<td width="50%"><img alt="Logs: request KPIs, throughput per minute, the request log and the stream inspector" src="docs/assets/screen-logs.jpg"><br><sub>Logs: requests with TTFT and duration, and the stream inspector.</sub></td>
+<td width="50%"><img alt="Time: KPI tiles, parallel work across the window and a timeline of every agent and subagent" src="docs/assets/screen-time.jpg"><br><sub>Time: who worked on what, when, and in parallel.</sub></td>
 </tr>
-</table>
-</details>
-
-<details open>
-<summary><b>Overview & live monitor</b>: usage, cost and what is running right now</summary>
-<br>
-<img alt="Overview: 3D usage city, KPI cards, daily activity and efficiency gauges" src="docs/assets/screen-overview.jpg">
-<table>
 <tr>
-<td width="50%"><img alt="Live monitor: AI fleet in 3D, telemetry, machine share and process table" src="docs/assets/screen-live.jpg"></td>
-<td width="50%"><img alt="Sessions: a constellation of every session by day and start hour" src="docs/assets/screen-sessions.jpg"></td>
+<td width="50%"><img alt="Proxy logs: OmniRoute upstream attempts and MCP hub calls, traffic over time, latency distribution and the traffic inspector" src="docs/assets/screen-proxy.jpg"><br><sub>Proxy logs: OmniRoute upstream attempts and MCP hub calls.</sub></td>
+<td width="50%"></td>
 </tr>
 </table>
 </details>
 
 <details open>
-<summary><b>Quality & safety</b>: accuracy, utilization, cache, compression, providers, models and rankings</summary>
+<summary><b>Quality & safety</b>: accuracy, evals, utilization, cache, compression, providers, models and rankings</summary>
 <br>
-<img alt="Quality and safety: KPI cards and model-caused failures per day as a 3D stacked city" src="docs/assets/screen-quality.jpg">
+<img alt="Quality and safety: cards for accuracy, non-existent targets, poisoning, corrections, relevance and faithfulness, with the Evals card below" src="docs/assets/screen-quality.jpg">
+<p align="center"><sub>Quality & safety: signals detected in your logs, each card opening the items that matched.</sub></p>
 <table>
 <tr>
-<td width="50%"><img alt="Utilization: load landscape by weekday and hour, peaks, 5-hour windows and forecast" src="docs/assets/screen-utilization.jpg"></td>
-<td width="50%"><img alt="Cache: hit rate, savings, write premium and router memo reuse" src="docs/assets/screen-cache.jpg"></td>
+<td width="50%"><img alt="Evals card: pass rates of the six code checks and five judge evaluators with 7-day trends and sample counts, and judge agreement with your Good and Bad ratings" src="docs/assets/screen-evals.jpg"><br><sub>Evals: code checks and judge evaluators, and how often the judge agrees with you.</sub></td>
+<td width="50%"><img alt="Poisoning and prompt injection drill-down: counts from external content and local files, what is checked, matches by pattern and every match" src="docs/assets/screen-drawer-poisoning.jpg"><br><sub>Drill-down: every prompt-injection match, external content first.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img alt="Utilization: load landscape by weekday and hour, peaks, 5-hour windows and forecast" src="docs/assets/screen-utilization.jpg"><br><sub>Utilization: load by weekday and hour, peaks and a forecast.</sub></td>
+<td width="50%"><img alt="Cache: hit rate, savings, write premium, hit rate over time and efficiency per provider" src="docs/assets/screen-cache.jpg"><br><sub>Cache: hit rate, savings and the write premium.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img alt="Compression: compactions, context pressure, compactions per day and recent compactions" src="docs/assets/screen-compression.jpg"><br><sub>Compression: compactions, context pressure and tokens avoided.</sub></td>
+<td width="50%"><img alt="Provider stats: a 3D model skyline by provider, with requests, tokens, cost and latency tiles" src="docs/assets/screen-providers.jpg"><br><sub>Provider stats: requests, cost and latency per provider and model.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img alt="Models: a 3D price landscape by vendor of the models on OpenRouter, with catalog tiles" src="docs/assets/screen-models.jpg"><br><sub>Models: OpenRouter's catalog with live prices.</sub></td>
+<td width="50%"><img alt="Rankings: the top 20 models on OpenRouter by tokens this week, with vendor share and benchmark leaders" src="docs/assets/screen-rankings.jpg"><br><sub>Rankings: the most-used models this week and benchmark leaders.</sub></td>
 </tr>
 </table>
+</details>
+
+<details open>
+<summary><b>Trace explorer, datasets & replay</b>: one session span by span, saved turns, and replays on other models</summary>
+<br>
+<img alt="Trace explorer: the sources rail (Claude Code, Codex, Kiro), one turn as a span tree with timeline, a paused-agent banner and the likely cause, a failed Bash call whose output has a masked key, Good and Bad ratings, and the session map on the right" src="docs/assets/screen-trace.jpg">
+<p align="center"><sub>Trace explorer: one turn as spans, its text on request with secrets masked, and a map of the turn.</sub></p>
 <table>
 <tr>
-<td width="50%"><img alt="Compression: compactions, context pressure and tokens avoided" src="docs/assets/screen-compression.jpg"></td>
-<td width="50%"><img alt="Provider stats: a 3D model skyline by provider, metric tiles, requests and cost per model" src="docs/assets/screen-providers.jpg"></td>
+<td width="33%"><img alt="A dataset of saved turns: input, output, reference, evals, rating, tags and a link back to the trace" src="docs/assets/screen-datasets.jpg"><br><sub>A dataset: saved turns with their reference, evals and rating.</sub></td>
+<td width="33%"><img alt="Playground in Dataset mode: pick a dataset and examples, a cost and request cap, up to three models (local first, external marked as sending masked text) and the evaluators" src="docs/assets/screen-replay.jpg"><br><sub>Replay: a dataset on up to three models, local first, with caps.</sub></td>
+<td width="33%"><img alt="Experiments: replay runs with dataset, start time, status and the pass rate per model and evaluator" src="docs/assets/screen-experiments.jpg"><br><sub>Experiments: pass rates per model, side by side.</sub></td>
 </tr>
 </table>
+</details>
+
+<details open>
+<summary><b>Monitors & local models</b>: rules, alerts, agent pause and your own model servers</summary>
+<br>
 <table>
 <tr>
-<td width="50%"><img alt="Models: every OpenRouter model with live prices, per-provider uptime and a 3D price landscape by vendor" src="docs/assets/screen-models.jpg"></td>
-<td width="50%"><img alt="Rankings: the most-used models and apps on OpenRouter this week, vendor share and benchmark leaders" src="docs/assets/screen-rankings.jpg"></td>
+<td width="50%"><img alt="Settings, Monitors: rule cards for daily cost, month projection, cost burn, tool loop, agent stuck and accuracy drop, each with its state, limits, snooze and pause switch" src="docs/assets/screen-monitors.jpg"><br><sub>Monitors: eight rules, each with its state, limits, snooze and auto-pause.</sub></td>
+<td width="50%"><img alt="Alerts drawer: a paused-agent banner with Resume and Stop, and recent alerts for cost burn, unsafe content, accuracy drop and month projection" src="docs/assets/screen-alerts.jpg"><br><sub>Alerts: the bell's drawer, with Resume and Stop for a paused agent.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img alt="Settings, Local models: an owner entry for llama-server with Approve, Edit and Delete, and the form to add a runtime" src="docs/assets/screen-local-models.jpg"><br><sub>Settings → Local models: add your own server and approve it.</sub></td>
+<td width="50%"><img alt="Model prices: live-price status, vendor filters, sorting and a card per model in use with prices, context and your spend" src="docs/assets/screen-settings.jpg"><br><sub>Settings → Model prices: live list prices and your spend per model.</sub></td>
 </tr>
 </table>
 </details>
@@ -263,12 +344,14 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 <summary><b>Second brain</b>: your knowledge as a living map (Obsidian and 14 more sources)</summary>
 <br>
 <p align="center"><img alt="All sources on one map: the note graph replays how Obsidian, Logseq, PARA, Tana, Heybrain, RAG and two vector stores grew" src="docs/assets/demo-brain.gif" width="82%"></p>
-<img alt="Second brain: knowledge growth in 3D, vault metrics and the note graph" src="docs/assets/screen-brain.jpg">
+<p align="center"><sub>A growth replay of every source on one map.</sub></p>
+<img alt="Second brain: notes per week in 3D by note type, notes over time and the biggest hubs, with the source and layout pickers" src="docs/assets/screen-brain.jpg">
+<p align="center"><sub>Second brain: how the vault grew, week by week.</sub></p>
 <table>
 <tr>
-<td width="33%"><img alt="All sources: every source on one map, notes with the same title joined across sources" src="docs/assets/screen-brain-all.jpg"></td>
-<td width="33%"><img alt="Semantic map: a vector store placed by meaning, nearest neighbours linked" src="docs/assets/screen-brain-semantic.jpg"></td>
-<td width="33%"><img alt="PARA: projects, areas, resources and archives in lanes" src="docs/assets/screen-brain-para.jpg"></td>
+<td width="33%"><img alt="All sources: every source as a cluster on one map, notes with the same title joined across sources" src="docs/assets/screen-brain-all.jpg"><br><sub>All sources on one map.</sub></td>
+<td width="33%"><img alt="Semantic map: Qdrant records placed by meaning in five clusters, nearest neighbours linked" src="docs/assets/screen-brain-semantic.jpg"><br><sub>Semantic map of a vector store.</sub></td>
+<td width="33%"><img alt="PARA: projects, areas, resources and archives in lanes" src="docs/assets/screen-brain-para.jpg"><br><sub>PARA lanes.</sub></td>
 </tr>
 </table>
 </details>
@@ -277,37 +360,43 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 <summary><b>Agentic workspace</b>: endpoint, gateway, agents working together, workflows, skills and RAG</summary>
 <br>
 <p align="center"><img alt="A group chat run from the Collaborate page: the orchestrator picks speakers while the live trace, budget and blackboard fill in" src="docs/assets/demo-collab.gif" width="82%"></p>
+<p align="center"><sub>A group-chat run: the live trace, budget and blackboard fill in.</sub></p>
 <table>
 <tr>
-<td width="50%"><img alt="Agent Gateway overview: API keys flow through the gateway and orchestrator to 17 domain agents, with month totals" src="docs/assets/screen-gateway.jpg"></td>
-<td width="50%"><img alt="Endpoint: base URL, keys, MCP clients, code tools and every endpoint with its scope" src="docs/assets/screen-endpoint.jpg"></td>
+<td width="50%"><img alt="Agent Gateway overview: API keys flow through the gateway and orchestrator to 17 domain agents, with month totals" src="docs/assets/screen-gateway.jpg"><br><sub>Agent Gateway: keys, the orchestrator and 17 domain agents.</sub></td>
+<td width="50%"><img alt="Endpoint: base URL, keys, MCP clients, code tools, setup in three steps and every endpoint with its scope" src="docs/assets/screen-endpoint.jpg"><br><sub>Endpoint: every endpoint with its scope.</sub></td>
 </tr>
 <tr>
-<td width="50%"><img alt="API keys: scopes, allowed models and agents, monthly spend against budget, rate limit and status" src="docs/assets/screen-keys.jpg"></td>
-<td width="50%"><img alt="MCP server: where it is registered, register or remove per client, and the HTTP connection" src="docs/assets/screen-mcp.jpg"></td>
+<td width="50%"><img alt="API keys: scopes, allowed models, agents and knowledge bases, monthly spend against budget, rate limit and status" src="docs/assets/screen-keys.jpg"><br><sub>API keys: scopes, budgets and rate limits.</sub></td>
+<td width="50%"><img alt="MCP server: where it is registered, register or remove per client, and the HTTP connection" src="docs/assets/screen-mcp.jpg"><br><sub>MCP server: registration per client, and HTTP.</sub></td>
 </tr>
 <tr>
-<td width="50%"><img alt="Code tools: Claude Code, Codex, Gemini CLI, OpenCode, Aider and more, set up on any provider in their own wire format" src="docs/assets/screen-code-tools.jpg"></td>
-<td width="50%"><img alt="Model router: private and approved external providers, quota and cooldown, and the token saver" src="docs/assets/screen-router.jpg"></td>
+<td width="50%"><img alt="Connect: curl, Python and JavaScript snippets for the OpenAI-compatible API, and agent, session and MCP-over-HTTP snippets" src="docs/assets/screen-connect.jpg"><br><sub>Connect: snippets for any OpenAI SDK, script or MCP client.</sub></td>
+<td width="50%"><img alt="Code tools: Claude Code, Codex, Gemini CLI, OpenCode, Aider and more, set up on any provider in their own wire format" src="docs/assets/screen-code-tools.jpg"><br><sub>Code tools: set up a coding tool on any provider.</sub></td>
 </tr>
 <tr>
-<td width="50%"><img alt="Providers: defaults and 52 presets in six groups" src="docs/assets/screen-gateway-providers.jpg"></td>
-<td width="50%"><img alt="Playground: the orchestrator's plan and the answer, with tokens, cost and model calls" src="docs/assets/screen-playground.jpg"></td>
+<td width="50%"><img alt="Model router: private and approved external providers, quota and cooldown, and the token saver" src="docs/assets/screen-router.jpg"><br><sub>Model router: quota, cooldown and the token saver.</sub></td>
+<td width="50%"><img alt="Providers: defaults and the provider presets by group, from Ollama and LM Studio to hosted APIs" src="docs/assets/screen-gateway-providers.jpg"><br><sub>Providers: defaults and the presets.</sub></td>
 </tr>
 <tr>
-<td width="50%"><img alt="Workflows: 24 ready-made workflows by category with risk tier, KPI, steps and approval gates" src="docs/assets/screen-workflows.jpg"></td>
-<td width="50%"><img alt="Collaborate: pick a pattern, set effort and budget, and run" src="docs/assets/screen-collaborate.jpg"></td>
+<td width="50%"><img alt="Playground: the orchestrator's plan and the answer, with tokens, cost and model calls" src="docs/assets/screen-playground.jpg"><br><sub>Playground: the plan and the answer.</sub></td>
+<td width="50%"><img alt="Workflows: 24 ready-made workflows by category with risk tier, KPI, steps and approval gates" src="docs/assets/screen-workflows.jpg"><br><sub>Workflows: 24 ready-made, with approval gates.</sub></td>
 </tr>
 <tr>
-<td width="50%"><img alt="Runs: every collaboration run with pattern, state and approvals waiting" src="docs/assets/screen-runs.jpg"></td>
-<td width="50%"><img alt="A run: answer, budget, trace with OpenTelemetry GenAI span names, steps and blackboard" src="docs/assets/screen-run-trace.jpg"></td>
+<td width="50%"><img alt="Collaborate: pick a pattern, set effort and budget, and run" src="docs/assets/screen-collaborate.jpg"><br><sub>Collaborate: pick a pattern and a budget.</sub></td>
+<td width="50%"><img alt="Runs: every collaboration run with pattern and state, two waiting for approval" src="docs/assets/screen-runs.jpg"><br><sub>Runs: state, and approvals waiting.</sub></td>
 </tr>
 <tr>
-<td width="50%"><img alt="Agent skills: nine SKILL.md files served by the gateway and installable into Claude Code" src="docs/assets/screen-skills.jpg"></td>
-<td width="50%"><img alt="RAG service: knowledge bases with documents, chunks and embeddings" src="docs/assets/screen-rag.jpg"></td>
+<td width="50%"><img alt="A workflow run waiting at an approval gate: approve or reject, budget, a trace with OpenTelemetry GenAI span names, steps and blackboard" src="docs/assets/screen-run-trace.jpg"><br><sub>A run at an approval gate, with its trace.</sub></td>
+<td width="50%"><img alt="Agent skills: nine SKILL.md files served by the gateway and installable into Claude Code" src="docs/assets/screen-skills.jpg"><br><sub>Agent skills: nine SKILL.md files.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img alt="RAG service: knowledge bases with documents, chunks and embeddings, and the form for a new one" src="docs/assets/screen-rag.jpg"><br><sub>RAG service: knowledge bases.</sub></td>
+<td width="50%"></td>
 </tr>
 </table>
 <p align="center"><img alt="Agent Gateway in 3D: keys on the left, the gateway and orchestrator in the middle, domain agents on the right, with pulses for recent calls" src="docs/assets/demo-gateway.gif" width="82%"></p>
+<p align="center"><sub>The Agent Gateway in 3D, with pulses for recent calls.</sub></p>
 </details>
 
 <details>
@@ -315,36 +404,17 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 <br>
 <table>
 <tr>
-<td width="50%"><img alt="Projects: a 3D skyline of projects by tokens, sessions and cost" src="docs/assets/screen-projects.jpg"></td>
-<td width="50%"><img alt="Agent skill usage: subagents, skills and tools your AI tools use, as a 3D toolbelt city" src="docs/assets/screen-agents.jpg"></td>
+<td width="50%"><img alt="Projects: a 3D skyline of projects by tokens, sessions and cost" src="docs/assets/screen-projects.jpg"><br><sub>Projects: where AI time goes.</sub></td>
+<td width="50%"><img alt="Agent skill usage: subagents, skills and tools your AI tools use, as a 3D toolbelt city" src="docs/assets/screen-agents.jpg"><br><sub>What your AI reaches for: subagents, skills and tools.</sub></td>
 </tr>
-</table>
-<img alt="Integrations: the MCP hub in 3D with every connection, its health and recent calls" src="docs/assets/screen-integrations.jpg">
-</details>
-
-<details open>
-<summary><b>Settings & integrations</b>: live model prices and the integration editor</summary>
-<br>
-<table>
 <tr>
-<td width="50%"><img alt="Model prices: vendor filters and a card per model with live list prices, context, tags and your spend" src="docs/assets/screen-settings.jpg"></td>
-<td width="50%"><img alt="Integration editor: configure and test a connection, secrets kept in the macOS Keychain" src="docs/assets/screen-integration-editor.jpg"></td>
+<td width="50%"><img alt="Integrations: the MCP hub in 3D with every connection, its health and recent calls" src="docs/assets/screen-integrations.jpg"><br><sub>Integrations: the MCP hub and each connection's health.</sub></td>
+<td width="50%"><img alt="Integration editor: configure and test a connection, with secrets kept in the OS secret store" src="docs/assets/screen-integration-editor.jpg"><br><sub>Integration editor: configure and test a connection.</sub></td>
 </tr>
 </table>
 </details>
 
-<details>
-<summary><b>Drill-downs</b>: spend projection and poisoning detections</summary>
-<br>
-<table>
-<tr>
-<td width="50%"><img alt="Estimated spend drill-down" src="docs/assets/screen-drawer-spend.jpg"></td>
-<td width="50%"><img alt="Poisoning drill-down" src="docs/assets/screen-drawer-poisoning.jpg"></td>
-</tr>
-</table>
-</details>
-
-<sub>All screenshots and GIFs use the built-in demo dataset (`npm run demo`). No real projects, costs, notes or accounts are shown. Regenerate them with `npm run media` (needs Google Chrome and ffmpeg).</sub>
+<sub>All screenshots and GIFs use the built-in demo dataset (`npm run demo`). No real projects, costs, notes or accounts are shown. Regenerate them with `npm run media` (needs Google Chrome and ffmpeg; `MEDIA_PORT` and `MEDIA_CDP_PORT` move its ports). The Models, Rankings and price shots need OpenRouter's public lists cached in `.cache/` by a normal run, since demo mode fetches nothing.</sub>
 
 ## Quick start
 
@@ -473,7 +543,7 @@ ZAAFPulse can sit in front of your models and agents. Everything listens on **12
 
 The sidebar has two groups:
 
-- **AI Observability:** Overview, AI Office, Live monitor, Quality & safety, Second brain, Projects and Sessions.
+- **AI Observability:** Overview (with the provider topology), AI Office (with the local model servers), Live monitor, Quality & safety (with evals), Second brain, Projects, Sessions, Trace explorer, and Datasets with Experiments.
 - **Agentic Workspace:**
   - **Endpoint:** API keys, the MCP server, connection snippets, code tools, and a table of every endpoint and its scope.
   - **Agent Gateway** (beta): a 3D overview, providers, model router, sessions and memory, and a playground.
@@ -560,11 +630,23 @@ Workflow approval gates fail closed: a run pauses before the gated step until so
 
 A new key is shown once and masked (`zp_Q7m_k••••••••••••T4vX`) as soon as it is copied, after 60 seconds or when you leave the page. Every request is logged with key, model, agent, tokens, cost (list prices), latency and time to first token, never prompt text. Keys, agents, sessions, memory, runs and knowledge bases live in `.data/` (git-ignored); provider, route, second-brain and tool settings live in `config.json`.
 
+## Provider topology
+
+The **Provider topology** card on the Overview shows how AI traffic on this machine flows, with ZAAFPulse at the centre.
+
+- **Four rows.** The AI tools that are installed or running sit on top, ZAAFPulse (with its Agent Gateway) in the middle, the routers (OmniRoute, 9router) and running local runtimes (Ollama, LM Studio) under it, and the providers and loaded models at the bottom.
+- **How each tool connects** is written on its node: *via gateway*, *via OmniRoute* (or another router), or *monitored* when it goes straight to its provider and ZAAFPulse reads its logs and processes.
+- **Colours:** green when the newest request succeeded in the last 5 minutes, orange within the hour, red for a failed request, a failing router or a runtime that does not answer, grey when idle.
+- **Recent requests** lists the 20 newest from the Claude Code and Codex logs, the gateway and OmniRoute. Click one to light up its path, click a node to highlight its neighbours, and use zoom, pan and fit. The card refreshes every 10 seconds and keeps your view.
+- **Metadata only:** names, statuses, models, token counts and times; no prompt text, URL, key or account email reaches the page.
+
+Layers, colours, sources and how tool routing is detected: **[docs/topology.md](docs/topology.md)**.
+
 ## Trace & Session Explorer
 
 The **Trace explorer** page shows what one AI session did: its turns, model calls, tool calls and subagents as a tree of spans with a timeline, a map of the same turn, and the text of any span on request. It reads Claude Code, Codex, the Agent Gateway, Kiro, Gemini CLI and Antigravity, each as deep as that tool's own logs allow (Claude Code and Codex in full; Antigravity at conversation level, which needs Node 22.13 or newer).
 
-<img alt="Trace explorer: sessions from Claude Code, Codex and Kiro on the left, the span tree of one turn with a failed Bash call and a masked secret, and the session map on the right" src="docs/assets/screen-trace.jpg">
+<img alt="Trace explorer: the sources rail (Claude Code, Codex, Kiro), the span tree of one turn with a failed Bash call whose output has a masked key, and the session map on the right" src="docs/assets/screen-trace.jpg">
 
 - **Text is read on demand and never copied.** The index holds counts, ids and byte offsets. Opening a span reads only its byte range from the original log, in 64 KB pages, and shows it as plain text.
 - **Secrets are masked.** **show** reveals one value at a time and nothing is stored. Text is read only from `~/.claude/projects` and `~/.codex/sessions`.
@@ -596,6 +678,31 @@ Save the turns that matter, replay them on other models, and fail a build when q
 - **Gate in CI.** `zaafpulse eval --dataset auth-regressions --model local/qwen3 --require 'task_completion>=0.7' --ci` exits 1 when a rate falls short.
 
 Shapes, limits, privacy, the API and CI recipes: **[docs/datasets.md](docs/datasets.md)**.
+
+## Monitors and alerts
+
+Monitors watch your usage, cost and quality inside the dashboard server and tell you when something looks wrong. The bell in the top bar lists recent alerts, and **Settings → Monitors** has the rules and the channels.
+
+- **Eight rules:** daily cost, month projection, cost burn (per session, per 10 minutes), tool loop, agent stuck, accuracy drop, evaluator pass rate and unsafe content. Each can be switched on or off, has its own limits, and can be snoozed for an hour or a day. A rule with missing input reports *no data* and never triggers.
+- **Channels:** a desktop notification (on by default) and an optional webhook whose URL and headers go to the OS secret store. Neither carries transcript text. Demo mode sends nothing.
+- **Agent control:** pause (`SIGSTOP`), resume or stop the Claude Code or Codex process behind a session from the Trace explorer, the Live monitor or AI Office. Before every signal the process table is read again and the pid and start time must match; every action is written to `.data/agent-audit.jsonl`.
+- **Auto-pause** for daily cost, cost burn and tool loop is off by default. A paused agent is never resumed or stopped automatically.
+- **Where control is off:** server mode, password sign-in, no sign-in, and Docker. Windows has no pause or resume.
+
+Rules, states, channels, safety checks, the API and known limits: **[docs/monitors.md](docs/monitors.md)**.
+
+## Local model servers
+
+AI Office can start and stop the model servers on your machine.
+
+- **Where:** in **AI Office → Installed AI tools**, the Ollama and LM Studio cards get a row with the server's state, its port and **Start** or **Stop**. The llama.cpp server, Jan, LocalAI and your own servers get cards of their own.
+- **Models come back:** for Ollama and LM Studio, Start loads the models the server last had loaded and keeps them loaded until Stop (Ollama with `keep_alive: -1`, LM Studio with no time-to-live), so they also keep their memory in use.
+- **Stopped the way it runs:** quitting the app, `brew services stop`, the runtime's own stop command, or `SIGINT` then `SIGTERM`; `SIGKILL` is never sent to a model server. Stop asks first, and every action is audited.
+- **Desktop apps (macOS):** the Claude Desktop, ChatGPT, Antigravity and Kiro cards get Start and Stop too, on AI Office and on the Overview. Stop asks the app to quit; if it is still open after 10 s it gets `SIGTERM`, then `SIGKILL` 5 s later, each only while it is still the same process.
+- **Your own servers:** add one in **Settings → Local models** (for example `llama-server` with a model file). It is stored in `config.json` and starts only after you press **Approve**; editing the command, port or health URL asks again.
+- **Where control is off:** server mode, password sign-in, no sign-in, and Docker, the same as agent control. In demo mode the buttons change only what the page shows.
+
+Runtimes, how a server is found and stopped, your own entries, safety and the API: **[docs/local-models.md](docs/local-models.md)**.
 
 ## OpenTelemetry export
 
@@ -756,6 +863,10 @@ lib/trace/             Trace explorer: adapters for Claude Code, Codex, the gate
 lib/evals/             local evals: registry, code evaluators, judge prompts, models, engine, stores, HTTP API, CLI
 lib/datasets/          datasets, replay and experiments: example shape, store, scoring, runner, HTTP API, auto-add, CLI gate
 lib/cost/              cost ledger: collectors, price versions, billing history, ledger store, pass, restate, HTTP API
+lib/monitors/          monitors: the rules, their state machine, alert channels (desktop, webhook) and the HTTP API
+lib/agents/            pausing, resuming and stopping the agent process behind a session, with its safety checks
+lib/runtimes/          local model servers: presets and your own entries, process state, start and stop, model reload
+lib/topology.js        the Overview's provider topology, built from the logs, the gateway, the routers and the runtimes
 lib/claude.js          Claude Code log parser (usage + signals)
 lib/codex.js           Codex log parser (usage + signals), skips the history a fork copies
 lib/signals.js         non-existent-target, injection, secret, risky-command and correction detectors; relevance and
@@ -795,7 +906,7 @@ scripts/bench-index.js indexer benchmark on seeded synthetic logs
 install.sh, install.ps1 one-command installers for macOS/Linux and Windows
 Dockerfile, compose.yaml container image for servers
 .github/workflows/     ci.yml (the full suite on Linux, macOS and Windows), release.yml (binaries, checksums, attestations)
-test/                  62 node:test suites with fake HTTP and MCP servers
+test/                  108 node:test suites with fake HTTP and MCP servers
 test/fixtures/         the labelled synthetic signal corpus (signals/) and cost fixtures (cost/)
 config.example.json    every integration type with placeholder references
 docs/install.md        installers, sign-in, server mode, Docker, single-file binaries, verifying a download
@@ -844,6 +955,9 @@ Apart from the sign-in routes in the first row, every `/api` route needs a signe
 | `GET /api/evals` · `summary` · `status` · `evaluators` · `settings` · `POST /api/evals/run` · `settings` · `preview` · `GET /api/feedback` · `sessions` · `POST /api/feedback` | local evals and feedback: results per session, trends and judge agreement, the judge's status, settings, the external preview, and your ratings and notes; see [docs/evals.md](docs/evals.md#http-api) |
 | `GET /api/datasets` · `POST /api/datasets` · `/api/datasets/<slug>` · `…/examples` · `…/export` · `POST /api/datasets/import` · `/api/datasets/settings` · `GET /api/experiments` · `POST /api/experiments` | datasets of saved turns, import and export, the auto-add rule, and replay experiments; see [docs/datasets.md](docs/datasets.md#http-api) |
 | `POST /api/experiments/<id>/cancel` | stop a running replay experiment after the current call (the call in flight finishes); see [docs/datasets.md](docs/datasets.md#http-api) |
+| `GET /api/topology` | the Overview's provider topology: nodes, edges and recent requests, metadata only; see [docs/topology.md](docs/topology.md#where-the-data-comes-from) |
+| `GET /api/monitors` · `status` · `POST /api/monitors/<rule>` · `channels` · `test` · `GET /api/alerts` | monitor rules and their state, channels, a test send, and recent alerts; see [docs/monitors.md](docs/monitors.md#api) |
+| `GET /api/agents/candidates` · `POST /api/agents/pause` · `resume` · `stop` | the processes that could be behind a session, and pausing, resuming or stopping one; see [docs/monitors.md](docs/monitors.md#agent-control) |
 | `GET /api/runtimes` · `/api/runtimes/config` · `POST /api/runtimes/start` · `stop` · `approve` · `save` · `delete` | local model servers: Start and Stop in AI Office and your own runtimes in Settings; see [docs/local-models.md](docs/local-models.md#api) |
 | `POST /api/rescan` | re-index changed log files now |
 | `GET /api/integrations` | integration health, client registration and recent MCP tool calls |
