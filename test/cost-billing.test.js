@@ -184,3 +184,54 @@ test('lost: with no good copy and earlier data, closed days are assumed metered 
   assert.equal(later.list().lostBefore, '2026-10-23', 'the loss is kept across restarts');
   assert.equal(later.billingFor('codex', '2026-10-20').assumed, true);
 });
+
+test('overrides are written only to a history that was set up: a lost one is dated first, and its loss is kept', () => {
+  const dir = tmp();
+  const b = createBillingHistory({ dir });
+  b.observe({ claude: PLAN }, '2026-10-22', { firstUse: () => '2026-10-15' });
+  fs.rmSync(fileOf(dir));
+  fs.rmSync(`${fileOf(dir)}.bak`);
+  const o = { source: 'claude', from: '2026-10-20', to: '2026-10-20', billing: PLAN };
+  const lost = createBillingHistory({ dir, earlierData: () => true });
+  assert.throws(() => lost.addOverride(o), { code: 'BILLING_NOT_READY' });
+  assert.throws(() => lost.addOverrides([o]), { code: 'BILLING_NOT_READY' });
+  assert.equal(fs.existsSync(fileOf(dir)), false, 'nothing was written');
+  lost.ensure('2026-10-23');
+  lost.addOverride(o);
+  const later = createBillingHistory({ dir, earlierData: () => true });
+  assert.equal(later.lost(), true);
+  assert.deepEqual(parseFile(dir).lostBefore, '2026-10-23', 'the loss is kept');
+  assert.equal(later.billingFor('claude', '2026-10-19').assumed, true);
+  assert.deepEqual(later.billingFor('claude', '2026-10-20'), PLAN);
+
+  const first = createBillingHistory({ dir: tmp() }); // a first run: set up by its first ensure
+  assert.throws(() => first.addOverride(o), { code: 'BILLING_NOT_READY' });
+  first.ensure('2026-10-23');
+  first.addOverride(o);
+  assert.equal(first.lost(), false);
+});
+
+test('overrides: one that a newer override of the same source covers is dropped; the billing is unchanged', () => {
+  const b = createBillingHistory({ dir: tmp() });
+  b.observe({}, '2026-10-22', { firstUse: () => '2026-10-01' });
+  const o = (source, from, to, billing) => ({ source, from, to, billing });
+  b.addOverrides([o('claude', '2026-10-05', '2026-10-06', PLAN), o('codex', '2026-10-05', '2026-10-06', PLAN)]);
+  b.addOverride(o('claude', '2026-10-06', '2026-10-09', METERED)); // overlaps only: both kept
+  b.addOverride(o('claude', '2026-10-04', '2026-10-06', PLAN)); // covers the first claude one
+  b.addOverride(o('claude', '2026-10-04', '2026-10-06', PLAN)); // the same again: replaces it
+  assert.deepEqual(
+    b.list().overrides.map((x) => [x.source, x.from, x.to, x.billing.mode]),
+    [
+      ['codex', '2026-10-05', '2026-10-06', 'plan'],
+      ['claude', '2026-10-06', '2026-10-09', 'metered'],
+      ['claude', '2026-10-04', '2026-10-06', 'plan'],
+    ],
+  );
+  for (const [day, mode] of [
+    ['2026-10-03', 'metered'],
+    ['2026-10-04', 'plan'],
+    ['2026-10-06', 'plan'],
+    ['2026-10-07', 'metered'],
+  ])
+    assert.equal(b.billingFor('claude', day).mode, mode, day);
+});

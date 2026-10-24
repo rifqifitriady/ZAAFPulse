@@ -283,6 +283,7 @@ test('restate is idempotent: a second identical restate changes no total', () =>
   near(once.totals.billedUSD, 20);
   const second = r.cost.restate(req);
   assert.deepEqual(second.rows, [], 'the view already shows the restated amounts');
+  assert.equal(r.cost.billingHistory().overrides.length, 6, "the second restate replaces the first one's overrides");
   for (const cost of [r.cost, r.make()]) {
     const twice = cost.ledger(q);
     assert.deepEqual(twice.rows, once.rows);
@@ -352,4 +353,38 @@ test('restate over a month or corrections that did not read throws, and writes n
   assert.equal(c.restate(req).to, '2026-10-20');
   assert.equal(correctionLines(r).length, 1);
   assert.equal(c.billingHistory().overrides.length, 6);
+});
+
+test('a restate after the billing history was lost keeps the loss: days outside the range stay assumed', () => {
+  const r = rig();
+  r.st.t = at(20);
+  r.st.entries.push(file('a', [ev(at(19), 'm1'), ev(at(20), 'm2')]));
+  r.cost.update();
+  r.st.t = at(21);
+  r.cost.update();
+  for (const f of ['billing.json', 'billing.json.bak']) fs.rmSync(path.join(r.costDir, f));
+  r.st.t = at(22);
+  r.st.settings = { billing: { claude: MAX } };
+  const c = r.make(); // a restart: the history is lost, and no pass has run yet
+  assert.equal(c.status().billing.historyLost, true);
+  assert.equal(c.restate({ from: '2026-10-20', to: '2026-10-20', reason: 'Max on the 20th' }).billing.length, 6);
+
+  const again = r.make();
+  again.update(); // claude is on Max now: the loss keeps it from being backfilled over closed days
+  assert.equal(again.status().billing.historyLost, true);
+  assert.equal(again.billingHistory().lostBefore, '2026-10-22');
+  const rows = again.ledger({ from: '2026-10-19', to: '2026-10-21', groupBy: ['day', 'source', 'kind'] }).rows;
+  const of = (d) => rows.filter((x) => x.day === d);
+  assert.deepEqual(
+    of('2026-10-19').map((x) => [x.kind, x.billingAssumed, x.billedUSD]),
+    [['chat', true, 0.003]],
+  );
+  assert.deepEqual(
+    of('2026-10-20').map((x) => [x.kind, x.billingAssumed]),
+    [
+      ['plan', false],
+      ['chat', false],
+    ],
+  );
+  assert.equal(of('2026-10-21').length, 0, 'no plan row outside the range');
 });
