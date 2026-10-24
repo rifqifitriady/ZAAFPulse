@@ -1,6 +1,6 @@
 # Local model servers
 
-AI Office can start and stop the model servers on your machine with one button: Ollama, LM Studio, the llama.cpp server, Jan, LocalAI, and any server you add yourself. Start and Stop act on the **server**. Stopping it unloads every model it has loaded, and for Ollama and LM Studio Start loads the last ones again (see [Models are loaded again on Start](#models-are-loaded-again-on-start)). Loading, unloading or pulling a single model by hand is not part of this.
+AI Office can start and stop the model servers on your machine with one button: Ollama, LM Studio, the llama.cpp server, Jan, LocalAI, and any server you add yourself. On macOS it can also open and quit the AI desktop apps (see [Desktop apps](#desktop-apps)). Start and Stop act on the **server**. Stopping it unloads every model it has loaded, and for Ollama and LM Studio Start loads the last ones again (see [Models are loaded again on Start](#models-are-loaded-again-on-start)). Loading, unloading or pulling a single model by hand is not part of this.
 
 ## Where the buttons are
 
@@ -9,6 +9,9 @@ In **AI Office → Installed AI tools**:
 - The **Ollama** and **LM Studio** cards get a row under their status line: the server's state and port, **Start** or **Stop**, and how the server runs.
 - **llama.cpp**, **Jan**, **LocalAI** and your own runtimes get a card of their own in the same grid, with the same row and their port.
 - A runtime shows up when it is installed, running, or one of your own entries.
+- The **Claude Desktop**, **ChatGPT**, **Antigravity** and **Kiro** cards get the same row (see [Desktop apps](#desktop-apps)).
+
+The **Overview** shows the same rows on its AI Office cards. It shows only its first six cards, and never adds a card of its own, so a runtime whose card is not among them has no row there: use AI Office.
 
 Stop asks first: "Stop Ollama? Its models are unloaded now and loaded again on the next Start." (for a runtime without the reload below: "Models it has loaded are unloaded.") While a request is out the button reads "Starting…" or "Stopping…". When a start fails, the card shows the error and the last lines of the server's log, with secrets masked and paths removed.
 
@@ -40,7 +43,7 @@ A server is stopped the way it runs. Every stop is confirmed first and audited.
 | started outside ZAAFPulse | a terminal, a Claude session, a script | `SIGINT`, then `SIGTERM` after 5 seconds |
 | managed by the system | a Linux systemd system unit | not stopped: use `systemctl` |
 
-A runtime with its own stop command (LM Studio's `lms server stop`) is stopped with that command. `SIGKILL` is never sent. On Windows a process is stopped with `taskkill /PID n`, without `/F`. After a stop ZAAFPulse waits up to 10 seconds for the server to go; if it is still there, the card says "still shutting down".
+A runtime with its own stop command (LM Studio's `lms server stop`) is stopped with that command. `SIGKILL` is never sent to a model server (only a desktop app can be closed by force, see [Desktop apps](#desktop-apps)). On Windows a process is stopped with `taskkill /PID n`, without `/F`. After a stop ZAAFPulse waits up to 10 seconds for the server to go; if it is still there, the card says "still shutting down".
 
 An entry of your own is stopped only while it is approved (see [Your own runtimes](#your-own-runtimes)). Stopping an unapproved entry is refused with 403.
 
@@ -68,6 +71,29 @@ For **Ollama** and **LM Studio**, Start also loads again the models the server l
 
 The llama.cpp server and your own entries name their model in the command, so they need no reload. Jan and LocalAI are not reloaded.
 
+## Desktop apps
+
+On macOS the **Claude Desktop**, **ChatGPT**, **Antigravity** and **Kiro** cards in AI Office (and on the Overview) get a row with **Start** or **Stop**. The row says "App open" or "App closed"; an app has no port and no URL to answer, so it counts as open while its main process runs. Its helper processes count toward it.
+
+| App | Opens | Main process |
+|---|---|---|
+| Claude Desktop | `Claude.app` | `Claude.app/Contents/MacOS/Claude` |
+| ChatGPT | `ChatGPT.app` | `ChatGPT.app/Contents/MacOS/ChatGPT` |
+| Antigravity | `Antigravity.app` | `Antigravity.app/Contents/MacOS/Antigravity` |
+| Kiro | `Kiro.app` (the IDE) when installed, else `Kiro CLI.app` | `Kiro.app/Contents/MacOS/Kiro`, or `Kiro CLI.app/Contents/MacOS/kiro_cli_desktop` |
+
+Apps are looked up in `/Applications` and `~/Applications`. `kiro-cli` sessions in a terminal are not the Kiro app and are left alone.
+
+- **Start** runs `open -a` with the app found, then waits up to 15 seconds for its main process. The card says "Opened.", or "Opening, not up yet." when it takes longer.
+- **Stop** asks first: "Quit Claude Desktop? If it is still open after 10 s it is force-closed; unsaved work or a running chat or agent can be lost." Then, in two stages:
+  1. The app is asked to quit, as with ⌘Q (`osascript -e 'quit app "Claude"'`). An app with unsaved work may ask you first.
+  2. If its main process is still there after **10 seconds**, it gets `SIGTERM`; if it is still there **5 seconds** later, `SIGKILL`. Before each signal the process is read again, and nothing is sent unless it is still the same process (the same pid and start time). An app that is gone, or a process that was replaced, ends the stop.
+  The card then says "Closed.", or "Still shutting down." when it is still there 3 seconds after the last step.
+- Every step is audited in `.data/agent-audit.jsonl`: the quit, and each signal with `forced: true`.
+- **macOS only.** Elsewhere the cards show no button and say "macOS only".
+- An app is never a card of its own: when its card is not shown (not installed, or not among the Overview's first six), it has no row.
+- Control is off in the same places as for model servers (see [Safety](#safety)).
+
 ## Your own runtimes
 
 Add a server of your own in **Settings → Local models**, for example `llama-server` with a model file. Each entry is stored in `config.json`:
@@ -80,7 +106,7 @@ Add a server of your own in **Settings → Local models**, for example `llama-se
 
 | Field | |
 |---|---|
-| `id` | 1 to 40 lowercase letters, digits or dashes; not a preset's id (`ollama`, `lmstudio`, `llamacpp`, `jan`, `localai`) and not used twice |
+| `id` | 1 to 40 lowercase letters, digits or dashes; not a preset's id (`ollama`, `lmstudio`, `llamacpp`, `jan`, `localai`, `claude-desktop`, `chatgpt`, `antigravity`, `kiro`) and not used twice |
 | `name` | shown on the card (optional) |
 | `command` | the program and its arguments, one string each, at most 1,000 characters each. In Settings you type one argument per line, and Settings turns `~/` at the start of an argument into your home folder when you save. In a `config.json` edited by hand, use absolute paths: `~/` is not expanded there |
 | `port` | 1 to 65535 |
@@ -118,7 +144,7 @@ All routes are behind the dashboard sign-in. Writes need `Content-Type: applicat
 
 | Route | Body | Answer |
 |---|---|---|
-| `GET /api/runtimes` | | `[{ id, name, preset, installed, running, healthy, how, pid, startTime, children, port, canStart, canStop, reason, approved, error }]` |
+| `GET /api/runtimes` | | `[{ id, name, kind, preset, installed, running, healthy, how, pid, startTime, children, port, canStart, canStop, reason, approved, error }]`; `kind` is `"app"` for a desktop app, else `"server"` |
 | `POST /api/runtimes/start` | `{ id }` | `{ state: "running" }`, or `{ state: "starting", note, log }` |
 | `POST /api/runtimes/stop` | `{ id, pid, startTime }` | `{ state: "stopped" }`, or `{ state: "stopping", note }` |
 | `POST /api/runtimes/approve` | `{ id }` | `{ approved: true }` |

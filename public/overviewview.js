@@ -277,7 +277,7 @@ function viewOverview() {
   <div class="card topo" data-topo aria-busy="true"></div>
 
   <div class="section-head"><h2>AI Office</h2><span class="meta">— ${squad.total} detected · ${squad.running} running now</span><a class="link" href="#squad">View all ↗</a></div>
-  <div class="grid squad">${squad.html}</div>
+  <div class="grid squad" data-rt-grid="slots">${squad.html}</div>
 
   <div class="grid two">
     <div class="card"><div class="card-head"><h3>Model mix</h3><span class="meta">tokens by model</span><div class="right">${legend()}</div></div>
@@ -430,6 +430,8 @@ function mountOverview() {
   const canvas = $('#ov-scene');
   if (canvas && state.data) isoStage(canvas, { draw: drawCity, fit: [13.4, 8.9], origin: [0.46, 0.62] });
   if (typeof topoMount === 'function') topoMount(); // public/topologyview.js: polls /api/topology on its own
+  // public/runtimesview.js: Start and Stop on the AI Office cards shown here; polls until the page is left
+  if (typeof rtMount === 'function') rtMount();
 }
 
 if (typeof module !== 'undefined') module.exports = { emptyLogsNote, liveNoteStep };

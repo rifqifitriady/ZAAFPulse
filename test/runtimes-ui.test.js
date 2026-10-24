@@ -16,6 +16,7 @@ const {
   rtActionRow,
   rtCard,
   rtModelsText,
+  RT_CARD_IDS,
 } = require('../public/runtimesview');
 
 const SRC = path.join(__dirname, '..', 'public', 'runtimesview.js');
@@ -218,4 +219,72 @@ test('the action row shows the models line as text', () => {
   assert.equal(line.textContent, `Start reloads ${evil}`);
   const none = rtActionRow(fakeDoc(), R({ models: null }));
   assert.ok(!flat(none).some((n) => n.className && n.className.includes('rt-models')));
+});
+
+// The desktop apps (kind 'app': Claude Desktop, ChatGPT, Antigravity, Kiro) get the same row on their own cards.
+const APP = (over = {}) =>
+  R({ id: 'claude-desktop', name: 'Claude Desktop', kind: 'app', how: 'app', port: null, children: 3, ...over });
+
+test('RT_CARD_IDS: the four desktop apps have a slot on their cards, next to Ollama and LM Studio', () => {
+  for (const id of ['ollama', 'lmstudio', 'claude-desktop', 'chatgpt', 'antigravity', 'kiro'])
+    assert.ok(RT_CARD_IDS.includes(id), id);
+});
+
+test('an app: "App open" or "App closed", no port, no model processes, no how note', () => {
+  assert.deepEqual(rtStatus(APP()), { cls: 'running', text: 'App open' });
+  assert.deepEqual(rtStatus(APP({ healthy: false })), { cls: 'running', text: 'App open' });
+  assert.deepEqual(rtStatus(APP({ running: false, port: 1234 })), { cls: 'idle', text: 'App closed' });
+  // Not found where it is opened from (or not on macOS): the reason line under the row says why.
+  assert.deepEqual(rtStatus(APP({ running: false, installed: false })), { cls: 'off', text: '' });
+  assert.equal(rtHowNote(APP()), '');
+  assert.equal(rtHowNote(APP({ how: 'process' })), '');
+});
+
+test('an app: the Stop confirmation warns of the force-close, and the results say opened and closed', () => {
+  assert.equal(
+    rtConfirmText(APP()),
+    'Quit Claude Desktop? If it is still open after 10 s it is force-closed; unsaved work or a running chat or agent can be lost.',
+  );
+  assert.equal(rtConfirmText(APP({ name: 'Kiro', id: 'kiro' })).slice(0, 11), 'Quit Kiro? ');
+  const app = APP();
+  assert.equal(rtResultText('start', { state: 'running' }, app), 'Opened.');
+  assert.equal(rtResultText('start', { state: 'starting', note: 'opening, not up yet' }, app), 'Opening, not up yet.');
+  assert.equal(rtResultText('start', { state: 'starting' }, app), 'Opening, not up yet.');
+  assert.equal(rtResultText('stop', { state: 'stopped' }, app), 'Closed.');
+  assert.equal(rtResultText('stop', { state: 'stopping', note: 'still shutting down' }, app), 'Still shutting down.');
+  assert.equal(rtResultText('stop', { state: 'stopped', demo: true }, app), 'Demo mode: nothing was stopped.');
+  // A model server keeps its own words.
+  assert.equal(rtResultText('start', { state: 'running' }, R()), 'Started.');
+  assert.equal(rtResultText('stop', { state: 'stopped' }, R({ kind: 'server' })), 'Stopped.');
+});
+
+test('rtCardPlan: an app never gets a card of its own, and a slots-only grid (the Overview) draws no own cards', () => {
+  const list = [
+    R(),
+    APP(),
+    APP({ id: 'chatgpt', name: 'ChatGPT' }),
+    APP({ id: 'kiro', name: 'Kiro', reason: 'macOS only' }),
+    R({ id: 'localai' }),
+  ];
+  const office = rtCardPlan(list, ['ollama', 'claude-desktop']);
+  assert.deepEqual(office.slots.map((r) => r.id), ['ollama', 'claude-desktop']);
+  assert.deepEqual(office.own.map((r) => r.id), ['localai'], 'the apps without a card on the page are not drawn');
+  const overview = rtCardPlan(list, ['claude-desktop', 'chatgpt'], { slotsOnly: true });
+  assert.deepEqual(overview.slots.map((r) => r.id), ['claude-desktop', 'chatgpt']);
+  assert.deepEqual(overview.own, []);
+});
+
+test('an app\'s action row: the state, Stop, no how note; off macOS no button and the reason as given', () => {
+  const all = flat(rtActionRow(fakeDoc(), APP()));
+  assert.equal(all.find((n) => n.className === 'rt-state').textContent, 'App open');
+  assert.equal(all.find((n) => n.tag === 'button').attrs['data-rt-id'], 'claude-desktop');
+  assert.ok(!all.some((n) => n.className === 'rt-how'));
+  const off = rtActionRow(
+    fakeDoc(),
+    APP({ running: false, installed: false, canStart: false, canStop: false, reason: 'macOS only' }),
+  );
+  assert.ok(!flat(off).some((n) => n.tag === 'button'));
+  assert.ok(!flat(off).some((n) => n.className === 'rt-state'), 'no empty state line');
+  assert.ok(texts(off).includes('macOS only'), texts(off).join(' | '));
+  assert.ok(texts(rtActionRow(fakeDoc(), R({ canStop: false, reason: 'not installed' }))).includes('Not installed'));
 });

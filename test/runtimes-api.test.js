@@ -434,3 +434,22 @@ test('demo mode: Ollama remembers a model, and a Start after a Stop answers relo
   const lms = await call('POST', '/api/runtimes/start', { id: 'lmstudio' });
   assert.deepEqual(lms.body, { state: 'running', demo: true }, 'nothing remembered: no reloading');
 });
+
+test('demo mode: the four desktop apps, Claude Desktop open, and a demo Stop and Start of an app', async () => {
+  const { runtimesDemo } = require('../lib/demo');
+  const { call } = setup({ demo: runtimesDemo() });
+  const rows = (await call('GET', '/api/runtimes')).body;
+  const apps = rows.filter((r) => r.kind === 'app');
+  assert.deepEqual(apps.map((r) => r.id).sort(), ['antigravity', 'chatgpt', 'claude-desktop', 'kiro']);
+  for (const r of apps) assert.equal(r.port, null, r.id);
+  assert.equal(rows.find((r) => r.id === 'ollama').kind, 'server');
+  const claude = apps.find((r) => r.id === 'claude-desktop');
+  assert.equal(claude.running, true);
+  assert.equal(claude.canStop, true);
+  const stop = await call('POST', '/api/runtimes/stop', { id: 'claude-desktop', pid: claude.pid, startTime: claude.startTime });
+  assert.deepEqual(stop.body, { state: 'stopped', demo: true });
+  assert.deepEqual((await call('POST', '/api/runtimes/start', { id: 'claude-desktop' })).body, { state: 'running', demo: true });
+  const after = (await call('GET', '/api/runtimes')).body.find((r) => r.id === 'claude-desktop');
+  assert.equal(after.how, 'app');
+  assert.equal(after.models, null);
+});
