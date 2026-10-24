@@ -272,8 +272,8 @@ test('apps: four presets of kind app; the model servers are kind server, and so 
   );
   assert.deepEqual(preset('claude-desktop').app, ['Claude.app']);
   assert.deepEqual(preset('chatgpt').app, ['ChatGPT.app']);
-  assert.deepEqual(preset('antigravity').app, ['Antigravity.app']);
   assert.deepEqual(preset('kiro').app, ['Kiro.app', 'Kiro CLI.app'], 'Kiro.app first: the first one installed wins');
+  assert.deepEqual(preset('antigravity').app, ['Antigravity IDE.app', 'Antigravity.app'], 'the IDE build first');
   for (const id of APP_IDS) {
     const p = preset(id);
     assert.equal(p.openApp, true, `${id}: Start opens the app`);
@@ -324,4 +324,12 @@ test('apps: the main process matches, in /Applications or ~/Applications; helper
   // A model server never matches an app row and the other way round.
   for (const id of ['ollama', 'lmstudio', 'llamacpp', 'jan', 'localai'])
     for (const main of [...Object.values(MAIN), KIRO_CLI]) assert.ok(!preset(id).match(row(main)), `${id} ${main}`);
+});
+
+test('an app main process has launchd (pid 1) as parent: a CLI wrapper running the same exe from a shell is not the app', () => {
+  const ag = preset('antigravity');
+  const exe = '/Applications/Antigravity IDE.app/Contents/MacOS/Electron';
+  assert.ok(ag.match({ pid: 3290, ppid: 1, args: exe }));
+  assert.ok(!ag.match({ pid: 5000, ppid: 4999, args: `${exe} /x/cli.js --wait file.txt` }), 'ELECTRON_RUN_AS_NODE wrapper');
+  assert.ok(ag.match({ pid: 3290, args: exe }), 'a row without ppid is judged by its program alone');
 });
