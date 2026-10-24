@@ -371,3 +371,29 @@ test('an app runs while its main process is there: healthy equals running, its h
   assert.equal(x.chatgpt.appBundle, null);
   assert.deepEqual(asked.filter((u) => !/^http:\/\/127\.0\.0\.1:(11434|1234|1337|8080)\//.test(u)), [], 'only model servers are probed');
 });
+
+// A desktop app sits at the top of a large process tree: a shell inside Claude Desktop that runs `ollama serve` must not
+// make Ollama Claude Desktop's child. A row that is itself a runtime's server is only absorbed by the same runtime.
+test('a model server started from inside a desktop app is its own runtime, not the app child', async () => {
+  const rows = [
+    row(100, 1, '/Applications/Claude.app/Contents/MacOS/Claude', 900),
+    row(110, 100, '/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=utility'),
+    row(120, 110, '/bin/zsh -l'),
+    row(130, 120, '/opt/homebrew/bin/ollama serve', 60),
+  ];
+  const { st } = stateOf(rows);
+  const x = byId(await st.list());
+  assert.equal(x.ollama.running, true);
+  assert.equal(x.ollama.pid, 130);
+  assert.equal(x['claude-desktop'].running, true);
+  assert.equal(x['claude-desktop'].children, 2, 'the helper and the shell, not the Ollama server');
+});
+
+test('Antigravity IDE.app (exe Electron) is Antigravity, and comes before Antigravity.app', async () => {
+  const rows = [row(3290, 1, '/Applications/Antigravity IDE.app/Contents/MacOS/Electron', 900)];
+  const { st } = stateOf(rows);
+  const a = byId(await st.list()).antigravity;
+  assert.equal(a.running, true);
+  assert.equal(a.pid, 3290);
+  assert.equal(a.appBundle, 'Antigravity IDE.app');
+});
