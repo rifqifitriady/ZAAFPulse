@@ -149,3 +149,21 @@ test('unusable bodies and entries are dropped and reported; nothing throws', () 
   near(sum(again.pricerFor(1).parts('m', 1000, 0, 0, 0, 0, null)), 0.001);
   assert.equal(again.observe({ m: { input: 5 } }, '2026-10-24').id, 5);
 });
+
+test('model entries that are not objects are ignored and reported; pricerFor never throws', () => {
+  const dir = path.join(tmp(), 'prices');
+  const p = createPriceVersions({ dir });
+  p.observe({ m: { input: 1 } }, '2026-10-20');
+  p.observe({ m: { input: 2 } }, '2026-10-21');
+  p.observe({ m: { input: 3 } }, '2026-10-22');
+  const body = (id, pricing) => fs.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify({ id, pricing }));
+  body(1, { m: null });
+  body(2, { m: 'x' });
+  body(3, { m: { input: 3 }, bad: null, worse: 7 });
+  const again = createPriceVersions({ dir });
+  for (const id of [1, 2, 3]) assert.doesNotThrow(() => again.pricerFor(id));
+  near(sum(again.pricerFor(3).parts('m', 1000, 0, 0, 0, 0, null)), 0.003);
+  near(sum(again.pricerFor(1).parts('m', 1000, 0, 0, 0, 0, null)), 0);
+  assert.ok(again.problems().length >= 3);
+  assert.ok(!again.problems().join('').includes(dir));
+});
