@@ -739,3 +739,70 @@ test('invalid saved settings do not rewrite the billing history', () => {
   );
   assert.equal(billedOnce(r.cost, '2026-10-22', '2026-10-23')['2026-10-23'].claude, 'plan');
 });
+
+// Claude metered from its first use on the 15th, switched to a plan on the 20th; passes up to the 21st.
+function switchedHistory() {
+  const r = rig({ day: 20 });
+  r.st.entries.push(file('a', [ev(at(15), 'm1'), ev(at(20), 'm2')]));
+  r.cost.update();
+  r.st.settings = { billing: { claude: MAX } };
+  r.cost.retag();
+  r.st.t = at(21);
+  r.st.entries.push(file('b', [ev(at(21), 'm3')]));
+  r.cost.update();
+  return r;
+}
+const billingFile = (r) => path.join(r.costDir, 'billing.json');
+
+test('a damaged billing history comes back from its last good copy: closed days keep their billing', () => {
+  const r = switchedHistory();
+  const before = billedOnce(r.cost, '2026-10-15', '2026-10-21');
+  assert.deepEqual([before['2026-10-15'].claude, before['2026-10-20'].claude], ['metered', 'plan']);
+  fs.writeFileSync(billingFile(r), '{ torn');
+  r.st.t = at(22);
+  const again = r.make();
+  const st = again.update();
+  assert.ok(fs.existsSync(`${billingFile(r)}.bad`));
+  assert.ok(st.billing.problems.some((p) => /recovered from its last good copy/.test(p)));
+  assert.equal(st.billing.historyLost, false);
+  assert.doesNotMatch(JSON.stringify(st.billing), /Users|zp-cost-pass/);
+  const after = billedOnce(again, '2026-10-15', '2026-10-22');
+  for (const d of Object.keys(before)) assert.deepEqual(after[d], before[d], d);
+  for (const d of ['2026-10-16', '2026-10-17', '2026-10-18', '2026-10-19'])
+    assert.equal(planOf(again, d, 'claude').length, 0, d);
+  near(useOf(again, '2026-10-15', 'claude').billedUSD, 0.003);
+});
+
+test('a billing history lost on a later run: closed days are billed at list as assumed, no plan rows, today follows the settings', () => {
+  const r = switchedHistory();
+  fs.writeFileSync(billingFile(r), '{ torn');
+  fs.rmSync(`${billingFile(r)}.bak`);
+  r.st.t = at(22);
+  r.st.entries.push(file('c', [ev(at(22), 'm4')]));
+  for (const c of [r.make(), r.make()]) {
+    const st = c.update();
+    assert.equal(st.billing.historyLost, true);
+    assert.ok(st.billing.problems.includes('history lost: past days are billed as metered until restated'));
+    const body = c.ledger({ from: '2026-10-15', to: '2026-10-22', groupBy: ['day', 'source', 'kind'] });
+    assert.equal(body.billing.historyLost, true);
+    for (const x of body.rows.filter((y) => y.day < '2026-10-22')) {
+      assert.notEqual(x.kind, 'plan', `${x.day}: no plan row before today`);
+      near(x.billedUSD, x.listUSD);
+      assert.equal(x.billingAssumed, true, x.day);
+    }
+    const today = body.rows.filter((y) => y.day === '2026-10-22');
+    assert.deepEqual(today.map((y) => [y.kind, y.billingAssumed]).sort(), [['chat', false], ['plan', false]]);
+    assert.equal(today.find((y) => y.kind === 'chat').billedUSD, 0);
+  }
+});
+
+test('a missing billing history on a true first run: the first-run rule applies as before', () => {
+  const r = rig({ settings: { billing: { claude: MAX } } });
+  r.st.entries.push(file('a', [ev(at(18), 'm1'), ev(at(22), 'm2')]));
+  const st = r.cost.update();
+  assert.equal(st.billing.historyLost, false);
+  const b = billedOnce(r.cost, '2026-10-18', '2026-10-22');
+  for (const d of ['2026-10-18', '2026-10-19', '2026-10-20', '2026-10-21', '2026-10-22'])
+    assert.equal(b[d].claude, 'plan', d);
+  for (const f of ['billing.json', 'billing.json.bak']) assert.ok(fs.existsSync(path.join(r.costDir, f)), f);
+});
