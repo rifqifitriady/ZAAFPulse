@@ -205,3 +205,90 @@ test('readNew: the first run reads the rotated file too; then only new complete 
   );
   assert.deepEqual(C.readNew(f, r.cursor).rows, []);
 });
+
+test('readNew: a rotation by another process between the head and the data reads every line exactly once', () => {
+  // Another process (the dataset CLI's gateway) can rename the log to .1 at any moment of a pass. Each case rotates
+  // right after the reader's first read (the head) or its second (the data) of the file.
+  for (const after of [1, 2]) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-cost-race-'));
+    const f = path.join(dir, 'log.jsonl');
+    const L = (n) => JSON.stringify({ n }) + '\n';
+    const seen = [];
+    fs.writeFileSync(f, L(1) + L(2) + L(3));
+    let r = C.readNew(f, undefined);
+    seen.push(...r.rows.map((x) => x.n));
+    fs.appendFileSync(f, L(4));
+    const real = fs.readSync;
+    let calls = 0;
+    fs.readSync = (...args) => {
+      const got = real(...args);
+      if (++calls === after) {
+        fs.renameSync(f, f + '.1');
+        fs.writeFileSync(f, L(5));
+      }
+      return got;
+    };
+    try {
+      r = C.readNew(f, r.cursor);
+    } finally {
+      fs.readSync = real;
+    }
+    assert.ok(calls >= after, 'the rotation happened during the pass');
+    seen.push(...r.rows.map((x) => x.n));
+    for (const more of [L(6), L(7)]) {
+      fs.appendFileSync(f, more);
+      r = C.readNew(f, r.cursor);
+      seen.push(...r.rows.map((x) => x.n));
+    }
+    assert.deepEqual(seen, [1, 2, 3, 4, 5, 6, 7], `rotated after read ${after}`);
+  }
+});
+
+test('readNew: a partial line is read once it is complete, also when the file was rotated meanwhile', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-cost-torn-'));
+  const f = path.join(dir, 'log.jsonl');
+  const L = (n) => JSON.stringify({ n }) + '\n';
+  fs.writeFileSync(f, L(1) + '{"n":');
+  let r = C.readNew(f, undefined);
+  assert.deepEqual(
+    r.rows.map((x) => x.n),
+    [1],
+  );
+  fs.appendFileSync(f, '2}\n{"n"');
+  r = C.readNew(f, r.cursor);
+  assert.deepEqual(
+    r.rows.map((x) => x.n),
+    [2],
+  );
+  fs.appendFileSync(f, ':3}\n');
+  fs.renameSync(f, f + '.1');
+  fs.writeFileSync(f, L(4) + '{"n":5');
+  r = C.readNew(f, r.cursor);
+  assert.deepEqual(
+    r.rows.map((x) => x.n),
+    [3, 4],
+  );
+  fs.appendFileSync(f, '}\n');
+  r = C.readNew(f, r.cursor);
+  assert.deepEqual(
+    r.rows.map((x) => x.n),
+    [5],
+  );
+});
+
+test('readNew: a first line longer than 4096 bytes still names the file, so its rotation is followed', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-cost-long-'));
+  const f = path.join(dir, 'log.jsonl');
+  const L = (n, pad = '') => JSON.stringify({ n, pad }) + '\n';
+  fs.writeFileSync(f, L(1, 'x'.repeat(5000)));
+  assert.notEqual(C.headOf(f), null);
+  let r = C.readNew(f, undefined);
+  fs.appendFileSync(f, L(2));
+  fs.renameSync(f, f + '.1');
+  fs.writeFileSync(f, L(3, 'y'.repeat(5000)));
+  r = C.readNew(f, r.cursor);
+  assert.deepEqual(
+    r.rows.map((x) => x.n),
+    [2, 3],
+  );
+});
