@@ -1,4 +1,5 @@
 const test = require('node:test');
+const { afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const net = require('net');
@@ -9,6 +10,19 @@ const { spawn: realSpawn } = require('child_process');
 const { entries, commandHash } = require('../lib/runtimes/registry');
 const { createRuntimeState, jsonFile } = require('../lib/runtimes/state');
 const { createRuntimeControl, OFF_TEXT } = require('../lib/runtimes/control');
+
+// No test sends a real signal. A setup that does not inject its own `kill` gets this one: it records the signal and
+// throws, and the afterEach below fails the test (the control code swallows a throw from kill as "gone").
+const strayKills = [];
+const noRealKill = (pid, signal) => {
+  if (signal === 0) return process.kill(pid, 0);
+  strayKills.push([pid, signal]);
+  throw new Error(`a test sent ${signal} to ${pid} without injecting kill`);
+};
+afterEach(() => {
+  const s = strayKills.splice(0);
+  assert.deepEqual(s, [], 'a test signalled a real process');
+});
 
 const POSIX = process.platform !== 'win32';
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
@@ -443,6 +457,7 @@ test('stop commands run with the same environment as the started runtime', async
   const dir = tmp('zp-rt-stopenv-');
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const ctl = createRuntimeControl({
+    kill: noRealKill,
     state: { one: async () => item({ stopArgv: ['/x/lms', 'server', 'stop'], entry: LMSTUDIO, how: 'app' }), list: async () => [] },
     dataDir: dir,
     audit: recorder(),
@@ -471,6 +486,7 @@ test('an unexpected failure inside stop or approve is audited with status 500 an
     throw new Error('disk on fire at /Users/x');
   };
   const ctl = createRuntimeControl({
+    kill: noRealKill,
     state: { one: boom, list: boom },
     entries: () => entries([{ id: 'mine', name: 'Mine', command: ['/bin/true'], port: 9 }]),
     dataDir: dir,
@@ -593,6 +609,7 @@ test('a stop command that never exits resolves as a failure after its own timer'
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const killed = [];
   const ctl = createRuntimeControl({
+    kill: noRealKill,
     state: { one: async () => item({ stopArgv: ['/x/ollama', 'stop'] }), list: async () => [] },
     dataDir: dir,
     audit: recorder(),
@@ -687,6 +704,7 @@ function startSetup({ items, models, probe = async () => true, healthWaitMs = 10
   const audit = recorder();
   let n = 0;
   const ctl = createRuntimeControl({
+    kill: noRealKill,
     state: {
       one: async () => {
         const x = items[Math.min(n++, items.length - 1)];
@@ -775,7 +793,7 @@ test('list rows carry models for Ollama and LM Studio, null otherwise; status on
   const mk = (x, models) => {
     const dir = tmp('zp-rt-view-');
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-    return createRuntimeControl({ state: { list: async () => x }, dataDir: dir, audit: recorder(), inDocker: false, models });
+    return createRuntimeControl({ kill: noRealKill, state: { list: async () => x }, dataDir: dir, audit: recorder(), inDocker: false, models });
   };
   const rows = await mk([item(), lmsItem, janItem], fakeModels({ status })).list();
   assert.deepEqual(rows.map((r) => [r.id, r.models]), [
@@ -816,7 +834,7 @@ test('reloaded writes one audit line with counts and no names', async (t) => {
 
 // ---- the desktop apps (kind 'app'): nothing real is opened, quit or signalled ----
 const APP = (id) => entries([]).find((e) => e.id === id);
-const APP_PID = { pid: 84551, startTime: 1_790_000_100_000 };
+const APP_PID = { pid: 4000001, startTime: 1_790_000_100_000 };
 const appItem = (over = {}) =>
   item({
     entry: APP('claude-desktop'),
@@ -1096,4 +1114,9 @@ test('app stop: a signal that is not permitted is audited and answers stopping, 
       [false, 'signal', 'SIGTERM', 403],
     ],
   );
+});
+
+test('the test guard: a kill that was not injected is recorded, throws and fails the test that sent it', () => {
+  assert.throws(() => noRealKill(4_000_009, 'SIGKILL'), /without injecting kill/);
+  assert.deepEqual(strayKills.splice(0), [[4_000_009, 'SIGKILL']]);
 });
