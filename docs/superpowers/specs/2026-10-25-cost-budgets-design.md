@@ -11,7 +11,7 @@ Cost Control is built in five sub-projects (see docs/superpowers/specs/2026-10-2
 | What a budget measures | Chosen per budget: **usage value** (`listUSD`, the default) or **what was paid** (`billedUSD`). |
 | Scope | Global, or **one** dimension: cost center, gateway API key, project, model, provider, or source (`claude`, `codex`, `gateway`, `judge`, `replay`, `collab`). No combinations. |
 | Periods | Day, week (starts Monday), month (starts on the 1st), in the machine's local time. Nothing carries over. |
-| Alerts | Up to 3 thresholds per budget (default 50 / 80 / 100 %), plus a **projection alert** once at least 25 % of the period has passed. Delivered through the Monitors channels (bell, desktop, webhook); only on a change of state. |
+| Alerts | Up to 2 warning levels per budget plus 100 % (default 50 / 80 / 100 %), plus a **projection alert** once at least 25 % of the period has passed. Delivered through the Monitors channels (bell, desktop, webhook); only on a change of state. |
 | At 100 % | A notification, plus optional enforcement per budget: **block** matching gateway requests (HTTP 402) or **pause** the local agent. Default: notify only. Rerouting to a cheaper or private model is deferred to sub-project 4. |
 | Existing controls | **Migrated** to budgets: `monthlyBudgetUSD`, per-key `budgetUSD`, and the Monitors rules `daily_cost` and `month_projection`. Old settings keep being read. |
 | Architecture | Budgets are instances of a `budget` rule in the Monitors engine; a real-time **gateway guard** enforces blocks. |
@@ -37,7 +37,7 @@ Cost Control is built in five sub-projects (see docs/superpowers/specs/2026-10-2
   period: 'day' | 'week' | 'month',
   amount, currency,         // currency 'USD' or the display currency (e.g. 'IDR')
   measure: 'list' | 'billed',          // default 'list'
-  thresholds: [50, 80, 100],           // 1–3 ascending integers in 1..100; the last one may be 100
+  thresholds: [50, 80],                // warning levels: 0–2 ascending integers in 1..99; 100 % is always 'exceeded'
   projection: true,                    // default true
   enforce: 'none' | 'block' | 'pause', // default 'none'
   legacy: null | 'monthlyBudgetUSD' | 'keyBudget' }   // set only for budgets read from old settings
@@ -57,7 +57,7 @@ Validation (400 with reasons on save; an invalid saved list keeps the last valid
 - Corrections and billing overrides apply, as in every ledger read.
 - **Currency:** an amount in the display currency is converted to USD with the latest rate on or before today. With no rate, the budget is `no_data` and says why.
 
-**States:** `ok` → `threshold_1` → `threshold_2` → `exceeded`, where the last threshold, normally 100 %, is `exceeded`.
+**States:** `ok` → `warn_<n>` for each warning level reached (e.g. `warn_50`, `warn_80`) → `exceeded` at 100 %, always.
 - `projected` is reported beside the threshold state when, at ≥ 25 % of the period, `spent ÷ elapsed fraction > amount`.
 - `no_data` when the ledger months the period needs are unreadable, the billing history is lost for a `billed` budget, or there is no rate.
 - An alert fires only on a change of state. A new period starts at `ok` without an alert.
