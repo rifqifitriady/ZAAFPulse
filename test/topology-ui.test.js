@@ -643,6 +643,18 @@ test('topologyview.js builds no HTML from server text (S1)', () => {
   assert.match(src, /createElementNS\(TOPO_NS/);
 });
 
+test("the Overview's AI Office cards get the Start/Stop rows: a slots-only grid, filled by rtMount", () => {
+  const ov = fs.readFileSync(path.join(__dirname, '..', 'public', 'overviewview.js'), 'utf8');
+  assert.match(ov, /<div class="grid squad" data-rt-grid="slots">\$\{squad\.html\}<\/div>/);
+  const mount = /function mountOverview\(\) \{([\s\S]*?)\n\}/.exec(ov);
+  assert.ok(mount, 'mountOverview');
+  assert.match(mount[1], /rtMount\(\)/);
+  // rtMount polls only while a grid is on screen and stops on unmount, as on AI Office.
+  const rt = fs.readFileSync(path.join(__dirname, '..', 'public', 'runtimesview.js'), 'utf8');
+  assert.match(rt, /onUnmount\(\(\) => clearInterval\(timer\)\)/);
+  assert.match(rt, /dataset\.rtGrid === 'slots'/);
+});
+
 test('the Overview holds the section above AI Office and the page loads the script before overviewview.js', () => {
   const ov = fs.readFileSync(path.join(__dirname, '..', 'public', 'overviewview.js'), 'utf8');
   const topo = ov.indexOf('<h2>Provider topology</h2>');

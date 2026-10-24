@@ -697,7 +697,8 @@ AI Office can start and stop the model servers on your machine.
 
 - **Where:** in **AI Office → Installed AI tools**, the Ollama and LM Studio cards get a row with the server's state, its port and **Start** or **Stop**. The llama.cpp server, Jan, LocalAI and your own servers get cards of their own.
 - **Models come back:** for Ollama and LM Studio, Start loads the models the server last had loaded and keeps them loaded until Stop (Ollama with `keep_alive: -1`, LM Studio with no time-to-live), so they also keep their memory in use.
-- **Stopped the way it runs:** quitting the app, `brew services stop`, the runtime's own stop command, or `SIGINT` then `SIGTERM`; `SIGKILL` is never sent. Stop asks first, and every action is audited.
+- **Stopped the way it runs:** quitting the app, `brew services stop`, the runtime's own stop command, or `SIGINT` then `SIGTERM`; `SIGKILL` is never sent to a model server. Stop asks first, and every action is audited.
+- **Desktop apps (macOS):** the Claude Desktop, ChatGPT, Antigravity and Kiro cards get Start and Stop too, on AI Office and on the Overview. Stop asks the app to quit; if it is still open after 10 s it gets `SIGTERM`, then `SIGKILL` 5 s later, each only while it is still the same process.
 - **Your own servers:** add one in **Settings → Local models** (for example `llama-server` with a model file). It is stored in `config.json` and starts only after you press **Approve**; editing the command, port or health URL asks again.
 - **Where control is off:** server mode, password sign-in, no sign-in, and Docker, the same as agent control. In demo mode the buttons change only what the page shows.
 
