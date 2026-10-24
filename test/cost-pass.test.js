@@ -806,3 +806,170 @@ test('a missing billing history on a true first run: the first-run rule applies 
     assert.equal(b[d].claude, 'plan', d);
   for (const f of ['billing.json', 'billing.json.bak']) assert.ok(fs.existsSync(path.join(r.costDir, f)), f);
 });
+
+// The log positions (cursors.json): two gateway lines, one judge call outside the gateway and one Claude Code
+// response, read by one pass.
+const cursorFile = (r) => path.join(r.costDir, 'cursors.json');
+const LOST = 'cursor state lost: gateway and judge lines are paused; see docs/cost.md (rebuild)';
+const ONCE = { claude: 1, gateway: 2, judge: 1 };
+function countedOnce() {
+  const r = rig();
+  fs.writeFileSync(r.gatewayLog, gwLine(at(22, 1)) + gwLine(at(22, 2)));
+  r.cost.recordJudge({ kind: 'ollama', provider: 'ollama', model: 'qwen3:8b', usage: { input: 900, output: 30 } });
+  r.st.entries.push(file('a', [ev(at(22, 3), 'm1')]));
+  r.cost.update();
+  return r;
+}
+
+test('a true first run reads every log once and saves the positions with a last good copy', () => {
+  const r = countedOnce();
+  const st = r.cost.status();
+  assert.deepEqual(st.cursors, { error: null, problems: [] });
+  assert.deepEqual(requestsBy(r.cost, '2026-10-22', 'source'), ONCE);
+  assert.equal(fs.readFileSync(`${cursorFile(r)}.bak`, 'utf8'), fs.readFileSync(cursorFile(r), 'utf8'));
+  if (process.platform !== 'win32') assert.equal(fs.statSync(`${cursorFile(r)}.bak`).mode & 0o777, 0o600);
+  r.cost.update();
+  const again = r.make();
+  again.update();
+  assert.deepEqual(requestsBy(again, '2026-10-22', 'source'), ONCE);
+});
+
+test('a missing, empty or torn cursors.json comes back from its last good copy: every line still counts once', () => {
+  for (const [damage, how] of [
+    [null, 'missing'],
+    ['', 'damaged'],
+    ['{"gateway":{"head":"ab', 'damaged'],
+    ['{"gateway":{"offset":-4},"version":1}', 'damaged'],
+  ]) {
+    const r = countedOnce();
+    if (damage === null) fs.rmSync(cursorFile(r));
+    else fs.writeFileSync(cursorFile(r), damage);
+    const again = r.make();
+    let st = again.update();
+    assert.deepEqual(requestsBy(again, '2026-10-22', 'source'), ONCE, how);
+    assert.equal(st.collectors.gateway.error, null);
+    assert.equal(st.collectors.judge.error, null);
+    assert.deepEqual(st.cursors, {
+      error: null,
+      problems: [`the log positions were ${how} and were recovered from their last good copy`],
+    });
+    assert.equal(fs.existsSync(`${cursorFile(r)}.bad`), damage !== null, 'a damaged file is kept aside');
+    assert.doesNotMatch(JSON.stringify(st), /Users|zp-cost-pass/);
+    fs.appendFileSync(r.gatewayLog, gwLine(at(22, 4)));
+    st = again.update();
+    assert.deepEqual(requestsBy(again, '2026-10-22', 'source'), { ...ONCE, gateway: 3 });
+    const fresh = r.make();
+    fresh.update();
+    assert.deepEqual(requestsBy(fresh, '2026-10-22', 'source'), { ...ONCE, gateway: 3 });
+  }
+});
+
+test('cursors.json lost with no good copy on a later run: the gateway and judge logs wait, nothing counts twice', () => {
+  const r = countedOnce();
+  fs.writeFileSync(cursorFile(r), '{ torn');
+  fs.rmSync(`${cursorFile(r)}.bak`);
+  fs.appendFileSync(r.gatewayLog, gwLine(at(22, 4)));
+  r.st.entries.push(file('b', [ev(at(22, 5), 'm2')]));
+  for (const c of [r.make(), r.make()]) {
+    // A restart stays paused: nothing was saved over the lost positions.
+    c.recordJudge({ kind: 'ollama', provider: 'ollama', model: 'qwen3:8b', usage: { input: 900, output: 30 } });
+    const st = c.update();
+    assert.deepEqual(requestsBy(c, '2026-10-22', 'source'), { ...ONCE, claude: 2 }, 'only the local collector reads');
+    assert.equal(st.cursors.error, LOST);
+    assert.equal(st.collectors.gateway.error, LOST);
+    assert.equal(st.collectors.judge.error, LOST);
+    assert.equal(st.collectors.local.error, null);
+    assert.equal(fs.existsSync(cursorFile(r)), false, 'no new cursors.json that would read the logs from 0');
+    assert.doesNotMatch(JSON.stringify(st), /Users|zp-cost-pass/);
+  }
+  // The rebuild of docs/cost.md: everything in .data/cost/ but the judge call log, then a pass reads each line once.
+  for (const f of fs.readdirSync(r.costDir))
+    if (f !== 'judge-calls.jsonl') fs.rmSync(path.join(r.costDir, f), { recursive: true });
+  const rebuilt = r.make();
+  const st = rebuilt.update();
+  assert.equal(st.cursors.error, null);
+  assert.equal(st.collectors.gateway.error, null);
+  assert.deepEqual(requestsBy(rebuilt, '2026-10-22', 'source'), { claude: 2, gateway: 3, judge: 3 });
+});
+
+test(
+  'a cursors.json that does not read (not a parse error) is left in place and tried again',
+  { skip: process.platform === 'win32' || (process.getuid && process.getuid() === 0) },
+  () => {
+    const r = countedOnce();
+    fs.rmSync(`${cursorFile(r)}.bak`);
+    fs.chmodSync(cursorFile(r), 0o000);
+    let c;
+    try {
+      c = r.make();
+      assert.equal(c.update().cursors.error, LOST);
+    } finally {
+      fs.chmodSync(cursorFile(r), 0o600);
+    }
+    fs.appendFileSync(r.gatewayLog, gwLine(at(22, 4)));
+    const st = c.update();
+    assert.equal(st.cursors.error, null);
+    assert.deepEqual(requestsBy(c, '2026-10-22', 'source'), { ...ONCE, gateway: 3 });
+  },
+);
+
+test('a config.json that does not parse: the pass waits; billing, centers and prices stay; a restate is refused', () => {
+  const PLAN = { mode: 'plan', plan: 'Team', feeUSD: 31, period: 'month' };
+  const settings = {
+    centers: [{ id: 'acme', name: 'Acme' }],
+    keyCenters: { key_a: 'acme' },
+    billing: { gateway: PLAN },
+  };
+  const r = rig({ settings, day: 21 });
+  fs.writeFileSync(r.gatewayLog, gwLine(at(21, 1)));
+  r.cost.update();
+  r.st.t = at(22, 1);
+  fs.appendFileSync(r.gatewayLog, gwLine(at(22, 1)));
+  r.cost.update();
+  const centers = () => [
+    ...new Set(
+      rowsOf(r.cost, '2026-10-21', '2026-10-23', ['center', 'kind'])
+        .filter((x) => x.kind !== 'plan') // plan rows have no center
+        .map((x) => x.center),
+    ),
+  ];
+  const history = () => r.cost.billingHistory().entries.map((e) => [e.source, e.from, e.billing.mode]);
+  const sources = ['claude', 'codex', 'gateway', 'judge', 'replay', 'collab'];
+  const want = sources.map((x) => [x, '2026-10-21', x === 'gateway' ? 'plan' : 'metered']);
+  assert.deepEqual(history(), want);
+
+  r.st.settings = false; // what server.js hands over while config.json does not parse
+  r.st.pricing = PRICE_B; // its default prices: never frozen into a version
+  for (const [day, h] of [
+    [22, 2],
+    [23, 1], // across midnight
+  ]) {
+    r.st.t = at(day, h);
+    fs.appendFileSync(r.gatewayLog, gwLine(at(day, h)));
+    const st = r.cost.update();
+    r.cost.retag();
+    assert.equal(st.settings.error, 'config.json could not be read, so the ledger pass waits until it does');
+    assert.deepEqual(history(), want, 'no billing entry from the defaults');
+    assert.deepEqual(centers(), ['acme'], 'no row moved to unassigned');
+    assert.equal(r.cost.versions().current, 1);
+    assert.throws(
+      () => r.cost.restate({ from: '2026-10-21', to: '2026-10-21', reason: 'x' }),
+      (e) => e.status === 409 && /config\.json could not be read/.test(e.message),
+    );
+  }
+  assert.deepEqual(requestsBy(r.cost, '2026-10-22', 'source'), { gateway: 1 }, 'the lines wait in the log');
+
+  r.st.settings = settings; // fixed
+  r.st.pricing = PRICE_A;
+  r.st.t = at(23, 2);
+  const st = r.cost.update();
+  assert.equal(st.settings.error, null);
+  assert.deepEqual(history(), want);
+  assert.deepEqual(centers(), ['acme']);
+  assert.deepEqual(requestsBy(r.cost, '2026-10-22', 'source'), { gateway: 2 });
+  assert.deepEqual(requestsBy(r.cost, '2026-10-23', 'source'), { gateway: 1 });
+  const b = billedOnce(r.cost, '2026-10-21', '2026-10-23');
+  for (const d of ['2026-10-21', '2026-10-22', '2026-10-23']) assert.equal(b[d].gateway, 'plan', d);
+  near(planOf(r.cost, '2026-10-22', 'gateway')[0].billedUSD, 1);
+  assert.ok(r.cost.restate({ from: '2026-10-21', to: '2026-10-22', reason: 'check' }));
+});

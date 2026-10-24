@@ -719,3 +719,79 @@ test('cost api over HTTP: Claude Code logs fill the ledger after the first refre
     await s.stop();
   }
 });
+
+test('cost api over HTTP: a config.json that does not parse is an error, not empty settings; once fixed all is normal', async () => {
+  const data = tmp();
+  const now = Date.now();
+  const today = dayOf(now);
+  const yday = addDays(today, -1);
+  const gwAt = (ts) =>
+    JSON.stringify({
+      ts,
+      keyId: 'key_a',
+      provider: 'openrouter',
+      model: 'anthropic/claude-sonnet-5.5',
+      kind: 'chat',
+      status: 200,
+      input: 1000,
+      output: 100,
+      cached: 0,
+    }) + '\n';
+  const log = path.join(data, '.data', 'gateway-usage.jsonl');
+  fs.mkdirSync(path.dirname(log), { recursive: true });
+  fs.writeFileSync(log, gwAt(now), { mode: 0o600 });
+  const config = path.join(data, 'config.json');
+  const good = JSON.stringify({
+    pricingSync: { enabled: false },
+    cost: {
+      centers: [{ id: 'acme', name: 'Acme' }],
+      keyCenters: { key_a: 'acme' },
+      billing: { gateway: { mode: 'plan', plan: 'Team', feeUSD: 31, period: 'month' } },
+    },
+  });
+  fs.writeFileSync(config, good);
+  const s = await startServer({ ZAAFPULSE_AUTH: 'none' }, { data });
+  const c = client(s.base);
+  const today_ = async () =>
+    (await c.call(`/api/cost/ledger?from=${today}&to=${today}&groupBy=source,kind,center`)).json.rows
+      .map((x) => [x.source, x.kind, x.center])
+      .sort();
+  const want = [
+    ['gateway', 'chat', 'acme'],
+    ['gateway', 'plan', null],
+  ];
+  const rescan = () => c.post('/api/rescan', {});
+  try {
+    assert.equal((await passed(c, 'gateway')).collectors.gateway.error, null);
+    assert.deepEqual(await today_(), want);
+
+    fs.writeFileSync(config, good.slice(0, 40)); // a hand edit cut short
+    const broken = /^config\.json could not be read/;
+    assert.match((await c.call('/api/cost/status')).json.settings.error, broken);
+    assert.match((await c.call('/api/cost/settings')).json.error, broken);
+    const restate = { from: yday, to: yday, reason: 'check', confirm: true };
+    const refused = await c.post('/api/cost/restate', restate);
+    assert.equal(refused.status, 409);
+    assert.match(refused.json.error, broken);
+    assert.equal((await rescan()).status, 202);
+    await new Promise((r) => setTimeout(r, 2000)); // the pass after the refresh, which waits
+    assert.deepEqual(await today_(), want, 'the gateway stays on its plan and its row in its center');
+
+    fs.writeFileSync(config, good);
+    fs.appendFileSync(log, gwAt(Date.now()));
+    assert.equal((await c.call('/api/cost/status')).json.settings.error, null);
+    await rescan();
+    let rows = [];
+    for (let i = 0; i < 60; i++) {
+      rows = (await c.call(`/api/cost/ledger?from=${today}&to=${today}&groupBy=source,kind`)).json.rows;
+      if (rows.some((x) => x.kind === 'chat' && x.requests === 2)) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    assert.equal(rows.find((x) => x.kind === 'chat').requests, 2);
+    assert.deepEqual(await today_(), want);
+    assert.equal((await c.post('/api/cost/restate', restate)).status, 200);
+    for (const b of c.bodies) assert.doesNotMatch(b, PATHS);
+  } finally {
+    await s.stop();
+  }
+});
