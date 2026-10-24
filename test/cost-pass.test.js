@@ -470,3 +470,115 @@ test('a step that does not need the unreadable month is saved with its cursor, a
   fresh.update();
   check(fresh);
 });
+
+const planOf = (cost, day, source) =>
+  rowsOf(cost, day, day, ['source', 'kind']).filter((x) => x.source === source && x.kind === 'plan');
+const useOf = (cost, day, source) =>
+  rowsOf(cost, day, day, ['source', 'kind']).find((x) => x.source === source && x.kind === 'chat');
+
+test('days the server was off: a source on a plan pays the plan once and its usage is not billed; a metered one stays metered', () => {
+  const r = rig({ settings: { billing: { claude: { mode: 'plan', plan: 'Max', feeUSD: 310, period: 'month' } } } });
+  r.st.entries.push(file('a', [ev(at(22), 'm1')]));
+  r.cost.update();
+  r.st.t = at(25); // off from the 22nd, back on the 25th
+  r.st.entries.push(file('off', [ev(at(23), 'm2')]));
+  r.st.entries.push({
+    file: '/logs/codex.jsonl',
+    source: 'codex',
+    size: 1,
+    mtimeMs: 1,
+    result: { events: [[at(23), 'codex', 'c1', 'claude-sonnet-5-5', 1000, 100, 0, 0, 0, 0, null, null]], sessions: session('c1', 'm', 'codex') },
+  });
+  const again = r.make(); // a restart
+  again.update();
+  again.update();
+  for (const c of [again, r.make()]) {
+    const use = useOf(c, '2026-10-23', 'claude');
+    near(use.listUSD, 0.003);
+    assert.equal(use.billedUSD, 0, 'usage on a plan day is not billed');
+    for (const d of ['2026-10-22', '2026-10-23', '2026-10-24', '2026-10-25']) {
+      const plan = planOf(c, d, 'claude');
+      assert.equal(plan.length, 1, d);
+      near(plan[0].billedUSD, 10);
+    }
+    const codex = useOf(c, '2026-10-23', 'codex');
+    near(codex.billedUSD, 0.003);
+    assert.equal(planOf(c, '2026-10-23', 'codex').length, 0);
+    near(c.ledger({ from: '2026-10-23', to: '2026-10-23' }).totals.billedUSD, 10.003);
+  }
+});
+
+test('a switch to a plan applies from that day: earlier days keep their metered bill, late usage on them too', () => {
+  const r = rig({ day: 21 });
+  r.st.entries.push(file('a', [ev(at(21), 'm1')]));
+  r.cost.update();
+  r.st.t = at(22);
+  r.st.settings = { billing: { claude: { mode: 'plan', plan: 'Max', feeUSD: 310, period: 'month' } } };
+  r.st.entries.push(file('b', [ev(at(21, 23), 'm2'), ev(at(22), 'm3')]));
+  r.cost.update();
+  const d21 = useOf(r.cost, '2026-10-21', 'claude');
+  assert.equal(d21.requests, 2);
+  near(d21.billedUSD, 0.006);
+  assert.equal(planOf(r.cost, '2026-10-21', 'claude').length, 0);
+  assert.equal(useOf(r.cost, '2026-10-22', 'claude').billedUSD, 0);
+  near(planOf(r.cost, '2026-10-22', 'claude')[0].billedUSD, 10);
+});
+
+test("a first pass whose log index fails keeps the plan's backfill for the next pass", () => {
+  const r = rig({ settings: { billing: { claude: { mode: 'plan', plan: 'Max', feeUSD: 310, period: 'month' } } } });
+  const entries = r.st.entries;
+  r.st.entries = {
+    [Symbol.iterator]() {
+      throw Object.assign(new Error('index'), { code: 'EIO' });
+    },
+  };
+  assert.match(r.cost.update().collectors.local.error, /^the log index could not be read \(EIO\)$/);
+  r.st.entries = entries;
+  entries.push(file('a', [ev(at(20), 'm1'), ev(at(22), 'm2')]));
+  r.cost.update();
+  for (const d of ['2026-10-20', '2026-10-21', '2026-10-22']) assert.equal(planOf(r.cost, d, 'claude').length, 1, d);
+  assert.equal(useOf(r.cost, '2026-10-20', 'claude').billedUSD, 0);
+});
+
+test('a retag merges rows that come to share a key without losing any', () => {
+  const settings = {
+    centers: [{ id: 'acme', name: 'Acme' }, { id: 'lab', name: 'Lab' }],
+    folderRules: [{ glob: '~/work/acme/**', center: 'acme' }],
+  };
+  const r = rig({ settings });
+  r.st.entries.push(file('a', [ev(at(22), 'm1')], session('s1', 'work/acme')));
+  fs.writeFileSync(r.gatewayLog, gwLine(at(22)) + gwLine(at(22, 13)));
+  r.cost.update();
+  r.st.settings = { ...settings, keyCenters: { key_a: 'lab' } };
+  r.cost.retag();
+  r.st.settings = { ...settings, keyCenters: {} };
+  r.cost.retag();
+  const t = r.cost.ledger({ from: '2026-10-22', to: '2026-10-22' }).totals;
+  assert.equal(t.requests, 3);
+  near(t.listUSD, 0.009);
+  assert.equal(r.cost.status().ledger.error, null);
+});
+
+test('usage on a day the server was off is not billed for a plan even when the plan step cannot run yet', () => {
+  const sepAt = (d) => new Date(2026, 8, d, 12).getTime();
+  const r = rig({ settings: { billing: { claude: { mode: 'plan', plan: 'Max', feeUSD: 300, period: 'month' } } } });
+  r.st.t = sepAt(29);
+  r.st.entries.push(file('a', [ev(sepAt(29), 'm1')]));
+  r.cost.update();
+  r.st.t = at(2); // off from September 29th to October 2nd; September does not read
+  r.st.entries = [file('off', [ev(at(1), 'm2')])]; // the September transcript is gone: only October is needed
+  const u = makeUnreadable(path.join(r.costDir, 'ledger-2026-09.jsonl'));
+  let again;
+  try {
+    again = r.make();
+    const st = again.update();
+    assert.match(st.ledger.error, /^ledger month 2026-09 could not be read/);
+    assert.equal(st.collectors.local.error, null);
+    assert.equal(useOf(again, '2026-10-01', 'claude').billedUSD, 0);
+  } finally {
+    u.restore();
+  }
+  again.update();
+  for (const d of ['2026-09-30', '2026-10-01', '2026-10-02']) assert.equal(planOf(again, d, 'claude').length, 1, d);
+  assert.equal(useOf(again, '2026-10-01', 'claude').billedUSD, 0);
+});
