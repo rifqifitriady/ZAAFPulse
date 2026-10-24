@@ -139,3 +139,226 @@ test('keys: geo and plan are part of the key, baseKey leaves the center out, mer
   assert.deepEqual([m.requests, m.listUSD, m.billedUSD, m.priceVersion, m.unpriced], [2, 2, 2, 3, true]);
   assert.equal(L.tokenTotal({ tokens: { in: 1, out: 2, cacheRead: 3, cacheWrite5m: 4, cacheWrite1h: 5 } }), 15);
 });
+
+// A month file the store cannot read: no read permission where that holds (not on Windows, not as root), else a folder
+// in its place. `restore` puts the readable file back.
+function makeUnreadable(file) {
+  const text = fs.readFileSync(file, 'utf8');
+  const byMode = process.platform !== 'win32' && !(process.getuid && process.getuid() === 0);
+  if (byMode) fs.chmodSync(file, 0o000);
+  else {
+    fs.rmSync(file);
+    fs.mkdirSync(file);
+  }
+  return {
+    byMode,
+    restore() {
+      if (byMode) fs.chmodSync(file, 0o600);
+      else {
+        fs.rmSync(file, { recursive: true });
+        fs.writeFileSync(file, text);
+      }
+    },
+  };
+}
+
+test('store: a month that does not read is never written; the others load and flush; it catches up once it reads', () => {
+  const dir = path.join(tmp(), 'cost');
+  const seed = L.createLedgerStore({ dir });
+  seed.load();
+  for (const d of ['01', '02', '03']) seed.put(row(`2026-09-${d}`));
+  for (const d of ['01', '02']) seed.put(row(`2026-10-${d}`));
+  seed.flush();
+  const sep = path.join(dir, 'ledger-2026-09.jsonl');
+  const oct = path.join(dir, 'ledger-2026-10.jsonl');
+  const lineCount = (f) => fs.readFileSync(f, 'utf8').trim().split('\n').length;
+  const u = makeUnreadable(sep);
+  try {
+    const s = L.createLedgerStore({ dir });
+    assert.throws(
+      () => s.load(),
+      (e) => !e.message.includes(dir) && !e.message.includes('ledger-2026'),
+    );
+    assert.equal(s.day('2026-10-01').length, 1, 'the month after the failed one still loads');
+    assert.deepEqual(s.unread(), ['2026-09']);
+    s.put(row('2026-09-04'));
+    s.remove(row('2026-09-01'));
+    s.put(row('2026-10-03'));
+    assert.throws(() => s.flush(), 'the error stays while a month is unread');
+    assert.equal(lineCount(oct), 3, 'a month that read is written');
+    u.restore();
+    assert.equal(lineCount(sep), 3, 'the blocked month is unchanged on disk');
+    s.flush(); // it reads now: the held put and remove land on top of the file
+    assert.deepEqual(s.unread(), []);
+    const again = L.createLedgerStore({ dir });
+    again.load();
+    assert.deepEqual(
+      again
+        .range('2026-09-01', '2026-09-30')
+        .map((r) => r.day)
+        .sort(),
+      ['2026-09-02', '2026-09-03', '2026-09-04'],
+    );
+    assert.equal(again.range('2026-10-01', '2026-10-31').length, 3);
+  } finally {
+    if (u.byMode) fs.chmodSync(sep, 0o600); // so the temp folder can be cleaned up
+  }
+});
+
+test('store: a flush before any load reads the folder first, so the rows on disk are kept', () => {
+  const dir = path.join(tmp(), 'cost');
+  const seed = L.createLedgerStore({ dir });
+  seed.load();
+  seed.put(row('2026-10-01'));
+  seed.put(row('2026-10-02'));
+  seed.flush();
+  const s = L.createLedgerStore({ dir });
+  s.put(row('2026-10-03'));
+  // flush reads the folder first, so the held put lands on top of the two rows on disk.
+  s.flush();
+  const again = L.createLedgerStore({ dir });
+  again.load();
+  assert.equal(again.range('2026-10-01', '2026-10-31').length, 3);
+});
+
+test('store: a second load before a flush does not set the same bad lines aside again', () => {
+  const dir = path.join(tmp(), 'cost');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'ledger-2026-10.jsonl');
+  fs.writeFileSync(file, `${JSON.stringify(row('2026-10-01'))}\nnot json\n`);
+  const s = L.createLedgerStore({ dir });
+  s.load();
+  s.load();
+  assert.equal(fs.readFileSync(`${file}.bad`, 'utf8').split('\n').filter(Boolean).length, 1);
+  assert.equal(s.badLines(), 0, 'the month was written again without it');
+  assert.equal(s.range('2026-10-01', '2026-10-31').length, 1);
+});
+
+test('store: a row with a count that is not a number goes to .bad, so sums stay numbers', () => {
+  const dir = path.join(tmp(), 'cost');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'ledger-2026-10.jsonl');
+  const good = row('2026-10-01', { tokens: { in: 3, out: 1 } });
+  const lines = [
+    good,
+    row('2026-10-02', { tokens: { in: '5', out: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 } }),
+    row('2026-10-03', { webSearches: '2' }),
+    row('2026-10-04', { tokens: { in: 1, prompt: 2 } }),
+    row('2026-10-05', { requests: -1 }),
+    row('2026-10-06', { listUSD: '1' }),
+  ];
+  fs.writeFileSync(file, lines.map((r) => JSON.stringify(r) + '\n').join(''));
+  const s = L.createLedgerStore({ dir });
+  s.load();
+  assert.equal(s.badLines(), 5);
+  assert.equal(fs.readFileSync(`${file}.bad`, 'utf8').split('\n').filter(Boolean).length, 5);
+  const rows = s.range('2026-10-01', '2026-10-31');
+  assert.deepEqual(rows[0].tokens, { in: 3, out: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 });
+  const g = L.groupRows(rows, { groupBy: ['source'] });
+  assert.deepEqual([g.rows[0].tokens.in, g.rows[0].webSearches, g.totals.requests], [3, 0, 1]);
+  assert.equal(L.tokenTotal(rows[0]), 4);
+  assert.equal(L.tokenTotal({ tokens: { in: '5', out: 1 } }), 1, 'tokenTotal never returns a string');
+  const m = L.mergeRows(good, { ...good, requests: '2', tokens: { in: '5' } });
+  assert.deepEqual([m.requests, m.tokens.in], [1, 3]);
+});
+
+test('corrections: one that does not validate is skipped whole, counted and moved to .bad; totals stay', () => {
+  const dir = path.join(tmp(), 'cost');
+  const seed = L.createLedgerStore({ dir });
+  seed.load();
+  const base = row('2026-10-01', { center: 'a' });
+  seed.put(base);
+  seed.flush();
+  const state = (listUSD, billedUSD) => ({ listUSD, billedUSD, priceVersion: 2, center: 'a', unpriced: false });
+  const correction = (after, extra = {}) => ({
+    ts: 1,
+    from: '2026-10-01',
+    to: '2026-10-01',
+    reason: 'r',
+    priceVersion: 2,
+    rows: [{ key: L.rowKey(base), before: state(1, 1), after }],
+    ...extra,
+  });
+  assert.throws(() => seed.addCorrection(correction(state(NaN, 1))), TypeError, 'NaN is refused on the way in');
+  const file = path.join(dir, 'corrections.jsonl');
+  const added = { ...L.newRow({ day: '2026-10-01', source: 'claude', kind: 'plan', plan: 'Max' }), billedUSD: '9' };
+  fs.appendFileSync(
+    file,
+    [
+      correction(state('x', 1)),
+      correction(state(null, 1)), // NaN written as JSON
+      correction(state(5, 5), { from: 'soon' }),
+      correction(state(5, 5), {
+        rows: [
+          { key: L.rowKey(base), before: state(1, 1), after: state(4, 4) },
+          { key: L.rowKey(added), before: null, after: state(0, 9), row: added },
+        ],
+      }),
+      correction(state(3, 2)),
+    ]
+      .map((c) => JSON.stringify(c) + '\n')
+      .join(''),
+  );
+  const s = L.createLedgerStore({ dir });
+  s.load();
+  assert.equal(s.corrections().length, 1);
+  assert.equal(s.badLines(), 4);
+  assert.equal(fs.readFileSync(`${file}.bad`, 'utf8').split('\n').filter(Boolean).length, 4);
+  assert.equal(fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).length, 1, 'moved, not copied');
+  const v = s.view('2026-10-01', '2026-10-01');
+  assert.equal(v.length, 1, 'no half-applied correction adds its row');
+  assert.deepEqual([v[0].listUSD, v[0].billedUSD], [3, 2]);
+  const g = L.groupRows(v, { groupBy: ['day'] });
+  assert.deepEqual(g.totals, { requests: 1, listUSD: 3, billedUSD: 2 });
+});
+
+test('corrections: a torn last line does not swallow the next correction', () => {
+  const dir = path.join(tmp(), 'cost');
+  const s = L.createLedgerStore({ dir });
+  s.load();
+  const base = row('2026-10-01');
+  s.put(base);
+  s.flush();
+  const file = path.join(dir, 'corrections.jsonl');
+  fs.writeFileSync(file, '{"ts":1,"from":"2026-10-01","to":"2026-10-'); // a crash mid-append
+  const before = { listUSD: 1, billedUSD: 1, priceVersion: 1, center: 'unassigned', unpriced: false };
+  s.addCorrection({
+    ts: 2,
+    from: '2026-10-01',
+    to: '2026-10-01',
+    reason: 'r',
+    priceVersion: 2,
+    rows: [{ key: L.rowKey(base), before, after: { ...before, listUSD: 3, priceVersion: 2 } }],
+  });
+  const again = L.createLedgerStore({ dir });
+  again.load();
+  assert.equal(again.corrections().length, 1);
+  assert.equal(again.badLines(), 1, 'only the torn line is bad');
+  assert.equal(again.view('2026-10-01', '2026-10-01')[0].listUSD, 3);
+});
+
+test('corrections: written to disk, read back, and copies on the way in and out', () => {
+  const dir = path.join(tmp(), 'cost');
+  const s = L.createLedgerStore({ dir });
+  s.load();
+  const base = row('2026-10-01');
+  s.put(base);
+  s.flush();
+  const before = { listUSD: 1, billedUSD: 1, priceVersion: 1, center: 'unassigned', unpriced: false };
+  const c = {
+    ts: 1,
+    from: '2026-10-01',
+    to: '2026-10-01',
+    reason: 'r',
+    priceVersion: 2,
+    rows: [{ key: L.rowKey(base), before, after: { ...before, billedUSD: 0 } }],
+  };
+  s.addCorrection(c);
+  c.rows[0].after.billedUSD = 50;
+  s.corrections()[0].rows[0].after.billedUSD = 60;
+  assert.equal(s.view('2026-10-01', '2026-10-01')[0].billedUSD, 0);
+  if (process.platform !== 'win32') assert.equal(mode(path.join(dir, 'corrections.jsonl')), 0o600);
+  const again = L.createLedgerStore({ dir });
+  again.load();
+  assert.equal(again.view('2026-10-01', '2026-10-01')[0].billedUSD, 0);
+});
