@@ -11,8 +11,12 @@ const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'zp-cost-billing-'));
 const PLAN = { mode: 'plan', plan: 'Max', feeUSD: 310, period: 'month' };
 const METERED = { mode: 'metered' };
 const fileOf = (dir) => path.join(dir, 'billing.json');
+const parseFile = (dir) => {
+  const { entries, overrides, lostBefore } = JSON.parse(fs.readFileSync(fileOf(dir), 'utf8'));
+  return { entries, overrides, lostBefore };
+};
 
-test('history: the first record dates from first use, a change starts on its day, the newest of a day wins', () => {
+test('history: the first record dates from first use, a change starts on its day, the newest of a day wins, the past is never rewritten', () => {
   const dir = tmp();
   const b = createBillingHistory({ dir });
   assert.deepEqual(b.billingFor('claude', '2026-10-01'), METERED, 'no entry is metered');
@@ -26,19 +30,22 @@ test('history: the first record dates from first use, a change starts on its day
   b.observe({}, '2026-10-24', {}); // switched again the same day: that one wins
   assert.deepEqual(b.billingFor('claude', '2026-10-23'), PLAN);
   assert.deepEqual(b.billingFor('claude', '2026-10-24'), METERED);
-  b.observe({ claude: PLAN }, '2026-10-20', {}); // a clock that went back: never dated before the last entry
+  assert.equal(b.observe({ claude: PLAN }, '2026-10-20', {}), false, 'a clock that went back rewrites no entry');
   assert.deepEqual(b.billingFor('claude', '2026-10-23'), PLAN);
-  assert.deepEqual(b.billingFor('claude', '2026-10-24'), PLAN);
+  assert.deepEqual(b.billingFor('claude', '2026-10-24'), METERED);
   assert.deepEqual(
     b.list().entries.filter((e) => e.source === 'claude').map((e) => [e.from, e.billing.mode]),
     [
       ['2026-10-15', 'plan'],
-      ['2026-10-24', 'plan'],
+      ['2026-10-24', 'metered'],
     ],
   );
   const again = createBillingHistory({ dir });
   assert.deepEqual(again.list(), b.list());
-  if (process.platform !== 'win32') assert.equal(fs.statSync(fileOf(dir)).mode & 0o777, 0o600);
+  const text = (f) => fs.readFileSync(f, 'utf8');
+  assert.equal(text(`${fileOf(dir)}.bak`), text(fileOf(dir)), 'the last good copy');
+  if (process.platform !== 'win32')
+    for (const f of [fileOf(dir), `${fileOf(dir)}.bak`]) assert.equal(fs.statSync(f).mode & 0o777, 0o600, f);
 });
 
 test('history: a source left for later is not recorded, and without firstUse a source with no entry is left alone', () => {
@@ -80,8 +87,9 @@ test('a billing file that does not parse is kept aside; one that does not read i
   const dir = tmp();
   fs.writeFileSync(fileOf(dir), '{ nope');
   const b = createBillingHistory({ dir });
-  assert.match(b.problems().join('\n'), /billing history was unreadable/);
+  assert.match(b.problems().join('\n'), /billing history was damaged and kept aside/);
   assert.ok(fs.existsSync(`${fileOf(dir)}.bad`));
+  assert.equal(b.lost(), false, 'no earlier data: a first run');
 
   const dir2 = tmp();
   const ok = createBillingHistory({ dir: dir2 });
@@ -134,4 +142,45 @@ test('read side: usage is billed by the day it was on, one plan row per plan day
   assert.equal(out.filter((r) => r.source === 'codex' && r.kind === 'plan').length, 0, 'a stored plan row is ignored');
   assert.equal(out.filter((r) => r.kind === 'plan').length, 11, 'Oct 21 to 31; November did not read');
   assert.deepEqual(out.unread, ['2026-11']);
+});
+
+test('recovery: a damaged or missing history comes back from its last good copy; a partly unusable one too', () => {
+  for (const damage of ['{ nope', null, JSON.stringify({ version: 1, entries: [{ source: 'claude', from: 'x' }] })]) {
+    const dir = tmp();
+    const b = createBillingHistory({ dir });
+    b.observe({ claude: PLAN }, '2026-10-22', { firstUse: () => '2026-10-15' });
+    b.addOverride({ source: 'codex', from: '2026-10-16', to: '2026-10-17', billing: PLAN });
+    const want = b.list();
+    if (damage === null) fs.rmSync(fileOf(dir));
+    else fs.writeFileSync(fileOf(dir), damage);
+    const again = createBillingHistory({ dir, earlierData: () => true });
+    assert.deepEqual(again.list(), want, String(damage));
+    assert.equal(again.lost(), false);
+    assert.match(again.problems().join('\n'), /recovered from its last good copy/);
+    assert.doesNotMatch(again.problems().join('\n'), /zp-cost-billing/);
+    assert.equal(fs.existsSync(`${fileOf(dir)}.bad`), damage !== null);
+    assert.deepEqual(parseFile(dir), want, 'the file is written back');
+  }
+});
+
+test('lost: with no good copy and earlier data, closed days are assumed metered and the history starts today', () => {
+  const dir = tmp();
+  const b = createBillingHistory({ dir });
+  b.observe({ claude: PLAN }, '2026-10-22', { firstUse: () => '2026-10-15' });
+  fs.writeFileSync(fileOf(dir), '{ nope');
+  fs.writeFileSync(`${fileOf(dir)}.bak`, '[]');
+  const lost = createBillingHistory({ dir, earlierData: () => true });
+  assert.equal(lost.lost(), true);
+  assert.deepEqual(lost.billingFor('claude', '2026-10-20'), { mode: 'metered', assumed: true });
+  lost.observe({ claude: PLAN }, '2026-10-23', { firstUse: () => '2026-10-15' }); // first use is not used
+  const claude = lost.list().entries.find((e) => e.source === 'claude');
+  assert.deepEqual(claude, { source: 'claude', from: '2026-10-23', billing: PLAN });
+  assert.equal(lost.billingFor('claude', '2026-10-22').assumed, true);
+  assert.deepEqual(lost.billingFor('claude', '2026-10-23'), PLAN);
+  assert.ok(lost.problems().includes('history lost: past days are billed as metered until restated'));
+  lost.addOverride({ source: 'claude', from: '2026-10-15', to: '2026-10-22', billing: PLAN }); // a restate fixes it
+  assert.deepEqual(lost.billingFor('claude', '2026-10-20'), PLAN);
+  const later = createBillingHistory({ dir, earlierData: () => true });
+  assert.equal(later.list().lostBefore, '2026-10-23', 'the loss is kept across restarts');
+  assert.equal(later.billingFor('codex', '2026-10-20').assumed, true);
 });
