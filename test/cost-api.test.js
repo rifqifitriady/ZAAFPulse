@@ -706,13 +706,10 @@ test('cost api over HTTP: Claude Code logs fill the ledger after the first refre
     assert.equal(st.collectors.local.error, null);
     const led = await c.call(`/api/cost/ledger?from=${dayOf(now)}&groupBy=source,project,center`);
     assert.equal(led.status, 200);
-    assert.deepEqual(
-      led.json.rows.map((x) => [x.source, x.project, x.center, x.requests]).sort(),
-      [
-        ['claude', process.platform === 'win32' ? 'D:/srv/app' : '/srv/app', 'unassigned', 1],
-        ['claude', '~/work/acme/web', 'acme', 1],
-      ],
-    );
+    assert.deepEqual(led.json.rows.map((x) => [x.source, x.project, x.center, x.requests]).sort(), [
+      ['claude', process.platform === 'win32' ? 'D:/srv/app' : '/srv/app', 'unassigned', 1],
+      ['claude', '~/work/acme/web', 'acme', 1],
+    ]);
     for (const x of led.json.rows) near(x.listUSD, 0.003);
     for (const b of c.bodies) assert.doesNotMatch(b, PATHS);
   } finally {
