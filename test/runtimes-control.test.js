@@ -1071,6 +1071,10 @@ test('apps off macOS: listed with "macOS only", no Start or Stop, and both refus
     ['start', false, 409, 'macOS only'],
     ['stop', false, 409, 'macOS only'],
   ]);
+  // Off macOS with control off (Docker, server mode) the card still says "macOS only": the app would not work outside either.
+  const docker = appStopSetup({ reads: [absent], platform: 'linux', extra: { inDocker: true } });
+  t.after(docker.cleanup);
+  assert.equal((await docker.ctl.list())[0].reason, 'macOS only');
   // On macOS an app that is not installed is not listed, like a model server.
   const mac = appStopSetup({ reads: [absent] });
   t.after(mac.cleanup);
