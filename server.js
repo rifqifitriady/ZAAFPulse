@@ -50,6 +50,8 @@ const { createRuntimeState, jsonFile } = require('./lib/runtimes/state');
 const { createRuntimeControl } = require('./lib/runtimes/control');
 const { createModelMemory } = require('./lib/runtimes/models');
 const { createRuntimeApi } = require('./lib/runtimes/api');
+const { createCost } = require('./lib/cost');
+const { createCostApi } = require('./lib/cost/api');
 const { isRef } = require('./lib/secrets');
 const { createPriceSync } = require('./lib/price-sync');
 const { createOpenRouter } = require('./lib/openrouter');
@@ -293,6 +295,29 @@ function saveConfigSection(name, value) {
     rawCache = { mtime: 0, value: raw }; // saved; the next read checks the file again
   }
 }
+// The cost section for the ledger, or false when config.json is there but does not parse as an object. rawConfig()
+// reads such a file as {} for every other caller; the ledger must not take that for "no cost settings", or it would
+// date every plan source as metered and move today's rows to unassigned (settingsOf(false) makes the pass wait).
+function costSettings() {
+  const raw = rawConfig();
+  if (DEMO) return raw.cost;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+  if (Object.keys(raw).length) return raw.cost;
+  // {} is also what a missing, empty or unparsable file reads as: the file itself tells them apart.
+  let text = '';
+  try {
+    text = fs.readFileSync(CONFIG_FILE, 'utf8');
+  } catch (e) {
+    return e.code === 'ENOENT' ? undefined : false;
+  }
+  if (!text.trim()) return undefined;
+  try {
+    const v = JSON.parse(text);
+    return v && typeof v === 'object' && !Array.isArray(v) ? v.cost : false;
+  } catch {
+    return false;
+  }
+}
 // Local trace store: every gateway trace without content, under .data/traces (on unless "tracing": { "enabled":
 // false }). Retention is read at start; the on/off switch whenever config.json changes.
 const tracingCfg = () => (rawConfig() || {}).tracing || {};
@@ -373,6 +398,31 @@ const trace = createTrace({
       }),
 });
 
+// Cost ledger (Cost Control 1): daily cost rows from every source in .data/cost/, priced with the version of their day
+// and attributed to cost centers (config.json "cost"). Demo: a synthetic ledger in memory; no files, no passes.
+const costDemo = DEMO ? demo.costDemo() : null;
+if (DEMO) rawCache.value = { ...rawCache.value, cost: costDemo.settings };
+const cost = createCost({
+  dir: DEMO ? null : path.join(DIR, '.data', 'cost'),
+  gatewayLog: DEMO ? null : path.join(DIR, '.data', 'gateway-usage.jsonl'),
+  entries: () => (typeof indexer.entries === 'function' ? indexer.entries() : []),
+  getPricing: () => config.pricing,
+  getSettings: costSettings, // false while config.json does not parse
+  // A model on the owner's own hardware costs nothing, as for the gateway's key budgets.
+  isPrivate: (id) => {
+    const p = gateway.providers.list().find((x) => x.id === id);
+    return !!p && gateway.providers.tierOf(p) === 'private';
+  },
+  home: os.homedir(),
+  demo: costDemo,
+});
+const costApi = createCostApi({
+  cost,
+  settings: { get: costSettings, save: (value) => saveConfigSection('cost', value) },
+  listKeys: () => gateway.keys.list(),
+  home: os.homedir(),
+});
+
 // Local evals: judge models read the masked text of finished turns, one queue, local first.
 // Settings live in config.json under "evals" (stored values only; defaults are filled in when read), results and
 // feedback in .data/. Demo keeps all of it in the throwaway folder and in memory.
@@ -408,6 +458,7 @@ const evalEngine = createEvalEngine({
   demo: DEMO,
   demoData: evalDemo || {},
   onResult: (r) => datasetAuto.onResult(r),
+  onCall: (c) => cost.recordJudge(c), // judge calls that skip the gateway, for the cost ledger
 });
 const evalApi = createEvalApi({
   trace,
@@ -646,6 +697,12 @@ const monitorTick = () =>
     .catch(() => console.error('monitors: the aggregate pass failed'));
 // The aggregate pass has to run on the refreshed index: each call waits for the refresh to end (lib/monitors).
 const monitorTickAfterIndex = createAfterRefresh({ indexing: () => indexer.state.indexing, run: monitorTick });
+// The cost ledger pass reads the refreshed index too; a failure never breaks a refresh.
+const costTick = () =>
+  Promise.resolve()
+    .then(() => cost.update())
+    .catch(() => console.error('cost: the ledger pass failed'));
+const costTickAfterIndex = createAfterRefresh({ indexing: () => indexer.state.indexing, run: costTick });
 
 // Second brain sources: Obsidian by default, plus Logseq, Notion, Tana, Roam, mem.ai, Reflect, Heybrain,
 // PARA folders, the RAG knowledge bases and vector databases. Settings in config.json under "brain";
@@ -1128,6 +1185,17 @@ const handler = async (req, res) => {
       });
       if (hit) return send(res, hit.status, hit.body);
     }
+    // The cost ledger: rows, status, settings, price versions and restate, behind the same sign-in. No path out.
+    {
+      const hit = await costApi.route({
+        method: req.method,
+        path: url.pathname,
+        query: url.searchParams,
+        contentType: req.headers['content-type'],
+        readBody: () => readBody(req),
+      });
+      if (hit) return send(res, hit.status, hit.body);
+    }
     if (url.pathname === '/api/logs') {
       return send(res, 200, DEMO ? reqlogs.demoLogs() : reqlogs.logs());
     }
@@ -1383,6 +1451,7 @@ const handler = async (req, res) => {
         memo.clear();
         evalTick();
         monitorTick();
+        costTick();
       });
       return send(res, 202, indexer.state);
     }
@@ -1419,9 +1488,11 @@ server.listen(PORT, HOST, () => {
     console.log(`Indexed logs in ${((Date.now() - t) / 1000).toFixed(1)}s`);
     evalTick();
     monitorTick();
+    costTick();
   });
   setInterval(() => indexer.refresh().then(evalTick), RESCAN_MS).unref();
   setInterval(monitorTickAfterIndex, RESCAN_MS).unref();
+  setInterval(costTickAfterIndex, RESCAN_MS).unref();
   // The live monitor pass. It reads the office snapshot itself: nothing else polls it (the AI Office page asks on
   // its own requests), so there is no call to share.
   setInterval(() => monitors.tickLive().catch(() => console.error('monitors: the live pass failed')), 5000).unref();
