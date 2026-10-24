@@ -795,3 +795,30 @@ test('cost api over HTTP: a config.json that does not parse is an error, not emp
     await s.stop();
   }
 });
+
+// A Windows home folder: after it becomes ~, the rest of the path uses backslashes and must still be hidden.
+test('cost api: a Windows-style path in an error is hidden after the home folder becomes ~', async () => {
+  const s = setup();
+  const winHome = 'C:\\Users\\alex';
+  const api = createCostApi({
+    cost: s.cost,
+    settings: {
+      get: () => s.st.saved,
+      save: () => {
+        throw Object.assign(new Error(`could not write ${winHome}\\zp\\config.json`), { status: 500 });
+      },
+    },
+    home: winHome,
+    now: () => s.st.t,
+  });
+  const r = await api.route({
+    method: 'POST',
+    path: '/api/cost/settings',
+    query: new URLSearchParams(''),
+    contentType: 'application/json',
+    readBody: async () => '{}',
+  });
+  assert.equal(r.status, 500);
+  assert.match(r.body.error, /\[path\]/);
+  assert.doesNotMatch(r.body.error, /zp|config\.json|\\/);
+});
