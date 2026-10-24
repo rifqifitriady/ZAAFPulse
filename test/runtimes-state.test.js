@@ -345,10 +345,10 @@ test('an app is installed from a fake app folder; Kiro.app wins over Kiro CLI.ap
 test('an app runs while its main process is there: healthy equals running, its helpers are children, no health URL is asked', async () => {
   const asked = [];
   const rows = [
-    row(84551, 1, '/Applications/Claude.app/Contents/MacOS/Claude', 900),
-    row(84581, 84551, '/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=utility'),
-    row(59799, 84551, '/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer) --type=renderer'),
-    row(3224, 1, '/Applications/Kiro CLI.app/Contents/MacOS/kiro_cli_desktop', 300),
+    row(4000001, 1, '/Applications/Claude.app/Contents/MacOS/Claude', 900),
+    row(4000002, 4000001, '/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=utility'),
+    row(4000003, 4000001, '/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer) --type=renderer'),
+    row(4000004, 1, '/Applications/Kiro CLI.app/Contents/MacOS/kiro_cli_desktop', 300),
     row(4000, 1, '/Users/u/.local/bin/kiro-cli chat'),
   ];
   const { st } = stateOf(rows, { extra: { probe: async (u) => (asked.push(u), false) } });
@@ -358,12 +358,12 @@ test('an app runs while its main process is there: healthy equals running, its h
   assert.equal(c.healthy, true, 'no health URL: healthy is running');
   assert.equal(c.how, 'app');
   assert.equal(c.appBundle, 'Claude.app');
-  assert.equal(c.pid, 84551);
+  assert.equal(c.pid, 4000001);
   assert.equal(c.startTime, startOf(900));
   assert.equal(c.children, 2);
   const k = x.kiro;
   assert.equal(k.running, true);
-  assert.equal(k.pid, 3224, 'the app, not a kiro-cli session');
+  assert.equal(k.pid, 4000004, 'the app, not a kiro-cli session');
   assert.equal(k.how, 'app');
   assert.equal(k.appBundle, 'Kiro CLI.app', 'the bundle the running process is from');
   assert.equal(x.chatgpt.running, false);
@@ -390,10 +390,10 @@ test('a model server started from inside a desktop app is its own runtime, not t
 });
 
 test('Antigravity IDE.app (exe Electron) is Antigravity, and comes before Antigravity.app', async () => {
-  const rows = [row(3290, 1, '/Applications/Antigravity IDE.app/Contents/MacOS/Electron', 900)];
+  const rows = [row(4000005, 1, '/Applications/Antigravity IDE.app/Contents/MacOS/Electron', 900)];
   const { st } = stateOf(rows);
   const a = byId(await st.list()).antigravity;
   assert.equal(a.running, true);
-  assert.equal(a.pid, 3290);
+  assert.equal(a.pid, 4000005);
   assert.equal(a.appBundle, 'Antigravity IDE.app');
 });

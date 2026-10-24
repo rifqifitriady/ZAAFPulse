@@ -329,7 +329,7 @@ test('apps: the main process matches, in /Applications or ~/Applications; helper
 test('an app main process has launchd (pid 1) as parent: a CLI wrapper running the same exe from a shell is not the app', () => {
   const ag = preset('antigravity');
   const exe = '/Applications/Antigravity IDE.app/Contents/MacOS/Electron';
-  assert.ok(ag.match({ pid: 3290, ppid: 1, args: exe }));
+  assert.ok(ag.match({ pid: 4000005, ppid: 1, args: exe }));
   assert.ok(!ag.match({ pid: 5000, ppid: 4999, args: `${exe} /x/cli.js --wait file.txt` }), 'ELECTRON_RUN_AS_NODE wrapper');
-  assert.ok(ag.match({ pid: 3290, args: exe }), 'a row without ppid is judged by its program alone');
+  assert.ok(ag.match({ pid: 4000005, args: exe }), 'a row without ppid is judged by its program alone');
 });
