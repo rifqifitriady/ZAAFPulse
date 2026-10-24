@@ -167,3 +167,33 @@ test('model entries that are not objects are ignored and reported; pricerFor nev
   assert.ok(again.problems().length >= 3);
   assert.ok(!again.problems().join('').includes(dir));
 });
+
+test('writePrivate syncs the data before the rename and the folder after it; a failed sync keeps the old file', () => {
+  const dir = tmp();
+  const file = path.join(dir, 'x.json');
+  writePrivate(file, 'one');
+  const real = { fsyncSync: fs.fsyncSync, renameSync: fs.renameSync };
+  const calls = [];
+  fs.fsyncSync = (fd) => {
+    calls.push(fs.fstatSync(fd).isDirectory() ? 'fsync folder' : 'fsync file');
+    return real.fsyncSync(fd);
+  };
+  fs.renameSync = (...a) => {
+    calls.push('rename');
+    return real.renameSync(...a);
+  };
+  try {
+    writePrivate(file, 'two');
+    fs.fsyncSync = () => {
+      throw Object.assign(new Error('EIO'), { code: 'EIO' });
+    };
+    assert.throws(() => writePrivate(file, 'three'), /EIO/);
+  } finally {
+    Object.assign(fs, real);
+  }
+  const want = ['fsync file', 'rename'];
+  if (process.platform !== 'win32') want.push('fsync folder');
+  assert.deepEqual(calls, want);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'two');
+  assert.deepEqual(fs.readdirSync(dir), ['x.json'], 'no temp file is left');
+});

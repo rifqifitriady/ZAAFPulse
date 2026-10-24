@@ -295,6 +295,29 @@ function saveConfigSection(name, value) {
     rawCache = { mtime: 0, value: raw }; // saved; the next read checks the file again
   }
 }
+// The cost section for the ledger, or false when config.json is there but does not parse as an object. rawConfig()
+// reads such a file as {} for every other caller; the ledger must not take that for "no cost settings", or it would
+// date every plan source as metered and move today's rows to unassigned (settingsOf(false) makes the pass wait).
+function costSettings() {
+  const raw = rawConfig();
+  if (DEMO) return raw.cost;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+  if (Object.keys(raw).length) return raw.cost;
+  // {} is also what a missing, empty or unparsable file reads as: the file itself tells them apart.
+  let text = '';
+  try {
+    text = fs.readFileSync(CONFIG_FILE, 'utf8');
+  } catch (e) {
+    return e.code === 'ENOENT' ? undefined : false;
+  }
+  if (!text.trim()) return undefined;
+  try {
+    const v = JSON.parse(text);
+    return v && typeof v === 'object' && !Array.isArray(v) ? v.cost : false;
+  } catch {
+    return false;
+  }
+}
 // Local trace store: every gateway trace without content, under .data/traces (on unless "tracing": { "enabled":
 // false }). Retention is read at start; the on/off switch whenever config.json changes.
 const tracingCfg = () => (rawConfig() || {}).tracing || {};
@@ -384,7 +407,7 @@ const cost = createCost({
   gatewayLog: DEMO ? null : path.join(DIR, '.data', 'gateway-usage.jsonl'),
   entries: () => (typeof indexer.entries === 'function' ? indexer.entries() : []),
   getPricing: () => config.pricing,
-  getSettings: () => rawConfig().cost,
+  getSettings: costSettings, // false while config.json does not parse
   // A model on the owner's own hardware costs nothing, as for the gateway's key budgets.
   isPrivate: (id) => {
     const p = gateway.providers.list().find((x) => x.id === id);
@@ -395,7 +418,7 @@ const cost = createCost({
 });
 const costApi = createCostApi({
   cost,
-  settings: { get: () => rawConfig().cost, save: (value) => saveConfigSection('cost', value) },
+  settings: { get: costSettings, save: (value) => saveConfigSection('cost', value) },
   listKeys: () => gateway.keys.list(),
   home: os.homedir(),
 });
