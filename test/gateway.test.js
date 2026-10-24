@@ -190,6 +190,45 @@ test('judge: lists routable providers without secrets, completes with no tools a
   }
 });
 
+// The cost ledger counts Claude Code and Codex on this machine from their own logs, so their gateway lines are tagged.
+test('usage lines name a Claude Code or Codex client and a loopback caller, never the raw User-Agent', async () => {
+  const t = await setup(() => ({ body: completion('hi') }));
+  try {
+    const { secret } = t.gateway.keys.create({ name: 'cli', scopes: ['llm'] });
+    const body = { model: 'fake/llama-9', messages: [{ role: 'user', content: 'x' }] };
+    const cc = await t.call('/v1/chat/completions', {
+      key: secret,
+      body,
+      headers: { 'User-Agent': 'claude-cli/2.1.304' },
+    });
+    assert.equal(cc.status, 200);
+    const e = t.gateway.usage.recent(1)[0];
+    assert.equal(e.client, 'claude-code');
+    assert.equal(e.local, true);
+    assert.equal('userAgent' in e, false);
+    assert.doesNotMatch(JSON.stringify(e), /claude-cli/);
+
+    const codex = await t.call('/v1/responses', {
+      key: secret,
+      body: { model: 'fake/llama-9', input: 'x' },
+      headers: { 'User-Agent': 'codex_cli_rs/0.48.0 (Mac OS 26.6; arm64)' },
+    });
+    assert.equal(codex.status, 200);
+    assert.deepEqual([t.gateway.usage.recent(1)[0].client, t.gateway.usage.recent(1)[0].local], ['codex', true]);
+
+    assert.equal((await t.call('/v1/chat/completions', { key: secret, body })).status, 200);
+    const plain = t.gateway.usage.recent(1)[0];
+    assert.equal('client' in plain, false, 'any other client is not named');
+
+    await t.gateway.judge.complete({ model: 'fake/llama-9', messages: [{ role: 'user', content: 'judge this' }] });
+    const judged = t.gateway.usage.recent(1)[0];
+    assert.equal(judged.agent, 'judge');
+    assert.equal('client' in judged || 'local' in judged, false, "the dashboard's own calls carry neither field");
+  } finally {
+    await t.close();
+  }
+});
+
 test('judge: providers() leaves out disabled and unapproved providers and aliases are detectable', async () => {
   const base = { preset: 'custom', baseUrl: 'http://127.0.0.1:9', enabled: true, tier: 'external', approved: true };
   const gw = {
