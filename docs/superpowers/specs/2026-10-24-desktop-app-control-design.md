@@ -23,10 +23,10 @@ There are four new presets, with `kind: 'app'`. Model servers get `kind: 'server
 |---|---|---|---|
 | `claude-desktop` | Claude Desktop | `Claude.app` | `Claude` |
 | `chatgpt` | ChatGPT | `ChatGPT.app` | `ChatGPT` |
-| `antigravity` | Antigravity | `Antigravity.app` | `Antigravity` |
+| `antigravity` | Antigravity | `Antigravity IDE.app`, `Antigravity.app` | `Electron`, `Antigravity` |
 | `kiro` | Kiro | `Kiro.app`, `Kiro CLI.app` | `Kiro`, `kiro_cli_desktop` |
 
-- **Match.** The process is the app's main process: argv[0], or the leading path of `args`, is exactly `<dir>/<Bundle>.app/Contents/MacOS/<exe>`, for an app folder in `/Applications` or `~/Applications`. Helpers under `Contents/Frameworks/…` never match.
+- **Match.** The process is the app's main process: argv[0], or the leading path of `args`, is exactly `<dir>/<Bundle>.app/Contents/MacOS/<exe>`, for an app folder in `/Applications` or `~/Applications`. Helpers under `Contents/Frameworks/…` never match. Its parent must be launchd (ppid 1): an app run from a terminal does not count.
 - **Start.** `['/usr/bin/open', '-a', <bundle path found>]`.
 - **Health.** None. Running means the main process is there, and healthy equals running.
 - **Excluded.** No model reload: `models.supports` stays ollama and lmstudio only. No owner entries of `kind: 'app'`.

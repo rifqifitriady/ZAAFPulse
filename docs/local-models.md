@@ -79,20 +79,21 @@ On macOS the **Claude Desktop**, **ChatGPT**, **Antigravity** and **Kiro** cards
 |---|---|---|
 | Claude Desktop | `Claude.app` | `Claude.app/Contents/MacOS/Claude` |
 | ChatGPT | `ChatGPT.app` | `ChatGPT.app/Contents/MacOS/ChatGPT` |
-| Antigravity | `Antigravity.app` | `Antigravity.app/Contents/MacOS/Antigravity` |
+| Antigravity | `Antigravity IDE.app` when installed, else `Antigravity.app` | `Antigravity IDE.app/Contents/MacOS/Electron`, or `Antigravity.app/Contents/MacOS/Antigravity` |
 | Kiro | `Kiro.app` (the IDE) when installed, else `Kiro CLI.app` | `Kiro.app/Contents/MacOS/Kiro`, or `Kiro CLI.app/Contents/MacOS/kiro_cli_desktop` |
 
-Apps are looked up in `/Applications` and `~/Applications`. `kiro-cli` sessions in a terminal are not the Kiro app and are left alone.
+Apps are looked up in `/Applications` and `~/Applications`. `kiro-cli` sessions in a terminal are not the Kiro app and are left alone. An app counts as running only when macOS started it, with launchd as its parent process: an app started from a terminal shows no Stop.
 
 - **Start** runs `open -a` with the app found, then waits up to 15 seconds for its main process. The card says "Opened.", or "Opening, not up yet." when it takes longer.
 - **Stop** asks first: "Quit Claude Desktop? If it is still open after 10 s it is force-closed; unsaved work or a running chat or agent can be lost." Then, in two stages:
-  1. The app is asked to quit, as with ⌘Q (`osascript -e 'quit app "Claude"'`). An app with unsaved work may ask you first.
-  2. If its main process is still there after **10 seconds**, it gets `SIGTERM`; if it is still there **5 seconds** later, `SIGKILL`. Before each signal the process is read again, and nothing is sent unless it is still the same process (the same pid and start time). An app that is gone, or a process that was replaced, ends the stop.
+  1. The app is asked to quit, as with ⌘Q (`osascript -e 'quit app "Claude"'`). An app with unsaved work may ask you first, and you have about 10 seconds to save. Pressing Cancel on the app's own save prompt does not prevent the force-close.
+  2. If its main process is still there **10 seconds** after the quit request returns (the request itself can take up to 15 seconds, so `SIGTERM` comes 10 to 25 seconds after the click), it gets `SIGTERM`; if it is still there **5 seconds** later, `SIGKILL`. Before each signal the process is read again, and nothing is sent unless it is still the same process (the same pid and start time). An app that is gone, or a process that was replaced, ends the stop.
   The card then says "Closed.", or "Still shutting down." when it is still there 3 seconds after the last step.
 - Every step is audited in `.data/agent-audit.jsonl`: the quit, and each signal with `forced: true`.
 - **macOS only.** Elsewhere the cards show no button and say "macOS only".
 - An app is never a card of its own: when its card is not shown (not installed, or not among the Overview's first six), it has no row.
 - Control is off in the same places as for model servers (see [Safety](#safety)).
+- **Reserved ids.** An owner entry with the id `claude-desktop`, `chatgpt`, `antigravity` or `kiro` is now invalid ("… is the id of a preset"). It shows with that error in Settings and cannot start or stop; rename it. A server it started keeps running but is no longer listed, so stop it from a terminal.
 
 ## Your own runtimes
 
