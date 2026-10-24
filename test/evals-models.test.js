@@ -828,7 +828,7 @@ test('claude-code: the call sends the external payload (PII masked) on stdin, an
     assert.doesNotMatch(run.stdin + run.argv.join(' '), /ana@example|\/Users\/ana|812-3456/);
     assert.equal(run.argv.includes('--model'), false, '"default" leaves the model to Claude Code');
     assert.deepEqual(JSON.parse(run.argv[run.argv.indexOf('--json-schema') + 1]), SCHEMA);
-    assert.deepEqual(out.usage, { input: 1602, output: 40, cost: 0.0005 });
+    assert.deepEqual(out.usage, { input: 1602, output: 40, cost: 0.0005, cacheRead: 100, cacheWrite: 1500 });
     assert.equal(out.model, 'claude-haiku-5-5');
     assert.equal(out.text, JSON.stringify({ label: 'ok', explanation: 'fake verdict' }));
 
