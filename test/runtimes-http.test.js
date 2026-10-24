@@ -225,6 +225,10 @@ test('runtimes over HTTP: a save writes config.json with mode 0600', { skip: pro
   }
 });
 
+// The reason a row shows while control is off: a desktop app off macOS says "macOS only" first (it could not be
+// controlled there either way), every other row the off text.
+const offFor = (r, off) => (r.kind === 'app' && process.platform !== 'darwin' ? 'macOS only' : off);
+
 test('runtimes over HTTP: sign-in only, gateway keys refused, control off with password sign-in', async () => {
   const data = tmp('zp-rt-http-auth-');
   const gw = createGateway({
@@ -262,7 +266,7 @@ test('runtimes over HTTP: sign-in only, gateway keys refused, control off with p
     for (const r of list.json) {
       assert.equal(r.canStart, false);
       assert.equal(r.canStop, false);
-      assert.equal(r.reason, 'runtime control is off on this server');
+      assert.equal(r.reason, offFor(r, 'runtime control is off on this server'), r.id);
     }
     const start = await c.post('/api/runtimes/start', { id: 'ollama' });
     assert.equal(start.status, 403);
@@ -304,7 +308,7 @@ test('runtimes over HTTP: without sign-in (ZAAFPULSE_AUTH=none, no demo) runtime
     for (const r of list.json) {
       assert.equal(r.canStart, false);
       assert.equal(r.canStop, false);
-      assert.equal(r.reason, OFF);
+      assert.equal(r.reason, offFor(r, OFF), r.id);
     }
     const cfg = (await c.call('/api/runtimes/config')).json;
     assert.equal(cfg.off, OFF);

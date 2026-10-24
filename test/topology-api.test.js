@@ -68,23 +68,43 @@ async function startServer(env) {
   throw new Error('could not start server.js on a free port');
 }
 
-test('topologyDemo: three layers, OmniRoute in error, Ollama model, 8 requests', () => {
+test('topologyDemo: four layers around the ZAAFPulse hub, OmniRoute in error, Ollama model, 8 requests', () => {
   const t = demo.topologyDemo();
   const by = (id) => t.nodes.find((n) => n.id === id);
-  assert.deepEqual([...new Set(t.nodes.map((n) => n.layer))], [0, 1, 2]);
+  assert.deepEqual([...new Set(t.nodes.map((n) => n.layer))], [0, 1, 2, 3]);
   assert.equal(by('claude').label, 'Claude Code');
+  assert.equal(by('claude').via, null, 'monitored');
   assert.equal(by('codex').label, 'Codex');
+  assert.equal(by('codex').via, 'OmniRoute');
+  const hub = by('zaafpulse');
+  assert.deepEqual(
+    t.nodes.filter((n) => n.layer === 1),
+    [hub],
+  );
+  assert.equal(hub.kind, 'hub');
+  assert.equal(hub.status, 'active');
+  assert.equal(hub.note, 'gateway · 1 router · 1 runtime');
   const router = t.nodes.find((n) => n.kind === 'router');
   assert.equal(router.label, 'OmniRoute');
   assert.equal(router.status, 'error');
   assert.equal(router.note, 'timed out');
-  assert.ok(by('gateway'));
+  assert.equal(by('gateway'), undefined, 'the gateway is part of the hub');
   assert.ok(by('runtime:ollama'));
   assert.ok(by('model:ollama:llama3.2:3b'));
   for (const p of ['anthropic', 'openai', 'google']) assert.ok(by(`provider:${p}`), p);
   assert.equal(t.requests.length, 8);
-  assert.ok(t.edges.some((e) => e.from === 'codex' && e.to === router.id));
-  assert.ok(t.requests.some((q) => q.source === 'router' && q.path[0] === 'codex'));
+  for (const tool of ['claude', 'codex'])
+    assert.ok(
+      t.edges.some((e) => e.from === tool && e.to === 'zaafpulse'),
+      tool,
+    );
+  assert.ok(t.edges.some((e) => e.from === 'zaafpulse' && e.to === router.id));
+  assert.ok(
+    t.requests.some(
+      (q) => q.source === 'router' && q.path.join(' ') === `codex zaafpulse ${router.id} provider:openai`,
+    ),
+  );
+  assert.ok(t.requests.every((q) => q.path.includes('zaafpulse')));
   assert.doesNotMatch(JSON.stringify(t), /https?:\/\//);
 });
 
@@ -95,7 +115,8 @@ test('GET /api/topology: demo answer over HTTP, with no URL in the body', async 
     assert.equal(r.status, 200);
     const text = await r.text();
     const t = JSON.parse(text);
-    assert.deepEqual([...new Set(t.nodes.map((n) => n.layer))], [0, 1, 2]);
+    assert.deepEqual([...new Set(t.nodes.map((n) => n.layer))], [0, 1, 2, 3]);
+    assert.equal(t.nodes.find((n) => n.id === 'zaafpulse').kind, 'hub');
     assert.equal(t.nodes.find((n) => n.kind === 'router').status, 'error');
     assert.equal(t.requests.length, 8);
     assert.doesNotMatch(text, /http:\/\/|https:\/\//);

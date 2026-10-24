@@ -46,7 +46,9 @@ const omni = (o = {}) => ({
   ...o,
 });
 const node = (t, id) => t.nodes.find((n) => n.id === id);
+const edge = (t, id) => t.edges.find((e) => e.id === id);
 const edgeIds = (t) => t.edges.map((e) => e.id).sort();
+const HUB = 'zaafpulse';
 
 test('providerOf maps model and provider names to a provider', () => {
   const cases = {
@@ -111,21 +113,23 @@ test('a direct Claude Code with only claude-* turns goes to Anthropic, with its 
     label: 'Claude Code',
     status: 'active',
     note: null,
+    via: null,
   });
   assert.deepEqual(node(t, 'provider:anthropic'), {
     id: 'provider:anthropic',
-    layer: 2,
+    layer: 3,
     kind: 'provider',
     label: 'Anthropic',
     status: 'active',
     note: null,
   });
   assert.deepEqual(t.edges, [
-    { id: 'claude>provider:anthropic', from: 'claude', to: 'provider:anthropic', status: 'active' },
+    { id: 'claude>zaafpulse', from: 'claude', to: HUB, status: 'active' },
+    { id: 'zaafpulse>provider:anthropic', from: HUB, to: 'provider:anthropic', status: 'active' },
   ]);
   assert.deepEqual(t.requests[0], {
     ts: NOW - 2 * MIN,
-    path: ['claude', 'provider:anthropic'],
+    path: ['claude', HUB, 'provider:anthropic'],
     client: 'Claude Code',
     model: 'claude-opus-5-5',
     tokens: 120,
@@ -136,7 +140,7 @@ test('a direct Claude Code with only claude-* turns goes to Anthropic, with its 
   assert.equal(t.requests.length, 2);
 });
 
-test('a direct tool gets one edge per provider in its turns; with none, Claude Code goes to Anthropic, Codex to OpenAI', () => {
+test('a direct tool’s providers hang off the hub, one per provider in its turns; with none, Claude Code goes to Anthropic, Codex to OpenAI', () => {
   const t = buildTopology(
     input({
       live: { apps: [], installed: ['claude', 'codex', 'cursor'] },
@@ -144,7 +148,14 @@ test('a direct tool gets one edge per provider in its turns; with none, Claude C
     }),
     NOW,
   );
-  assert.deepEqual(edgeIds(t), ['claude>provider:anthropic', 'codex>provider:openai', 'codex>provider:qwen']);
+  assert.deepEqual(edgeIds(t), [
+    'claude>zaafpulse',
+    'codex>zaafpulse',
+    'cursor>zaafpulse',
+    'zaafpulse>provider:anthropic',
+    'zaafpulse>provider:openai',
+    'zaafpulse>provider:qwen',
+  ]);
   assert.equal(node(t, 'cursor').label, 'Cursor');
   assert.equal(node(t, 'claude').status, 'idle');
   // An app without a name in appNames is labelled with its id.
@@ -177,16 +188,40 @@ test('the local runtimes are drawn as runtimes, not as tools', () => {
   );
   assert.deepEqual(node(t, 'runtime:ollama'), {
     id: 'runtime:ollama',
-    layer: 1,
+    layer: 2,
     kind: 'runtime',
     label: 'Ollama',
     status: 'active', // running and answering, though no request passed through it
     note: null,
   });
   assert.equal(node(t, 'runtime:lmstudio'), undefined);
+  assert.ok(edge(t, 'zaafpulse>runtime:ollama'), 'a running runtime hangs off the hub');
 });
 
-test('Codex pointed at OmniRoute goes to the router, and its log turns are left out of the requests', () => {
+test('a desktop app runtime (kind app) is not drawn as a runtime: it stays a tool', () => {
+  const t = buildTopology(
+    input({
+      live: { apps: [{ id: 'claude-desktop' }], installed: ['claude-desktop', 'chatgpt'] },
+      runtimes: [
+        { id: 'ollama', kind: 'server', name: 'Ollama', running: true, healthy: true, port: 11434, models: null },
+        { id: 'claude-desktop', kind: 'app', name: 'Claude Desktop', running: true, healthy: true, port: null, models: null },
+        { id: 'chatgpt', kind: 'app', name: 'ChatGPT', running: false, healthy: false, port: null, models: null },
+      ],
+    }),
+    NOW,
+  );
+  assert.deepEqual(
+    t.nodes.filter((n) => n.layer === 0).map((n) => n.id),
+    ['claude-desktop', 'chatgpt'],
+  );
+  assert.equal(node(t, 'claude-desktop').status, 'active', 'a running tool');
+  assert.equal(node(t, 'runtime:claude-desktop'), undefined);
+  assert.equal(node(t, 'runtime:chatgpt'), undefined);
+  assert.ok(node(t, 'runtime:ollama'));
+  assert.equal(node(t, HUB).note, '1 runtime');
+});
+
+test('Codex pointed at OmniRoute goes through the hub to the router, and its log turns are left out of the requests', () => {
   const t = buildTopology(
     input({
       live: { apps: [{ id: 'codex' }], installed: ['claude', 'codex'] },
@@ -217,19 +252,24 @@ test('Codex pointed at OmniRoute goes to the router, and its log turns are left 
   );
   assert.deepEqual(node(t, 'router:omniroute'), {
     id: 'router:omniroute',
-    layer: 1,
+    layer: 2,
     kind: 'router',
     label: 'OmniRoute',
     status: 'active',
     note: null,
   });
+  assert.equal(node(t, 'codex').via, 'OmniRoute');
+  assert.equal(node(t, 'claude').via, null);
   assert.deepEqual(edgeIds(t), [
-    'claude>provider:anthropic',
-    'codex>router:omniroute',
+    'claude>zaafpulse',
+    'codex>zaafpulse',
     'router:omniroute>provider:anthropic',
     'router:omniroute>provider:openai',
+    'zaafpulse>provider:anthropic', // Claude Code, direct
+    'zaafpulse>router:omniroute',
   ]);
-  assert.ok(!t.edges.some((e) => e.id === 'codex>provider:openai'));
+  assert.ok(!edge(t, 'codex>router:omniroute'), 'a routed tool connects to the hub, not to its router');
+  assert.ok(!edge(t, 'zaafpulse>provider:openai'), 'a routed tool adds no direct provider edge');
   assert.equal(
     t.requests.filter((r) => r.source === 'logs').length,
     1,
@@ -238,7 +278,7 @@ test('Codex pointed at OmniRoute goes to the router, and its log turns are left 
   assert.equal(t.requests[0].source, 'router');
   assert.deepEqual(t.requests[0], {
     ts: NOW - 30 * 1000,
-    path: ['codex', 'router:omniroute', 'provider:openai'],
+    path: ['codex', HUB, 'router:omniroute', 'provider:openai'],
     client: 'Codex',
     model: 'gpt-5.6',
     tokens: 350,
@@ -246,7 +286,24 @@ test('Codex pointed at OmniRoute goes to the router, and its log turns are left 
     ok: true,
     source: 'router',
   });
-  assert.deepEqual(t.requests[1].path, ['codex', 'router:omniroute', 'provider:anthropic']);
+  assert.deepEqual(t.requests[1].path, ['codex', HUB, 'router:omniroute', 'provider:anthropic']);
+  assert.equal(edge(t, 'codex>zaafpulse').status, 'active', 'the tool edge takes its routed calls');
+  assert.equal(edge(t, 'zaafpulse>router:omniroute').status, 'active');
+});
+
+test('an edge takes the newest request that passed along it: a router call does not colour a direct hub edge', () => {
+  const t = buildTopology(
+    input({
+      live: { apps: [], installed: ['claude'] }, // direct, no turns: its default edge to Anthropic
+      routers: [omni({ calls: [{ ts: NOW - MIN, status: 200, model: 'claude-sonnet-5', provider: 'anthropic' }] })],
+    }),
+    NOW,
+  );
+  assert.deepEqual(t.requests[0].path, [HUB, 'router:omniroute', 'provider:anthropic']);
+  assert.equal(node(t, 'provider:anthropic').status, 'active', 'the provider was reached');
+  assert.equal(edge(t, 'router:omniroute>provider:anthropic').status, 'active');
+  assert.equal(edge(t, 'zaafpulse>provider:anthropic').status, 'idle', 'nothing went straight from the hub');
+  assert.equal(edge(t, 'claude>zaafpulse').status, 'idle');
 });
 
 test('a router is labelled with its connector name, and a 9router without one with "9router"', () => {
@@ -256,10 +313,10 @@ test('a router is labelled with its connector name, and a 9router without one wi
   );
   assert.equal(node(t, 'router:mine').label, 'Home router');
   assert.equal(node(t, 'router:n').label, '9router');
-  assert.equal(buildTopology(input({ routers: [omni({ name: undefined })] }), NOW).nodes[0].label, 'OmniRoute');
+  assert.equal(node(buildTopology(input({ routers: [omni({ name: undefined })] }), NOW), 'router:omniroute').label, 'OmniRoute');
 });
 
-test('the gateway goes to a running runtime by port, and to the provider otherwise', () => {
+test('the gateway’s providers hang off the hub: a running runtime by port, the provider otherwise', () => {
   const gateway = {
     providers: [
       { id: 'local', preset: 'ollama', baseUrl: 'http://localhost:11434/v1', enabled: true },
@@ -289,29 +346,30 @@ test('the gateway goes to a running runtime by port, and to the provider otherwi
     },
   ];
   const t = buildTopology(input({ gateway, runtimes }), NOW);
-  assert.deepEqual(node(t, 'gateway'), {
-    id: 'gateway',
-    layer: 1,
-    kind: 'gateway',
-    label: 'Agent Gateway',
-    status: 'idle',
-    note: null,
-  });
+  assert.equal(node(t, 'gateway'), undefined, 'the gateway is part of the hub');
+  assert.equal(node(t, HUB).note, 'gateway · 1 runtime');
   assert.deepEqual(edgeIds(t), [
-    'gateway>provider:anthropic',
-    'gateway>provider:other', // LM Studio is not running
-    'gateway>runtime:ollama',
     'runtime:ollama>model:ollama:llama3.2:3b', // what a Start loaded; qwen3:8b is only remembered
+    'zaafpulse>provider:anthropic',
+    'zaafpulse>provider:other', // LM Studio is not running
+    'zaafpulse>runtime:ollama',
   ]);
   assert.deepEqual(node(t, 'model:ollama:llama3.2:3b'), {
     id: 'model:ollama:llama3.2:3b',
-    layer: 2,
+    layer: 3,
     kind: 'model',
     label: 'llama3.2:3b',
     status: 'idle',
     note: null,
   });
   assert.equal(node(t, 'provider:google'), undefined, 'a disabled provider has no edge');
+  // A gateway provider on a running runtime's port adds no provider node.
+  const only = buildTopology(input({ gateway: { ...gateway, providers: [gateway.providers[0]] }, runtimes }), NOW);
+  assert.deepEqual(
+    only.nodes.filter((n) => n.kind === 'provider'),
+    [],
+  );
+  assert.ok(edge(only, 'zaafpulse>runtime:ollama'));
   // Nothing loaded by a Start: the models last read from the running server are the loaded ones.
   const r = buildTopology(
     input({
@@ -319,10 +377,11 @@ test('the gateway goes to a running runtime by port, and to the provider otherwi
     }),
     NOW,
   );
-  assert.deepEqual(edgeIds(r), ['runtime:ollama>model:ollama:qwen3:8b']);
-  // With no enabled provider there is no gateway.
+  assert.deepEqual(edgeIds(r), ['runtime:ollama>model:ollama:qwen3:8b', 'zaafpulse>runtime:ollama']);
+  // With no enabled provider the gateway adds nothing.
   const u = buildTopology(input({ gateway: { providers: [{ id: 'off', preset: 'openai', enabled: false }] } }), NOW);
-  assert.equal(node(u, 'gateway'), undefined);
+  assert.equal(node(u, HUB).note, null);
+  assert.deepEqual(edgeIds(u), []);
 });
 
 test('gateway usage: path, ok, and the key name or agent as the client', () => {
@@ -367,7 +426,7 @@ test('gateway usage: path, ok, and the key name or agent as the client', () => {
   const g = t.requests.filter((r) => r.source === 'gateway');
   assert.deepEqual(g[0], {
     ts: NOW - MIN,
-    path: ['gateway', 'provider:anthropic'],
+    path: [HUB, 'provider:anthropic'],
     client: 'laptop',
     model: 'claude-sonnet-5',
     tokens: 15,
@@ -375,23 +434,24 @@ test('gateway usage: path, ok, and the key name or agent as the client', () => {
     ok: true,
     source: 'gateway',
   });
-  assert.deepEqual(g[1].path, ['gateway', 'runtime:ollama']);
+  assert.deepEqual(g[1].path, [HUB, 'runtime:ollama']);
   assert.equal(g[1].client, 'researcher');
   assert.equal(g[2].ok, false, 'an error makes it fail');
   assert.equal(g[3].ok, false, 'a status of 400 or more makes it fail');
   // A provider no longer configured: the model names the provider, and the model is what answered.
-  assert.deepEqual(g[4].path, ['gateway', 'provider:openai']);
+  assert.deepEqual(g[4].path, [HUB, 'provider:openai']);
   assert.equal(g[4].model, 'gpt-5-mini');
   assert.equal(g[4].client, null);
   assert.ok(node(t, 'provider:openai'), 'a provider seen in a request is drawn');
-  assert.ok(t.edges.some((e) => e.id === 'gateway>provider:openai'));
+  assert.ok(edge(t, 'zaafpulse>provider:openai'));
 
   // One tool routed to the gateway does not make it the client of every request: the key says who sent it.
   const one = buildTopology(input({ ...base, routes: { claude: 'gateway', codex: null } }), NOW);
   const r = one.requests.find((x) => x.source === 'gateway');
-  assert.deepEqual(r.path, ['gateway', 'provider:anthropic']);
+  assert.deepEqual(r.path, [HUB, 'provider:anthropic']);
   assert.equal(r.client, 'laptop');
-  assert.ok(one.edges.some((e) => e.id === 'claude>gateway'));
+  assert.ok(edge(one, 'claude>zaafpulse'));
+  assert.equal(node(one, 'claude').via, 'gateway');
 });
 
 test('gateway usage: a tool key names its tool, the dashboard is ZAAFPulse, any other key or agent is the client', () => {
@@ -430,31 +490,28 @@ test('gateway usage: a tool key names its tool, the dashboard is ZAAFPulse, any 
   assert.deepEqual(
     g.map((q) => [q.path.join(' '), q.client]),
     [
-      ['claude gateway provider:anthropic', 'Claude Code'],
-      ['codex gateway provider:anthropic', 'Codex'],
-      ['cursor gateway provider:anthropic', 'Cursor'],
-      ['gateway provider:anthropic', 'tool:gemini-cli'], // its app (Antigravity) is not drawn
-      ['gateway provider:anthropic', 'ZAAFPulse'], // the dashboard's own calls: agents, collab, evals, RAG
-      ['gateway provider:anthropic', 'laptop'],
-      ['gateway provider:anthropic', 'tool:__proto__'],
-      ['gateway provider:anthropic', 'researcher'],
+      ['claude zaafpulse provider:anthropic', 'Claude Code'],
+      ['codex zaafpulse provider:anthropic', 'Codex'],
+      ['cursor zaafpulse provider:anthropic', 'Cursor'],
+      ['zaafpulse provider:anthropic', 'tool:gemini-cli'], // its app (Antigravity) is not drawn
+      ['zaafpulse provider:anthropic', 'ZAAFPulse'], // the dashboard's own calls: agents, collab, evals, RAG
+      ['zaafpulse provider:anthropic', 'laptop'],
+      ['zaafpulse provider:anthropic', 'tool:__proto__'],
+      ['zaafpulse provider:anthropic', 'researcher'],
     ],
   );
-  for (const e of ['claude>gateway', 'codex>gateway', 'cursor>gateway'])
-    assert.ok(
-      t.edges.some((x) => x.id === e),
-      e,
-    );
-  assert.equal(t.edges.find((x) => x.id === 'claude>gateway').status, 'active', 'its edge takes the request status');
+  for (const e of ['claude>zaafpulse', 'codex>zaafpulse', 'cursor>zaafpulse']) assert.ok(edge(t, e), e);
+  assert.equal(edge(t, 'claude>zaafpulse').status, 'active', 'its edge takes the request status');
+  assert.equal(edge(t, 'cursor>zaafpulse').status, 'active', 'a tool credited by its key, though not routed');
   // Gemini CLI is part of the Antigravity app; with that drawn, its key names it.
   const u = buildTopology(
     input({ live: { apps: [], installed: ['antigravity'] }, gateway: { ...gateway, usage: [use(1, 'kg')] } }),
     NOW,
   );
-  assert.deepEqual(u.requests[0].path, ['antigravity', 'gateway', 'provider:anthropic']);
+  assert.deepEqual(u.requests[0].path, ['antigravity', HUB, 'provider:anthropic']);
   // A tool key is the client even when that tool is not routed to the gateway (it was pointed there by hand).
   const v = buildTopology(input({ live, gateway: { ...gateway, usage: [use(1, 'kx')] } }), NOW);
-  assert.deepEqual(v.requests[0].path, ['codex', 'gateway', 'provider:anthropic']);
+  assert.deepEqual(v.requests[0].path, ['codex', HUB, 'provider:anthropic']);
 });
 
 test('requests from every source are merged newest first and capped at 20', () => {
@@ -514,7 +571,9 @@ test('status from the newest request: error, active, recent, idle', () => {
     );
   const err = at(30 * MIN, false);
   assert.equal(node(err, 'claude').status, 'error');
-  assert.equal(err.edges[0].status, 'error');
+  assert.equal(edge(err, 'claude>zaafpulse').status, 'error');
+  assert.equal(edge(err, 'zaafpulse>provider:anthropic').status, 'error');
+  assert.equal(node(err, HUB).status, 'active', 'the hub is the dashboard itself');
   assert.equal(err.requests[0].ok, false);
   assert.equal(node(at(2 * MIN), 'claude').status, 'active');
   assert.equal(node(at(40 * MIN), 'claude').status, 'recent');
@@ -541,7 +600,8 @@ test('a turn with failed tool calls is ok: the provider answered', () => {
   assert.equal(t.requests[0].ok, true);
   assert.equal(node(t, 'provider:anthropic').status, 'active');
   assert.equal(node(t, 'claude').status, 'active');
-  assert.equal(t.edges.find((e) => e.id === 'claude>provider:anthropic').status, 'active');
+  assert.equal(edge(t, 'claude>zaafpulse').status, 'active');
+  assert.equal(edge(t, 'zaafpulse>provider:anthropic').status, 'active');
 });
 
 test('an API error in the logs is a failed request to the tool’s provider', () => {
@@ -566,7 +626,7 @@ test('an API error in the logs is a failed request to the tool’s provider', ()
   assert.deepEqual(t.requests, [
     {
       ts: NOW - 2 * MIN,
-      path: ['claude', 'provider:anthropic'],
+      path: ['claude', HUB, 'provider:anthropic'],
       client: 'Claude Code',
       model: null,
       tokens: 0,
@@ -576,7 +636,7 @@ test('an API error in the logs is a failed request to the tool’s provider', ()
     },
     {
       ts: NOW - 3 * MIN,
-      path: ['codex', 'provider:anthropic'],
+      path: ['codex', HUB, 'provider:anthropic'],
       client: 'Codex',
       model: 'claude-sonnet-5',
       tokens: 0,
@@ -587,7 +647,8 @@ test('an API error in the logs is a failed request to the tool’s provider', ()
   ]);
   assert.ok(node(t, 'claude'), 'a tool with only an API error is drawn');
   assert.equal(node(t, 'provider:anthropic').status, 'error');
-  assert.equal(t.edges.find((e) => e.id === 'claude>provider:anthropic').status, 'error');
+  assert.equal(edge(t, 'claude>zaafpulse').status, 'error');
+  assert.equal(edge(t, 'zaafpulse>provider:anthropic').status, 'error');
   assert.doesNotMatch(JSON.stringify(t), /Overloaded|status\.anthropic|https?:/, 'the error text is not copied');
   // A tool routed through a hop: that hop reports its failures, so the log error is left out.
   const u = buildTopology(
@@ -605,7 +666,8 @@ test('a running tool with no requests is active', () => {
   const t = buildTopology(input({ live: { apps: [{ id: 'codex' }, { id: 'cursor' }], installed: ['codex'] } }), NOW);
   assert.equal(node(t, 'codex').status, 'active');
   assert.equal(node(t, 'cursor').status, 'active');
-  assert.equal(t.edges.find((e) => e.id === 'codex>provider:openai').status, 'idle');
+  assert.equal(edge(t, 'codex>zaafpulse').status, 'idle');
+  assert.equal(edge(t, 'zaafpulse>provider:openai').status, 'idle');
 });
 
 test('a router whose health failed is error, with the short reason as its note', () => {
@@ -691,9 +753,10 @@ test('edges and requests of a node folded into "+N more" point at the "+N more" 
     input({ live: { apps: [], installed: [...ids, 'codex'] }, appNames: {}, logs: { requests: [] } }),
     NOW,
   );
-  // codex is last and not busier than the others, so it is folded; its default edge then leaves from "+N more".
+  // codex is last and not busier than the others, so it is folded; its hub edge then leaves from "+N more".
   assert.equal(node(t, 'codex'), undefined);
-  assert.ok(t.edges.some((e) => e.id === 'more:0>provider:openai'));
+  assert.ok(edge(t, 'more:0>zaafpulse'));
+  assert.ok(edge(t, 'zaafpulse>provider:openai'), 'its default provider still hangs off the hub');
   for (const e of t.edges) {
     assert.ok(node(t, e.from), e.id);
     assert.ok(node(t, e.to), e.id);
@@ -752,8 +815,9 @@ test('model names are clipped to 80 characters', () => {
 });
 
 test('wrong types, missing fields and { error } objects in place of lists give an empty graph', () => {
-  assert.deepEqual(buildTopology({}, NOW), { ts: NOW, nodes: [], edges: [], requests: [] });
-  assert.deepEqual(buildTopology(undefined, NOW), { ts: NOW, nodes: [], edges: [], requests: [] });
+  const hub = { id: HUB, layer: 1, kind: 'hub', label: 'ZAAFPulse', status: 'active', note: null };
+  assert.deepEqual(buildTopology({}, NOW), { ts: NOW, nodes: [hub], edges: [], requests: [] });
+  assert.deepEqual(buildTopology(undefined, NOW), { ts: NOW, nodes: [hub], edges: [], requests: [] });
   const t = buildTopology(
     {
       live: { error: 'ps failed' },
@@ -772,7 +836,7 @@ test('wrong types, missing fields and { error } objects in place of lists give a
   );
   assert.deepEqual(
     t.nodes.map((n) => n.id),
-    ['router:omniroute'],
+    [HUB, 'router:omniroute'],
   );
   assert.deepEqual(t.requests, []);
   // Rows with junk inside are skipped one by one.
@@ -786,11 +850,11 @@ test('wrong types, missing fields and { error } objects in place of lists give a
   );
   assert.ok(node(u, 'claude'));
   const codex = u.requests.find((r) => r.source === 'logs');
-  assert.deepEqual(codex.path, ['codex', 'provider:openai'], 'a turn without a model goes to the tool’s own provider');
+  assert.deepEqual(codex.path, ['codex', HUB, 'provider:openai'], 'a turn without a model goes to the tool’s own provider');
   assert.equal(codex.tokens, 0);
   assert.equal(codex.model, null);
   const call = u.requests.find((r) => r.source === 'router');
-  assert.deepEqual(call.path, ['router:omniroute', 'provider:other']);
+  assert.deepEqual(call.path, [HUB, 'router:omniroute', 'provider:other']);
   assert.equal(call.ok, true, 'a status that is not a number is not a failure');
 });
 
@@ -919,15 +983,16 @@ test('a tool routed to a hop that is not a node falls back to direct', () => {
       }),
       NOW,
     );
-    assert.ok(edgeIds(t).includes('claude>provider:anthropic'));
+    assert.ok(edgeIds(t).includes('zaafpulse>provider:anthropic'));
+    assert.equal(node(t, 'claude').via, null, 'monitored');
     assert.equal(t.requests.length, 1);
-    assert.deepEqual(t.requests[0].path, ['claude', 'provider:anthropic']);
+    assert.deepEqual(t.requests[0].path, ['claude', HUB, 'provider:anthropic']);
   }
 });
 
 test('a tool named like an Object.prototype key has no default provider', () => {
   const t = buildTopology(input({ live: { apps: [], installed: ['constructor', 'toString'] } }), NOW);
-  assert.deepEqual(edgeIds(t), []);
+  assert.deepEqual(edgeIds(t), ['constructor>zaafpulse', 'toString>zaafpulse']);
 });
 
 test('real model names survive the scrub: Ollama tags, Vertex @versions, dated tags', () => {
@@ -983,11 +1048,12 @@ test('readGateway reads the provider list, not the whole Gateway page, and keeps
     usage: [{ n: 200 }],
     keys: [{ id: 'k1', name: 'laptop' }],
   });
-  // A disabled provider is still honoured: with only that one there is no gateway.
+  // A disabled provider is still honoured: with only that one the hub has no gateway.
   const t = buildTopology(
     input({ gateway: await readGateway({ ...gw, providers: { list: () => [r.providers[1]] } }) }),
   );
-  assert.equal(node(t, 'gateway'), undefined);
+  assert.equal(node(t, HUB).note, null);
+  assert.equal(node(t, 'provider:openai'), undefined);
   // Missing parts give empty lists.
   assert.deepEqual(
     await readGateway({ providers: { list: () => null }, usage: { recent: () => null }, keys: { list: () => null } }),
@@ -1016,4 +1082,156 @@ test('a running, answering runtime and the models it has loaded now are active; 
   const silent = buildTopology(input({ runtimes: [lm({ healthy: false, models: null })] }), NOW);
   assert.equal(node(silent, 'runtime:lmstudio').status, 'error');
   assert.equal(node(silent, 'runtime:lmstudio').note, 'not answering');
+});
+
+// ZAAFPulse is the hub: every tool, router, runtime and provider is connected through it
+// (docs/superpowers/specs/2026-10-23-topology-hub-design.md).
+test('the ZAAFPulse hub is always there, alone in layer 1, and always active', () => {
+  const hub = (t) => t.nodes.filter((n) => n.layer === 1);
+  for (const t of [
+    buildTopology({}, NOW),
+    buildTopology(input(), NOW),
+    buildTopology(input({ logs: { requests: [], errors: [apiError('claude', MIN)] } }), NOW),
+    buildTopology(input({ logs: { requests: [turn('claude', 'claude-x', 2 * 60 * MIN)] } }), NOW),
+  ]) {
+    assert.deepEqual(
+      hub(t).map((n) => [n.id, n.kind, n.label, n.status]),
+      [[HUB, 'hub', 'ZAAFPulse', 'active']],
+    );
+    assert.equal('via' in hub(t)[0], false, 'only tools carry via');
+  }
+  // An app with the hub's id is not drawn as a tool in its place.
+  const t = buildTopology(input({ live: { apps: [{ id: 'zaafpulse' }], installed: ['zaafpulse'] } }), NOW);
+  assert.deepEqual(
+    t.nodes.map((n) => [n.id, n.kind]),
+    [[HUB, 'hub']],
+  );
+});
+
+test('the hub note names the gateway and counts the routers and running runtimes', () => {
+  const rt = (id, running = true) => ({ id, name: id, running, healthy: true, port: 1, models: null });
+  const enabledGw = { providers: [{ id: 'a', preset: 'anthropic', enabled: true }], usage: [], keys: [] };
+  const note = (o) => node(buildTopology(input(o), NOW), HUB).note;
+  assert.equal(note({ gateway: enabledGw, routers: [omni()], runtimes: [rt('ollama')] }), 'gateway · 1 router · 1 runtime');
+  assert.equal(
+    note({ routers: [omni(), omni({ id: 'n', flavor: '9router' })], runtimes: [rt('ollama'), rt('lmstudio')] }),
+    '2 routers · 2 runtimes',
+  );
+  assert.equal(note({ runtimes: [rt('ollama', false)] }), null, 'a stopped runtime is not counted');
+  assert.equal(note({ gateway: enabledGw }), 'gateway');
+  assert.equal(
+    note({ gateway: { providers: [{ id: 'a', preset: 'anthropic', enabled: false }] }, routers: [omni()] }),
+    '1 router',
+    'the gateway counts only with an enabled provider',
+  );
+  assert.equal(note({}), null);
+});
+
+test('a tool node says how it is connected: via the gateway, via a router by its label, or monitored (null)', () => {
+  const t = buildTopology(
+    input({
+      live: { apps: [], installed: ['claude', 'codex', 'cursor'] },
+      gateway: { providers: [{ id: 'a', preset: 'anthropic', enabled: true }], usage: [], keys: [] },
+      routers: [omni({ name: 'Home router' })],
+      routes: { claude: 'gateway', codex: 'omniroute', cursor: null },
+    }),
+    NOW,
+  );
+  assert.equal(node(t, 'claude').via, 'gateway');
+  assert.equal(node(t, 'codex').via, 'Home router');
+  assert.equal(node(t, 'cursor').via, null);
+  for (const n of t.nodes.filter((x) => x.kind !== 'tool')) assert.equal('via' in n, false, n.id);
+  // Pointed at a gateway with nothing enabled, or at an unknown router: monitored.
+  const u = buildTopology(input({ live: { apps: [], installed: ['claude', 'codex'] }, routes: { claude: 'gateway', codex: 'x' } }), NOW);
+  assert.equal(node(u, 'claude').via, null);
+  assert.equal(node(u, 'codex').via, null);
+});
+
+test('every tool connects to the hub, and every router and running runtime hangs off it', () => {
+  const t = buildTopology(
+    input({
+      live: { apps: [{ id: 'cursor' }], installed: ['claude', 'codex', 'zed'] },
+      logs: { requests: [turn('claude', 'claude-x', MIN)] },
+      gateway: { providers: [{ id: 'g', preset: 'gemini', enabled: true }], usage: [], keys: [] },
+      routers: [omni(), omni({ id: 'n', name: '9router', flavor: '9router' })],
+      runtimes: [{ id: 'ollama', name: 'Ollama', running: true, healthy: true, port: 11434, models: { current: ['qwen3:8b'] } }],
+      routes: { claude: null, codex: 'omniroute' },
+    }),
+    NOW,
+  );
+  const tools = t.nodes.filter((n) => n.kind === 'tool').map((n) => n.id);
+  assert.deepEqual(tools.sort(), ['claude', 'codex', 'cursor', 'zed']);
+  for (const id of tools) {
+    assert.deepEqual(
+      t.edges.filter((e) => e.from === id).map((e) => e.to),
+      [HUB],
+      `${id} connects to the hub alone`,
+    );
+  }
+  for (const n of t.nodes.filter((x) => x.layer === 2)) assert.ok(edge(t, `${HUB}>${n.id}`), n.id);
+  // Every node is reachable from the hub, or reaches it.
+  const near = new Set([HUB]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const e of t.edges)
+      for (const [a, b] of [
+        [e.from, e.to],
+        [e.to, e.from],
+      ])
+        if (near.has(a) && !near.has(b)) grew = near.add(b);
+  }
+  for (const n of t.nodes) assert.ok(near.has(n.id), n.id);
+  // Every request passes through the hub.
+  for (const q of t.requests) assert.ok(q.path.includes(HUB), q.path.join(' '));
+});
+
+test('there is no gateway node: the Agent Gateway is part of the hub', () => {
+  const t = buildTopology(
+    input({
+      live: { apps: [], installed: ['claude'] },
+      gateway: {
+        providers: [{ id: 'a', preset: 'anthropic', enabled: true }],
+        usage: [{ ts: NOW - MIN, keyId: 'kc', provider: 'a', model: 'claude-3', status: 200 }],
+        keys: [{ id: 'kc', name: 'tool:claude-code' }],
+      },
+      routes: { claude: 'gateway' },
+    }),
+    NOW,
+  );
+  assert.ok(t.requests.length);
+  assert.equal(node(t, 'gateway'), undefined);
+  assert.ok(!t.nodes.some((n) => n.kind === 'gateway'));
+  assert.ok(!t.edges.some((e) => e.from === 'gateway' || e.to === 'gateway'));
+  assert.ok(!t.requests.some((q) => q.path.includes('gateway')));
+  assert.deepEqual(t.requests[0].path, ['claude', HUB, 'provider:anthropic']);
+});
+
+test('the 12-a-layer cap folds layers 0, 2 and 3, and never the hub', () => {
+  const ids = Array.from({ length: 14 }, (_, i) => `tool${i}`);
+  const models = Array.from({ length: 14 }, (_, i) => `m${i}`);
+  const t = buildTopology(
+    input({
+      live: { apps: [], installed: ids },
+      routers: Array.from({ length: 14 }, (_, i) => omni({ id: `r${i}`, name: `R${i}` })),
+      runtimes: [{ id: 'ollama', name: 'Ollama', running: true, healthy: true, port: 11434, models: { current: models } }],
+    }),
+    NOW,
+  );
+  const layer = (n) => t.nodes.filter((x) => x.layer === n);
+  assert.deepEqual(
+    layer(1).map((n) => n.id),
+    [HUB],
+  );
+  for (const n of [0, 2, 3]) {
+    assert.equal(layer(n).length, 12, `layer ${n}`);
+    assert.equal(layer(n)[11].id, `more:${n}`);
+  }
+  assert.equal(layer(2)[11].label, '+4 more'); // 14 routers and Ollama
+  assert.equal(layer(3)[11].label, '+3 more');
+  assert.ok(edge(t, 'more:0>zaafpulse'));
+  assert.ok(edge(t, 'zaafpulse>more:2'));
+  for (const e of t.edges) {
+    assert.ok(node(t, e.from), e.id);
+    assert.ok(node(t, e.to), e.id);
+  }
 });

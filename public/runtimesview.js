@@ -1,11 +1,13 @@
 'use strict';
-/* Local model servers in the dashboard: Start and Stop in AI Office (an action row on the Ollama and LM Studio cards,
-   a card of their own for llama.cpp, Jan, LocalAI and the owner's runtimes) and Settings → Local models (the owner's
-   entries: add, edit, delete, approve). Everything from /api/runtimes reaches the page as text: nodes are made with
-   createElement and filled with textContent (S1). The only innerHTML here is this app's own icon markup. The helpers
-   at the top are pure, so test/runtimes-ui.test.js runs them without a browser. */
+/* Local model servers and the AI desktop apps in the dashboard: Start and Stop in AI Office (an action row on the
+   Ollama, LM Studio, Claude Desktop, ChatGPT, Antigravity and Kiro cards, a card of their own for llama.cpp, Jan,
+   LocalAI and the owner's runtimes), the same rows on the Overview's AI Office cards, and Settings → Local models
+   (the owner's entries: add, edit, delete, approve). Everything from /api/runtimes reaches the page as text: nodes
+   are made with createElement and filled with textContent (S1). The only innerHTML here is this app's own icon
+   markup. The helpers at the top are pure, so test/runtimes-ui.test.js runs them without a browser. */
 
-const RT_CARD_IDS = ['ollama', 'lmstudio']; // runtimes that already have a card among the installed AI tools
+// Runtimes that already have a card among the installed AI tools. A desktop app (kind 'app') is drawn only there.
+const RT_CARD_IDS = ['ollama', 'lmstudio', 'claude-desktop', 'chatgpt', 'antigravity', 'kiro'];
 const RT_POLL_MS = 5000;
 const RT_ID_RE = /^[a-z0-9-]{1,40}$/;
 const RT_HOW = {
@@ -33,11 +35,18 @@ const rtText = (v, max = 300) =>
         .trim()
         .slice(0, max)
     : '';
-const rtCap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+// A word with a capital inside, such as macOS, keeps its first letter.
+const rtCap = (s) => (s && !/^[a-z]+[A-Z]/.test(s) ? s[0].toUpperCase() + s.slice(1) : s);
+const rtIsApp = (r) => !!r && r.kind === 'app';
 
 // The runtime's status line: { cls: 'running' | 'idle' | 'off', text }.
 function rtStatus(r) {
   if (!r || typeof r !== 'object') return { cls: 'off', text: '' };
+  // An app has no port and no health check: open or closed. Not found to open, the reason line says why.
+  if (rtIsApp(r)) {
+    if (r.running) return { cls: 'running', text: 'App open' };
+    return r.installed ? { cls: 'idle', text: 'App closed' } : { cls: 'off', text: '' };
+  }
   const port = Number.isInteger(r.port) ? ` · port ${r.port}` : '';
   if (r.running) {
     const n = Number.isInteger(r.children) ? r.children : 0;
@@ -48,8 +57,8 @@ function rtStatus(r) {
   return { cls: 'idle', text: `Server stopped${port}` };
 }
 
-// How a running server runs, as a short note next to Stop; '' when it is not running.
-const rtHowNote = (r) => (r && r.running && Object.hasOwn(RT_HOW, r.how) ? RT_HOW[r.how] : '');
+// How a running server runs, as a short note next to Stop; '' when it is not running, and for an app (it is one).
+const rtHowNote = (r) => (r && r.running && !rtIsApp(r) && Object.hasOwn(RT_HOW, r.how) ? RT_HOW[r.how] : '');
 
 // The one button a runtime gets, or null: Stop while running, Start while stopped, a label while a request is out.
 function rtButton(r, busy) {
@@ -61,11 +70,15 @@ function rtButton(r, busy) {
   return null;
 }
 
-// A runtime whose models are loaded again on Start (Ollama, LM Studio) says so before it is stopped.
+// A runtime whose models are loaded again on Start (Ollama, LM Studio) says so before it is stopped. An app is quit,
+// then closed by force when it is still open 10 s later.
 const rtConfirmText = (r) =>
-  `Stop ${rtText(r && r.name, 60) || 'this server'}? ${
-    r && r.models ? 'Its models are unloaded now and loaded again on the next Start.' : 'Models it has loaded are unloaded.'
-  }`;
+  rtIsApp(r)
+    ? `Quit ${rtText(r.name, 60) || 'this app'}? If it is still open after 10 s it is force-closed; ` +
+      'unsaved work or a running chat or agent can be lost.'
+    : `Stop ${rtText(r && r.name, 60) || 'this server'}? ${
+        r && r.models ? 'Its models are unloaded now and loaded again on the next Start.' : 'Models it has loaded are unloaded.'
+      }`;
 
 // Model names as text: "a", "a and b", "a, b and 2 more".
 function rtNames(list) {
@@ -90,10 +103,14 @@ function rtModelsText(r) {
   return out.join('. ');
 }
 
-// What happened, from the answer of /api/runtimes/start or /stop.
-function rtResultText(action, res) {
+// What happened, from the answer of /api/runtimes/start or /stop for the runtime `r`.
+function rtResultText(action, res, r) {
   if (!res || typeof res !== 'object') return '';
   if (res.demo) return `Demo mode: nothing was ${action === 'stop' ? 'stopped' : 'started'}.`;
+  if (rtIsApp(r)) {
+    const said = { running: 'Opened.', starting: 'Opening, not up yet.', stopped: 'Closed.' };
+    return Object.hasOwn(said, res.state) ? said[res.state] : res.state === 'stopping' ? 'Still shutting down.' : '';
+  }
   if (res.state === 'running') return 'Started.'; // the models a Start reloads have their own line (rtModelsText)
   if (res.state === 'starting') return `${rtCap(rtText(res.note)) || 'Started, not answering yet'}.`;
   if (res.state === 'stopped') return 'Stopped.';
@@ -117,11 +134,14 @@ const rtLogLines = (v) =>
         .map((l) => l.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, ' ').slice(0, 300))
     : [];
 
-// Which runtimes go on an existing card's slot and which get a card of their own.
-function rtCardPlan(list, slotIds) {
+// Which runtimes go on an existing card's slot and which get a card of their own. An app is drawn only on its slot,
+// so an app whose card is not on the page (or that is not on this machine) is not drawn at all. `slotsOnly` (the
+// Overview, which shows its first few cards) draws no cards of its own.
+function rtCardPlan(list, slotIds, { slotsOnly = false } = {}) {
   const slots = new Set(slotIds || []);
   const rows = Array.isArray(list) ? list.filter((r) => r && typeof r.id === 'string') : [];
-  return { slots: rows.filter((r) => slots.has(r.id)), own: rows.filter((r) => !slots.has(r.id)) };
+  const own = slotsOnly ? [] : rows.filter((r) => !slots.has(r.id) && !rtIsApp(r));
+  return { slots: rows.filter((r) => slots.has(r.id)), own };
 }
 
 /* ---------- nodes (text only) ---------- */
@@ -136,7 +156,8 @@ function rtEl(doc, tag, cls, text) {
 function rtActionRow(doc, r, ui = {}) {
   const box = rtEl(doc, 'div', 'rt-body');
   const row = rtEl(doc, 'div', 'rt-row');
-  row.appendChild(rtEl(doc, 'span', 'rt-state', rtStatus(r).text));
+  const line = rtStatus(r).text;
+  if (line) row.appendChild(rtEl(doc, 'span', 'rt-state', line));
   const b = rtButton(r, ui.busy);
   if (b) {
     const btn = rtEl(doc, 'button', `btn ghost mon-sm${b.action === 'stop' ? ' danger' : ''}`, b.label);
@@ -148,7 +169,7 @@ function rtActionRow(doc, r, ui = {}) {
   }
   const how = rtHowNote(r);
   if (how) row.appendChild(rtEl(doc, 'span', 'rt-how', how));
-  box.appendChild(row);
+  if (row.children.length) box.appendChild(row);
   const models = rtModelsText(r);
   if (models) box.appendChild(rtEl(doc, 'p', 'mon-note rt-models', models));
   if (!b && r.reason) box.appendChild(rtEl(doc, 'p', 'mon-note off', rtCap(rtText(r.reason))));
@@ -233,14 +254,15 @@ async function rtApi(path, body) {
   return j && typeof j === 'object' ? j : {};
 }
 
-// AI Office: fill the slots of the existing cards and draw the other runtimes' cards in the same grid.
+// AI Office: fill the slots of the existing cards and draw the other runtimes' cards in the same grid. The Overview's
+// grid (data-rt-grid="slots") only fills the slots.
 function rtPaint() {
   const grid = document.querySelector('[data-rt-grid]');
   if (!grid || !Array.isArray(RT.list)) return;
   const active = document.activeElement;
   const focused = active && grid.contains(active) && active.dataset ? active.dataset.rtId : null;
   const slots = new Map([...grid.querySelectorAll('[data-rt-slot]')].map((s) => [s.dataset.rtSlot, s]));
-  const plan = rtCardPlan(RT.list, [...slots.keys()]);
+  const plan = rtCardPlan(RT.list, [...slots.keys()], { slotsOnly: grid.dataset.rtGrid === 'slots' });
   for (const r of plan.slots) slots.get(r.id).replaceChildren(rtActionRow(document, r, RT.ui[r.id]));
   const cards = new Map([...grid.querySelectorAll('[data-rt-card]')].map((c) => [c.dataset.rtCard, c]));
   for (const [id, c] of cards) if (!plan.own.some((r) => r.id === id)) c.remove();
@@ -279,7 +301,7 @@ async function rtAct(id, action) {
     const body = action === 'stop' ? { id, pid: r.pid, startTime: r.startTime } : { id };
     const res = await rtApi(`/api/runtimes/${action}`, body);
     const settled = res.state === 'running' || res.state === 'stopped';
-    Object.assign(ui, { msg: rtResultText(action, res), tone: settled ? 'good' : 'warn', log: rtLogLines(res.log) });
+    Object.assign(ui, { msg: rtResultText(action, res, r), tone: settled ? 'good' : 'warn', log: rtLogLines(res.log) });
   } catch (e) {
     Object.assign(ui, { msg: rtErrorText(e), tone: 'bad', log: rtLogLines(e.log) });
   } finally {
@@ -294,7 +316,7 @@ async function rtAct(id, action) {
   }
 }
 
-// Called by the AI Office page when it is drawn; polls while the page is on screen.
+// Called by the AI Office page and the Overview when they are drawn; polls while the page is on screen.
 function rtMount() {
   if (!document.querySelector('[data-rt-grid]')) return;
   rtPaint();
@@ -523,6 +545,7 @@ if (typeof module !== 'undefined')
     rtCard,
     rtModelsText,
     rtEntryFromForm,
+    RT_CARD_IDS,
     rtFormFromEntry,
     rtEntryRow,
     RT,
