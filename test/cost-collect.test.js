@@ -328,3 +328,22 @@ test('readNew: on the first run, a rotation between the current file and .1 does
   // 1 and 2 were deleted by the rotation before they could be read; every line still on disk comes out once.
   assert.deepEqual(seen, [3, 4, 5, 6, 7]);
 });
+
+// Claude Code and Codex on this machine are counted from their own logs; the same tools elsewhere only via the gateway.
+test('gateway lines: local Claude Code and Codex are skipped and counted as such; remote ones and old lines are kept', () => {
+  const base = { ts: 5, keyId: 'key_a', provider: 'openrouter', model: 'claude-sonnet-5.5', input: 10, output: 2 };
+  const lines = [
+    { ...base, client: 'claude-code', local: true },
+    { ...base, client: 'codex', local: true },
+    { ...base, client: 'claude-code' },
+    { ...base },
+  ];
+  const counts = { skippedLocalClients: 0 };
+  const events = lines.map((l) => C.gatewayEvent(l, { counts })).filter(Boolean);
+  assert.equal(events.length, 2);
+  assert.deepEqual(events.map((e) => e.source), ['gateway', 'gateway']);
+  assert.equal(counts.skippedLocalClients, 2);
+  assert.ok(C.gatewayEvent({ ...base, local: true }), 'another client on this machine is kept');
+  assert.ok(C.gatewayEvent({ ...base, client: 'codex', local: 'true' }), 'only local: true');
+  assert.equal(C.gatewayEvent({ ...base, client: 'codex', local: true }), null, 'skipped with no counter too');
+});
