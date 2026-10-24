@@ -389,6 +389,19 @@ test('a model server started from inside a desktop app is its own runtime, not t
   assert.equal(x['claude-desktop'].children, 2, 'the helper and the shell, not the Ollama server');
 });
 
+test('a process under a model server inside a desktop app belongs to the server, not to the app', async () => {
+  const rows = [
+    row(100, 1, '/Applications/Claude.app/Contents/MacOS/Claude', 900),
+    row(110, 100, '/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=utility'),
+    row(120, 110, '/bin/zsh -l'),
+    row(130, 120, '/opt/homebrew/bin/ollama serve', 60),
+    row(140, 130, '/opt/homebrew/bin/ollama runner --model x'),
+  ];
+  const x = byId(await stateOf(rows).st.list());
+  assert.equal(x.ollama.children, 1, 'the runner');
+  assert.equal(x['claude-desktop'].children, 2, 'the helper and the shell, not the runner');
+});
+
 test('Antigravity IDE.app (exe Electron) is Antigravity, and comes before Antigravity.app', async () => {
   const rows = [row(4000005, 1, '/Applications/Antigravity IDE.app/Contents/MacOS/Electron', 900)];
   const { st } = stateOf(rows);
