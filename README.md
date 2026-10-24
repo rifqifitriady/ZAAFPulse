@@ -687,6 +687,19 @@ Each API response is counted once across all log files, so resumed and forked Cl
 
 **Price sync is on by default.** Turn it off with the **Auto-update** switch in Settings → Model prices, or `"pricingSync": { "enabled": false }` in `config.json`; prices then come from the built-in defaults, the snapshot and your own. Demo mode never fetches. `config.json` stores only the prices you set.
 
+### Cost ledger
+
+ZAAFPulse also keeps a **daily cost ledger** in `.data/cost/`, the base of the Cost Control menu. A pass after each index refresh reads what is new and stores one row per day and source, model, project, key and cost center.
+
+- **Each call counted once.** Claude Code and Codex on this machine from their own logs; everything through the Agent Gateway (your keys, dataset replay, collaboration runs, external judges) from the gateway log; local judge calls from their own log. When Claude Code or Codex on this machine is pointed at the gateway, its gateway lines are skipped; the same tools on another machine, or through a proxy or tunnel, are counted from the gateway. OmniRoute is not counted.
+- **Frozen cost.** A price change starts a new price version from that day; past days keep their prices, and a late log is priced with its own day's. The first run's history is marked `backfilled`.
+- **Billing.** Each source is `metered` or on a `plan` (a monthly or yearly fee spread per day), derived when the ledger is read from a dated billing history.
+- **Cost centers.** A gateway key's center first, then the first folder rule (`~/work/acme/**`) that matches; rule changes apply from today.
+- **Restate** re-prices, re-attributes and re-bills a past range on purpose, as a correction that keeps the original rows.
+- **Display currency** with dated rates you enter; nothing is fetched.
+
+Who counts what, frozen cost, billing, restate, settings, the `/api/cost/*` routes (dashboard sign-in only) and the known limits: **[docs/cost.md](docs/cost.md)**.
+
 ## Privacy
 
 By default the server listens on `127.0.0.1` only and rejects requests whose `Host` is not `localhost`; server mode changes that and requires a password.
@@ -716,6 +729,7 @@ Nothing else: no telemetry, no update checks, no accounts. Demo mode fetches not
 - Second-brain sources are read with the token you give each one (kept in the OS secret store), only from that source's own API or files; the map keeps titles and links, never note text. Vector databases are sampled read-only (240 records at most), and Postgres is only sent `SELECT`s.
 - **Code tools → Set up** writes a coding tool's own config file (mode 0600) with a dedicated key, after a backup that **Revert** restores; **Agent Skills → Install** writes only marked folders under `~/.claude/skills`. Nothing is written to your tools without a click.
 - `config.json`, `.cache/` and `.data/` are git-ignored.
+- The cost ledger in `.data/cost/` (mode 0600) holds numbers, model, provider, key and agent names and project folders (home shown as `~`) only, never prompt or reply text. Currency rates are typed in by you; the ledger makes no network call.
 
 <details>
 <summary><b>Project structure</b></summary>
@@ -741,6 +755,7 @@ lib/trace/             Trace explorer: adapters for Claude Code, Codex, the gate
                        masked text reading (content.js), and the registry with opaque keys, a cache and a worker (index.js)
 lib/evals/             local evals: registry, code evaluators, judge prompts, models, engine, stores, HTTP API, CLI
 lib/datasets/          datasets, replay and experiments: example shape, store, scoring, runner, HTTP API, auto-add, CLI gate
+lib/cost/              cost ledger: collectors, price versions, billing history, ledger store, pass, restate, HTTP API
 lib/claude.js          Claude Code log parser (usage + signals)
 lib/codex.js           Codex log parser (usage + signals), skips the history a fork copies
 lib/signals.js         non-existent-target, injection, secret, risky-command and correction detectors; relevance and
@@ -795,6 +810,7 @@ docs/release-hardening.md tag ruleset and immutable releases
 docs/monitors.md       monitors, alerts, webhook, pausing an agent: rules, channels, limits, API
 docs/local-models.md   starting and stopping local model servers: runtimes, your own entries, safety, API
 docs/topology.md       the Overview's provider topology: layers, colours, sources, tool routing, privacy
+docs/cost.md           cost ledger: who counts what, frozen cost, billing, cost centers, restate, API, limits
 docs/assets/           README banner, diagrams, screenshots and GIFs
 ```
 </details>

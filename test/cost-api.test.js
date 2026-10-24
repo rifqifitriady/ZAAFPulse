@@ -431,3 +431,291 @@ test('cost demo: three centers, Claude Code on a plan, an IDR rate, two price ve
   assert.equal(r.status, 200);
   for (const b of s.bodies) assert.doesNotMatch(b, PATHS);
 });
+
+// ---- spawned server.js ----
+const net = require('net');
+const { spawn } = require('child_process');
+const { NO_JUDGE_PORTS, secretsFor } = require('./helpers');
+const { createGateway } = require('../lib/gateway');
+
+const ROOT = path.join(__dirname, '..');
+const PASSWORD = 'correct-horse-battery';
+const JSON_HEADERS = { 'content-type': 'application/json' };
+
+const freePort = () =>
+  new Promise((resolve) => {
+    const s = net.createServer();
+    // A range of its own (trace 5100-5899, evals 5900-6399, datasets/monitors 6400-6899, topology 6900-7299,
+    // monitors engine and OTLP 7000-7799).
+    const port = 8000 + Math.floor(Math.random() * 400);
+    s.once('error', () => resolve(freePort()));
+    s.listen(port, '127.0.0.1', () => s.close(() => resolve(port)));
+  });
+async function startServer(env, { data = tmp() } = {}) {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const port = await freePort();
+    const child = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
+      env: {
+        ...process.env,
+        ZAAFPULSE_AUTH: '',
+        ZAAFPULSE_CONTENT: '',
+        DEMO: '',
+        // The logs read are the ones under the test's HOME only, never this machine's.
+        CLAUDE_CONFIG_DIR: '',
+        ZAAFPULSE_CLAUDE_DIRS: '',
+        XDG_CONFIG_HOME: '',
+        CODEX_HOME: '',
+        ...NO_JUDGE_PORTS,
+        ...env,
+        ZAAFPULSE_PORT: String(port),
+        ZAAFPULSE_DATA: data,
+        HOME: data,
+        USERPROFILE: data,
+      },
+      stdio: 'ignore',
+    });
+    let exited = false;
+    child.on('exit', () => (exited = true));
+    const base = `http://127.0.0.1:${port}`;
+    const kill = async () => {
+      if (!exited) {
+        const gone = new Promise((r) => child.once('exit', r));
+        child.kill();
+        await gone;
+      }
+    };
+    const stop = async () => {
+      await kill();
+      fs.rmSync(data, { recursive: true, force: true });
+    };
+    for (let i = 0; i < 80 && !exited; i++) {
+      try {
+        await fetch(`${base}/api/session`, { signal: AbortSignal.timeout(2000) });
+        await new Promise((r) => setTimeout(r, 200));
+        if (!exited) return { base, stop };
+      } catch {
+        await new Promise((r) => setTimeout(r, 150));
+      }
+    }
+    await kill();
+  }
+  fs.rmSync(data, { recursive: true, force: true });
+  throw new Error('could not start server.js on a free port');
+}
+function client(base, headers = {}) {
+  const bodies = [];
+  const call = async (p, { method = 'GET', body, extra = {} } = {}) => {
+    const r = await fetch(base + p, {
+      method,
+      signal: AbortSignal.timeout(10000),
+      headers: { ...headers, ...extra },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    const text = await r.text();
+    bodies.push(text);
+    let json = null;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      /* not JSON */
+    }
+    return { status: r.status, json, text };
+  };
+  return { call, post: (p, body) => call(p, { method: 'POST', body, extra: JSON_HEADERS }), bodies };
+}
+// The ledger pass runs after the first index refresh: wait until the named collector has read.
+async function passed(c, collector) {
+  let st = null;
+  for (let i = 0; i < 60; i++) {
+    st = (await c.call('/api/cost/status')).json;
+    if (st && st.collectors && st.collectors[collector].at) return st;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return st;
+}
+
+test('cost api over HTTP: the demo ledger, path-free', async () => {
+  const s = await startServer({ DEMO: '1', ZAAFPULSE_AUTH: 'none' });
+  const c = client(s.base);
+  try {
+    const from = addDays(dayOf(Date.now()), -29);
+    const led = await c.call(`/api/cost/ledger?from=${from}&groupBy=center&currency=IDR`);
+    assert.equal(led.status, 200);
+    const centers = led.json.rows.map((x) => x.center);
+    for (const id of ['client-acme', 'platform', 'research', 'unassigned']) assert.ok(centers.includes(id), id);
+    assert.ok(led.json.totals.list > 0);
+    assert.equal((await c.call('/api/cost/status')).json.demo, true);
+    assert.equal((await c.call('/api/cost/prices/versions')).json.versions.length >= 2, true);
+    assert.equal((await c.call('/api/cost/settings')).json.settings.billing.claude.mode, 'plan');
+    assert.equal((await c.call('/api/cost/settings', { method: 'POST', body: {} })).status, 415);
+    assert.equal((await c.post('/api/cost/restate', { from, to: from, reason: 'x' })).status, 400);
+    for (const b of c.bodies) assert.doesNotMatch(b, PATHS, 'a response body holds a file path');
+  } finally {
+    await s.stop();
+  }
+});
+
+test('cost api over HTTP: a gateway key is not a sign-in; the ledger fills from the gateway log into private files', async () => {
+  const data = tmp();
+  const gw = createGateway({
+    dataDir: path.join(data, '.data'),
+    getConfig: () => ({ gateway: {} }),
+    writeGatewayConfig: () => {},
+    secrets: secretsFor(),
+    resolveSecret: () => undefined,
+    getPricing: () => ({}),
+    getIntegrations: () => ({ listTools: async () => [], callTool: async () => ({}) }),
+  });
+  const { key, secret } = gw.keys.create({ name: 'acme app', scopes: ['llm', 'agents', 'rag', 'mcp'], rpm: 60 });
+  gw.flush();
+  const now = Date.now();
+  const yesterday = now - 86400e3;
+  const gwLine = (ts) =>
+    JSON.stringify({
+      ts,
+      keyId: key.id,
+      provider: 'openrouter',
+      model: 'anthropic/claude-sonnet-5.5',
+      kind: 'chat',
+      status: 200,
+      input: 1000,
+      output: 100,
+      cached: 0,
+    }) + '\n';
+  fs.writeFileSync(path.join(data, '.data', 'gateway-usage.jsonl'), gwLine(yesterday) + gwLine(now), { mode: 0o600 });
+  // pricingSync off: the spawned server never fetches the live price list.
+  fs.writeFileSync(
+    path.join(data, 'config.json'),
+    JSON.stringify({
+      pricingSync: { enabled: false },
+      cost: { centers: [{ id: 'acme', name: 'Acme' }], keyCenters: { [key.id]: 'acme' } },
+    }),
+  );
+  const s = await startServer({ ZAAFPULSE_AUTH: '1', ZAAFPULSE_ADMIN_PASSWORD: PASSWORD }, { data });
+  try {
+    const bearer = client(s.base, { authorization: `Bearer ${secret}`, 'x-api-key': secret });
+    for (const who of [client(s.base), bearer]) {
+      for (const p of ['/api/cost/ledger', '/api/cost/status', '/api/cost/settings', '/api/cost/prices/versions'])
+        assert.equal((await who.call(p)).status, 401, p);
+      for (const p of ['/api/cost/settings', '/api/cost/restate']) assert.equal((await who.post(p, {})).status, 401, p);
+    }
+    const login = await fetch(`${s.base}/api/login`, {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ password: PASSWORD }),
+    });
+    assert.equal(login.status, 200);
+    const cookie = login.headers
+      .getSetCookie()
+      .map((x) => x.split(';')[0])
+      .join('; ');
+    const c = client(s.base, { cookie });
+    const st = await passed(c, 'gateway');
+    assert.ok(st.collectors.gateway.at, 'the ledger pass ran after the first index refresh');
+    const today = dayOf(now);
+    const yday = dayOf(yesterday);
+    const led = await c.call(`/api/cost/ledger?from=${yday}&to=${today}&groupBy=day,center,keyId`);
+    assert.equal(led.status, 200);
+    assert.deepEqual(
+      led.json.rows.map((x) => [x.day, x.center, x.keyId, x.backfilled]),
+      [
+        [yday, 'acme', key.id, true],
+        [today, 'acme', key.id, false],
+      ],
+    );
+    for (const x of led.json.rows) near(x.listUSD, 0.003);
+    const badGlob = { folderRules: [{ glob: 'relative/**', center: 'acme' }] };
+    assert.equal((await c.post('/api/cost/settings', badGlob)).status, 400);
+    const restate = { from: yday, to: yday, reason: 'check', confirm: true };
+    assert.equal((await c.call('/api/cost/restate', { method: 'POST', body: restate })).status, 415);
+    assert.equal((await c.post('/api/cost/restate', restate)).status, 200);
+    const dir = path.join(data, '.data', 'cost');
+    const files = [
+      `ledger-${today.slice(0, 7)}.jsonl`,
+      'cursors.json',
+      'corrections.jsonl',
+      'billing.json',
+      path.join('prices', 'versions.json'),
+      path.join('prices', '1.json'),
+    ];
+    for (const f of files) assert.ok(fs.existsSync(path.join(dir, f)), f);
+    if (process.platform !== 'win32') {
+      assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
+      assert.equal(fs.statSync(path.join(dir, 'prices')).mode & 0o777, 0o700);
+      for (const f of files) assert.equal(fs.statSync(path.join(dir, f)).mode & 0o777, 0o600, f);
+    }
+    for (const b of c.bodies) assert.doesNotMatch(b, PATHS);
+  } finally {
+    await s.stop();
+  }
+});
+
+test('cost api over HTTP: Claude Code logs fill the ledger after the first refresh; home is ~, other folders in full', async () => {
+  const data = tmp();
+  const now = Date.now();
+  const inHome = path.join(data, 'work', 'acme', 'web');
+  const outside = process.platform === 'win32' ? 'D:\\srv\\app' : '/srv/app';
+  // One Claude Code session per folder, one answered request each (1,000 in, 100 out: 0.003 at the built-in prices).
+  const session = (sid, cwd, i) =>
+    [
+      {
+        type: 'user',
+        sessionId: sid,
+        uuid: `u-${i}`,
+        timestamp: new Date(now - 60e3).toISOString(),
+        cwd,
+        message: { role: 'user', content: 'hi' },
+      },
+      {
+        type: 'assistant',
+        sessionId: sid,
+        timestamp: new Date(now - 50e3).toISOString(),
+        requestId: `req_${i}`,
+        cwd,
+        message: {
+          id: `msg_${i}`,
+          role: 'assistant',
+          model: 'claude-sonnet-5-5',
+          content: [{ type: 'text', text: 'Done.' }],
+          usage: { input_tokens: 1000, output_tokens: 100, cache_read_input_tokens: 0 },
+        },
+      },
+    ]
+      .map((x) => JSON.stringify(x))
+      .join('\n') + '\n';
+  for (const [sid, cwd, i] of [
+    ['c0ffee00-0000-4000-8000-000000000001', inHome, 1],
+    ['c0ffee00-0000-4000-8000-000000000002', outside, 2],
+  ]) {
+    const folder = path.join(data, '.claude', 'projects', `-p${i}`);
+    fs.mkdirSync(folder, { recursive: true });
+    fs.writeFileSync(path.join(folder, `${sid}.jsonl`), session(sid, cwd, i));
+  }
+  fs.writeFileSync(
+    path.join(data, 'config.json'),
+    JSON.stringify({
+      pricingSync: { enabled: false },
+      cost: { centers: [{ id: 'acme', name: 'Acme' }], folderRules: [{ glob: '~/work/acme/**', center: 'acme' }] },
+    }),
+  );
+  const s = await startServer({ ZAAFPULSE_AUTH: 'none' }, { data });
+  const c = client(s.base);
+  try {
+    const st = await passed(c, 'local');
+    assert.ok(st.collectors.local.at, 'the ledger pass ran after the first index refresh');
+    assert.equal(st.collectors.local.error, null);
+    const led = await c.call(`/api/cost/ledger?from=${dayOf(now)}&groupBy=source,project,center`);
+    assert.equal(led.status, 200);
+    assert.deepEqual(
+      led.json.rows.map((x) => [x.source, x.project, x.center, x.requests]).sort(),
+      [
+        ['claude', process.platform === 'win32' ? 'D:/srv/app' : '/srv/app', 'unassigned', 1],
+        ['claude', '~/work/acme/web', 'acme', 1],
+      ],
+    );
+    for (const x of led.json.rows) near(x.listUSD, 0.003);
+    for (const b of c.bodies) assert.doesNotMatch(b, PATHS);
+  } finally {
+    await s.stop();
+  }
+});
