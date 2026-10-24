@@ -34,7 +34,7 @@ const entry = (sid, times, mtimeMs, source = 'claude') => ({
 });
 const nextLoop = () => new Promise((r) => setImmediate(r)); // yield to the event loop
 
-function rig({ settings = {}, resolved = LOCAL, entries = [], demo, demoData } = {}) {
+function rig({ settings = {}, resolved = LOCAL, entries = [], demo, demoData, onCall } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'evals-engine-'));
   dirs.push(dir);
   const clock = { t: T0 };
@@ -151,6 +151,7 @@ function rig({ settings = {}, resolved = LOCAL, entries = [], demo, demoData } =
       log: (m) => logs.push(m),
       demo,
       demoData,
+      ...(onCall ? { onCall } : {}),
     });
   const engine = make();
   return {
@@ -1977,4 +1978,46 @@ test('writeState uses a temp file of its own process, so a stale shared temp nam
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { since: 1, day: '2026-10-23', count: 3, cost: 0 });
   assert.deepEqual(fs.readdirSync(dir).sort(), ['evals-state.json', 'evals-state.json.tmp'], 'no temp file left');
   if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+});
+
+// ---- onCall: what the cost ledger records for judge calls that skip the gateway ----
+test('onCall: each answered judge call is reported with kind, provider, model and usage, never text', async () => {
+  const seen = [];
+  const r = rig({ onCall: (c) => seen.push(c) });
+  const v = await r.engine.judgeMaterial('task_completion', MATERIAL);
+  assert.equal(v.ok, true);
+  assert.deepEqual(seen, [{ kind: 'ollama', provider: 'ollama', model: 'qwen3:8b', usage: { input: 10, output: 5, cost: 0 } }]);
+  assert.doesNotMatch(JSON.stringify(seen), /fix the redirect|Fixed/);
+
+  const q = [];
+  const queue = rig({ onCall: (c) => q.push(c) });
+  await queue.arm();
+  queue.clock.t = T0 + 15 * MIN;
+  queue.st.entries.push(entry('one', [T0 + 2 * MIN], T0 + 3 * MIN));
+  await queue.engine.tick();
+  await queue.engine.drain();
+  assert.ok(q.length >= 1);
+  assert.equal(q.length, queue.calls.length, 'one report per answered call');
+  assert.ok(q.every((c) => c.kind === 'ollama' && c.model === 'qwen3:8b'));
+});
+
+test('onCall: the model the judge names wins; a failed call is not reported; a throwing listener changes nothing', async () => {
+  const seen = [];
+  const named = rig({ onCall: (c) => seen.push(c) });
+  named.st.model = 'claude-haiku-5-5';
+  await named.engine.judgeMaterial('task_completion', MATERIAL);
+  assert.equal(seen[0].model, 'claude-haiku-5-5');
+
+  const failed = [];
+  const down = rig({ onCall: (c) => failed.push(c) });
+  down.st.failures = 1;
+  assert.equal((await down.engine.judgeMaterial('task_completion', MATERIAL)).ok, false);
+  assert.deepEqual(failed, []);
+
+  const loud = rig({
+    onCall: () => {
+      throw new Error('listener broke');
+    },
+  });
+  assert.equal((await loud.engine.judgeMaterial('task_completion', MATERIAL)).ok, true);
 });
