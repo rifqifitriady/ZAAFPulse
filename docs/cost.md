@@ -31,6 +31,11 @@ A request counts as from this machine only when its connection comes from loopba
 
 The same tools **on another machine** have no logs here, so they are counted **from the gateway**. That includes a tool on this machine that reaches the gateway through a proxy or tunnel (nginx, Caddy, `tailscale serve`, cloudflared, ngrok): the request is not taken as local, and the gateway line is kept. Counting twice is visible; a dropped cost is not.
 
+Two cases fall the other way, and their cost is **dropped** (see [Known limits](#known-limits)):
+
+- Claude Code or Codex on this machine whose logs ZAAFPulse cannot read (another user's folder, or a log folder it does not know): its gateway lines are still skipped as "counted from logs".
+- A tool on another machine that reaches the gateway through an SSH or port-forward tunnel (`ssh -L`/`-R`, `kubectl port-forward`, socat): the request arrives from loopback with no forwarding header, so it looks local and is skipped too.
+
 ## Pricing
 
 Every source is priced with the same price table and formula as the dashboard (see [Cost and prices](../README.md#cost-and-prices)): input, output, cache reads, cache writes (5-minute and 1-hour), long-prompt tiers, web searches and the 1.1× rate for US-only inference.
@@ -56,11 +61,12 @@ Rows carry the **list cost** (`listUSD`): what the use would cost at list prices
 
 **Billing is derived when the ledger is read**, from a dated billing history in `.data/cost/billing.json`. The pass never writes a plan row, so a day is billed exactly once, whatever order the passes ran in and whether the server ran that day at all.
 
-- A change of a source's billing in the settings starts a new entry, dated the day it is saved. Earlier days keep the billing they had.
+- A change of a source's billing starts a new entry. A change saved in **Settings** is dated the day it is saved; a **hand edit of `config.json`** is dated when the next pass sees it (at most a minute later while the server runs, or at its next start). Earlier days keep the billing they had.
 - On the first run, each source takes its current billing from its first day of use.
+- A late log line dated before a source's first billing entry is billed as metered: no plan covered that day.
 - A restate writes overrides for its range: inside it, the override wins.
 
-`billing.json` and its last good copy `billing.json.bak` are the **only record of past billing**. If `billing.json` does not read, it is recovered from the copy. If both are lost while the ledger already has data, past days are billed as metered and marked `billingAssumed`, and the status shows `historyLost`, until a restate of those days says otherwise. While the history does not read at all, the ledger shows every day as metered and names the error.
+`billing.json` and its last good copy `billing.json.bak` are the **only record of past billing**. If `billing.json` does not read, it is recovered from the copy. If both are lost while the ledger already has data, past days are billed as metered and marked `billingAssumed`. A restate of those days corrects their billing. `historyLost` stays set in the status and in each ledger answer **for good**, also after a restate: it records that the history was lost once, not that days are still assumed (the rows' `billingAssumed` says that). While the history does not read at all, the ledger shows every day as metered and names the error.
 
 ## Cost centers
 
@@ -107,6 +113,8 @@ The ledger is in USD. With a display currency, amounts are also converted with t
 
 Settings are validated when saved, and a bad glob, center, billing or rate is refused with the reasons. If the saved section is invalid (a hand edit), the defaults apply to attribution and the status says so; the billing history is not rewritten from those defaults, and a restate is refused until the settings are fixed.
 
+If `config.json` itself does not parse (a hand edit with a syntax error, or an editor caught mid-write), the settings are unknown, not empty: the pass **waits** until the file parses again. It reads no log, records no billing, freezes no price version and re-attributes no row, and a restate is refused (409). The status shows `settings.error`: `config.json could not be read, so the ledger pass waits until it does`. The logs keep the data: the first pass after the fix reads it, with lines of days that closed meanwhile counted as late events of their day.
+
 ## Restate
 
 A restate re-reads a past range with what holds now: the current prices, the current cost-center rules and the current billing. Use it after fixing a price, adding a folder rule or switching a source to a plan.
@@ -128,6 +136,7 @@ The ledger never guesses over data it could not read.
 - **A ledger month or the corrections file that does not read** (a permission or disk error) is named in the status (`ledger.unread`) and in every ledger answer that touches it (`unread`). The other months still show. The pass steps that need it stop before they change anything, their log positions stay where they were, and the next pass reads the same lines again: the logs keep the data, so nothing is lost and nothing is counted twice. A restate over it is refused (503) until it reads.
 - **A line that does not parse** is moved to `<file>.bad` beside it, and the rest of the file loads. The status counts such lines (`ledger.badLines`).
 - **A collector that fails** shows its error in the status and does not stop the others.
+- **The log positions** (`cursors.json`, how far the gateway and judge logs were read) are written with a last good copy, `cursors.json.bak`. A missing, empty, torn or invalid `cursors.json` is moved aside to `cursors.json.bad` (or `.bad.1`, …) and recovered from the copy; the status names the recovery (`cursors.problems`). If neither reads on a later run, reading those logs from the start would count every line still in them twice, so the **gateway and judge lines are paused**: the status shows `cursor state lost: gateway and judge lines are paused; see docs/cost.md (rebuild)` (`cursors.error`, and the error of both collectors). Claude Code and Codex go on, rebuilt from the index. Nothing is written over the lost positions, so a restart stays paused. To go on, [rebuild the ledger](#rebuilding-the-ledger). A true first run (no ledger rows, price versions or billing history yet) simply reads every log once.
 - Every message is a fixed phrase with an error code: no file path leaves the server.
 
 ## Project folders
@@ -136,18 +145,26 @@ Project folders are stored and shown with the home folder as `~` and forward sla
 
 ## Files
 
-Everything is under `.data/cost/` (`ZAAFPULSE_DATA` decides where `.data` is). Folders are mode 0700 and files 0600 (not enforced on Windows), and every rewrite goes through a temporary file and a rename.
+Everything is under `.data/cost/` (`ZAAFPULSE_DATA` decides where `.data` is). Folders are mode 0700 and files 0600 (not enforced on Windows), and every rewrite goes through a temporary file that is synced to disk before the rename (and the folder after it, except on Windows), so a power loss leaves the old copy or the new one.
 
 | File | What |
 |---|---|
 | `ledger-YYYY-MM.jsonl` | one row per day and dimension tuple (source, provider, model, project, center, key, agent, kind) |
 | `corrections.jsonl` | the corrections restates wrote |
 | `billing.json`, `billing.json.bak` | the billing history and its last good copy |
-| `cursors.json` | how far the gateway and judge logs were read, and the ledger's first day |
+| `cursors.json`, `cursors.json.bak` | how far the gateway and judge logs were read, and the ledger's first day; and its last good copy |
 | `judge-calls.jsonl` | judge calls that skip the gateway |
 | `prices/versions.json`, `prices/<id>.json` | the price versions and a full copy of each |
 
-Deleting `.data/cost/` rebuilds the ledger from the logs at the next pass, with today's prices and settings, marked `backfilled`. That also drops the restates and the billing history.
+### Rebuilding the ledger
+
+To rebuild the ledger from its sources (for example after `cursor state lost`):
+
+1. Stop the server.
+2. Delete everything in `.data/cost/` **except `judge-calls.jsonl`**: that file is itself a source (the judge calls that skip the gateway), and deleting it loses them.
+3. Start the server. The first pass reads the logs again, as a first run.
+
+The rows come back marked `backfilled` (every day before the rebuild), priced at the current prices, attributed with the current rules and billed from the current settings. The restates, the billing history and the price versions are gone. Only what the sources still hold comes back: the gateway log keeps two 10 MB files, and Claude Code removes old transcripts after its cleanup period (30 days by default), so older history is lost. Never delete `cursors.json` on its own: that pauses the gateway and judge lines as above.
 
 ## API (dashboard sign-in only)
 
@@ -174,11 +191,12 @@ These routes need the dashboard sign-in. A gateway API key, MCP or A2A is never 
 | `prices.problems` | price versions that could not be used |
 | `unpriced` | `{ rows, requests }` with no known price |
 | `backfill` | `{ firstDay, rows }` |
-| `settings.error` | set when the saved settings are invalid and the defaults apply |
+| `settings.error` | set when the saved settings are invalid and the defaults apply, or when `config.json` does not parse and the pass waits |
+| `cursors` | `{ error, problems }`: `error` while the log positions are lost (the gateway and judge lines are paused), `problems` for a recovery from the last good copy |
 | `billing` | `{ error, historyLost, problems }` |
 | `ledger` | `{ badLines, corrections, error, unread }` |
 
-Errors: 400 for bad input, 409 for a restate while the saved settings are invalid, 503 with a `code` while a month, the corrections or the billing history does not read.
+Errors: 400 for bad input, 409 for a restate while the saved settings are invalid or `config.json` does not parse, 503 with a `code` while a month, the corrections or the billing history does not read.
 
 ## Demo mode
 
@@ -191,3 +209,6 @@ The demo shows a synthetic ledger held in memory: three cost centers, Claude Cod
 - **Agent and collaboration models called by a local tool.** Claude Code or Codex on this machine calling an `agent/…` or `collab/…` model through a key is counted twice: once from the tool's logs, and once from the gateway lines of the models the agents call, which are not tagged.
 - **Embeddings from a local tool.** An embeddings request sent with a Claude Code or Codex User-Agent from this machine is skipped like its chat requests, though those tools log no embeddings.
 - **The collector counts restart.** `total` and `skippedLocalClients` count from the server's start.
+- **Local tools whose logs cannot be read.** Claude Code or Codex on this machine that ZAAFPulse cannot read the logs of loses its cost when it calls the gateway: the gateway lines are skipped as "counted from logs", and there are no logs to count. The status counts the skipped lines (`skippedLocalClients`).
+- **SSH and port-forward tunnels look local.** A tool on another machine that reaches the gateway through `ssh -L`/`-R`, `kubectl port-forward` or socat arrives from loopback with no forwarding header, so a Claude Code or Codex line from it is skipped as local, and its cost is dropped. A reverse proxy that adds a forwarding header (nginx, Caddy) is counted from the gateway instead.
+- **A crash during the very first pass** can leave the log positions unsaved after the billing history was written. The next start then pauses the gateway and judge lines as for lost positions; a first run's data all comes back from the sources, so a [rebuild](#rebuilding-the-ledger) loses nothing.
