@@ -938,6 +938,7 @@ test('app stop: SIGTERM after the quit wait, then SIGKILL after the term wait, e
       ['stop', true, 'app', undefined, undefined],
       ['stop', true, 'signal', 'SIGTERM', true],
       ['stop', true, 'signal', 'SIGKILL', true],
+      ['stop', false, 'check', undefined, undefined],
     ],
   );
   for (const l of s.audit.lines) {
@@ -960,22 +961,31 @@ test('app stop: SIGTERM after the quit wait, then SIGKILL after the term wait, e
 
 test('app stop: a changed pid or start time, a gone process or an unreadable table before a signal sends nothing', async (t) => {
   const cases = [
-    ['another pid before SIGTERM', [appItem(), appItem({ pid: APP_PID.pid + 1 })], [], { state: 'stopped' }],
-    ['another start before SIGTERM', [appItem(), appItem({ startTime: APP_PID.startTime + 60000 })], [], { state: 'stopped' }],
-    ['gone before SIGTERM', [appItem(), appItem({ running: false, pid: null, startTime: null })], [], { state: 'stopped' }],
-    ['no row before SIGTERM', [appItem(), null], [], { state: 'stopped' }],
-    ['table unreadable before SIGTERM', [appItem(), appItem({ tableError: 'the process table could not be read' })], [], { state: 'stopping', note: 'still shutting down' }],
-    ['read throws before SIGTERM', [appItem(), new Error('ps failed')], [], { state: 'stopping', note: 'still shutting down' }],
-    ['another pid before SIGKILL', [appItem(), appItem(), appItem({ pid: APP_PID.pid + 1 })], ['SIGTERM'], { state: 'stopped' }],
-    ['another start before SIGKILL', [appItem(), appItem(), appItem({ startTime: APP_PID.startTime - 60000 })], ['SIGTERM'], { state: 'stopped' }],
-    ['table unreadable before SIGKILL', [appItem(), appItem(), appItem({ tableError: 'x' })], ['SIGTERM'], { state: 'stopping', note: 'still shutting down' }],
+    ['another pid before SIGTERM', [appItem(), appItem({ pid: APP_PID.pid + 1 })], [], { state: 'stopped' }, 'changed'],
+    ['another start before SIGTERM', [appItem(), appItem({ startTime: APP_PID.startTime + 60000 })], [], { state: 'stopped' }, 'changed'],
+    ['gone before SIGTERM', [appItem(), appItem({ running: false, pid: null, startTime: null })], [], { state: 'stopped' }, 'gone'],
+    ['no row before SIGTERM', [appItem(), null], [], { state: 'stopped' }, 'gone'],
+    ['table unreadable before SIGTERM', [appItem(), appItem({ tableError: 'the process table could not be read' })], [], { state: 'stopping', note: 'still shutting down' }, 'unreadable'],
+    ['read throws before SIGTERM', [appItem(), new Error('ps failed')], [], { state: 'stopping', note: 'still shutting down' }, 'unreadable'],
+    ['another pid before SIGKILL', [appItem(), appItem(), appItem({ pid: APP_PID.pid + 1 })], ['SIGTERM'], { state: 'stopped' }, 'changed'],
+    ['another start before SIGKILL', [appItem(), appItem(), appItem({ startTime: APP_PID.startTime - 60000 })], ['SIGTERM'], { state: 'stopped' }, 'changed'],
+    ['table unreadable before SIGKILL', [appItem(), appItem(), appItem({ tableError: 'x' })], ['SIGTERM'], { state: 'stopping', note: 'still shutting down' }, 'unreadable'],
   ];
-  for (const [name, reads, sent, answer] of cases) {
+  for (const [name, reads, sent, answer, why] of cases) {
     const s = appStopSetup({ reads, killer: fakeKillApp() });
     t.after(s.cleanup);
     assert.deepEqual(await s.ctl.stop({ id: 'claude-desktop', ...APP_PID }), answer, name);
     assert.deepEqual(s.killer.sent(), sent, name);
+    const last = s.audit.lines[s.audit.lines.length - 1];
+    assert.deepEqual([last.method, last.ok, last.note], ['check', true, why], `${name}: the audit says why nothing more was sent`);
+    assert.deepEqual(Object.keys(last).filter((k) => /path|cmd|command|argv/i.test(k)), [], 'no path in the line');
   }
+  // Still there after SIGKILL and its wait: the outcome is audited too.
+  const stuck = appStopSetup({ killer: fakeKillApp() });
+  t.after(stuck.cleanup);
+  assert.deepEqual(await stuck.ctl.stop({ id: 'claude-desktop', ...APP_PID }), { state: 'stopping', note: 'still shutting down' });
+  const end = stuck.audit.lines[stuck.audit.lines.length - 1];
+  assert.deepEqual([end.method, end.ok, end.note], ['check', false, 'still running']);
 });
 
 test('app stop: the usual refusals hold (pid and start time, already stopped, busy, control off)', async (t) => {
