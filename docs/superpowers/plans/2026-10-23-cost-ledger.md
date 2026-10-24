@@ -1578,6 +1578,37 @@ git add lib/evals/engine.js lib/evals/claude-cli.js test/evals-engine.test.js te
 git commit -m "Evals: report each answered judge call to a listener, and split Claude Code cache tokens"
 ```
 
+#### Part B: tag gateway lines from Claude Code and Codex on this machine (owner decision 2026-10-24)
+
+Claude Code or Codex pointed at this gateway (`ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` to the gateway) appear in their own logs **and** in the gateway log. The local collector already counts them from their logs, so the ledger must skip those gateway lines. A client on **another machine** using a gateway key has no logs here, so its lines must still count.
+
+**Files (Part B):**
+- Modify: `lib/gateway/index.js` — where each request's `base` record is built for `usage.record` (the proxy handlers around `:600-850`, and the other `usage.record` call sites at `:157`, `:181`, `:224`): add `client` and `local` (shared file: additive lines only).
+- Create: `lib/gateway/client.js` — `clientOf(userAgent) → 'claude-code' | 'codex' | null`.
+- Modify: `lib/cost/collect.js` (from Task 3) — the gateway collector skips local Claude Code / Codex lines.
+- Test: `test/gateway-client.test.js` (new), `test/cost-collect.test.js` (add cases), `test/gateway.test.js` (add one case).
+
+**Behaviour:**
+- `clientOf(ua)`: `/^claude-cli\//i` → `'claude-code'`; `/^codex_cli_rs\//i` or `/^codex\//i` → `'codex'`; anything else, a non-string or an empty string → `null`. Only this label is stored, never the raw User-Agent (privacy).
+- Each gateway usage line gains two optional fields: `client` (the label above, omitted when `null`) and `local: true` when the request's remote address is loopback (`127.0.0.0/8`, `::1`, `::ffff:127.x.x.x`), omitted otherwise. Calls the dashboard makes itself (playground, replay, collab, judge) carry neither field.
+- The gateway's own `usage.cost`, key budgets and 402 are unchanged.
+- The ledger's gateway collector drops a line when `client` is `'claude-code'` or `'codex'` **and** `local === true` (counted from the local logs). Every other line is kept, including the same clients from another machine. Old lines without the fields are kept (no change for history).
+- `/api/cost/status` reports the skipped count per collector as `skippedLocalClients`.
+
+- [ ] **Step 6: Write the failing tests**
+  - `test/gateway-client.test.js`: `clientOf('claude-cli/2.1.304 (external, cli)') === 'claude-code'`; `clientOf('codex_cli_rs/0.48.0 (Mac OS 26.6; arm64)') === 'codex'`; `clientOf('codex/1.2')` → `'codex'`; `clientOf('Mozilla/5.0')`, `clientOf('')`, `clientOf(undefined)` → `null`.
+  - `test/gateway.test.js`: a request through the gateway (the file's existing fake upstream and loopback client) with header `User-Agent: claude-cli/2.1.304` writes a usage line with `client: 'claude-code'` and `local: true`, and the line has no `userAgent` field; a request without that header has no `client` field.
+  - `test/cost-collect.test.js`: the gateway collector given lines `{ client: 'claude-code', local: true }`, `{ client: 'codex', local: true }`, `{ client: 'claude-code' }` (remote), `{ }` (old line) yields events for the last two only, and reports `skippedLocalClients: 2`.
+- [ ] **Step 7: Run them and see them fail.** `node --test test/gateway-client.test.js test/gateway.test.js test/cost-collect.test.js` → FAIL (`clientOf` missing; no `client` field; lines not skipped).
+- [ ] **Step 8: Implement** `lib/gateway/client.js`, the two fields where `base` is built (from `req.headers['user-agent']` and `req.socket.remoteAddress`), and the skip rule plus counter in the gateway collector.
+- [ ] **Step 9: Run them and see them pass**, plus `node --test test/gateway*.test.js test/cost-*.test.js`.
+- [ ] **Step 10: Commit**
+
+```bash
+git add lib/gateway/client.js lib/gateway/index.js lib/cost/collect.js test/gateway-client.test.js test/gateway.test.js test/cost-collect.test.js
+git commit -m "Tag gateway lines from Claude Code and Codex on this machine, and keep them out of the cost ledger"
+```
+
 ---
 
 ### Task 5: The ledger store, the reader view and grouping
@@ -3794,8 +3825,9 @@ ZAAFPulse keeps one daily record of what AI use cost, in `.data/cost/`. It is th
   Local models cost nothing.
 - **Not counted:** OmniRoute (its own figures are shown apart).
 
-> **Note:** Claude Code or Codex pointed at this gateway shows up in both its own logs and the gateway log, so it is
-> counted twice.
+> **Note:** Claude Code or Codex on this machine pointed at this gateway is counted once, from its own logs: its
+> gateway lines are tagged (`client`, `local`) and skipped. The same tools on another machine using a gateway key are
+> counted from the gateway log.
 
 Every source is priced with the same price table and formula. That includes cache writes, prompt-length tiers, web
 searches and US-only inference.
