@@ -216,6 +216,17 @@ test('usage lines name a Claude Code or Codex client and a loopback caller, neve
     assert.equal(codex.status, 200);
     assert.deepEqual([t.gateway.usage.recent(1)[0].client, t.gateway.usage.recent(1)[0].local], ['codex', true]);
 
+    // Through a proxy or tunnel on this host the socket is loopback too: a forwarded caller is not local.
+    const proxied = await t.call('/v1/chat/completions', {
+      key: secret,
+      body,
+      headers: { 'User-Agent': 'claude-cli/2.1.304', 'X-Forwarded-For': '203.0.113.7' },
+    });
+    assert.equal(proxied.status, 200);
+    const far = t.gateway.usage.recent(1)[0];
+    assert.equal(far.client, 'claude-code');
+    assert.equal('local' in far, false, 'a forwarded request is counted by the ledger');
+
     assert.equal((await t.call('/v1/chat/completions', { key: secret, body })).status, 200);
     const plain = t.gateway.usage.recent(1)[0];
     assert.equal('client' in plain, false, 'any other client is not named');
