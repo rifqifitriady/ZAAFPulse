@@ -117,7 +117,9 @@ async function realSetup({ mode, approve = true, healthWaitMs = 10000, extra = {
     // removing the folder then fails with EPERM or EBUSY, which rmSync retries.
     fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   };
-  return { ctl, state, started, approvals, audit, spawned, dataDir, port, config, cleanup };
+  // The fake runtime's row (off macOS the desktop apps are listed too, with "macOS only").
+  const row = async () => (await ctl.list()).find((r) => r.id === 'fake-rt');
+  return { ctl, row, state, started, approvals, audit, spawned, dataDir, port, config, cleanup };
 }
 
 test('start detaches the server, records it, waits for health; stop sends SIGINT and it exits', async (t) => {
@@ -132,7 +134,7 @@ test('start detaches the server, records it, waits for health; stop sends SIGINT
   const log = path.join(s.dataDir, 'runtimes', 'fake-rt.log');
   assert.ok(fs.existsSync(log));
   if (POSIX) assert.equal(fs.statSync(log).mode & 0o777, 0o600);
-  const [row] = await s.ctl.list();
+  const row = await s.row();
   assert.equal(row.id, 'fake-rt');
   assert.equal(row.running, true);
   assert.equal(row.healthy, true);
@@ -229,16 +231,16 @@ test('refusals: unknown, unapproved, server mode, no sign-in, Docker, not instal
   t.after(s.cleanup);
   await rejects(s.ctl.start('nope'), 404, /unknown runtime/);
   await rejects(s.ctl.start('fake-rt'), 403, /approve it in Settings first/);
-  const [row] = await s.ctl.list();
+  const row = await s.row();
   assert.equal(row.approved, false);
   assert.equal(row.canStart, false);
   assert.equal(row.reason, 'approve it in Settings first');
   // Approving stores a hash of the command; a changed command asks again.
   assert.deepEqual(await s.ctl.approve('fake-rt'), { approved: true });
   assert.equal(s.approvals.read()['fake-rt'], commandHash(s.config[0]));
-  assert.equal((await s.ctl.list())[0].canStart, true);
+  assert.equal((await s.row()).canStart, true);
   s.config[0].command = [...s.config[0].command, '--verbose'];
-  assert.equal((await s.ctl.list())[0].approved, false);
+  assert.equal((await s.row()).approved, false);
   await rejects(s.ctl.approve('ollama'), 400, /preset/);
   await rejects(s.ctl.approve('nope'), 404);
   s.ctl.forget('fake-rt');
@@ -248,7 +250,7 @@ test('refusals: unknown, unapproved, server mode, no sign-in, Docker, not instal
   await rejects(server.ctl.start('fake-rt'), 403, /off on this server/);
   await rejects(server.ctl.stop({ id: 'fake-rt', pid: 4242, startTime: 1 }), 403, /off on this server/);
   await rejects(server.ctl.approve('fake-rt'), 403);
-  const off = (await server.ctl.list())[0];
+  const off = (await server.row());
   assert.equal(off.canStart, false);
   assert.equal(off.reason, 'runtime control is off on this server');
   // Without sign-in the reason is kept, so the card does not say "on this server" on a laptop.
@@ -258,7 +260,7 @@ test('refusals: unknown, unapproved, server mode, no sign-in, Docker, not instal
   await rejects(none.ctl.start('fake-rt'), 403, /without sign-in/);
   await rejects(none.ctl.stop({ id: 'fake-rt', pid: 4242, startTime: 1 }), 403, /without sign-in/);
   await rejects(none.ctl.approve('fake-rt'), 403, /without sign-in/);
-  assert.equal((await none.ctl.list())[0].reason, OFF_TEXT['no-sign-in']);
+  assert.equal((await none.row()).reason, OFF_TEXT['no-sign-in']);
   assert.equal(server.ctl.offReason(), 'server');
   const docker = await realSetup({ extra: { inDocker: true } });
   t.after(docker.cleanup);
@@ -680,7 +682,7 @@ test('stop of an unsupported runtime or a refused stop does not observe', async 
 });
 
 // A start of a preset with a fake spawn: `one` answers each item in turn (before the start, then after it answered).
-function startSetup({ items, models, probe = async () => true, healthWaitMs = 1000 }) {
+function startSetup({ items, models, probe = async () => true, healthWaitMs = 1000, extra = {} }) {
   const dir = tmp('zp-rt-reload-');
   const audit = recorder();
   let n = 0;
@@ -708,6 +710,7 @@ function startSetup({ items, models, probe = async () => true, healthWaitMs = 10
     healthWaitMs,
     pollMs: 10,
     models,
+    ...extra,
   });
   return { ctl, audit, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
@@ -809,4 +812,288 @@ test('reloaded writes one audit line with counts and no names', async (t) => {
     { kind: 'runtime', action: 'reload', id: 'ollama', by: 'owner', ok: true, loaded: 0, failed: 0 },
   ]);
   assert.doesNotMatch(JSON.stringify(s.audit.lines), /llama3|qwen3|gemma|not found/);
+});
+
+// ---- the desktop apps (kind 'app'): nothing real is opened, quit or signalled ----
+const APP = (id) => entries([]).find((e) => e.id === id);
+const APP_PID = { pid: 84551, startTime: 1_790_000_100_000 };
+const appItem = (over = {}) =>
+  item({
+    entry: APP('claude-desktop'),
+    bin: null,
+    app: '/Applications/Claude.app',
+    appBundle: 'Claude.app',
+    startArgv: ['/usr/bin/open', '-a', '/Applications/Claude.app'],
+    how: 'app',
+    ...APP_PID,
+    children: 3,
+    ...over,
+  });
+const APP_WAITS = { appQuitWaitMs: 60, appTermWaitMs: 40, appKillWaitMs: 20, appOpenWaitMs: 60 };
+// A stop of an app: `reads` are what the state answers in turn (the first is the find before the stop; the last one
+// repeats); `quits` makes the fake osascript end the process; every kill and command is recorded with its time.
+function appStopSetup({ reads = [appItem()], killer = fakeKill(), quits = false, runCode = 0, platform = 'darwin', extra = {} } = {}) {
+  const ran = [];
+  const audit = recorder();
+  const dir = tmp('zp-rt-app-');
+  let n = 0;
+  const t0 = Date.now();
+  const at = [];
+  const ctl = createRuntimeControl({
+    state: {
+      one: async () => {
+        const x = reads[Math.min(n++, reads.length - 1)];
+        if (x instanceof Error) throw x;
+        return x;
+      },
+      list: async () => [reads[0]],
+    },
+    entries: () => entries([]),
+    dataDir: dir,
+    audit,
+    kill: (pid, signal) => {
+      if (signal !== 0) at.push([signal, Date.now() - t0]);
+      return killer.kill(pid, signal);
+    },
+    spawn: (cmd, args) => {
+      ran.push([cmd, ...args]);
+      at.push([cmd, Date.now() - t0]);
+      if (quits) killer.gone.add(APP_PID.pid);
+      const c = new EventEmitter();
+      process.nextTick(() => c.emit('close', runCode));
+      return c;
+    },
+    probe: async () => {
+      throw new Error('an app has no health URL');
+    },
+    platform,
+    inDocker: false,
+    pollMs: 5,
+    ...APP_WAITS,
+    ...extra,
+  });
+  return { ctl, ran, audit, killer, at, reads: () => n, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+}
+function fakeKillApp(opts) {
+  const gone = (opts && opts.gone) || new Set();
+  return { ...fakeKill({ ...opts, gone }), gone };
+}
+const QUIT_CLAUDE = ['/usr/bin/osascript', '-e', 'quit app "Claude"'];
+
+test('app stop: the quit command first; an app that quits in time gets no signal', async (t) => {
+  const s = appStopSetup({ killer: fakeKillApp(), quits: true });
+  t.after(s.cleanup);
+  assert.deepEqual(await s.ctl.stop({ id: 'claude-desktop', ...APP_PID }), { state: 'stopped' });
+  assert.deepEqual(s.ran, [QUIT_CLAUDE]);
+  assert.deepEqual(s.killer.sent(), [], 'no signal');
+  assert.deepEqual(
+    s.audit.lines.map((l) => [l.action, l.ok, l.id, l.method, l.signal, l.forced]),
+    [['stop', true, 'claude-desktop', 'app', undefined, undefined]],
+  );
+  assert.equal(s.audit.lines[0].pid, APP_PID.pid);
+  assert.equal(s.audit.lines[0].startTime, APP_PID.startTime);
+});
+
+test('app stop: Kiro CLI.app is quit by its own name, from the bundle the process runs from', async (t) => {
+  const kiro = appItem({ entry: APP('kiro'), appBundle: 'Kiro CLI.app', app: '/Applications/Kiro.app' });
+  const s = appStopSetup({ reads: [kiro], killer: fakeKillApp(), quits: true });
+  t.after(s.cleanup);
+  assert.deepEqual(await s.ctl.stop({ id: 'kiro', ...APP_PID }), { state: 'stopped' });
+  assert.deepEqual(s.ran, [['/usr/bin/osascript', '-e', 'quit app "Kiro CLI"']]);
+});
+
+test('app stop: SIGTERM after the quit wait, then SIGKILL after the term wait, each to the same process; then stopping', async (t) => {
+  const s = appStopSetup({ killer: fakeKillApp() });
+  t.after(s.cleanup);
+  const r = await s.ctl.stop({ id: 'claude-desktop', ...APP_PID });
+  assert.deepEqual(r, { state: 'stopping', note: 'still shutting down' }, 'the fake app never exits');
+  assert.deepEqual(s.ran, [QUIT_CLAUDE]);
+  assert.deepEqual(s.killer.sent(), ['SIGTERM', 'SIGKILL']);
+  assert.ok(s.killer.calls.filter(([, sig]) => sig !== 0).every(([pid]) => pid === APP_PID.pid));
+  const when = Object.fromEntries(s.at.map(([what, ms]) => [what, ms]));
+  assert.ok(when.SIGTERM - when['/usr/bin/osascript'] >= APP_WAITS.appQuitWaitMs - 5, `SIGTERM waited: ${JSON.stringify(s.at)}`);
+  assert.ok(when.SIGKILL - when.SIGTERM >= APP_WAITS.appTermWaitMs - 5, `SIGKILL waited: ${JSON.stringify(s.at)}`);
+  assert.equal(s.reads(), 3, 'the find, then one read before each signal');
+  assert.deepEqual(
+    s.audit.lines.map((l) => [l.action, l.ok, l.method, l.signal, l.forced]),
+    [
+      ['stop', true, 'app', undefined, undefined],
+      ['stop', true, 'signal', 'SIGTERM', true],
+      ['stop', true, 'signal', 'SIGKILL', true],
+    ],
+  );
+  for (const l of s.audit.lines) {
+    assert.equal(l.kind, 'runtime');
+    assert.equal(l.pid, APP_PID.pid);
+    assert.equal(l.startTime, APP_PID.startTime);
+    assert.doesNotMatch(JSON.stringify(l), /Applications|osascript/, 'no path or command in an audit line');
+  }
+  // It ends on SIGTERM: no SIGKILL.
+  const term = appStopSetup({ killer: fakeKillApp({ exitOn: 'SIGTERM' }) });
+  t.after(term.cleanup);
+  assert.deepEqual(await term.ctl.stop({ id: 'claude-desktop', ...APP_PID }), { state: 'stopped' });
+  assert.deepEqual(term.killer.sent(), ['SIGTERM']);
+  // It ends on SIGKILL.
+  const killed = appStopSetup({ killer: fakeKillApp({ exitOn: 'SIGKILL' }) });
+  t.after(killed.cleanup);
+  assert.deepEqual(await killed.ctl.stop({ id: 'claude-desktop', ...APP_PID }), { state: 'stopped' });
+  assert.deepEqual(killed.killer.sent(), ['SIGTERM', 'SIGKILL']);
+});
+
+test('app stop: a changed pid or start time, a gone process or an unreadable table before a signal sends nothing', async (t) => {
+  const cases = [
+    ['another pid before SIGTERM', [appItem(), appItem({ pid: APP_PID.pid + 1 })], [], { state: 'stopped' }],
+    ['another start before SIGTERM', [appItem(), appItem({ startTime: APP_PID.startTime + 60000 })], [], { state: 'stopped' }],
+    ['gone before SIGTERM', [appItem(), appItem({ running: false, pid: null, startTime: null })], [], { state: 'stopped' }],
+    ['no row before SIGTERM', [appItem(), null], [], { state: 'stopped' }],
+    ['table unreadable before SIGTERM', [appItem(), appItem({ tableError: 'the process table could not be read' })], [], { state: 'stopping', note: 'still shutting down' }],
+    ['read throws before SIGTERM', [appItem(), new Error('ps failed')], [], { state: 'stopping', note: 'still shutting down' }],
+    ['another pid before SIGKILL', [appItem(), appItem(), appItem({ pid: APP_PID.pid + 1 })], ['SIGTERM'], { state: 'stopped' }],
+    ['another start before SIGKILL', [appItem(), appItem(), appItem({ startTime: APP_PID.startTime - 60000 })], ['SIGTERM'], { state: 'stopped' }],
+    ['table unreadable before SIGKILL', [appItem(), appItem(), appItem({ tableError: 'x' })], ['SIGTERM'], { state: 'stopping', note: 'still shutting down' }],
+  ];
+  for (const [name, reads, sent, answer] of cases) {
+    const s = appStopSetup({ reads, killer: fakeKillApp() });
+    t.after(s.cleanup);
+    assert.deepEqual(await s.ctl.stop({ id: 'claude-desktop', ...APP_PID }), answer, name);
+    assert.deepEqual(s.killer.sent(), sent, name);
+  }
+});
+
+test('app stop: the usual refusals hold (pid and start time, already stopped, busy, control off)', async (t) => {
+  const s = appStopSetup({ killer: fakeKillApp() });
+  t.after(s.cleanup);
+  await rejects(s.ctl.stop({ id: 'claude-desktop', pid: APP_PID.pid }), 400);
+  await rejects(s.ctl.stop({ id: 'claude-desktop', pid: APP_PID.pid + 1, startTime: APP_PID.startTime }), 409, /process changed/);
+  const idle = appStopSetup({ reads: [appItem({ running: false, healthy: false, pid: null, startTime: null, how: null })] });
+  t.after(idle.cleanup);
+  await rejects(idle.ctl.stop({ id: 'claude-desktop', ...APP_PID }), 409, /already stopped/);
+  const off = appStopSetup({ extra: { serverMode: true } });
+  t.after(off.cleanup);
+  await rejects(off.ctl.stop({ id: 'claude-desktop', ...APP_PID }), 403, /off on this server/);
+  for (const x of [s, idle, off]) {
+    assert.deepEqual(x.ran, []);
+    assert.deepEqual(x.killer.sent(), []);
+    assert.ok(x.audit.lines.every((l) => l.ok === false));
+  }
+  const busy = appStopSetup({ killer: fakeKillApp() });
+  t.after(busy.cleanup);
+  const first = busy.ctl.stop({ id: 'claude-desktop', ...APP_PID });
+  await rejects(busy.ctl.stop({ id: 'claude-desktop', ...APP_PID }), 409, /a stop is still in progress/);
+  await first;
+});
+
+test('app stop: a quit command that fails is audited, and the stop goes on to SIGTERM', async (t) => {
+  const s = appStopSetup({ killer: fakeKillApp({ exitOn: 'SIGTERM' }), runCode: 1 });
+  t.after(s.cleanup);
+  assert.deepEqual(await s.ctl.stop({ id: 'claude-desktop', ...APP_PID }), { state: 'stopped' });
+  assert.deepEqual(s.killer.sent(), ['SIGTERM']);
+  assert.deepEqual(
+    s.audit.lines.map((l) => [l.ok, l.method, l.signal || null, l.error || null]),
+    [
+      [false, 'app', null, 'the quit command failed'],
+      [true, 'signal', 'SIGTERM', null],
+    ],
+  );
+});
+
+test('a model server never gets SIGKILL: not by signals, not when it runs inside its app', async (t) => {
+  // Ollama run from a shell that never exits: SIGINT, SIGTERM, then it is left alone, with the app waits short.
+  const shell = stopSetup({ extra: APP_WAITS });
+  t.after(shell.cleanup);
+  assert.deepEqual(await shell.ctl.stop({ id: 'ollama', ...SRV }), { state: 'stopping', note: 'still shutting down' });
+  assert.deepEqual(shell.killer.sent(), ['SIGINT', 'SIGTERM']);
+  // Ollama inside Ollama.app that never quits: the quit command only, no signal at all.
+  const inApp = stopSetup({ x: item({ how: 'app', appBundle: 'Ollama.app' }), extra: APP_WAITS });
+  t.after(inApp.cleanup);
+  assert.deepEqual(await inApp.ctl.stop({ id: 'ollama', ...SRV }), { state: 'stopping', note: 'still shutting down' });
+  assert.deepEqual(inApp.ran, [['/usr/bin/osascript', '-e', 'quit app "Ollama"']]);
+  assert.deepEqual(inApp.killer.sent(), []);
+  for (const s of [shell, inApp]) assert.ok(!s.killer.calls.some(([, sig]) => sig === 'SIGKILL'));
+});
+
+test('app start: opens the app, waits for the main process (no health URL), answers running or opening', async (t) => {
+  const closed = appItem({ running: false, healthy: false, pid: null, startTime: null, how: null, appBundle: null });
+  const probes = [];
+  const probe = async (u) => (probes.push(u), true);
+  const mac = { ...APP_WAITS, platform: 'darwin' };
+  const up = startSetup({ items: [closed, closed, closed, appItem()], probe, extra: mac });
+  t.after(up.cleanup);
+  assert.deepEqual(await up.ctl.start('claude-desktop'), { state: 'running' });
+  const never = startSetup({ items: [closed], probe, extra: mac });
+  t.after(never.cleanup);
+  assert.deepEqual(await never.ctl.start('claude-desktop'), { state: 'starting', note: 'opening, not up yet' });
+  assert.deepEqual(probes, [], 'no health URL is asked');
+  assert.deepEqual(
+    up.audit.lines.map((l) => [l.action, l.ok, l.id]),
+    [['start', true, 'claude-desktop']],
+  );
+  assert.doesNotMatch(JSON.stringify(up.audit.lines), /Applications/);
+  // Already open: refused.
+  const open = startSetup({ items: [appItem()], extra: mac });
+  t.after(open.cleanup);
+  await rejects(open.ctl.start('claude-desktop'), 409, /already running/);
+});
+
+test('apps off macOS: listed with "macOS only", no Start or Stop, and both refused without running anything', async (t) => {
+  const absent = appItem({ installed: false, running: false, healthy: false, pid: null, startTime: null, how: null, app: null, appBundle: null, startArgv: null });
+  const s = appStopSetup({ reads: [absent], platform: 'linux', killer: fakeKillApp() });
+  t.after(s.cleanup);
+  const [row] = await s.ctl.list();
+  assert.equal(row.id, 'claude-desktop');
+  assert.equal(row.kind, 'app');
+  assert.equal(row.canStart, false);
+  assert.equal(row.canStop, false);
+  assert.equal(row.reason, 'macOS only');
+  await rejects(s.ctl.start('claude-desktop'), 409, /^macOS only$/);
+  await rejects(s.ctl.stop({ id: 'claude-desktop', ...APP_PID }), 409, /^macOS only$/);
+  assert.deepEqual(s.ran, []);
+  assert.deepEqual(s.killer.sent(), []);
+  assert.deepEqual(s.audit.lines.map((l) => [l.action, l.ok, l.status, l.error]), [
+    ['start', false, 409, 'macOS only'],
+    ['stop', false, 409, 'macOS only'],
+  ]);
+  // On macOS an app that is not installed is not listed, like a model server.
+  const mac = appStopSetup({ reads: [absent] });
+  t.after(mac.cleanup);
+  assert.deepEqual(await mac.ctl.list(), []);
+});
+
+test('list rows carry kind: app for the desktop apps, server for the model servers', async (t) => {
+  const s = appStopSetup();
+  t.after(s.cleanup);
+  const [row] = await s.ctl.list();
+  assert.equal(row.kind, 'app');
+  assert.equal(row.canStop, true);
+  assert.equal(row.reason, null);
+  assert.equal(row.models, null, 'no model memory for an app');
+  assert.doesNotMatch(JSON.stringify(row), /Applications|Claude\.app/, 'no path, no bundle');
+  const m = stopSetup();
+  t.after(m.cleanup);
+  assert.equal((await m.ctl.list())[0].kind, 'server');
+});
+
+test('app stop: a signal that is not permitted is audited and answers stopping, with no SIGKILL after it', async (t) => {
+  const calls = [];
+  const killer = {
+    calls,
+    gone: new Set(),
+    kill: (pid, signal) => {
+      calls.push([pid, signal]);
+      if (signal === 'SIGTERM') throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+      return true;
+    },
+    sent: () => calls.filter(([, s]) => s !== 0).map(([, s]) => s),
+  };
+  const s = appStopSetup({ killer });
+  t.after(s.cleanup);
+  assert.deepEqual(await s.ctl.stop({ id: 'claude-desktop', ...APP_PID }), { state: 'stopping', note: 'still shutting down' });
+  assert.deepEqual(killer.sent(), ['SIGTERM'], 'tried once, nothing after');
+  assert.deepEqual(
+    s.audit.lines.map((l) => [l.ok, l.method, l.signal || null, l.status || null]),
+    [
+      [true, 'app', null, null],
+      [false, 'signal', 'SIGTERM', 403],
+    ],
+  );
 });

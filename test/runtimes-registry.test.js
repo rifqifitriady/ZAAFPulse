@@ -1,5 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const os = require('os');
+const path = require('path');
 const { PRESETS, entries, ownerEntries, commandHash, storedEntry } = require('../lib/runtimes/registry');
 
 const row = (args, argv) => ({ pid: 9, ppid: 1, args, ...(argv ? { argv } : {}) });
@@ -14,7 +16,7 @@ const QWEN = {
 test('presets: ids, start and stop commands, health URLs', () => {
   assert.deepEqual(
     PRESETS.map((p) => p.id),
-    ['ollama', 'lmstudio', 'llamacpp', 'jan', 'localai'],
+    ['ollama', 'lmstudio', 'llamacpp', 'jan', 'localai', 'claude-desktop', 'chatgpt', 'antigravity', 'kiro'],
   );
   assert.deepEqual(preset('ollama').start, ['ollama', 'serve']);
   assert.equal(preset('ollama').stop, null);
@@ -77,9 +79,12 @@ test('owner entries: a valid entry gets its start command, a default health URL 
   assert.ok(!e.match(row(spaced)), 'without argv the first word is the program');
   const [h] = ownerEntries([{ ...QWEN, health: 'http://localhost:8081/health' }]);
   assert.equal(h.health, 'http://localhost:8081/health');
-  assert.deepEqual(entries([QWEN]).map((x) => x.id), ['ollama', 'lmstudio', 'llamacpp', 'jan', 'localai', 'qwen-local']);
-  assert.deepEqual(entries(undefined).length, 5);
-  assert.deepEqual(entries({ not: 'a list' }).length, 5);
+  assert.deepEqual(
+    entries([QWEN]).map((x) => x.id),
+    ['ollama', 'lmstudio', 'llamacpp', 'jan', 'localai', 'claude-desktop', 'chatgpt', 'antigravity', 'kiro', 'qwen-local'],
+  );
+  assert.deepEqual(entries(undefined).length, 9);
+  assert.deepEqual(entries({ not: 'a list' }).length, 9);
 });
 
 test('owner entries: a command that names its port also needs its other arguments, so a stranger on that number does not match', () => {
@@ -243,4 +248,80 @@ test('commandHash covers the command, the port and the health URL of an entry', 
   assert.notEqual(commandHash({ ...QWEN, port: 8082 }), base);
   assert.notEqual(commandHash({ ...QWEN, health: 'http://127.0.0.1:8081/health' }), base);
   assert.notEqual(commandHash(QWEN.command), base, 'a bare command is not an entry');
+});
+
+// ---- the desktop apps (kind 'app') ----
+const APP_IDS = ['claude-desktop', 'chatgpt', 'antigravity', 'kiro'];
+const MAIN = {
+  'claude-desktop': '/Applications/Claude.app/Contents/MacOS/Claude',
+  chatgpt: '/Applications/ChatGPT.app/Contents/MacOS/ChatGPT',
+  antigravity: '/Applications/Antigravity.app/Contents/MacOS/Antigravity',
+  kiro: '/Applications/Kiro.app/Contents/MacOS/Kiro',
+};
+const KIRO_CLI = '/Applications/Kiro CLI.app/Contents/MacOS/kiro_cli_desktop';
+
+test('apps: four presets of kind app; the model servers are kind server, and so is every owner entry', () => {
+  assert.deepEqual(
+    PRESETS.filter((p) => p.kind === 'app').map((p) => [p.id, p.name]),
+    [
+      ['claude-desktop', 'Claude Desktop'],
+      ['chatgpt', 'ChatGPT'],
+      ['antigravity', 'Antigravity'],
+      ['kiro', 'Kiro'],
+    ],
+  );
+  assert.deepEqual(preset('claude-desktop').app, ['Claude.app']);
+  assert.deepEqual(preset('chatgpt').app, ['ChatGPT.app']);
+  assert.deepEqual(preset('antigravity').app, ['Antigravity.app']);
+  assert.deepEqual(preset('kiro').app, ['Kiro.app', 'Kiro CLI.app'], 'Kiro.app first: the first one installed wins');
+  for (const id of APP_IDS) {
+    const p = preset(id);
+    assert.equal(p.openApp, true, `${id}: Start opens the app`);
+    assert.equal(p.health, null, `${id}: no health URL`);
+    assert.equal(p.port, null);
+    assert.equal(p.bin, null);
+    assert.equal(p.start, null);
+    assert.equal(p.stop, null);
+    assert.ok(Object.isFrozen(p.app), `${id}: the bundle list cannot be changed`);
+  }
+  for (const id of ['ollama', 'lmstudio', 'llamacpp', 'jan', 'localai']) assert.equal(preset(id).kind, 'server', id);
+  assert.equal(ownerEntries([QWEN])[0].kind, 'server');
+  assert.equal(ownerEntries([{ ...QWEN, kind: 'app' }])[0].kind, 'server', 'an owner entry cannot be an app');
+  assert.equal(ownerEntries([{ id: 5 }])[0].kind, 'server', 'an invalid entry too');
+});
+
+test('apps: the main process matches, in /Applications or ~/Applications; helpers, other apps and arguments do not', () => {
+  const homeApps = path.join(os.homedir(), 'Applications');
+  for (const id of APP_IDS) {
+    const m = preset(id).match;
+    const main = MAIN[id];
+    assert.ok(m(row(main)), `${id}: the main executable`);
+    assert.ok(m(row(`${main} --some-flag`)), `${id}: with arguments`);
+    assert.ok(m(row(main, [main])), `${id}: with argv`);
+    assert.ok(m(row(main.replace('/Applications', homeApps))), `${id}: in ~/Applications`);
+    assert.ok(!m(row(main.replace('/Applications', '/tmp/x/Applications'))), `${id}: another folder`);
+    assert.ok(!m(row(`/usr/bin/vim ${main}`)), `${id}: the path in an argument`);
+    assert.ok(!m(row(`/usr/bin/vim ${main}`, ['/usr/bin/vim', main])), `${id}: the path in an argv argument`);
+    assert.ok(!m(row(`${main}2`)), `${id}: another program in the same folder`);
+  }
+  const claude = preset('claude-desktop').match;
+  for (const helper of [
+    '/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=utility',
+    '/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer) --type=renderer',
+    '/Applications/Claude.app/Contents/Frameworks/Electron Framework.framework/Helpers/chrome_crashpad_handler',
+  ])
+    assert.ok(!claude(row(helper)), helper);
+  assert.ok(!claude(row('/Applications/ChatGPT.app/Contents/MacOS/ChatGPT')), 'another app');
+  assert.ok(!claude(row('/Applications/Claude Code.app/Contents/MacOS/Claude')), 'another bundle');
+  assert.ok(!claude(row('/opt/homebrew/bin/claude')), 'Claude Code is not Claude Desktop');
+  assert.ok(!preset('chatgpt').match(row(MAIN['claude-desktop'])));
+  const kiro = preset('kiro').match;
+  assert.ok(kiro(row(KIRO_CLI)), 'Kiro CLI.app main process');
+  assert.ok(kiro(row(KIRO_CLI, [KIRO_CLI])));
+  assert.ok(!kiro(row('/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli chat')), 'a kiro-cli session is not the app');
+  assert.ok(!kiro(row('/Users/u/.local/bin/kiro-cli chat')));
+  assert.ok(!kiro(row('/Applications/Kiro.app/Contents/Frameworks/Kiro Helper.app/Contents/MacOS/Kiro Helper')));
+  // A model server never matches an app row and the other way round.
+  for (const id of ['ollama', 'lmstudio', 'llamacpp', 'jan', 'localai'])
+    for (const main of [...Object.values(MAIN), KIRO_CLI]) assert.ok(!preset(id).match(row(main)), `${id} ${main}`);
 });
