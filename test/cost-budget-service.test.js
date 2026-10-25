@@ -352,3 +352,29 @@ test('a valid cost section is kept while the budget list is invalid, and a resta
   assert.equal(after.keyCenter('key_a'), 'beta', 'the newest valid settings, not the ones kept with the list');
   assert.deepEqual(after.list().budgets.map((b) => b.id), ['acme-center']);
 });
+
+test("billingMode: the ledger's billing of a source on a day, for a billed budget's pause; null when unknown", () => {
+  const r = rig();
+  r.cost.update();
+  assert.equal(r.s.billingMode('claude', '2026-10-21'), 'metered');
+  r.cost.addBillingOverride({
+    source: 'claude',
+    from: '2026-10-01',
+    to: '2026-10-21',
+    billing: { mode: 'plan', plan: 'Max', feeUSD: 100, period: 'month' },
+  });
+  assert.deepEqual(
+    [r.s.billingMode('claude', '2026-10-21'), r.s.billingMode('claude', '2026-10-22')],
+    ['plan', 'metered'],
+  );
+  assert.equal(r.s.billingMode('codex', '2026-10-21'), 'metered');
+  assert.equal(createBudgetService({ cost: {} }).billingMode('claude', '2026-10-21'), null, 'a ledger without it');
+  const broken = createBudgetService({
+    cost: {
+      billingFor: () => {
+        throw new Error('unreadable');
+      },
+    },
+  });
+  assert.equal(broken.billingMode('claude', '2026-10-21'), null);
+});
