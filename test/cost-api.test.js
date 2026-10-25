@@ -243,7 +243,7 @@ test('cost api: a restate while the saved settings are invalid is refused with 4
     body: { from: '2026-10-20', to: '2026-10-21', reason: 'check', confirm: true },
   });
   assert.equal(r.status, 409);
-  assert.match(r.body.error, /saved cost settings are invalid/);
+  assert.match(r.body.error, /cost settings in config\.json are invalid/);
   assert.equal(s.cost.status().ledger.corrections, 0);
 });
 

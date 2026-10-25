@@ -111,7 +111,7 @@ The ledger is in USD. With a display currency, amounts are also converted with t
 | `billing` | per source (`claude`, `codex`, `gateway`, `judge`, `replay`, `collab`): `{ "mode": "metered" }` or `{ "mode": "plan", "plan", "feeUSD" (0–1,000,000), "period": "month" \| "year" }` |
 | `currency` | `null`, or a three-letter `code` other than `USD` and up to 1000 `rates` `{ "from": day, "perUSD" }` with distinct days |
 
-Settings are validated when saved, and a bad glob, center, billing or rate is refused with the reasons. If the saved section is invalid (a hand edit), the defaults apply to attribution and the status says so; the billing history is not rewritten from those defaults, and a restate is refused until the settings are fixed.
+Settings are validated when saved, and a bad glob, center, billing or rate is refused with the reasons. If the saved section is invalid (a hand edit), the pass **waits**, as it does for a `config.json` that does not parse (below): its defaults would move today's rows to `unassigned`, and a day that closed meanwhile would keep them. It reads no log, records no billing and re-attributes no row, and a restate is refused (409). The status shows `settings.error`: `the cost settings in config.json are invalid, so the ledger pass waits until they are fixed`. The first pass after the fix reads what waited in the logs and attributes it with the fixed rules. Meanwhile no new spend reaches the ledger: budgets count only the gateway calls they recorded themselves, not local Claude Code or Codex use.
 
 If `config.json` itself does not parse (a hand edit with a syntax error, or an editor caught mid-write), the settings are unknown, not empty: the pass **waits** until the file parses again. It reads no log, records no billing, freezes no price version and re-attributes no row, and a restate is refused (409). The status shows `settings.error`: `config.json could not be read, so the ledger pass waits until it does`. The logs keep the data: the first pass after the fix reads it, with lines of days that closed meanwhile counted as late events of their day.
 
@@ -191,7 +191,7 @@ These routes need the dashboard sign-in. A gateway API key, MCP or A2A is never 
 | `prices.problems` | price versions that could not be used |
 | `unpriced` | `{ rows, requests }` with no known price |
 | `backfill` | `{ firstDay, rows }` |
-| `settings.error` | set when the saved settings are invalid and the defaults apply, or when `config.json` does not parse and the pass waits |
+| `settings.error` | set when the saved settings are invalid or `config.json` does not parse: the pass waits |
 | `cursors` | `{ error, problems }`: `error` while the log positions are lost (the gateway and judge lines are paused), `problems` for a recovery from the last good copy |
 | `billing` | `{ error, historyLost, problems }` |
 | `ledger` | `{ badLines, corrections, error, unread }` |
