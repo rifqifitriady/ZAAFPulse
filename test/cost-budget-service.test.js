@@ -18,6 +18,14 @@ const BASE = {
   keyCenters: { key_a: 'acme' },
   folderRules: [{ glob: '~/work/acme/**', center: 'acme' }],
 };
+const CENTER_BUDGET = {
+  id: 'acme-center',
+  name: 'Acme center',
+  scope: { dim: 'center', value: 'acme' },
+  period: 'month',
+  amount: 1,
+  enforce: 'block',
+};
 const KEY_BUDGET = {
   id: 'acme',
   name: 'Acme',
@@ -164,7 +172,11 @@ test('the last valid list stays in force while a hand edit does not validate, an
   assert.deepEqual(r.s.list().budgets.map((b) => b.id), ['acme']);
   assert.equal(r.s.list().complete, true);
   const kept = JSON.parse(fs.readFileSync(r.lastFile, 'utf8'));
-  assert.deepEqual([kept.version, kept.budgets.map((b) => b.id), kept.context.centers], [1, ['acme'], ['acme']]);
+  assert.deepEqual(
+    [kept.version, kept.budgets.map((b) => b.id), kept.context],
+    [1, ['acme'], { currency: null, ...BASE }],
+    'the list with the last good cost settings',
+  );
   if (process.platform !== 'win32') assert.equal(fs.statSync(r.lastFile).mode & 0o777, 0o600);
   r.st.settings = { ...BASE, budgets: [{ id: 'acme', name: '' }] };
   let l = r.s.list();
@@ -252,4 +264,62 @@ test('legacy budgets merge, the key and folder centers, the monthly figure, the 
   const v = d.s.evaluate()[0];
   assert.equal(v.state, 'no_data');
   assert.match(v.reason, /\(demo\)/);
+});
+
+test('config.json does not parse: a call not read yet is attributed with the last good settings', () => {
+  const r = rig({ budgets: [KEY_BUDGET, CENTER_BUDGET] });
+  r.send(at(22, 10));
+  r.s.pass(() => r.cost.update());
+  r.st.settings = false;
+  r.send(at(22, 10, 5)); // the pass waits meanwhile: this call stays in memory
+  r.s.pass(() => r.cost.update());
+  assert.equal(r.s.pendingCount(), 1);
+  near(spentOf(r.s, 'acme'), 0.006, 'the key budget');
+  near(spentOf(r.s, 'acme-center'), 0.006, 'the center budget: key_a is still acme');
+  assert.equal(r.s.keyCenter('key_a'), 'acme');
+});
+
+test('the cost section does not validate: today follows the last good settings, the pass and the calls alike', () => {
+  const r = rig({ budgets: [CENTER_BUDGET] });
+  r.s.list();
+  r.st.settings = { ...BASE, billing: 5, budgets: [CENTER_BUDGET] }; // parses; the pass attributes with the defaults
+  r.send(at(22, 10));
+  near(spentOf(r.s, 'acme-center'), 0.003, 'in memory');
+  r.s.pass(() => r.cost.update());
+  assert.equal(r.s.pendingCount(), 0);
+  near(spentOf(r.s, 'acme-center'), 0.003, 'from the ledger, whose row today says unassigned');
+  assert.equal(r.s.keyCenter('key_a'), 'acme');
+});
+
+test('a restart on an unparsable config.json: the kept settings attribute and a center budget still blocks', () => {
+  const r = rig({ budgets: [{ ...CENTER_BUDGET, amount: 0.005 }] });
+  r.send(at(22, 10));
+  r.s.pass(() => r.cost.update());
+  r.st.settings = false;
+  const after = r.make(); // the restart: nothing in memory
+  assert.equal(after.keyCenter('key_a'), 'acme', 'from budgets.last.json');
+  assert.equal(after.centerOfProject('~/work/acme/web'), 'acme');
+  const b = after.list().budgets[0];
+  assert.deepEqual([b.id, after.evaluateOne(b).state], ['acme-center', 'warn_50']);
+  near(after.evaluateOne(b).spentUSD, 0.003, 'the ledger row');
+  r.send(at(22, 10, 5)); // recorded by the old service; the new one records it as the gateway would
+  after.record(entry(at(22, 10, 5)));
+  near(after.evaluateOne(b).spentUSD, 0.006);
+  assert.equal(after.evaluateOne(b).state, 'exceeded', 'what the gateway guard refuses on');
+});
+
+test('a valid config.json with other key centers wins and overwrites the kept settings', () => {
+  const r = rig({ budgets: [CENTER_BUDGET] });
+  r.s.list();
+  r.st.settings = {
+    ...BASE,
+    centers: [...BASE.centers, { id: 'beta', name: 'Beta' }],
+    keyCenters: { key_a: 'beta' },
+    budgets: [CENTER_BUDGET],
+  };
+  assert.equal(r.s.keyCenter('key_a'), 'beta');
+  const ctx = JSON.parse(fs.readFileSync(r.lastFile, 'utf8')).context;
+  assert.deepEqual([ctx.keyCenters, ctx.centers.map((c) => c.id)], [{ key_a: 'beta' }, ['acme', 'beta']]);
+  r.st.settings = false;
+  assert.equal(r.make().keyCenter('key_a'), 'beta', 'the restart takes the newer settings');
 });
