@@ -101,10 +101,76 @@ test('applyBudgets: the projection alerts when it starts to pass the amount, and
   ]);
   assert.deepEqual(s.applyBudgets([res({ state: 'warn_50', projected: true })]), []);
   assert.deepEqual(s.applyBudgets([res({ state: 'warn_50', projected: false })]), [], 'falling back is quiet');
-  assert.equal(s.applyBudgets([res({ state: 'warn_50', projected: true })]).length, 1);
+  assert.deepEqual(s.applyBudgets([res({ state: 'warn_50', projected: true })]), [], 'once per period');
   assert.deepEqual(s.applyBudgets([res({ state: 'exceeded', projected: true })]).map(brief), [
     ['exceeded', 'warn_50', false],
   ]);
+});
+
+test('applyBudgets: a projection that flaps alerts once per period, and once again in the next', () => {
+  const { s, dir } = store();
+  s.applyBudgets([res({ state: 'warn_50' })]);
+  let sent = 0;
+  for (let i = 0; i < 10; i++) sent += s.applyBudgets([res({ state: 'warn_50', projected: i % 2 === 0 })]).length;
+  assert.equal(sent, 1);
+  const saved = () =>
+    JSON.parse(fs.readFileSync(path.join(dir, 'monitors.json'), 'utf8')).states.find((e) => e.instance === 'team');
+  assert.equal(saved().projected, false, 'the live flag follows the last pass');
+  assert.equal(s.applyBudgets([res({ state: 'warn_50', projected: true })]).length, 0);
+  assert.equal(saved().projected, true);
+  const next = (over) => s.applyBudgets([res({ periodKey: 'month:2026-11-01', ...over })]);
+  assert.deepEqual(next({ projected: false }), [], 'a new period starts quiet');
+  assert.deepEqual(next({ projected: true }).map(brief), [['ok', 'ok', true]], 'and may project once again');
+  assert.deepEqual(next({ projected: false }), []);
+  assert.deepEqual(next({ projected: true }), [], 'still once');
+});
+
+test('applyBudgets: a level reached while snoozed is announced once when the snooze ends, unless it went back', () => {
+  const { s, clock, make } = store();
+  s.applyBudgets([res({ state: 'warn_50' })]);
+  s.snooze('budget', 'team', HOUR);
+  assert.deepEqual(s.applyBudgets([res({ state: 'exceeded', value: 104, threshold: 100 })]), [], 'quiet while snoozed');
+  assert.deepEqual(s.pendingBudgets(), [], 'no pause while snoozed');
+  clock.t += 2 * HOUR;
+  const after = s.applyBudgets([res({ state: 'exceeded', value: 105, threshold: 100 })]);
+  assert.deepEqual(after.map(brief), [['exceeded', 'warn_50', false]], 'one alert as the snooze ends');
+  assert.equal(after[0].value, 105);
+  assert.deepEqual(s.applyBudgets([res({ state: 'exceeded', value: 106 })]), [], 'and only one');
+  assert.deepEqual(make().applyBudgets([res({ state: 'exceeded', value: 107 })]), [], 'also after a restart');
+
+  const b = store();
+  b.s.applyBudgets([res({ state: 'warn_50' })]);
+  b.s.snooze('budget', 'team', HOUR);
+  b.s.applyBudgets([res({ state: 'exceeded' })]);
+  b.s.applyBudgets([res({ state: 'warn_50' })]);
+  b.clock.t += 2 * HOUR;
+  assert.deepEqual(b.s.applyBudgets([res({ state: 'warn_50' })]), [], 'back at the announced level: nothing');
+
+  const c = store();
+  c.s.applyBudgets([res({ state: 'warn_50' })]);
+  c.s.snooze('budget', null, HOUR);
+  c.s.applyBudgets([res({ state: 'warn_80' })]);
+  c.clock.t += 2 * HOUR;
+  assert.deepEqual(
+    c.s.applyBudgets([res({ state: 'warn_80' })]).map(brief),
+    [['warn_80', 'warn_50', false]],
+    'rule snooze',
+  );
+});
+
+test('applyBudgets: a result that is not valid keeps its budget with retire', () => {
+  const { s } = store();
+  s.applyBudgets([res({ state: 'warn_50' })]);
+  s.snooze('budget', 'team', HOUR);
+  assert.deepEqual(s.applyBudgets([res({ state: 'warn_x' })]), []);
+  assert.equal(s.states().find((e) => e.instance === 'team').state, 'snoozed', 'kept, with its snooze');
+});
+
+test('the state layer refuses the fixed-rule paths for budgets', () => {
+  const { s } = store();
+  assert.throws(() => s.apply('budget', [res()]), /Unknown rule/);
+  assert.throws(() => s.pending('budget'), /Unknown rule/);
+  assert.throws(() => s.setSettings('budget', { enabled: false }), /Unknown rule/);
 });
 
 test('applyBudgets: a new period starts at ok without an alert, and may alert again from there', () => {
@@ -140,15 +206,17 @@ test('applyBudgets: retire with the list, keep without it; snooze is quiet; the 
   assert.equal(s.states().find((e) => e.instance === 'team').state, 'snoozed');
   clock.t += 2 * HOUR;
   assert.deepEqual(
-    s.applyBudgets([res({ state: 'warn_80' }), res({ instance: 'lab', state: 'warn_50' })]),
-    [],
-    'tracked while snoozed',
+    s
+      .applyBudgets([res({ state: 'warn_80' }), res({ instance: 'lab', state: 'warn_50' })])
+      .map((a) => [a.instance, ...brief(a)]),
+    [['team', 'warn_80', 'ok', false]],
+    'tracked while snoozed, announced once the snooze ended',
   );
   const again = make();
   assert.deepEqual(
     again.applyBudgets([res({ state: 'warn_80' }), res({ instance: 'lab', state: 'warn_50' })]),
     [],
-    'after a restart',
+    'not again after a restart',
   );
   clock.t += 2 * 86400e3;
   again.apply('unsafe_content', [{ instance: 'all', sessionId: null, state: 'ok', value: 0, threshold: 1 }]);
@@ -260,6 +328,10 @@ test('channels: a budget alert on the desktop names the level, the share and the
     'Back to 50 %: 60 % of the budget today\nTeam',
   );
   assert.equal(
+    (await text(budgetAlert({ state: 'warn_50', previous: 'ok', projected: true, value: 55 })))[1],
+    'Passed 50 %, projected to pass the budget: 55 % of the budget this month\nTeam',
+  );
+  assert.equal(
     (await text(budgetAlert({ state: 'warn_50', previous: 'warn_50', projected: true, value: 60 })))[1],
     'Projected to pass the budget: 60 % of the budget this month\nTeam',
   );
@@ -359,6 +431,13 @@ test('alerts API: a budget row has its title, the budget name, the period and th
     { ok: 0, triggered: 0, no_data: 0, snoozed: 0 },
     'budgets are not monitor rules in the counts',
   );
+});
+
+test('alerts API: a budget with the id all is opaque too', async () => {
+  const { state, call } = api();
+  state.applyBudgets([res({ instance: 'all', state: 'warn_50' })]);
+  const [row] = (await call('/api/alerts')).body.alerts;
+  assert.match(row.instance, /^[0-9a-f]{20}$/);
 });
 
 test('alerts API: retired rules are left out, and a change to one is refused', async () => {
