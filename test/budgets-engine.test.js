@@ -8,6 +8,7 @@ const os = require('os');
 const path = require('path');
 const { createMonitors } = require('../lib/monitors');
 const { createMonitorState } = require('../lib/monitors/state');
+const { createAgentControl } = require('../lib/agents/control');
 
 const MIN = 60e3;
 const T0 = new Date(2026, 9, 22, 12, 0, 0).getTime();
@@ -63,7 +64,19 @@ const view = (over = {}) => ({
   ...over,
 });
 
-function setup({ views = [], demo = false, retired = [], conf = {}, pauseThrows = false } = {}) {
+// `results`, `home` and `billingMode` stand in for the index, the home folder and the ledger's billing; `makeControl`
+// builds the agent control from the test clock (the real one with fakes, in the control test).
+function setup({
+  views = [],
+  demo = false,
+  retired = [],
+  conf = {},
+  pauseThrows = false,
+  results = RESULTS,
+  home = HOME,
+  billingMode = null,
+  makeControl = null,
+} = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-budgets-engine-'));
   const clock = { t: T0 };
   const state = createMonitorState({
@@ -75,7 +88,7 @@ function setup({ views = [], demo = false, retired = [], conf = {}, pauseThrows 
   const data = { views, complete: true };
   const sent = [];
   const calls = { candidates: [], pause: [], resume: [], stop: [] };
-  const control = {
+  const spy = {
     async candidates(a) {
       calls.candidates.push(a);
       return [{ pid: 4242, startTime: T0 - 90 * MIN }];
@@ -95,8 +108,9 @@ function setup({ views = [], demo = false, retired = [], conf = {}, pauseThrows 
       return [];
     },
   };
+  const control = makeControl ? makeControl(clock) : spy;
   const monitors = createMonitors({
-    indexer: { results: () => RESULTS },
+    indexer: { results: () => results },
     office: {
       snapshot: () => ({ ts: clock.t, agents: AGENTS }),
       demoSnapshot: () => ({ ts: clock.t, agents: AGENTS }),
@@ -119,9 +133,10 @@ function setup({ views = [], demo = false, retired = [], conf = {}, pauseThrows 
       evaluate: () => data.views.map((v) => ({ ...v })),
       complete: () => data.complete,
       centerOfProject: (p) => (p.startsWith('~/acme') ? 'acme' : 'unassigned'),
+      ...(billingMode ? { billingMode } : {}),
     },
     retired,
-    home: HOME,
+    home,
   });
   // The order of the server: the index refresh (aggregate), then the ledger pass (budgets), and the live pass.
   const cycle = async () => {
@@ -237,4 +252,152 @@ test('engine: retired rules are not evaluated', async () => {
   await off.monitors.tickAggregate();
   assert.equal(off.sent.filter((s) => s.alert.rule === 'daily_cost' || s.alert.rule === 'month_projection').length, 0);
   assert.equal((await off.monitors.status()).counts.triggered, 0);
+});
+
+// ---- the target of a budget's pause: the running session that spent the most in the budget's scope and period ----
+const pausedOf = async (opts) => {
+  const e = setup(opts);
+  await e.cycle();
+  return e.calls.pause.map((p) => p.meta.sessionId);
+};
+const exceeded = (over) => [view({ state: 'exceeded', enforce: 'pause', ...over })];
+
+test('engine: a model budget pauses the session that spent the most on that model, not the costliest overall', async () => {
+  // s1 cost 9 on test-model and 0.01 on other-model; s2 cost 5 on other-model.
+  const mixed = [
+    {
+      events: [
+        usage(T0 - 30 * MIN, 's1', 9, 'claude', 'test-model'),
+        usage(T0 - 25 * MIN, 's1', 0.01, 'claude', 'other-model'),
+        usage(T0 - 20 * MIN, 's2', 5, 'claude', 'other-model'),
+      ],
+      sessions: { s1: session(path.join(HOME, 'acme-web')), s2: session(path.join(HOME, 'lab')) },
+    },
+  ];
+  const scope = (value) => ({ dim: 'model', value });
+  assert.deepEqual(await pausedOf({ results: mixed, views: exceeded({ scope: scope('other-model') }) }), ['s2']);
+  assert.deepEqual(await pausedOf({ results: mixed, views: exceeded({ scope: scope('test-model') }) }), ['s1']);
+});
+
+test("engine: sessions rank by their cost in the budget's period, for a center and a project", async () => {
+  // s3 (~/acme-api, Codex) cost 20 on 5 October and nothing today; s1 (~/acme-web) cost 9 today.
+  const earlier = [
+    {
+      events: [
+        usage(new Date(2026, 9, 5, 10, 0, 0).getTime(), 's3', 20, 'codex', 'test-model'),
+        usage(T0 - 30 * MIN, 's1', 9, 'claude', 'test-model'),
+      ],
+      sessions: { s1: session(path.join(HOME, 'acme-web')), s3: session(path.join(HOME, 'acme-api'), 'codex') },
+    },
+  ];
+  const acme = { dim: 'center', value: 'acme' };
+  assert.deepEqual(await pausedOf({ results: earlier, views: exceeded({ scope: acme }) }), ['s3'], 'the month');
+  const week = { period: 'week', periodKey: 'week:2026-10-19' };
+  assert.deepEqual(await pausedOf({ results: earlier, views: exceeded({ scope: acme, ...week }) }), ['s1'], 'the week');
+  const day = { period: 'day', periodKey: 'day:2026-10-22' };
+  assert.deepEqual(await pausedOf({ results: earlier, views: exceeded({ scope: acme, ...day }) }), ['s1'], 'the day');
+  // The view's own from and to win over its period name.
+  const range = { from: '2026-10-01', to: '2026-10-10' };
+  assert.deepEqual(await pausedOf({ results: earlier, views: exceeded({ scope: acme, ...day, ...range }) }), ['s3']);
+  // A project scope: the costliest session overall (s1) is not in it.
+  const project = { dim: 'project', value: '~/acme-api' };
+  assert.deepEqual(await pausedOf({ views: exceeded({ scope: project }) }), ['s3']);
+});
+
+test('engine: a billed budget ranks by what was billed: nothing for a source on a plan', async () => {
+  const billingMode = (source) => (source === 'claude' ? 'plan' : 'metered');
+  assert.deepEqual(await pausedOf({ billingMode, views: exceeded({ measure: 'billed' }) }), ['s3']);
+  assert.deepEqual(await pausedOf({ billingMode, views: exceeded({ measure: 'list' }) }), ['s1'], 'list ignores it');
+  const throwing = () => {
+    throw new Error('the billing history could not be read');
+  };
+  assert.deepEqual(await pausedOf({ billingMode: throwing, views: exceeded({ measure: 'billed' }) }), ['s1']);
+});
+
+test('engine: without the home folder a project or center pause says so and pauses nothing', async () => {
+  for (const scope of [
+    { dim: 'project', value: '~/lab' },
+    { dim: 'center', value: 'acme' },
+  ]) {
+    const e = setup({ home: '', views: exceeded({ scope }) });
+    await e.cycle();
+    await e.cycle();
+    assert.equal(e.calls.pause.length, 0);
+    const notes = pauseNotes(e.state);
+    assert.deepEqual(
+      notes.map((n) => [n.ok, n.code]),
+      [[false, 'none']],
+    );
+    assert.match(notes[0].reason, /home folder is not known/);
+    assert.doesNotMatch(notes[0].reason, /[\\/]/, 'path-free');
+  }
+  assert.deepEqual(await pausedOf({ home: '', views: exceeded({ scope: { dim: 'source', value: 'codex' } }) }), ['s3']);
+});
+
+test('engine + the real agent control: a budget pause sends SIGSTOP once to the verified agent', async () => {
+  const kills = [];
+  const audit = [];
+  let ctl = null;
+  const makeControl = (clock) => {
+    ctl = createAgentControl({
+      platform: 'linux',
+      inDocker: false,
+      serverMode: false,
+      now: () => clock.t,
+      audit: { record: (e) => audit.push(e) },
+      kill: (pid, signal) => {
+        kills.push([pid, signal]); // a spy: nothing is signalled
+        return true;
+      },
+      processes: {
+        rows: async () => [
+          {
+            pid: 4242,
+            cpu: 1,
+            rssKB: 1024,
+            upSec: 90 * 60,
+            args: '/home/u/.local/bin/claude --resume',
+            argv: ['/home/u/.local/bin/claude', '--resume'],
+            cwd: path.join(HOME, 'acme-web'),
+          },
+          {
+            pid: 5151,
+            cpu: 1,
+            rssKB: 1024,
+            upSec: 90 * 60,
+            args: '/usr/bin/vim notes',
+            argv: ['/usr/bin/vim', 'notes'],
+          },
+        ],
+      },
+    });
+    return ctl;
+  };
+  const e = setup({ makeControl, views: exceeded() });
+  await e.cycle();
+  await e.cycle();
+  const signals = kills.filter(([, s]) => s !== 0);
+  assert.deepEqual(signals, [[4242, 'SIGSTOP']], 'one SIGSTOP, never SIGKILL');
+  assert.deepEqual(
+    pauseNotes(e.state).map((n) => [n.ok, n.code]),
+    [[true, 'paused']],
+  );
+  const ok = audit.filter((a) => a.ok === true);
+  assert.deepEqual(
+    ok.map((a) => [a.action, a.rule, a.by, a.sessionId, a.signal]),
+    [['pause', 'budget', 'rule', 's1', 'SIGSTOP']],
+  );
+  // Every other check still holds for a budget: no resume or stop by a rule, no other rule id, no non-agent process.
+  const target = { pid: 4242, startTime: e.clock.t - 90 * MIN };
+  const refused = (p, status) => assert.rejects(p, (err) => err.status === status);
+  await refused(ctl.resume(target, { by: 'rule', rule: 'budget', sessionId: 's1' }), 403);
+  await refused(ctl.stop(target, { by: 'rule', rule: 'budget', sessionId: 's1' }), 403);
+  await refused(ctl.pause(target, { by: 'rule', rule: 'accuracy_drop', sessionId: 's1' }), 403);
+  await refused(ctl.pause(target, { by: 'rule', rule: 'month_projection', sessionId: 's1' }), 403);
+  await refused(ctl.pause({ pid: 5151, startTime: e.clock.t - 90 * MIN }, { by: 'rule', rule: 'budget' }), 403);
+  assert.deepEqual(
+    kills.filter(([, s]) => s !== 0),
+    [[4242, 'SIGSTOP']],
+    'no signal for a refusal',
+  );
 });
