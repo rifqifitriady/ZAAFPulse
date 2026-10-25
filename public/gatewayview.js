@@ -59,6 +59,7 @@ const gw = {
   },
 };
 const GW_BASE = `${location.origin}/v1`;
+const GW_BUDGETS_DOC = 'https://github.com/rifqifitriady/ZAAFPulse/blob/main/docs/cost.md#budgets';
 const gwPost = (route, body) =>
   api(`/api/gateway/${route}`, {
     method: 'POST',
@@ -590,6 +591,7 @@ function gwKeys() {
             <label>Requests / minute<input class="input" name="rpm" type="number" min="1" value="60"></label>
             <label>Expires in (days)<input class="input" name="expiresInDays" type="number" min="1" placeholder="never"></label>
             <button class="btn" type="submit">Create key</button></div>
+          <p class="muted">A key's budget is a monthly budget that blocks the key with 402 once it is used up. <a href="${GW_BUDGETS_DOC}" target="_blank" rel="noopener">Manage in Budgets</a></p>
           <div id="gw-key-errors"></div>
         </form></section>`;
 }
