@@ -223,6 +223,24 @@ test('states: warning levels in order, 100 % always exceeded, projection from a 
   assert.equal(B.evaluateBudget(day, { rows: r3, now: at(10, 22, 7) }).projected, true);
 });
 
+test('100 % is reached by whole micro-dollars, not by float sums', () => {
+  const ev = (amount, usds, over = {}) =>
+    B.evaluateBudget(ok({ amount, ...over }), {
+      rows: usds.map((u) => row({ listUSD: u })),
+      now: at(10, 22),
+    });
+  const ten = ev(1, Array(10).fill(0.1));
+  assert.equal(ten.state, 'exceeded');
+  assert.equal(ten.percent, 100);
+  assert.equal(ev(0.3, [0.1, 0.2]).state, 'exceeded');
+  assert.equal(ev(0.8, [0.7, 0.1]).state, 'exceeded');
+  assert.equal(ev(1, [0.999998]).state, 'warn_80', 'more than a micro-dollar below stays below');
+  assert.equal(ev(1, [0.8]).state, 'warn_80');
+  assert.equal(ev(1, [0.1 * 3 + 0.1 * 5]).state, 'warn_80', 'a sum of 0.8 fires the 80 % level');
+  assert.equal(ev(10, [4.9999996]).state, 'warn_50', 'a level reached within a micro-dollar fires');
+  assert.equal(ev(1, [0.7999994]).state, 'warn_50', 'while one micro-dollar below does not');
+});
+
 test('no_data: an unread month of the period, the folder, the corrections; billing lost or unread for billed', () => {
   const at22 = at(10, 22);
   const b = ok();
