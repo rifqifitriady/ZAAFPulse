@@ -31,6 +31,7 @@ function setup({
   monthly = 1,
   keys = [{ id: 'key_b', name: 'Lab', budgetUSD: 2 }],
   saveThrows = false,
+  onChangeThrows = false,
 } = {}) {
   const dir = tmp();
   const st = { saved: { ...BASE, budgets }, monthly, keys, t: at(22), saves: [], changes: 0, pauseOff: null };
@@ -75,6 +76,7 @@ function setup({
     onChange: () => {
       st.changes++;
       budgetsSvc.invalidate();
+      if (onChangeThrows) throw new Error(`refresh failed at ${HOME}/zp`);
     },
   });
   const bodies = [];
@@ -266,4 +268,92 @@ test('the guard problems are listed per budget, path-free', async () => {
   assert.match(r.body.guard.problems[0].reason, /^ledger unread at \[path\]/);
   assert.equal(r.body.guard.problems[1].reason, 'the budget list could not be read');
   for (const b of s.bodies) assert.doesNotMatch(b, PATHS, b);
+});
+
+test('400 reasons are path-free in the budget and the settings saves', async () => {
+  const s = setup();
+  const names = [`${HOME}/secret`, 'C:\\Users\\x\\y', '~\\secret\\a'];
+  const extra = Object.fromEntries(names.map((n) => [n, 1]));
+  const budget = await s.call('POST', '/api/cost/budgets', { body: { ...ACME, ...extra } });
+  assert.equal(budget.status, 400);
+  assert.equal(budget.body.reasons.filter((x) => /^unknown field: \[path\]/.test(x)).length, 3);
+  const cfg = await s.call('POST', '/api/cost/settings', { body: { ...BASE, ...extra } });
+  assert.equal(cfg.status, 400);
+  assert.equal(cfg.body.reasons.filter((x) => /^unknown field: \[path\]/.test(x)).length, 3);
+  for (const b of s.bodies) assert.doesNotMatch(b, PATHS, b);
+});
+
+test('a settings save that would make a saved budget invalid is refused until the budget is changed', async () => {
+  const center = {
+    id: 'acme-c',
+    name: 'Acme center',
+    scope: { dim: 'center', value: 'acme' },
+    period: 'month',
+    amount: 5,
+  };
+  const idr = { id: 'team-idr', name: 'Team', scope: 'global', period: 'week', amount: 160000, currency: 'IDR' };
+  const s = setup({ budgets: [center, idr] });
+  const before = JSON.stringify(s.st.saved);
+  const noCenter = await s.call('POST', '/api/cost/settings', { body: { ...BASE, centers: [] } });
+  assert.equal(noCenter.status, 409);
+  assert.equal(noCenter.body.error, 'budgets depend on these settings; edit or delete them first');
+  assert.deepEqual(noCenter.body.reasons, ['budget acme-c: scope.value: unknown cost center']);
+  const noCurrency = await s.call('POST', '/api/cost/settings', { body: { ...BASE, currency: null } });
+  assert.equal(noCurrency.status, 409);
+  assert.deepEqual(noCurrency.body.reasons, ['budget team-idr: currency: USD']);
+  assert.equal(JSON.stringify(s.st.saved), before, 'nothing is written on a refusal');
+  assert.equal(s.st.changes, 0);
+  assert.equal((await s.call('POST', '/api/cost/budgets/acme-c/delete', { body: {} })).status, 200);
+  assert.equal((await s.call('POST', '/api/cost/settings', { body: { ...BASE, centers: [] } })).status, 200);
+  assert.deepEqual(s.st.saved.centers, []);
+  assert.equal((await s.call('POST', '/api/cost/budgets/team-idr/delete', { body: {} })).status, 200);
+  assert.equal((await s.call('POST', '/api/cost/settings', { body: { ...BASE, currency: null } })).status, 200);
+  assert.deepEqual(s.st.saved.budgets, [], 'the list stays as the budget routes left it');
+});
+
+test('a restate refreshes the budgets; the 101st budget is refused with reasons; editing at the limit is not', async () => {
+  const s = setup();
+  const r = await s.call('POST', '/api/cost/restate', {
+    body: { from: '2026-10-01', to: '2026-10-21', reason: 'new prices', confirm: true },
+  });
+  assert.equal(r.status, 200);
+  assert.equal(s.st.changes, 1);
+  const many = Array.from({ length: 100 }, (_, i) => ({ ...ACME, id: `b${i}`, enforce: 'none' }));
+  const full = setup({ budgets: many });
+  const over = await full.call('POST', '/api/cost/budgets', { body: { ...ACME, id: 'b100' } });
+  assert.equal(over.status, 400);
+  assert.deepEqual(over.body, { error: 'invalid budget', reasons: ['at most 100 budgets'] });
+  assert.equal(full.st.saves.length, 0);
+  assert.equal((await full.call('POST', '/api/cost/budgets', { body: { ...ACME, id: 'b99', amount: 2 } })).status, 200);
+});
+
+test('an onChange that throws never fails the request', async () => {
+  const s = setup({ onChangeThrows: true });
+  const r = await s.call('POST', '/api/cost/budgets', { body: { ...ACME, amount: 2 } });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.budget.amount, 2);
+  assert.equal(s.st.changes, 1);
+  assert.equal((await s.call('POST', '/api/cost/budgets/acme-key/delete', { body: {} })).status, 200);
+});
+
+test("a view's reason is path-free; its project folder is kept as ~", async () => {
+  const view = {
+    id: 'proj',
+    name: 'Project',
+    scope: { dim: 'project', value: '~/work/app' },
+    state: 'no_data',
+    reason: `the ledger month could not be read at ${HOME}/zp/.data/cost/2026-10.jsonl or C:\\zp\\cost`,
+  };
+  const status = { error: null, reasons: [], guard: null, guardProblems: [], kept: null };
+  const api = createCostApi({
+    cost: {},
+    settings: { get: () => ({}), save: () => {} },
+    home: HOME,
+    budgets: { evaluate: () => [view], status: () => status },
+  });
+  const r = await api.route({ method: 'GET', path: '/api/cost/budgets', query: new URLSearchParams() });
+  assert.equal(r.status, 200);
+  assert.match(r.body.budgets[0].reason, /^the ledger month could not be read at \[path\]/);
+  assert.doesNotMatch(r.body.budgets[0].reason, PATHS);
+  assert.equal(r.body.budgets[0].scope.value, '~/work/app');
 });
