@@ -128,6 +128,82 @@ test('guard: allows when spent cannot be computed, and says why', () => {
   });
   assert.equal(createGuard({ service: svc }).check({ keyId: 'key_a' }), null);
   assert.match(svc.status().guard, /could not read 2026-10/);
+  assert.deepEqual(svc.status().guardProblems.map((p) => p.budget), ['legacy-key-key_a']);
+});
+
+// A service whose list, views and clock the test changes between checks.
+function live() {
+  const st = { budgets: [], views: {}, t: 1000, reports: [], lists: [] };
+  const service = {
+    list: () => {
+      if (st.budgets instanceof Error) throw st.budgets;
+      return { budgets: st.budgets };
+    },
+    evaluateOne: (b) => {
+      const v = st.views[b.id];
+      if (v instanceof Error) throw v;
+      return { state: 'ok', reason: null, ...v };
+    },
+    keyCenter: () => 'unassigned',
+    reportGuard: (m, list) => {
+      st.reports.push(m);
+      st.lists.push(list);
+    },
+  };
+  st.guard = createGuard({ service, now: () => st.t });
+  st.listed = () => st.lists.at(-1).map((p) => [p.budget, p.since]);
+  return st;
+}
+
+test('guard: a budget failing open stays in the status until that budget evaluates again', () => {
+  const s = live();
+  s.budgets = [blk('a', { dim: 'provider', value: 'pa' }, { name: 'A' }), blk('b', { dim: 'provider', value: 'pb' })];
+  s.views = { a: { state: 'no_data', reason: 'the ledger could not read 2026-10' } };
+  assert.equal(s.guard.check({ keyId: 'key_a', provider: 'pa' }), null);
+  assert.match(s.reports.at(-1), /budget "A" has no data \(the ledger could not read 2026-10\)/);
+  assert.deepEqual(s.listed(), [['a', 1000]]);
+  s.t = 2000;
+  // Another route target, another client: B checks clean, A stays listed with its first time.
+  assert.equal(s.guard.check({ keyId: 'key_a', provider: 'pb' }), null);
+  assert.equal(s.guard.check({ keyId: 'key_b', provider: 'pb' }), null);
+  assert.equal(s.guard.check({}), null);
+  assert.match(s.reports.at(-1), /budget "A" has no data/);
+  assert.deepEqual(s.listed(), [['a', 1000]]);
+  assert.equal(s.guard.check({ provider: 'pa' }), null, 'still failing open');
+  assert.deepEqual(s.listed(), [['a', 1000]], 'since is when it started');
+  s.views.b = new Error('EIO');
+  s.guard.check({ provider: 'pb' });
+  assert.deepEqual(s.listed(), [['a', 1000], ['b', 2000]]);
+  assert.match(s.reports.at(-1), /^budget "A" has no data .* \(and 1 more\)$/);
+  s.views = {}; // both read again, but only a check that reaches a budget clears it
+  s.guard.check({ provider: 'pb' });
+  assert.deepEqual(s.listed(), [['a', 1000]]);
+  s.guard.check({ provider: 'pa' });
+  assert.deepEqual(s.lists.at(-1), []);
+  assert.equal(s.reports.at(-1), null);
+  // A budget removed from the list, or no longer blocking, leaves the status.
+  s.views = { a: { state: 'no_data', reason: 'r' }, b: { state: 'no_data', reason: 'r' } };
+  s.guard.check({ provider: 'pa' });
+  s.guard.check({ provider: 'pb' });
+  assert.deepEqual(s.listed().map((x) => x[0]), ['a', 'b']);
+  s.budgets = [{ ...s.budgets[0], enforce: 'none' }];
+  s.guard.check({});
+  assert.deepEqual(s.lists.at(-1), []);
+});
+
+test('guard: an unread list is reported until a list reads; a refusal keeps the other reasons', () => {
+  const s = live();
+  s.budgets = new Error('boom');
+  assert.equal(s.guard.check({ keyId: 'key_a' }), null);
+  assert.equal(s.reports.at(-1), 'the budgets could not be read, so requests are allowed');
+  assert.deepEqual(s.listed(), [[null, 1000]]);
+  s.t = 3000;
+  assert.equal(s.guard.check({}), null);
+  assert.deepEqual(s.listed(), [[null, 1000]], 'since is when it started');
+  s.budgets = [blk('a', 'global'), blk('b', 'global', { name: 'B' })];
+  s.views = { a: { state: 'no_data', reason: 'r' }, b: { state: 'exceeded' } };
+  assert.deepEqual(s.guard.check({}), { budget: 'b', message: 'budget "B" is used up for this month' });
+  assert.deepEqual(s.listed(), [['a', 3000]], 'the list read: only budget a is left');
 });
 
 test('guard: keyLimited for blocking key and center budgets only', () => {
@@ -306,6 +382,99 @@ test('gateway: a key under a blocking key budget saved in Budgets may use only p
     assert.equal(unpriced.status, 402, 'its spend could not be counted');
     assert.match(unpriced.text, /has no known price/);
     assert.equal((await t.chat(secret)).status, 200, 'a priced model still goes');
+  } finally {
+    await t.close();
+  }
+});
+
+// ---- a route of two providers: the guard skips a refused target, and its status covers every target ----
+async function routeSetup(guardFor) {
+  const answer = (who) => () => ({ body: { ...completion(), id: who } });
+  const models = { body: { data: [{ id: 'llama-9' }] } };
+  const a = await fakeServer({ 'POST /chat/completions': answer('A'), 'GET /models': models });
+  const b = await fakeServer({ 'POST /chat/completions': answer('B'), 'GET /models': models });
+  const s = live();
+  const gateway = createGateway({
+    dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'zp-cost-guard-route-')),
+    getConfig: () => ({
+      gateway: {
+        providers: [
+          { id: 'pa', preset: 'custom', baseUrl: a.url, models: [], enabled: true },
+          { id: 'pb', preset: 'custom', baseUrl: b.url, models: [], enabled: true },
+        ],
+        routes: [{ name: 'router/r', targets: ['pa/llama-9', 'pb/llama-9'], strategy: 'fallback' }],
+      },
+    }),
+    writeGatewayConfig: () => {},
+    secrets: secretsFor(),
+    resolveSecret: () => undefined,
+    getPricing: () => PRICING,
+    getIntegrations: () => ({ listTools: async () => [], callTool: async () => ({}) }),
+    budgetGuard: guardFor(s),
+  });
+  const server = http.createServer(async (req, res) => {
+    if (!(await gateway.handle(req, res, new URL(req.url, 'http://x')))) {
+      res.writeHead(404);
+      res.end();
+    }
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const { secret } = gateway.keys.create({ name: 'app', scopes: ['llm'] });
+  const chat = async () => {
+    const r = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${secret}` },
+      body: JSON.stringify({ model: 'router/r', messages: [{ role: 'user', content: 'x' }] }),
+    });
+    return { status: r.status, text: await r.text() };
+  };
+  const posts = (up) => up.requests.filter((x) => x.method === 'POST').length;
+  const close = async () => {
+    server.close();
+    await a.close();
+    await b.close();
+  };
+  return { s, chat, posts, a, b, close };
+}
+const realGuard = (s) => ({ check: s.guard.check, keyLimited: s.guard.keyLimited, record: () => {} });
+
+test('route: a refused target is skipped, all refused is one 402, a no_data target stays reported', async () => {
+  const t = await routeSetup(realGuard);
+  try {
+    t.s.budgets = [blk('aaa', { dim: 'provider', value: 'pa' }), blk('bbb', { dim: 'provider', value: 'pb' })];
+    t.s.views = { aaa: { state: 'exceeded' } };
+    const skipped = await t.chat();
+    assert.equal(skipped.status, 200);
+    assert.match(skipped.text, /"id":"B"/);
+    assert.equal(t.posts(t.a), 0, 'the refused provider is never called');
+    t.s.views = { aaa: { state: 'exceeded' }, bbb: { state: 'exceeded' } };
+    const refused = await t.chat();
+    assert.equal(refused.status, 402);
+    assert.match(refused.text, /budget \\"AAA\\" is used up for this month/);
+    assert.match(refused.text, /insufficient_quota/);
+    assert.doesNotMatch(refused.text, /BBB/);
+    // The first target fails open and the second checks clean in the same request: the status keeps the first.
+    t.s.views = { aaa: { state: 'no_data', reason: 'the ledger could not read 2026-10' } };
+    const open = await t.chat();
+    assert.equal(open.status, 200);
+    assert.match(open.text, /"id":"A"/);
+    assert.match(t.s.reports.at(-1), /budget "AAA" has no data/);
+    assert.deepEqual(t.s.listed().map((x) => x[0]), ['aaa']);
+  } finally {
+    await t.close();
+  }
+});
+
+test('route: a guard whose methods throw lets the request through', async () => {
+  const boom = () => {
+    throw new Error('guard down');
+  };
+  const t = await routeSetup(() => ({ check: boom, keyLimited: boom, record: boom }));
+  try {
+    const r = await t.chat();
+    assert.equal(r.status, 200);
+    assert.match(r.text, /"id":"A"/);
   } finally {
     await t.close();
   }
