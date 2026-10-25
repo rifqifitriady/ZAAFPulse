@@ -97,6 +97,25 @@ function monMeasure(rule, value, threshold) {
   return `${fv(v)} ${join} ${ft(t)}`;
 }
 
+// A budget alert (rule `budget`): the level it reached or fell back to, or its projection, with its share of the
+// period. The budget's name is the line's session part (the owner's own words, shown as text).
+const MON_PERIOD = { day: 'today', week: 'this week', month: 'this month' };
+const monBudgetRank = (s) =>
+  s === 'exceeded' ? 100 : /^warn_\d{1,2}$/.test(String(s || '')) ? Number(s.slice(5)) : 0;
+function monBudgetChange(a) {
+  const now = monBudgetRank(a.state);
+  const was = monBudgetRank(a.previous);
+  if (now > was)
+    return a.state === 'exceeded' ? { change: 'Used up', tone: 'bad' } : { change: `Passed ${now}%`, tone: 'warn' };
+  if (now < was) return { change: a.state === 'ok' ? 'Back under its levels' : `Back to ${now}%`, tone: 'good' };
+  if (a.projected === true) return { change: 'Projected to pass its amount', tone: 'warn' };
+  return { change: 'Changed', tone: 'muted' };
+}
+const monBudgetMeasure = (a) =>
+  monNum(a.value)
+    ? `${monRound(a.value)}% of the budget ${Object.hasOwn(MON_PERIOD, a.period || '') ? MON_PERIOD[a.period] : 'this period'}`
+    : '';
+
 // Why agent control is off, from /api/monitors/status agents.reason, as the end of a sentence.
 const MON_OFF = {
   server: 'agent control is off on this server',
@@ -133,6 +152,10 @@ function alertLine(a, rules, agents) {
     const change =
       a.ok === true ? 'Paused the agent' : why ? `Could not pause the agent: ${why}` : 'Could not pause the agent';
     line = { ...base, kind: 'pause', tone: a.ok === true ? 'warn' : 'bad', change };
+  } else if (a.rule === 'budget') {
+    // The bell's rule list (/api/monitors) has no budget rule, so its title is named here when the server sent none.
+    const title = monText(a.ruleTitle, MON_MAX_TITLE) || 'Budget';
+    line = { ...base, kind: 'change', title, measure: monBudgetMeasure(a), ...monBudgetChange(a) };
   } else {
     const st = typeof a.state === 'string' ? a.state : '';
     const prev = typeof a.previous === 'string' ? a.previous : '';
@@ -1234,6 +1257,7 @@ if (typeof document !== 'undefined') {
 if (typeof module !== 'undefined')
   module.exports = {
     alertLine,
+    monBudgetChange,
     unreadCount,
     pauseBanner,
     pausedWithRule,
