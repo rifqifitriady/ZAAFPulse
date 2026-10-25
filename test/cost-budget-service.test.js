@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const { createCost } = require('../lib/cost');
 const { createBudgetService } = require('../lib/cost/budget-service');
+const { createGuard } = require('../lib/cost/guard');
 
 const HOME = path.join(path.parse(process.cwd()).root, 'Users', 'owner');
 const at = (d, h = 12, m = 0) => new Date(2026, 9, d, h, m).getTime(); // October 2026, local time
@@ -210,9 +211,7 @@ test('a restart on a broken hand edit still enforces the last valid list, a bloc
   const l = after.list();
   assert.deepEqual(l.budgets.map((b) => [b.id, b.enforce]), [['acme', 'block']]);
   assert.equal(l.error, 'budgets in config.json are invalid; the last valid list is in force');
-  // What the gateway guard (lib/cost/guard.js, Task 3) refuses on: a blocking budget whose state is exceeded.
-  const v = after.evaluateOne(l.budgets[0]);
-  assert.deepEqual([v.id, v.state], ['acme', 'exceeded'], 'still blocks');
+  assert.equal(createGuard({ service: after }).check({ keyId: 'key_a' }).budget, 'acme', 'still blocks');
   r.st.settings = false;
   assert.deepEqual(r.make().list().budgets.map((b) => b.id), ['acme'], 'also when config.json does not parse');
 });
