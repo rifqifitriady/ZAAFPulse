@@ -107,7 +107,7 @@ All routes need the dashboard session (never a gateway API key, MCP or A2A). Sta
 - A corrupt ledger line is moved to `ledger-YYYY-MM.jsonl.bad`; the month still loads.
 - A failing collector does not stop the others; its error shows in `/api/cost/status`.
 - A missing or corrupt ledger can be rebuilt from the sources; rebuilt rows are marked `backfilled`. Source data is never deleted.
-- An invalid `cost` section is refused with 400 on save. If `config.json` already holds an invalid one, the defaults apply and the status reports it.
+- An invalid `cost` section is refused with 400 on save. If `config.json` already holds an invalid one, the pass waits, as it does for a `config.json` that does not parse: it writes no row, no billing entry and no re-attribution, a restate is refused (409), and the status reports it. Applying the defaults instead would move today's rows to `unassigned`, and a day that closed meanwhile would keep them. The first pass after the fix reads the logs with the fixed rules.
 
 ## Privacy
 

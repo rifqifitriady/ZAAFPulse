@@ -279,16 +279,27 @@ test('config.json does not parse: a call not read yet is attributed with the las
   assert.equal(r.s.keyCenter('key_a'), 'acme');
 });
 
-test('the cost section does not validate: today follows the last good settings, the pass and the calls alike', () => {
+test('an invalid cost section across a day boundary: the pass waits, the center budget keeps every call', () => {
   const r = rig({ budgets: [CENTER_BUDGET] });
-  r.s.list();
-  r.st.settings = { ...BASE, billing: 5, budgets: [CENTER_BUDGET] }; // parses; the pass attributes with the defaults
+  const centers = () =>
+    r.cost
+      .ledger({ from: '2026-10-22', to: '2026-10-23', groupBy: ['center'] })
+      .rows.map((x) => [x.center, x.requests]);
   r.send(at(22, 10));
-  near(spentOf(r.s, 'acme-center'), 0.003, 'in memory');
+  r.s.pass(() => r.cost.update());
+  near(spentOf(r.s, 'acme-center'), 0.003, 'from the ledger');
+  r.st.settings = { ...BASE, billing: 5, budgets: [CENTER_BUDGET] }; // parses; the cost section does not validate
+  r.send(at(22, 11));
+  r.st.t = at(23, 1); // the 22nd closes meanwhile
+  r.s.pass(() => r.cost.update());
+  assert.equal(r.s.pendingCount(), 1, 'the pass waited: the call stays in memory');
+  assert.deepEqual(centers(), [['acme', 1]], 'no row written while the section is invalid');
+  near(spentOf(r.s, 'acme-center'), 0.006, 'the call attributed with the last good settings');
+  r.st.settings = { ...BASE, budgets: [CENTER_BUDGET] }; // fixed
   r.s.pass(() => r.cost.update());
   assert.equal(r.s.pendingCount(), 0);
-  near(spentOf(r.s, 'acme-center'), 0.003, 'from the ledger, whose row today says unassigned');
-  assert.equal(r.s.keyCenter('key_a'), 'acme');
+  assert.deepEqual(centers(), [['acme', 2]], 'the late line of the closed day, with the fixed rules');
+  near(spentOf(r.s, 'acme-center'), 0.006, 'counted once');
 });
 
 test('a restart on an unparsable config.json: the kept settings attribute and a center budget still blocks', () => {
@@ -322,4 +333,23 @@ test('a valid config.json with other key centers wins and overwrites the kept se
   assert.deepEqual([ctx.keyCenters, ctx.centers.map((c) => c.id)], [{ key_a: 'beta' }, ['acme', 'beta']]);
   r.st.settings = false;
   assert.equal(r.make().keyCenter('key_a'), 'beta', 'the restart takes the newer settings');
+});
+
+test('a valid cost section is kept while the budget list is invalid, and a restart takes it', () => {
+  const r = rig({ budgets: [CENTER_BUDGET] });
+  r.s.list();
+  r.st.settings = {
+    ...BASE,
+    centers: [...BASE.centers, { id: 'beta', name: 'Beta' }],
+    keyCenters: { key_a: 'beta' },
+    budgets: [{ id: 'x', name: '' }], // the list does not validate
+  };
+  assert.equal(r.s.keyCenter('key_a'), 'beta');
+  assert.equal(r.s.list().error, 'budgets in config.json are invalid; the last valid list is in force');
+  const f = JSON.parse(fs.readFileSync(r.lastFile, 'utf8'));
+  assert.deepEqual([f.budgets.map((b) => b.id), f.context.keyCenters], [['acme-center'], { key_a: 'beta' }]);
+  r.st.settings = false;
+  const after = r.make();
+  assert.equal(after.keyCenter('key_a'), 'beta', 'the newest valid settings, not the ones kept with the list');
+  assert.deepEqual(after.list().budgets.map((b) => b.id), ['acme-center']);
 });
