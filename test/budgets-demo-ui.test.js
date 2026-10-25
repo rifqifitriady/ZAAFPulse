@@ -45,6 +45,38 @@ test('demo budgets come in mixed states: used up and blocking, projected in IDR,
   );
 });
 
+test('the demo team alert agrees with the team budget: same period, same state, projected alike', () => {
+  const at = [
+    NOW, // the 22nd, 15:00: the month
+    new Date(2026, 10, 1, 23, 30).getTime(), // Sunday 23:30 on the 1st: no span fits, so the month, not projected
+    new Date(2026, 11, 1, 0, 5).getTime(), // the 1st at 00:05: no span fits
+    new Date(2026, 10, 2, 12).getTime(), // Monday noon on the 2nd: the day
+    new Date(2026, 10, 7, 7, 30).getTime(), // Saturday 07:30 on the 7th: the week
+    new Date(2026, 10, 2, 3).getTime(), // Monday 03:00 on the 2nd: no span fits
+  ];
+  for (const t of at) {
+    const d = costDemo(t);
+    const cost = createCost({ demo: d, getSettings: () => d.settings, home: HOME, now: () => t, nocase: false });
+    const svc = createBudgetService({
+      getSettings: () => d.settings,
+      getLegacy: () => ({ monthlyBudgetUSD: 1000, keys: [] }),
+      cost,
+      home: HOME,
+      now: () => t,
+      nocase: false,
+      demo: { noData: d.budgetNoData },
+    });
+    const team = svc.evaluate().find((x) => x.id === 'team');
+    const alert = monitorsDemo(t).alerts.find((a) => a.rule === 'budget' && a.instance === 'team');
+    const when = new Date(t).toString();
+    assert.equal(alert.period, team.period, `period at ${when}`);
+    assert.equal(alert.state, team.state, `state at ${when}`);
+    assert.equal(team.state, 'warn_80', `state at ${when}`);
+    assert.equal(alert.projected, team.projected, `projected at ${when}`);
+    assert.ok(Math.abs(team.percent - alert.value) < 0.05, `percent ${team.percent} at ${when}`);
+  }
+});
+
 test('the bell and drawer: a budget alert names the budget, the share and the period', () => {
   const b = (over = {}) => ({
     id: 'a1',

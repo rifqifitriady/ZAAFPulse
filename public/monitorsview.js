@@ -100,8 +100,7 @@ function monMeasure(rule, value, threshold) {
 // A budget alert (rule `budget`): the level it reached or fell back to, or its projection, with its share of the
 // period. The budget's name is the line's session part (the owner's own words, shown as text).
 const MON_PERIOD = { day: 'today', week: 'this week', month: 'this month' };
-const monBudgetRank = (s) =>
-  s === 'exceeded' ? 100 : /^warn_\d{1,2}$/.test(String(s || '')) ? Number(s.slice(5)) : 0;
+const monBudgetRank = (s) => (s === 'exceeded' ? 100 : /^warn_\d{1,2}$/.test(String(s || '')) ? Number(s.slice(5)) : 0);
 function monBudgetChange(a) {
   const now = monBudgetRank(a.state);
   const was = monBudgetRank(a.previous);
