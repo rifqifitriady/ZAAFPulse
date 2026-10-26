@@ -179,9 +179,9 @@ If `cost.budgets` does not validate, or `config.json` does not parse, the last v
 `.data/cost/budgets.last.json`, so it also survives a restart. If there is no valid kept list, only the old monthly and
 key budgets apply. `GET /api/cost/budgets` reports the warning and validation reasons; save and delete answer 409 until
 the hand edit is fixed. A valid list always replaces the kept list. While `config.json` does not parse, ZAAFPulse does
-not write it at all: Settings, the price editor and Settings → Integrations answer 409 `config.json could not be read;
-fix it first`, and every other settings page refuses its save as well. The file, and the budgets in it, stay as you
-left them until you fix it.
+not write it at all: a save from Settings, the price editor, the cost settings, Integrations, Monitors, Evals, Datasets
+or Local models answers 409 `config.json could not be read; fix it first`, and the gateway and second-brain pages refuse
+their saves in their own words. The file, and the budgets in it, stay as you left them until you fix it.
 
 ### What a budget counts
 
@@ -228,6 +228,10 @@ gateway calls recorded since the last ledger pass, so a budget blocks at the nex
 - **Which calls.** Dashboard calls (no key) meet only global, model and provider budgets. Key, center and source
   budgets need a key; a key's center comes from `cost.keyCenters` (`unassigned` when it has none). The model checked
   is the name the call is logged under, as in the ledger.
+- **The Playground counts but is never blocked.** The ledger tags the dashboard's own gateway calls (the Playground)
+  as source `gateway`, so they count toward a `source: gateway` budget, but the guard never blocks a call without a
+  key. Your own Playground use can therefore use up such a budget and cut off every keyed client, while the
+  Playground keeps working. Use a key or center budget to limit clients without counting your own use.
 - **Priced models only.** A key under a blocking key or center budget may call only priced (or private) models, as a
   key with `budgetUSD` could before. Global, model and provider budgets do not add this rule.
 - **Overshoot.** Nothing is reserved: every request already in flight finishes, so concurrent requests can pass the
@@ -269,7 +273,8 @@ is `exceeded`, ZAAFPulse pauses one local Claude Code or Codex session, once per
 Every rule of [agent control](monitors.md#agent-control) applies: the process is verified again before the signal,
 there is no SIGKILL, and every action goes to `.data/agent-audit.jsonl`. Windows cannot pause a process. Agent control
 is off in server mode, with a password sign-in or no sign-in, and in Docker; saving a pause budget there is refused
-with 409. Demo mode never pauses or notifies.
+with 409. A pause budget that is in force there anyway (written by hand, or saved before the server changed) pauses
+nothing and says so once per period in the bell (`could not pause: agent control is off …`). Demo mode never pauses or notifies.
 
 ### Migration
 
@@ -277,6 +282,10 @@ The old top-level `monthlyBudgetUSD` and each gateway key's `budgetUSD` are read
 and projection. The old `daily_cost` and `month_projection` monitor rules have been replaced by budgets and are no
 longer evaluated, acted on, listed or counted, and a change to them answers 410. Their old states and alerts remain as
 history.
+
+Nothing replaces `daily_cost` automatically: `legacy-monthly` is a monthly, notify-only budget. If you had `daily_cost`
+on with a daily limit of your own, or with auto-pause, create a `day` budget with that amount to keep it, with
+`"enforce": "pause"` if you used auto-pause (where agent control is on).
 
 One overlap at the upgrade: `legacy-monthly` is seen for the first time, so its first pass alerts from `ok` (for
 example "Passed 80 %" or "Projected") even when a `month_projection` alert from before the upgrade is still open. That
