@@ -433,3 +433,122 @@ test('engine + the real agent control: a budget pause sends SIGSTOP once to the 
     'no signal for a refusal',
   );
 });
+
+// ---- a budget changed while the agent is being looked up: the pause chosen before it is dropped ----
+// The lookup (control.candidates) is held open until the test releases it; the control is a spy that signals nothing.
+function deferred() {
+  const d = { pauses: [], waiting: null };
+  d.control = () => ({
+    async candidates() {
+      let release;
+      const gate = new Promise((r) => (release = r));
+      d.waiting = release;
+      await gate;
+      return [{ pid: 4242, startTime: T0 - 90 * MIN }];
+    },
+    async pause(target, meta) {
+      d.pauses.push(meta.sessionId);
+      return { ok: true };
+    },
+    async paused() {
+      return [];
+    },
+  });
+  // Resolves once a lookup is waiting.
+  d.entered = async () => {
+    for (let i = 0; i < 200 && !d.waiting; i++) await new Promise((r) => setImmediate(r));
+    assert.ok(d.waiting, 'a lookup started');
+  };
+  d.release = () => {
+    const r = d.waiting;
+    d.waiting = null;
+    r();
+  };
+  return d;
+}
+
+test('engine: a pause turned off while its agent is looked up sends nothing; the budget is not used up', async () => {
+  const d = deferred();
+  const e = setup({ views: exceeded(), makeControl: d.control });
+  await e.monitors.tickAggregate();
+  await e.monitors.tickBudgets(); // no live pass yet: nothing to act on
+  const live = e.monitors.tickLive();
+  await d.entered();
+  e.data.views = exceeded({ enforce: 'none' });
+  await e.monitors.tickBudgets();
+  d.release();
+  await live;
+  assert.deepEqual(d.pauses, [], 'no pause after the owner turned it off');
+  assert.equal(pauseNotes(e.state).length, 0, 'nothing to report: the action was dropped');
+  // The period was not used up: pause on again, the next pass acts.
+  e.data.views = exceeded();
+  const again = e.cycle();
+  await d.entered();
+  d.release();
+  await again;
+  assert.deepEqual(d.pauses, ['s1']);
+});
+
+test('engine: a scope or period changed while the agent is looked up drops the stale pause', async () => {
+  // The scope: the global budget picked s1; now it covers Codex only, so s3 is the right target on the next pass.
+  const d = deferred();
+  const e = setup({ views: exceeded(), makeControl: d.control });
+  await e.monitors.tickAggregate();
+  await e.monitors.tickBudgets();
+  const live = e.monitors.tickLive();
+  await d.entered();
+  e.data.views = exceeded({ scope: { dim: 'source', value: 'codex' } });
+  await e.monitors.tickBudgets();
+  d.release();
+  await live;
+  assert.deepEqual(d.pauses, [], 'not the session the old scope picked');
+  const next = e.monitors.tickLive();
+  await d.entered();
+  d.release();
+  await next;
+  assert.deepEqual(d.pauses, ['s3'], 'the new scope picks its own session');
+  // The period: a new period started while the agent was looked up.
+  const p = deferred();
+  const f = setup({ views: exceeded(), makeControl: p.control });
+  await f.monitors.tickAggregate();
+  await f.monitors.tickBudgets();
+  const pending = f.monitors.tickLive();
+  await p.entered();
+  f.data.views = exceeded({ periodKey: 'month:2026-11-01' });
+  p.release();
+  await pending;
+  assert.deepEqual(p.pauses, [], 'chosen in the old period');
+});
+
+test('engine: a change that arrives while the budget pass itself is looking up the agent wins', async () => {
+  const d = deferred();
+  const e = setup({ views: exceeded({ state: 'warn_80' }), makeControl: d.control });
+  await e.cycle(); // the live sessions are known; nothing is exceeded yet
+  e.data.views = exceeded();
+  const pass = e.monitors.tickBudgets(); // the pause starts inside this pass
+  await d.entered();
+  e.data.views = exceeded({ enforce: 'none' });
+  const change = e.monitors.tickBudgets(); // as server.js does after a budget save
+  d.release();
+  await Promise.all([pass, change]);
+  assert.deepEqual(d.pauses, []);
+  const st = e.state.states().find((x) => x.rule === 'budget');
+  assert.equal(st.state, 'exceeded');
+});
+
+test('engine: a budget pass asked for while one runs runs again after it, with what changed', async () => {
+  const d = deferred();
+  const e = setup({ views: exceeded({ state: 'warn_80' }), makeControl: d.control });
+  await e.cycle();
+  e.data.views = exceeded();
+  const pass = e.monitors.tickBudgets();
+  await d.entered();
+  e.data.views = exceeded({ state: 'warn_80', percent: 85 }); // the amount was raised meanwhile
+  const change = e.monitors.tickBudgets();
+  const third = e.monitors.tickBudgets();
+  assert.equal(change, third, 'one more pass, however many ask');
+  d.release();
+  await Promise.all([pass, change]);
+  assert.equal(e.state.states().find((x) => x.rule === 'budget').state, 'warn_80', 'the change was evaluated');
+  assert.deepEqual(d.pauses, []);
+});
