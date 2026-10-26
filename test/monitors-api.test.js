@@ -1032,11 +1032,11 @@ test('settings saves over HTTP: a config.json that does not parse is refused and
   const c = client(s.base);
   try {
     const m = await c.post('/api/monitors/channels', { desktop: false });
-    assert.equal(m.status, 500);
-    assert.equal(m.json.error, 'the settings could not be saved');
+    assert.equal(m.status, 409);
+    assert.equal(m.json.error, 'config.json could not be read; fix it first');
     const e = await c.post('/api/evals/settings', { dailyCap: 50 });
-    assert.equal(e.status, 500);
-    assert.match(e.json.error, /^the settings could not be saved: config\.json does not parse/);
+    assert.equal(e.status, 409);
+    assert.equal(e.json.error, 'config.json could not be read; fix it first');
     assert.equal(fs.readFileSync(file, 'utf8'), broken, 'config.json is untouched');
     assert.deepEqual(
       fs.readdirSync(data).filter((f) => f.startsWith('config.json')),

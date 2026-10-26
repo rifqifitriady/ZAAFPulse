@@ -181,3 +181,20 @@ test('a config.json that does not parse is never written over; a save is 0600 th
   assert.equal(ic(fresh).save(form).id, 'c');
   assert.ok(JSON.parse(fs.readFileSync(fresh, 'utf8')).integrations.c);
 });
+
+test('a failed integration write is logged with its error code only, and answered without a path', () => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'acc-ic-')), 'no-such-folder', 'config.json');
+  const ic = createIntegrationConfig({ file, secrets: fakeSecrets, store: () => {} });
+  const logged = [];
+  const was = console.error;
+  console.error = (...a) => logged.push(a.join(' '));
+  try {
+    assert.throws(
+      () => ic.save({ id: 'c', type: 'router', values: { flavor: '9router' } }),
+      (e) => e.status === 500 && e.message === 'the settings could not be saved',
+    );
+  } finally {
+    console.error = was;
+  }
+  assert.deepEqual(logged, ['config: the settings could not be saved (ENOENT)']);
+});
