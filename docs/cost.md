@@ -111,7 +111,7 @@ The ledger is in USD. With a display currency, amounts are also converted with t
 | `billing` | per source (`claude`, `codex`, `gateway`, `judge`, `replay`, `collab`): `{ "mode": "metered" }` or `{ "mode": "plan", "plan", "feeUSD" (0–1,000,000), "period": "month" \| "year" }` |
 | `currency` | `null`, or a three-letter `code` other than `USD` and up to 1000 `rates` `{ "from": day, "perUSD" }` with distinct days |
 
-Settings are validated when saved, and a bad glob, center, billing or rate is refused with the reasons. If the saved section is invalid (a hand edit), the defaults apply to attribution and the status says so; the billing history is not rewritten from those defaults, and a restate is refused until the settings are fixed.
+Settings are validated when saved, and a bad glob, center, billing or rate is refused with the reasons. If the saved section is invalid (a hand edit), the pass **waits**, as it does for a `config.json` that does not parse (below): its defaults would move today's rows to `unassigned`, and a day that closed meanwhile would keep them. It reads no log, records no billing and re-attributes no row, and a restate is refused (409). The status shows `settings.error`: `the cost settings in config.json are invalid, so the ledger pass waits until they are fixed`. The first pass after the fix reads what waited in the logs and attributes it with the fixed rules. Meanwhile no new spend reaches the ledger: budgets count only the gateway calls they recorded themselves, not local Claude Code or Codex use.
 
 If `config.json` itself does not parse (a hand edit with a syntax error, or an editor caught mid-write), the settings are unknown, not empty: the pass **waits** until the file parses again. It reads no log, records no billing, freezes no price version and re-attributes no row, and a restate is refused (409). The status shows `settings.error`: `config.json could not be read, so the ledger pass waits until it does`. The logs keep the data: the first pass after the fix reads it, with lines of days that closed meanwhile counted as late events of their day.
 
@@ -128,6 +128,188 @@ POST /api/cost/restate
 - **List cost and centers** change through one correction appended to `.data/cost/corrections.jsonl`, with the old and new amounts of each row. Stored rows are never rewritten; readers apply the corrections on top, so events that arrive later still count. Rows are daily sums, so each is re-priced from its average request: a row that mixes requests on both sides of a long-prompt tier is approximated.
 - **Billing** changes through one override per source for the range, with its current billing. This is also how days billed as `billingAssumed` are corrected.
 - The answer holds the correction and the overrides written.
+
+## Budgets
+
+Budgets sit on the ledger. They can cover everything or one cost center, gateway key, project, model, provider or
+source, for a local day, a week beginning Monday or a calendar month.
+
+### Budgets in `config.json`
+
+Saved budgets live in `config.json` under `cost.budgets`. At most 100 are accepted.
+
+```json
+"cost": {
+  "budgets": [
+    {
+      "id": "acme-month",
+      "name": "Acme monthly",
+      "scope": { "dim": "center", "value": "acme" },
+      "period": "month",
+      "amount": 500,
+      "currency": "USD",
+      "measure": "billed",
+      "thresholds": [50, 80],
+      "projection": true,
+      "enforce": "none"
+    }
+  ]
+}
+```
+
+| Field | Rule and default |
+|---|---|
+| `id` | required; letters, digits, `-` and `_`, up to 80, starting with a letter or digit; unique |
+| `name` | required; 1–60 characters, no control characters |
+| `scope` | required; `"global"` or `{ "dim": "center" \| "key" \| "project" \| "model" \| "provider" \| "source", "value": "…" }` |
+| `period` | required; `day`, `week` (Monday first) or `month`, in local time |
+| `amount` | required; above 0 and at most 1e12 |
+| `currency` | `USD`, or the configured display currency; default `USD` |
+| `measure` | `list` (usage value) or `billed` (what was paid); default `list` |
+| `thresholds` | up to two rising whole percentages from 1 to 99; default `[50, 80]`; 100 % is always exceeded |
+| `projection` | whether to warn about projected overspend; default `true` |
+| `enforce` | `none`, `block` or `pause`; default `none`; the scopes each action supports are below |
+
+Unknown fields, duplicate ids, invalid values and more than 100 budgets are refused with validation reasons. A
+saved cost-center scope must name a configured center, a non-USD currency must be the configured display currency,
+and a source must be one of the ledger sources. Changing the cost settings is refused with 409 when it would make a
+saved budget invalid; edit or delete that budget first.
+
+If `cost.budgets` does not validate, or `config.json` does not parse, the last valid list stays in force. It is kept in
+`.data/cost/budgets.last.json`, so it also survives a restart. If there is no valid kept list, only the old monthly and
+key budgets apply. `GET /api/cost/budgets` reports the warning and validation reasons; save and delete answer 409 until
+the hand edit is fixed. A valid list always replaces the kept list. While `config.json` does not parse, ZAAFPulse does
+not write it at all: a save from Settings, the price editor, the cost settings, Integrations, Monitors, Evals, Datasets
+or Local models answers 409 `config.json could not be read; fix it first`, and the gateway and second-brain pages refuse
+their saves in their own words. The file, and the budgets in it, stay as you left them until you fix it.
+
+### What a budget counts
+
+`list` counts the ledger's list-price value. `billed` counts what was paid after plan billing, corrections and billing
+overrides. Plan fee rows have no center, project, key, model or provider, so they count only in global and source
+budgets. A budget in the display currency converts the ledger's USD amounts at the latest configured rate on or before
+today.
+
+The current ledger rows and gateway calls recorded since the last ledger pass are combined, so a gateway block can
+take effect before the next pass. When the saved cost settings or `config.json` cannot be read, the ledger pass waits;
+pending gateway calls use the last valid attribution, while local Claude Code and Codex spend reaches budgets only
+after the settings are fixed and the ledger pass catches up.
+
+### States and alerts
+
+A budget is `ok`, `warn_<n>` at each configured level, or `exceeded` at 100 %. From 25 % of its period, it is also
+`projected` when its current pace would pass the amount. A new period begins at `ok`. An unread ledger month, folder
+or corrections file makes the budget `no_data`; so does missing currency data and, for a billed budget, unreadable or
+assumed billing history. `no_data` never alerts, blocks or pauses.
+
+Alerts are sent only when the level changes, and projection alerts at most once per period. There are no reminders.
+A budget seen for the first time starts at `ok`, so a first state above a level alerts once. A lower level (after the
+amount was raised) alerts too. A `no_data` budget keeps its last state and sends nothing.
+
+Alerts appear in the bell and drawer, and can go to the desktop notification and the webhook. The desktop shows the
+budget's name as its second line. The webhook body stays the seven fields of every monitor alert (`rule`, `state`,
+`previous`, `value`, `threshold`, `sessionId`, `ts`); a budget's name never leaves the machine. Two consequences for a
+webhook receiver:
+
+- **It cannot tell budgets apart.** `rule` is `budget` and `sessionId` is `null` for every budget, so nothing in the body
+  names the budget. Use the bell or `GET /api/cost/budgets` to see which one changed.
+- **A projection alert has `state` equal to `previous`.** A budget at `warn_50` whose pace starts to pass the amount
+  sends `warn_50`/`warn_50`. Only the bell and the drawer say "projected".
+
+### Block
+
+`block` works for global, key, center, model, provider and `source: gateway` budgets. The gateway checks the blocking
+budgets in scope before it sends a request to each route target. Spent is the ledger's total for the period plus the
+gateway calls recorded since the last ledger pass, so a budget blocks at the next request, not at the next pass.
+
+- **Route targets.** A target whose provider or model budget is used up is skipped and the next target is tried. Only
+  when no target is left does the gateway answer 402, with a message that names only the budget that refused it and its
+  period, for example `budget "Acme key" is used up for this month`. No figures and no other budget are in it.
+- **Which calls.** Dashboard calls (no key) meet only global, model and provider budgets. Key, center and source
+  budgets need a key; a key's center comes from `cost.keyCenters` (`unassigned` when it has none). The model checked
+  is the name the call is logged under, as in the ledger.
+- **The Playground counts but is never blocked.** The ledger tags the dashboard's own gateway calls (the Playground)
+  as source `gateway`, so they count toward a `source: gateway` budget, but the guard never blocks a call without a
+  key. Your own Playground use can therefore use up such a budget and cut off every keyed client, while the
+  Playground keeps working. Use a key or center budget to limit clients without counting your own use.
+- **Priced models only.** A key under a blocking key or center budget may call only priced (or private) models, as a
+  key with `budgetUSD` could before. Global, model and provider budgets do not add this rule.
+- **Overshoot.** Nothing is reserved: every request already in flight finishes, so concurrent requests can pass the
+  amount by more than one call (one per request in flight).
+- **Lift.** A new period or a raised amount lifts the block at the next request.
+- **Fail open.** When spent cannot be computed (the budget is `no_data`, the ledger read throws, the list does not
+  read), the guard lets the request through and reports why under `guard.error` and `guard.problems` in
+  `GET /api/cost/budgets`, path-free. When the check itself fails, the request goes through too, and
+  `the budget check failed, so requests are allowed` is listed with `budget: null` until a check works again.
+
+The guard reads the budget list once for each route target it checks, so a route with several targets costs a few more
+reads per request; a route has a handful of targets at most.
+
+### Pause
+
+`pause` works for global, project, center, model and `source: claude` or `source: codex` budgets. When such a budget
+is `exceeded`, ZAAFPulse pauses one local Claude Code or Codex session, once per period:
+
+- **The target** is the running session that spent the most in the budget's scope and period, on the budget's measure.
+  For a model budget that is the session's spend on that model; for other scopes, the session's cost in the period
+  (a source, project or center budget counts only sessions in its scope). For a `billed` budget, days on which the
+  session's source was on a plan count as zero. The sessions are ranked with today's list prices; this only picks the
+  target and changes no figure. A session with nothing spent in scope is never paused.
+- **Once per period, once the agent was looked up.** When the process behind the chosen session has been looked up,
+  the period is used up whatever the outcome (paused, no matching process, several, refused): the budget does not
+  pause again until its next period. Until then it keeps looking. With no running session in scope, a session not
+  indexed yet, or a process table that does not read, nothing is used up, and a later pass can pause a session that
+  starts running later in the period. A budget that becomes exceeded before the server has read the running sessions
+  acts on the first live pass.
+- **A change wins, until the pause is sent.** If the budget is saved while its agent is being looked up (pause turned
+  off, another scope, measure or period, or no longer exceeded), nothing is signalled and nothing is used up; the next
+  pass decides with the budget as it is now. A save that lands once the pause has started (while the process is being
+  verified for the signal) does not stop it; resume the agent from the dashboard.
+- **No candidate** (no running session in scope has spent anything this period) is reported once in the bell, and
+  the budget keeps looking. When the home folder is not known, project and center budgets cannot match a session's
+  folder: they pause nothing and say so once, path-free. Source, model and global budgets still pause.
+- **Never on `no_data`**, and a paused agent is never resumed automatically.
+
+Every rule of [agent control](monitors.md#agent-control) applies: the process is verified again before the signal,
+there is no SIGKILL, and every action goes to `.data/agent-audit.jsonl`. Windows cannot pause a process. Agent control
+is off in server mode, with a password sign-in or no sign-in, and in Docker; saving a pause budget there is refused
+with 409. A pause budget that is in force there anyway (written by hand, or saved before the server changed) pauses
+nothing and says so once per period in the bell (`could not pause: agent control is off …`). Demo mode never pauses or notifies.
+
+### Migration
+
+The old top-level `monthlyBudgetUSD` and each gateway key's `budgetUSD` are read as budgets with the default thresholds
+and projection. The old `daily_cost` and `month_projection` monitor rules have been replaced by budgets and are no
+longer evaluated, acted on, listed or counted, and a change to them answers 410. Their old states and alerts remain as
+history.
+
+Nothing replaces `daily_cost` automatically: `legacy-monthly` is a monthly, notify-only budget. If you had `daily_cost`
+on with a daily limit of your own, or with auto-pause, create a `day` budget with that amount to keep it, with
+`"enforce": "pause"` if you used auto-pause (where agent control is on).
+
+One overlap at the upgrade: `legacy-monthly` is seen for the first time, so its first pass alerts from `ok` (for
+example "Passed 80 %" or "Projected") even when a `month_projection` alert from before the upgrade is still open. That
+old alert never gets a resolution, because the rule is retired. Each overspend is announced at most twice, and only
+once, at the upgrade.
+
+Editing the old monthly budget through the budget API saves it as `legacy-monthly` and clears `monthlyBudgetUSD` in
+the same `config.json` write. Editing a key budget saves its replacement first and then clears the key's `budgetUSD` in
+`keys.json`; the saved budget wins between those writes, so it is never counted twice. Once the monthly budget is
+managed this way, the old Settings field shows its managed amount and ignores edits. A key's spend now uses the
+ledger's shared pricer, so it may read slightly higher than the key table.
+
+### Budget API
+
+These routes have the same dashboard sign-in and JSON requirements as the other cost routes.
+
+| Route | Answer |
+|---|---|
+| `GET /api/cost/budgets` | `{ budgets, error, reasons, guard: { error, problems }, kept: { error } }`; each budget includes its period, spent, percent, state and projection |
+| `POST /api/cost/budgets` | creates or replaces one budget; 200 `{ budget }`, 400 `{ error, reasons }`, or 409 while the saved list is invalid or pause is unavailable |
+| `POST /api/cost/budgets/<id>/delete` | 200 `{ deleted }`, or 404; deleting a legacy budget also clears its old setting |
+
+Writes need `Content-Type: application/json` (415 otherwise). Responses and validation reasons never expose a file
+path.
 
 ## Fail closed
 
@@ -154,6 +336,7 @@ Everything is under `.data/cost/` (`ZAAFPULSE_DATA` decides where `.data` is). F
 | `billing.json`, `billing.json.bak` | the billing history and its last good copy |
 | `cursors.json`, `cursors.json.bak` | how far the gateway and judge logs were read, and the ledger's first day; and its last good copy |
 | `judge-calls.jsonl` | judge calls that skip the gateway |
+| `budgets.last.json` | the last valid saved budget list and cost-setting context needed to keep it in force |
 | `prices/versions.json`, `prices/<id>.json` | the price versions and a full copy of each |
 
 ### Rebuilding the ledger
@@ -176,6 +359,9 @@ These routes need the dashboard sign-in. A gateway API key, MCP or A2A is never 
 | `GET /api/cost/status` | the collectors, the price version, unpriced and backfilled counts, settings, billing and ledger health |
 | `GET /api/cost/settings` | `{ settings, error, sources, unassigned, keys: [{ id, name }] }` |
 | `POST /api/cost/settings` | 200 `{ settings }` (normalized; today's rows are re-attributed at once), or 400 `{ error, reasons }` |
+| `GET /api/cost/budgets` | the budgets in force, their state, list warnings, guard problems and kept-file status |
+| `POST /api/cost/budgets` | create or replace one budget; 400 for validation, 409 while a hand edit is invalid or pause is unavailable |
+| `POST /api/cost/budgets/<id>/delete` | delete a saved or legacy budget |
 | `GET /api/cost/prices/versions` | `{ current, versions: [{ id, from, at, hash, changed, changedCount }] }` |
 | `POST /api/cost/restate` | 200 `{ correction, overrides }` |
 
@@ -191,7 +377,7 @@ These routes need the dashboard sign-in. A gateway API key, MCP or A2A is never 
 | `prices.problems` | price versions that could not be used |
 | `unpriced` | `{ rows, requests }` with no known price |
 | `backfill` | `{ firstDay, rows }` |
-| `settings.error` | set when the saved settings are invalid and the defaults apply, or when `config.json` does not parse and the pass waits |
+| `settings.error` | set when the saved settings are invalid or `config.json` does not parse: the pass waits |
 | `cursors` | `{ error, problems }`: `error` while the log positions are lost (the gateway and judge lines are paused), `problems` for a recovery from the last good copy |
 | `billing` | `{ error, historyLost, problems }` |
 | `ledger` | `{ badLines, corrections, error, unread }` |
@@ -204,6 +390,22 @@ The demo shows a synthetic ledger held in memory: three cost centers, Claude Cod
 
 ## Known limits
 
+- **Local Claude Code or Codex through a key.** Its own usage is counted from the local logs under source `claude` or
+  `codex`, without the gateway key. A key budget does not count that usage, although once that key budget is used up by
+  other traffic the gateway refuses the local tool's next request through the key.
+- **Concurrent gateway requests can overshoot a block.** There is no reservation. Requests already in flight finish,
+  so the budget may pass its amount by more than one call.
+- **Invalid cost settings delay local spend.** While the cost section or `config.json` does not read, the ledger pass
+  waits. Pending gateway calls use the last valid settings, but local Claude Code and Codex usage is absent from budget
+  spend until the settings are fixed and a pass reads it. The pending gateway calls are kept in memory only: a restart
+  during that wait drops them from every budget until the fix, when the ledger reads them from the gateway log.
+- **Gateway calls just before a restart.** A block counts the gateway calls made since the last ledger pass from
+  memory. After a restart those calls count again only when the first ledger pass reads them from the gateway log,
+  which runs after the first index refresh. Until then a key or global block reached through such calls lets requests
+  through: at most about one pass interval of calls.
+- **A kept list that no longer fits after a restart.** If `config.json` does not parse at startup and the kept list in
+  `budgets.last.json` no longer validates against the settings in force (for example, a hand edit removed a center
+  that a budget names), only the old monthly and key budgets apply, with a warning in `GET /api/cost/budgets`.
 - **Two log rotations between passes.** The gateway log rotates at 10 MB and keeps one older file (`.1`). If it rotates twice between two passes (about a minute apart), the middle file is gone and its lines are not counted.
 - **A crash between two writes** of a pass (the ledger rows, then the log positions) can count that pass's gateway and judge lines twice. The other order would lose them; counting twice was chosen because it is visible and a restate corrects it.
 - **Agent and collaboration models called by a local tool.** Claude Code or Codex on this machine calling an `agent/…` or `collab/…` model through a key is counted twice: once from the tool's logs, and once from the gateway lines of the models the agents call, which are not tagged.

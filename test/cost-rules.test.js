@@ -110,7 +110,7 @@ test('settingsOf: nothing saved is the defaults; an invalid saved section is the
   assert.deepEqual(R.settingsOf(undefined), { value: R.defaults(), error: null });
   const bad = R.settingsOf({ centers: 'nope' });
   assert.deepEqual(bad.value, R.defaults());
-  assert.match(bad.error, /invalid, so the defaults apply/);
+  assert.match(bad.error, /invalid, so the ledger pass waits/);
 });
 
 test('attribution: the key first, then the first matching folder rule, then Unassigned', () => {

@@ -45,7 +45,7 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 | **✓** | *Can I trust what it did?* | Tool-call accuracy that counts only failures the model caused, non-existent targets (paths, edit text, arguments, URLs, packages and commands that did not exist) and how often you had to correct it. |
 | **⚠** | *Did anything unsafe happen?* | Prompt-injection attempts in web and MCP content, secrets that surfaced in tool output, and risky commands such as `rm -rf` or force pushes. |
 | **◈** | *What are my agents doing right now?* | A live 3D office: every session and subagent walks to the room for the tool it is using, waits at the help desk when it needs you, and shows up in a request log, a stream inspector and a timeline. A topology on the Overview shows which tool reaches which router, runtime and provider through ZAAFPulse, and the path of each recent request. |
-| **!** | *Will I hear about it when something goes wrong?* | Monitors on daily cost, the month's projection, cost bursts, tool loops, stuck agents, accuracy, eval pass rates and unsafe content, with alerts in the dashboard, as a desktop notification or a webhook. You can pause the agent behind an alert, or let a cost or loop rule pause it. |
+| **!** | *Will I hear about it when something goes wrong?* | Monitors on cost bursts, tool loops, stuck agents, accuracy, eval pass rates and unsafe content, plus your cost budgets, with alerts in the dashboard, as a desktop notification or a webhook. You can pause the agent behind an alert, or let a cost-burst rule, a loop rule or a budget pause it. |
 | **◉** | *Is my second brain growing?* | One animated map of Obsidian, Logseq, Notion, Tana, Roam, mem.ai, Reflect, Heybrain, a PARA workspace, your RAG knowledge and vector databases: hubs, orphans, PARA lanes, a semantic map by meaning, and a replay of how it grew. |
 | **⌁** | *Can my apps and coding tools use any model through one API?* | An Agent Gateway (beta) on 127.0.0.1: API keys with scopes, budgets and rate limits; OpenAI, Anthropic, Responses and Gemini endpoints over 52 provider presets with fallback routes, quota and a token saver; Claude Code, Codex, Gemini CLI and more connected in one click. |
 | **⚙** | *Can my agents work together, safely?* | In beta: 17 domain agents, an orchestrator, seven collaboration patterns (vote, debate, review, group chat, handoff …) with budgets and traces, 24 ready-made workflows with approval gates, RAG, A2A, and Agent Skills that teach any AI to use all of it. |
@@ -90,7 +90,7 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 <td valign="top">
 
 **Monitors & alerts**<br>
-<sub>Eight rules on cost, quality and agent behaviour, with alerts in the top bar, a desktop notification or a webhook. Pause, resume or stop the agent behind a session, or let a cost or loop rule pause it (off by default). Snooze a rule for an hour or a day.</sub>
+<sub>Six rules on cost, quality and agent behaviour, plus your budgets, with alerts in the top bar, a desktop notification or a webhook. Pause, resume or stop the agent behind a session, or let a cost or loop rule pause it (off by default). Snooze a rule for an hour or a day.</sub>
 
 </td>
 </tr>
@@ -330,7 +330,7 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 <br>
 <table>
 <tr>
-<td width="50%"><img alt="Settings, Monitors: rule cards for daily cost, month projection, cost burn, tool loop, agent stuck and accuracy drop, each with its state, limits, snooze and pause switch" src="docs/assets/screen-monitors.jpg"><br><sub>Monitors: eight rules, each with its state, limits, snooze and auto-pause.</sub></td>
+<td width="50%"><img alt="Settings, Monitors, in an earlier version: rule cards for daily cost and month projection (both since replaced by budgets), cost burn, tool loop, agent stuck and accuracy drop, each with its state, limits, snooze and pause switch" src="docs/assets/screen-monitors.jpg"><br><sub>Monitors: each rule with its state, limits, snooze and auto-pause. The daily cost and month projection cards in this screenshot are budgets now.</sub></td>
 <td width="50%"><img alt="Alerts drawer: a paused-agent banner with Resume and Stop, and recent alerts for cost burn, unsafe content, accuracy drop and month projection" src="docs/assets/screen-alerts.jpg"><br><sub>Alerts: the bell's drawer, with Resume and Stop for a paused agent.</sub></td>
 </tr>
 <tr>
@@ -683,10 +683,10 @@ Shapes, limits, privacy, the API and CI recipes: **[docs/datasets.md](docs/datas
 
 Monitors watch your usage, cost and quality inside the dashboard server and tell you when something looks wrong. The bell in the top bar lists recent alerts, and **Settings → Monitors** has the rules and the channels.
 
-- **Eight rules:** daily cost, month projection, cost burn (per session, per 10 minutes), tool loop, agent stuck, accuracy drop, evaluator pass rate and unsafe content. Each can be switched on or off, has its own limits, and can be snoozed for an hour or a day. A rule with missing input reports *no data* and never triggers.
+- **Six rules:** cost burn (per session, per 10 minutes), tool loop, agent stuck, accuracy drop, evaluator pass rate and unsafe content, plus your cost budgets. Each rule can be switched on or off, has its own limits, and can be snoozed for an hour or a day. A rule with missing input reports *no data* and never triggers.
 - **Channels:** a desktop notification (on by default) and an optional webhook whose URL and headers go to the OS secret store. Neither carries transcript text. Demo mode sends nothing.
 - **Agent control:** pause (`SIGSTOP`), resume or stop the Claude Code or Codex process behind a session from the Trace explorer, the Live monitor or AI Office. Before every signal the process table is read again and the pid and start time must match; every action is written to `.data/agent-audit.jsonl`.
-- **Auto-pause** for daily cost, cost burn and tool loop is off by default. A paused agent is never resumed or stopped automatically.
+- **Auto-pause** for cost burn and tool loop is off by default; a budget pauses only when you set it to. A paused agent is never resumed or stopped automatically.
 - **Where control is off:** server mode, password sign-in, no sign-in, and Docker. Windows has no pause or resume.
 
 Rules, states, channels, safety checks, the API and known limits: **[docs/monitors.md](docs/monitors.md)**.
@@ -804,6 +804,8 @@ ZAAFPulse also keeps a **daily cost ledger** in `.data/cost/`, the base of the C
 - **Cost centers.** A gateway key's center first, then the first folder rule (`~/work/acme/**`) that matches; rule changes apply from today.
 - **Restate** re-prices, re-attributes and re-bills a past range on purpose, as a correction that keeps the original rows.
 - **Display currency** with dated rates you enter; nothing is fetched.
+
+**Budgets** sit on the ledger: global or per cost center, key, project, model, provider or source, by day, week (from Monday) or month, on the usage value or on what was paid, in USD or your display currency. Alerts at your levels (50 and 80 % by default), at 100 % and when the projection passes the amount, in the bell, the desktop or a webhook. A budget can also block matching gateway requests with 402 at once, or pause the local agent that spent the most in its scope and period. The old monthly budget and key budgets are read as budgets. See [docs/cost.md#budgets](docs/cost.md#budgets).
 
 Who counts what, frozen cost, billing, restate, settings, the `/api/cost/*` routes (dashboard sign-in only) and the known limits: **[docs/cost.md](docs/cost.md)**.
 

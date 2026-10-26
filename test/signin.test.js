@@ -359,7 +359,10 @@ test('server: local sign-in by default; sign-in page loads; foreign origins refu
         (err) => (err ? reject(err) : resolve()),
       ),
     );
-    for (let i = 0; i < 40 && !fs.existsSync(argv); i++) await new Promise((r) => setTimeout(r, 50));
+    // The fake opener may run after the command returns: poll for what it wrote, up to 10 s under a loaded machine.
+    const written = () => fs.existsSync(argv) && fs.readFileSync(argv, 'utf8').trim() !== '';
+    for (const until = Date.now() + 10000; !written() && Date.now() < until; )
+      await new Promise((r) => setTimeout(r, 50));
     const opened = fs.readFileSync(argv, 'utf8').trim();
     assert.ok(!/code=/.test(opened), `no code on the command line: ${opened}`);
     assert.ok(opened.startsWith(fs.realpathSync(s.data)) || opened.startsWith(s.data), opened);
