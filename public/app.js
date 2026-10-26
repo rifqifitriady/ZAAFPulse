@@ -728,6 +728,7 @@ function matches(...fields) {
   );
 }
 
+const SETTINGS_BUDGETS_DOC = 'https://github.com/rifqifitriady/ZAAFPulse/blob/main/docs/cost.md#budgets';
 async function viewSettings(el) {
   const cfg = await api('/api/config');
   const theme = store.get('theme', 'system');
@@ -736,7 +737,8 @@ async function viewSettings(el) {
     <div class="card"><div class="card-head"><h3>Profile & budget</h3></div>
       <form class="form" id="profile-form">
         <label>Display name<input class="input" name="userName" value="${esc(cfg.userName)}" maxlength="60"></label>
-        <label>Monthly budget (USD, API-equivalent)<input class="input" name="monthlyBudgetUSD" type="number" min="0" step="1" value="${cfg.monthlyBudgetUSD}"></label>
+        <label>Monthly budget (USD, API-equivalent)<input class="input" name="monthlyBudgetUSD" type="number" min="0" step="1" value="${Number(cfg.monthlyBudgetUSD) || 0}" ${cfg.monthlyBudgetManaged ? 'disabled' : ''}></label>
+        <p class="muted" style="margin:-4px 0 0">${cfg.monthlyBudgetManaged ? 'This budget was edited in Budgets, so it is changed there now.' : 'Read as the monthly budget in Budgets, with alerts at 50 and 80 %.'} <a href="${SETTINGS_BUDGETS_DOC}" target="_blank" rel="noopener">Manage in Budgets</a></p>
         <label>Obsidian vault path<input class="input" name="vaultPath" value="${esc((cfg.vaultPaths || [])[0] || '')}" placeholder="Empty = the vault Obsidian has open"></label>
         <label>Theme<select class="input" name="theme">${['system', 'light', 'dark'].map((t) => `<option ${t === theme ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
         <div><button class="btn" type="submit">Save</button> <span class="saved" id="profile-saved"></span></div>
@@ -760,7 +762,7 @@ async function viewSettings(el) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         userName: f.get('userName'),
-        monthlyBudgetUSD: Number(f.get('monthlyBudgetUSD')),
+        ...(cfg.monthlyBudgetManaged ? {} : { monthlyBudgetUSD: Number(f.get('monthlyBudgetUSD')) }),
         vaultPath: f.get('vaultPath'),
       }),
     });

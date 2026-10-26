@@ -44,7 +44,7 @@ const { createMonitorState } = require('./lib/monitors/state');
 const { createChannels, checkWebhookUrl, parseHeaders } = require('./lib/monitors/channels');
 const { createMonitorApi } = require('./lib/monitors/api');
 const { createMonitors, createAfterRefresh } = require('./lib/monitors');
-const { createAgentControl } = require('./lib/agents/control');
+const { createAgentControl, detectDocker } = require('./lib/agents/control');
 const runtimeRegistry = require('./lib/runtimes/registry');
 const { createRuntimeState, jsonFile } = require('./lib/runtimes/state');
 const { createRuntimeControl } = require('./lib/runtimes/control');
@@ -52,6 +52,8 @@ const { createModelMemory } = require('./lib/runtimes/models');
 const { createRuntimeApi } = require('./lib/runtimes/api');
 const { createCost } = require('./lib/cost');
 const { createCostApi } = require('./lib/cost/api');
+const { createBudgetService } = require('./lib/cost/budget-service');
+const { createGuard } = require('./lib/cost/guard');
 const { isRef } = require('./lib/secrets');
 const { createPriceSync } = require('./lib/price-sync');
 const { createOpenRouter } = require('./lib/openrouter');
@@ -254,17 +256,19 @@ function rawConfig() {
 // one top-level section is replaced and the cache is refreshed from what was written. Demo mode keeps it in memory.
 // config.json is read again here, not from the cache: rawConfig() reads a file that does not parse as {}, and saving
 // on top of that would drop every other section. Such a file (often a hand edit gone wrong) is refused and left as it
-// is. The write goes through a temp file of its own (two saves never share one) at mode 0600, then a rename. Every
-// failure throws a status-500 error whose message holds no path, so each API can pass it on.
+// is, with a status-409 error (CONFIG_BROKEN: fix the file first). The write goes through a temp file of its own (two
+// saves never share one) at mode 0600, then a rename; a failure there throws a status-500 error. No message holds a
+// path, so each API can pass it on. saveConfigSections(patch) replaces several top-level sections in one write.
 const CONFIG_UNSAVED = 'the settings could not be saved';
-function saveConfigSection(name, value) {
+const CONFIG_BROKEN = 'config.json could not be read; fix it first';
+function saveConfigSections(patch) {
   if (DEMO) {
-    rawCache.value = { ...rawCache.value, [name]: value };
+    rawCache.value = { ...rawCache.value, ...patch };
     return;
   }
-  const refuse = (message, err) => {
+  const refuse = (message, err, status = 500) => {
     console.error(`config: ${message}${err && err.code ? ` (${err.code})` : ''}`);
-    return Object.assign(new Error(message), { status: 500 });
+    return Object.assign(new Error(message), { status });
   };
   let text = '';
   try {
@@ -279,8 +283,8 @@ function saveConfigSection(name, value) {
     base = null;
   }
   if (!base || typeof base !== 'object' || Array.isArray(base))
-    throw refuse(`${CONFIG_UNSAVED}: config.json does not parse as an object; fix it by hand first`);
-  const raw = { ...base, [name]: value };
+    throw refuse(CONFIG_BROKEN, null, 409);
+  const raw = { ...base, ...patch };
   const tmpFile = `${CONFIG_FILE}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
   try {
     fs.writeFileSync(tmpFile, JSON.stringify(raw, null, 2), { mode: 0o600, flag: 'wx' });
@@ -294,6 +298,27 @@ function saveConfigSection(name, value) {
   } catch {
     rawCache = { mtime: 0, value: raw }; // saved; the next read checks the file again
   }
+}
+// config.json is there but does not read as an object (often a hand edit gone wrong). A save over it would drop every
+// other section (the budgets, the cost centers), so Settings and the price editor refuse with 409 until it is fixed.
+function configBroken() {
+  let text = '';
+  try {
+    text = fs.readFileSync(CONFIG_FILE, 'utf8');
+  } catch (e) {
+    return e.code !== 'ENOENT';
+  }
+  if (!text.trim()) return false;
+  try {
+    const v = JSON.parse(text);
+    return !v || typeof v !== 'object' || Array.isArray(v);
+  } catch {
+    return true;
+  }
+}
+// One section, for every settings page. A budget save writes two top-level fields at once (budget-service.js).
+function saveConfigSection(name, value) {
+  return saveConfigSections({ [name]: value });
 }
 // The cost section for the ledger, or false when config.json is there but does not parse as an object. rawConfig()
 // reads such a file as {} for every other caller; the ledger must not take that for "no cost settings", or it would
@@ -362,6 +387,17 @@ otel.init({
   sink: recorder,
 });
 const gatewaySecret = secretResolver({ store: DEMO ? () => {} : keychainStore });
+// Cost Control budgets: the gateway asks the guard before each request and reports each call to the budget service.
+// Both are made with the ledger below, after the gateway; until then (startup, before the server listens) nothing is
+// refused.
+let costBudgets = null;
+let costGuard = null;
+const budgetGuard = {
+  check: (ctx) => (costGuard ? costGuard.check(ctx) : null),
+  keyLimited: (keyId) => !!costGuard && costGuard.keyLimited(keyId),
+  record: (entry) => costBudgets && costBudgets.record(entry),
+  failed: () => costGuard && costGuard.failed(),
+};
 const gateway = createGateway({
   dataDir: DEMO ? demoDir : path.join(DIR, '.data'),
   ...(DEMO ? { fetchImpl: demoGw.createDemoFetch(), toolsHome: demoDir } : {}),
@@ -378,6 +414,7 @@ const gateway = createGateway({
   // Agent card and /skills advertise the address a client used, with the scheme it really has.
   publicUrl: process.env.ZAAFPULSE_PUBLIC_URL || '',
   trustProxy: process.env.ZAAFPULSE_TRUST_PROXY === '1',
+  budgetGuard,
 });
 
 // Trace explorer: every log source behind opaque keys and ids. Content (prompts, replies, tool output) is off
@@ -401,7 +438,8 @@ const trace = createTrace({
 // Cost ledger (Cost Control 1): daily cost rows from every source in .data/cost/, priced with the version of their day
 // and attributed to cost centers (config.json "cost"). Demo: a synthetic ledger in memory; no files, no passes.
 const costDemo = DEMO ? demo.costDemo() : null;
-if (DEMO) rawCache.value = { ...rawCache.value, cost: costDemo.settings };
+if (DEMO)
+  rawCache.value = { ...rawCache.value, cost: costDemo.settings, monthlyBudgetUSD: demo.config.monthlyBudgetUSD };
 const cost = createCost({
   dir: DEMO ? null : path.join(DIR, '.data', 'cost'),
   gatewayLog: DEMO ? null : path.join(DIR, '.data', 'gateway-usage.jsonl'),
@@ -416,11 +454,52 @@ const cost = createCost({
   home: os.homedir(),
   demo: costDemo,
 });
+// Budgets (Cost Control 2): config.json "cost.budgets" plus the old monthlyBudgetUSD and key budgets read as budgets.
+// The service reads the same settings as the ledger (costSettings), so both see one view of config.json.
+costBudgets = createBudgetService({
+  getSettings: costSettings,
+  getLegacy: () => ({ monthlyBudgetUSD: rawConfig().monthlyBudgetUSD, keys: gateway.keys.list() }),
+  cost,
+  home: os.homedir(),
+  demo: costDemo ? { noData: costDemo.budgetNoData } : null,
+  // The last valid list, kept across restarts (the demo keeps nothing on disk).
+  lastFile: DEMO ? null : path.join(DIR, '.data', 'cost', 'budgets.last.json'),
+});
+costGuard = createGuard({ service: costBudgets });
+// A budget save: the list into config.json "cost", and the old setting it replaces cleared in the same write
+// (monthlyBudgetUSD) or right after it (a key's budgetUSD, in keys.json). A saved budget wins over the old setting of
+// its id, so a crash between the two writes never counts a budget twice.
+function saveBudgets(list, { clearMonthly = false, clearKey = null } = {}) {
+  const raw = rawConfig();
+  const c = raw && raw.cost && typeof raw.cost === 'object' && !Array.isArray(raw.cost) ? raw.cost : {};
+  saveConfigSections({ cost: { ...c, budgets: list }, ...(clearMonthly ? { monthlyBudgetUSD: 0 } : {}) });
+  if (clearMonthly && !DEMO) config = loadConfig();
+  if (clearKey) gateway.keys.update(clearKey, { budgetUSD: null });
+}
+// A pause budget needs agent control, as an auto-pause rule does (lib/monitors/api.js): off in server mode, with a
+// password or no sign-in, and in Docker.
+const budgetPauseOff = () =>
+  AGENTS_OFF === 'no-sign-in'
+    ? 'agent control is off without a dashboard sign-in'
+    : AGENTS_OFF
+      ? 'agent control is off on this server'
+      : !DEMO && detectDocker()
+        ? 'agent control is off in Docker'
+        : null;
+// After any change the budgets read: a fresh ledger read and a budget pass, so an alert or a lifted block is current.
+const budgetsChanged = () => {
+  costBudgets.invalidate();
+  monitors.tickBudgets().catch(() => {});
+};
 const costApi = createCostApi({
   cost,
   settings: { get: costSettings, save: (value) => saveConfigSection('cost', value) },
   listKeys: () => gateway.keys.list(),
   home: os.homedir(),
+  budgets: costBudgets,
+  budgetStore: { save: saveBudgets },
+  pauseOff: budgetPauseOff,
+  onChange: () => budgetsChanged(),
 });
 
 // Local evals: judge models read the masked text of finished turns, one queue, local first.
@@ -557,6 +636,9 @@ const monitorChannels = createChannels({
 const AGENTS_OFF =
   SERVER_MODE || auth.mode === 'password' ? 'server' : auth.mode === 'none' && !DEMO ? 'no-sign-in' : false;
 const agentControl = createAgentControl({ dataDir: monitorDir, serverMode: AGENTS_OFF, log: (m) => console.error(m) });
+// daily_cost and month_projection became budgets (legacy-monthly): they are not evaluated, listed or changed, so
+// nothing alerts twice.
+const RETIRED_RULES = ['daily_cost', 'month_projection'];
 const monitors = createMonitors({
   indexer,
   office,
@@ -567,6 +649,9 @@ const monitors = createMonitors({
   control: agentControl,
   log: (m) => console.error(m),
   demo: DEMO,
+  budgets: costBudgets,
+  retired: RETIRED_RULES,
+  home: os.homedir(),
 });
 // The routes: rules, channels, alerts and agent control. Demo serves a seeded store of its own (mixed states, five
 // alerts) so the page always has something to show; the engine keeps evaluating into its own file.
@@ -635,6 +720,7 @@ const monitorApi = createMonitorApi({
   agentsOff: AGENTS_OFF,
   notifyOff: NOTIFY_OFF,
   home: os.homedir(),
+  retired: RETIRED_RULES,
 });
 // Local model servers (lib/runtimes): Start and Stop on the AI Office cards, and the owner's own runtimes in
 // config.json "localRuntimes" (Settings → Local models). Off wherever agent control is off (server mode, password
@@ -697,10 +783,12 @@ const monitorTick = () =>
     .catch(() => console.error('monitors: the aggregate pass failed'));
 // The aggregate pass has to run on the refreshed index: each call waits for the refresh to end (lib/monitors).
 const monitorTickAfterIndex = createAfterRefresh({ indexing: () => indexer.state.indexing, run: monitorTick });
-// The cost ledger pass reads the refreshed index too; a failure never breaks a refresh.
+// The cost ledger pass reads the refreshed index too; the budget service drops the gateway calls it read, then the
+// budgets are evaluated (alerts, pause). A failure never breaks a refresh.
 const costTick = () =>
   Promise.resolve()
-    .then(() => cost.update())
+    .then(() => costBudgets.pass(() => cost.update()))
+    .then(() => monitors.tickBudgets())
     .catch(() => console.error('cost: the ledger pass failed'));
 const costTickAfterIndex = createAfterRefresh({ indexing: () => indexer.state.indexing, run: costTick });
 
@@ -1035,7 +1123,7 @@ const handler = async (req, res) => {
       const range = r === 'all' ? 'all' : Math.min(365, Math.max(1, parseInt(r, 10) || 30));
       return send(res, 200, {
         ...getSummary(range),
-        config: { userName: config.userName, monthlyBudgetUSD: config.monthlyBudgetUSD, host: HOSTNAME },
+        config: { userName: config.userName, monthlyBudgetUSD: costBudgets.monthly().monthlyBudgetUSD, host: HOSTNAME },
         index: indexer.state,
       });
     }
@@ -1256,15 +1344,18 @@ const handler = async (req, res) => {
     }
     if (url.pathname === '/api/config' && req.method === 'GET') {
       const { integrations, ...rest } = config;
-      return send(res, 200, rest);
+      return send(res, 200, { ...rest, ...costBudgets.monthly() });
     }
     if (url.pathname === '/api/config' && req.method === 'POST') {
       if (!(req.headers['content-type'] || '').startsWith('application/json'))
         return send(res, 415, { error: 'json only' });
       const body = JSON.parse(await readBody(req));
+      if (!DEMO && configBroken()) return send(res, 409, { error: CONFIG_BROKEN });
+      // Once the legacy monthly budget is a saved budget, the Settings field is read-only: a posted value is ignored.
+      const managed = costBudgets.monthly().monthlyBudgetManaged;
       const next = { ...config };
       if (typeof body.userName === 'string') next.userName = body.userName.slice(0, 60);
-      if (Number.isFinite(body.monthlyBudgetUSD) && body.monthlyBudgetUSD >= 0)
+      if (!managed && Number.isFinite(body.monthlyBudgetUSD) && body.monthlyBudgetUSD >= 0)
         next.monthlyBudgetUSD = body.monthlyBudgetUSD;
       if (typeof body.vaultPath === 'string')
         next.vaultPaths = body.vaultPath.trim() ? [require('./lib/platform').expandHome(body.vaultPath)] : [];
@@ -1279,27 +1370,24 @@ const handler = async (req, res) => {
         }
         next.pricing = p;
       }
-      if (DEMO) config = next;
-      else {
-        // Write the stored settings only, never the merged runtime prices.
-        let raw = {};
-        try {
-          raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-        } catch {
-          /* new file */
-        }
-        Object.assign(raw, {
+      if (DEMO) {
+        config = next;
+        rawCache.value = { ...rawCache.value, monthlyBudgetUSD: next.monthlyBudgetUSD }; // the demo's legacy budget
+      } else {
+        // Write the stored settings only, never the merged runtime prices. saveConfigSections keeps every other section
+        // and refuses a file that does not parse.
+        saveConfigSections({
           userName: next.userName,
           monthlyBudgetUSD: next.monthlyBudgetUSD,
           vaultPaths: next.vaultPaths,
+          ...(body.pricing && typeof body.pricing === 'object' ? { pricing: next.pricing } : {}),
         });
-        if (body.pricing && typeof body.pricing === 'object') raw.pricing = next.pricing;
-        fs.writeFileSync(CONFIG_FILE, JSON.stringify(raw, null, 2));
         config = loadConfig();
       }
       memo.clear();
+      budgetsChanged();
       const { integrations, ...rest } = config;
-      return send(res, 200, rest);
+      return send(res, 200, { ...rest, ...costBudgets.monthly() });
     }
     if (url.pathname === '/api/openrouter') {
       const fn = {
@@ -1340,6 +1428,7 @@ const handler = async (req, res) => {
         await priceSync.refresh();
         return send(res, 200, { status: priceSync.status() });
       }
+      if (configBroken()) return send(res, 409, { error: CONFIG_BROKEN });
       let raw = {};
       try {
         raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
@@ -1365,9 +1454,7 @@ const handler = async (req, res) => {
         delete manual[key];
         sync.pinned = sync.pinned.filter((k) => k !== key);
       } else return send(res, 400, { error: 'unknown action' });
-      raw.pricing = manual;
-      raw.pricingSync = sync;
-      fs.writeFileSync(CONFIG_FILE, JSON.stringify(raw, null, 2));
+      saveConfigSections({ pricing: manual, pricingSync: sync });
       config = loadConfig();
       memo.clear();
       insightMemo.clear();
@@ -1415,7 +1502,14 @@ const handler = async (req, res) => {
         return send(res, 200, await integrationConfig.test(body));
       }
       if (DEMO) return send(res, 200, { errors: ['Demo mode: changes are not saved.'] });
-      const r = url.pathname.endsWith('/save') ? integrationConfig.save(body) : integrationConfig.remove(body.id);
+      let r;
+      try {
+        r = url.pathname.endsWith('/save') ? integrationConfig.save(body) : integrationConfig.remove(body.id);
+      } catch (err) {
+        // 409 while config.json does not parse (it is never written over), 500 when the write failed: path-free.
+        if (err && (err.status === 409 || err.status === 500)) return send(res, err.status, { error: err.message });
+        throw err;
+      }
       if (r.errors) return send(res, 200, r);
       config = loadConfig(); // keep Settings saves from writing back a stale integrations list
       if (url.pathname.endsWith('/delete')) return send(res, 200, r);

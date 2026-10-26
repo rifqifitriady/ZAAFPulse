@@ -285,12 +285,12 @@ test("attribution: the key's center, then the first matching folder rule, then U
   assert.equal(centers('2026-10-22')['claude ~/play'], 'work');
 });
 
-test('an invalid cost section means the defaults and the status says so; a failing collector stops nothing else', () => {
-  const r = rig({ settings: { centers: 'nope' } });
+test('a failing collector stops nothing else, and the status holds no path', () => {
+  const r = rig();
   fs.mkdirSync(r.gatewayLog); // a folder where the log should be: reading it fails
   r.st.entries.push(file('a', [ev(at(22), 'm1')]));
   const st = r.cost.update();
-  assert.match(st.settings.error, /invalid/);
+  assert.equal(st.settings.error, null);
   assert.match(st.collectors.gateway.error, /^the gateway log could not be read \(E[A-Z]+\)$/);
   assert.equal(st.collectors.local.error, null);
   assert.equal(rowsOf(r.cost, '2026-10-22', '2026-10-22', ['source']).length, 1);
@@ -972,4 +972,53 @@ test('a config.json that does not parse: the pass waits; billing, centers and pr
   for (const d of ['2026-10-21', '2026-10-22', '2026-10-23']) assert.equal(b[d].gateway, 'plan', d);
   near(planOf(r.cost, '2026-10-22', 'gateway')[0].billedUSD, 1);
   assert.ok(r.cost.restate({ from: '2026-10-21', to: '2026-10-22', reason: 'check' }));
+});
+
+test('an invalid cost section: the pass waits across a day boundary, then attributes with the fixed rules', () => {
+  const settings = { centers: [{ id: 'acme', name: 'Acme' }], keyCenters: { key_a: 'acme' } };
+  const r = rig({ settings, day: 21 });
+  fs.writeFileSync(r.gatewayLog, gwLine(at(21, 1)));
+  r.st.entries.push(file('a', [ev(at(21, 2), 'm1')]));
+  r.cost.update();
+  const before = fs.readFileSync(path.join(r.costDir, 'ledger-2026-10.jsonl'), 'utf8');
+  r.st.settings = { ...settings, centers: 'nope' }; // config.json parses; its cost section does not validate
+  for (const [day, h] of [
+    [22, 1],
+    [23, 1], // the 22nd closes meanwhile
+  ]) {
+    r.st.t = at(day, h);
+    fs.appendFileSync(r.gatewayLog, gwLine(at(day, h)));
+    r.st.entries.push(file(`l${day}`, [ev(at(day, h), `m${day}`)]));
+    const st = r.cost.update();
+    r.cost.retag();
+    assert.equal(
+      st.settings.error,
+      'the cost settings in config.json are invalid, so the ledger pass waits until they are fixed',
+    );
+    assert.equal(fs.readFileSync(path.join(r.costDir, 'ledger-2026-10.jsonl'), 'utf8'), before, 'no row written');
+    assert.deepEqual(requestsBy(r.cost, '2026-10-22', 'source'), {});
+    assert.throws(
+      () => r.cost.restate({ from: '2026-10-21', to: '2026-10-21', reason: 'x' }),
+      (e) => e.status === 409 && /cost settings in config\.json are invalid/.test(e.message),
+    );
+  }
+  r.st.settings = { centers: [...settings.centers, { id: 'beta', name: 'Beta' }], keyCenters: { key_a: 'beta' } };
+  r.st.t = at(23, 2);
+  assert.equal(r.cost.update().settings.error, null);
+  const closed = { acme: 1, unassigned: 1 };
+  assert.deepEqual(requestsBy(r.cost, '2026-10-21', 'center'), closed, 'a closed day keeps its centers');
+  assert.deepEqual(requestsBy(r.cost, '2026-10-22', 'center'), { beta: 1, unassigned: 1 }, 'late lines, fixed rules');
+  assert.deepEqual(requestsBy(r.cost, '2026-10-23', 'center'), { beta: 1, unassigned: 1 });
+});
+
+test('billingFor hands out a copy of { mode, assumed }, never the history itself', () => {
+  const r = rig({ settings: { billing: { claude: MAX } } });
+  r.st.entries.push(file('a', [ev(at(22), 'm1')]));
+  r.cost.update();
+  const b = r.cost.billingFor('claude', '2026-10-22');
+  assert.deepEqual(b, { mode: 'plan', assumed: false });
+  b.mode = 'metered';
+  assert.equal(r.cost.billingFor('claude', '2026-10-22').mode, 'plan', 'a caller cannot change the history');
+  assert.equal(r.cost.billingHistory().entries.find((e) => e.source === 'claude').billing.mode, 'plan');
+  assert.deepEqual(r.cost.billingFor('codex', '2026-10-22'), { mode: 'metered', assumed: false });
 });

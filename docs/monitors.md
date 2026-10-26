@@ -6,12 +6,13 @@ The bell in the top bar shows open alerts. Its drawer lists recent alerts, and *
 
 ## Rules
 
-Eight rules ship with ZAAFPulse. Each can be switched on or off and has its own limits. A rule that is on its default setting follows the table. Your own choices are kept in `.data/monitors.json`.
+Six rules ship with ZAAFPulse. Each can be switched on or off and has its own limits. A rule that is on its default setting follows the table. Your own choices are kept in `.data/monitors.json`.
+
+`daily_cost` and `month_projection` have been replaced by [budgets](cost.md#budgets). They are no longer evaluated,
+listed or changed; their old states and alerts remain as history.
 
 | Rule | Triggers when | Default | On by default | Auto-pause |
 |---|---|---|---|---|
-| `daily_cost` | Today's spend passes the daily limit | `limitUSD`: the monthly budget / 30 | only with a monthly budget | yes |
-| `month_projection` | This month's projected cost passes the monthly budget, from the 4th of the month | the monthly budget | only with a monthly budget | no |
 | `cost_burn` | One session spent more than the limit in the last 10 minutes | `maxUSD`: 5 | no | yes |
 | `tool_loop` | A session shows a loop in the last 10 minutes | `maxCalls`: 50 (no effect yet, see [Known limits](#known-limits)) | yes | yes |
 | `agent_stuck` | An agent is working or thinking but wrote no new log line | `stuckMin`: 10 | no | no |
@@ -22,8 +23,6 @@ Eight rules ship with ZAAFPulse. Each can be switched on or off and has its own 
 Notes:
 
 - Rules are either **live** (one instance per session: `cost_burn`, `tool_loop`, `agent_stuck`) or **aggregate** (one instance for everything).
-- `daily_cost` and `month_projection` need a monthly budget, set in Settings. Without one they stay off. Set `limitUSD` on `daily_cost` to use a limit of your own.
-- `month_projection` reports `no_data` for the first three days of each month (local time). A projection from a few hours of spend is noise: $1 by 00:30 on the 1st projects to about $1,500. The projection and the budget are still shown.
 - `accuracy_drop` reports `no_data` unless today and the previous 7 days each rest on at least `minSamples` tool results (default 20, the same as `eval_pass_rate`). One fault among the morning's first ten results would otherwise be a ten-point drop.
 - `eval_pass_rate` looks at the worst evaluator that has at least `minSamples` results. Evaluators with fewer are ignored.
 - `unsafe_content` counts a secret leak, or a prompt injection that came from outside (a tool result or a file, not from you).
@@ -49,6 +48,12 @@ Live rules are checked every 5 seconds. Aggregate rules are checked after each i
 
 Alerts are kept in `.data/alerts.jsonl` (newest 2000). No alert holds transcript text. It holds the rule, two numbers, and the session title with secrets masked.
 
+Budget alerts use rule `budget` and states `ok`, `warn_<n>` and `exceeded` (see [Budgets](cost.md#states-and-alerts)).
+They are sent only when the level changes; there are no reminders, and a projection alert is sent at most once per
+period. The bell and the drawer show the budget's name and period. The webhook gets the state but never the name:
+`sessionId` is `null` for every budget, so a receiver cannot tell budgets apart, and a projection alert arrives with
+`state` equal to `previous` (for example `warn_50`/`warn_50`).
+
 ## Channels
 
 Two channels, both optional and both free of content:
@@ -60,17 +65,19 @@ The webhook body is these seven fields and nothing else:
 
 ```json
 {
-  "rule": "daily_cost",
-  "state": "triggered",
-  "previous": "ok",
-  "value": 12.5,
-  "threshold": 10,
+  "rule": "budget",
+  "state": "warn_80",
+  "previous": "warn_50",
+  "value": 84.2,
+  "threshold": 80,
   "sessionId": null,
   "ts": 1790000000000
 }
 ```
 
-`state` and `previous` are `ok`, `triggered`, `no_data` or `snoozed`. `sessionId` is the raw session id for live rules, and `null` for aggregate rules.
+For fixed rules, `state` and `previous` are `ok`, `triggered`, `no_data` or `snoozed`; a budget also sends its
+`warn_<n>` or `exceeded` state. `sessionId` is the raw session id for live rules, and `null` for aggregate rules and
+budgets.
 
 The URL and the headers (for a token) are secrets. Paste them in **Settings → Monitors**: they go to the OS secret store, and `config.json` keeps only a reference, as described in [Storing a secret](integrations.md#storing-a-secret):
 
@@ -129,9 +136,16 @@ On macOS the working folder comes from `lsof`, on Linux from `/proc`. On Windows
 
 ### Auto-pause
 
-For `daily_cost`, `cost_burn` and `tool_loop` you can turn on **pause the agent automatically**. It is off by default. When one of these triggers, ZAAFPulse looks for the one process behind the session and pauses it, once per trigger episode. The outcome becomes an alert in the bell: paused, or why not (several matching processes, none, not on Windows, session not indexed yet, process gone or changed). A restart does not pause the same episode twice, and an agent you resumed stays running.
+For `cost_burn` and `tool_loop` you can turn on **pause the agent automatically**. It is off by default. When one of
+these triggers, ZAAFPulse looks for the one process behind the session and pauses it, once per trigger episode. The
+outcome becomes an alert in the bell: paused, or why not (several matching processes, none, not on Windows, session
+not indexed yet, process gone or changed). A restart does not pause the same episode twice, and an agent you resumed
+stays running.
 
-`daily_cost` has no session of its own. It pauses the costliest session of the day that is still running. This is a simplification chosen on purpose.
+A budget with `enforce: "pause"` uses the same controls. Once per budget period, it pauses the running session that
+spent the most in the budget's scope and period, on the budget's measure. Without a known home folder, project and
+center budgets pause nothing and say so once. It never pauses on `no_data` and never resumes the agent. See
+[Budgets → Pause](cost.md#pause).
 
 ### Where control is off
 
@@ -172,7 +186,7 @@ All routes are behind the dashboard sign-in. They are never open to gateway API 
 ## Known limits
 
 - **Too many tool calls in one turn does not fire.** The `tool_loop` rule currently triggers only on loop signals the index finds. The per-turn call count is not measured yet, so `maxCalls` has no effect. Settings shows no input for it; the API still accepts it.
-- **Quiet starts.** `month_projection` stays `no_data` for the first three days of a month, and `accuracy_drop` until today and the previous 7 days each have 20 tool results (`minSamples`).
+- **Quiet starts.** `accuracy_drop` stays `no_data` until today and the previous 7 days each have 20 tool results (`minSamples`).
 - **No statistical detection.** The rules compare numbers to limits. They do not learn a baseline.
 - **Local only.** Agents on other machines, and remote paging, are out of scope.
 - **Windows:** no pause, no resume, and no session-to-process link. Stop may fail on console apps.
