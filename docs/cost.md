@@ -178,7 +178,9 @@ saved budget invalid; edit or delete that budget first.
 If `cost.budgets` does not validate, or `config.json` does not parse, the last valid list stays in force. It is kept in
 `.data/cost/budgets.last.json`, so it also survives a restart. If there is no valid kept list, only the old monthly and
 key budgets apply. `GET /api/cost/budgets` reports the warning and validation reasons; save and delete answer 409 until
-the hand edit is fixed. A valid list always replaces the kept list.
+the hand edit is fixed. A valid list always replaces the kept list. While `config.json` does not parse, Settings and the
+price editor do not save either: they answer 409 `config.json could not be read; fix it first`, so the file (and the
+budgets in it) is never overwritten.
 
 ### What a budget counts
 
@@ -232,7 +234,8 @@ gateway calls recorded since the last ledger pass, so a budget blocks at the nex
 - **Lift.** A new period or a raised amount lifts the block at the next request.
 - **Fail open.** When spent cannot be computed (the budget is `no_data`, the ledger read throws, the list does not
   read), the guard lets the request through and reports why under `guard.error` and `guard.problems` in
-  `GET /api/cost/budgets`, path-free.
+  `GET /api/cost/budgets`, path-free. When the check itself fails, the request goes through too, and
+  `the budget check failed, so requests are allowed` is listed with `budget: null` until a check works again.
 
 The guard reads the budget list once for each route target it checks, so a route with several targets costs a few more
 reads per request; a route has a handful of targets at most.
@@ -247,11 +250,18 @@ is `exceeded`, ZAAFPulse pauses one local Claude Code or Codex session, once per
   (a source, project or center budget counts only sessions in its scope). For a `billed` budget, days on which the
   session's source was on a plan count as zero. The sessions are ranked with today's list prices; this only picks the
   target and changes no figure. A session with nothing spent in scope is never paused.
-- **Once per period.** After one attempt (paused or not) the budget does not pause again until its next period. A
-  budget that becomes exceeded before the server has read the running sessions acts on the first live pass.
-- **No candidate** (no running session in scope has spent anything this period) is reported once per period, in the
-  bell. When the home folder is not known, project and center budgets cannot match a session's folder: they pause
-  nothing and say so once, path-free. Source, model and global budgets still pause.
+- **Once per period, once the agent was looked up.** When the process behind the chosen session has been looked up,
+  the period is used up whatever the outcome (paused, no matching process, several, refused): the budget does not
+  pause again until its next period. Until then it keeps looking. With no running session in scope, a session not
+  indexed yet, or a process table that does not read, nothing is used up, and a later pass can pause a session that
+  starts running later in the period. A budget that becomes exceeded before the server has read the running sessions
+  acts on the first live pass.
+- **A change wins.** If the budget is saved while its agent is being looked up (pause turned off, another scope,
+  measure or period, or no longer exceeded), nothing is signalled and nothing is used up; the next pass decides with
+  the budget as it is now.
+- **No candidate** (no running session in scope has spent anything this period) is reported once in the bell, and
+  the budget keeps looking. When the home folder is not known, project and center budgets cannot match a session's
+  folder: they pause nothing and say so once, path-free. Source, model and global budgets still pause.
 - **Never on `no_data`**, and a paused agent is never resumed automatically.
 
 Every rule of [agent control](monitors.md#agent-control) applies: the process is verified again before the signal,
@@ -378,6 +388,13 @@ The demo shows a synthetic ledger held in memory: three cost centers, Claude Cod
   waits. Pending gateway calls use the last valid settings, but local Claude Code and Codex usage is absent from budget
   spend until the settings are fixed and a pass reads it. The pending gateway calls are kept in memory only: a restart
   during that wait drops them from every budget until the fix, when the ledger reads them from the gateway log.
+- **Gateway calls just before a restart.** A block counts the gateway calls made since the last ledger pass from
+  memory. After a restart those calls count again only when the first ledger pass reads them from the gateway log,
+  which runs after the first index refresh. Until then a key or global block reached through such calls lets requests
+  through: at most about one pass interval of calls.
+- **A kept list that no longer fits after a restart.** If `config.json` does not parse at startup and the kept list in
+  `budgets.last.json` no longer validates against the settings in force (for example, a hand edit removed a center
+  that a budget names), only the old monthly and key budgets apply, with a warning in `GET /api/cost/budgets`.
 - **Two log rotations between passes.** The gateway log rotates at 10 MB and keeps one older file (`.1`). If it rotates twice between two passes (about a minute apart), the middle file is gone and its lines are not counted.
 - **A crash between two writes** of a pass (the ledger rows, then the log positions) can count that pass's gateway and judge lines twice. The other order would lose them; counting twice was chosen because it is visible and a restate corrects it.
 - **Agent and collaboration models called by a local tool.** Claude Code or Codex on this machine calling an `agent/…` or `collab/…` model through a key is counted twice: once from the tool's logs, and once from the gateway lines of the models the agents call, which are not tagged.
