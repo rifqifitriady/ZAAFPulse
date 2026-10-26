@@ -250,7 +250,7 @@ test('budgets over HTTP: sign-in only; a key budget answers 402 at once; a legac
   }
 });
 
-test('budgets over HTTP: a hand-broken config.json is never overwritten by a Settings or a price save', async () => {
+test('budgets over HTTP: a hand-broken config.json is never overwritten by a Settings, price or integration save', async () => {
   const data = tmp();
   const blk = { id: 'blk', name: 'Everything', scope: 'global', period: 'month', amount: 5, enforce: 'block' };
   fs.writeFileSync(
@@ -274,6 +274,8 @@ test('budgets over HTTP: a hand-broken config.json is never overwritten by a Set
       ['/api/config', { userName: 'x', monthlyBudgetUSD: 5 }],
       ['/api/prices', { action: 'set', key: 'llama-9', price: { input: 1 } }],
       ['/api/prices', { action: 'toggle', enabled: true }],
+      ['/api/integrations/save', { id: 'c', type: 'router', values: { flavor: '9router' } }],
+      ['/api/integrations/delete', { id: 'c' }],
     ];
     for (const [route, body] of saves) {
       const r = await c.post(route, body);

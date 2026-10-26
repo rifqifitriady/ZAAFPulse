@@ -178,9 +178,10 @@ saved budget invalid; edit or delete that budget first.
 If `cost.budgets` does not validate, or `config.json` does not parse, the last valid list stays in force. It is kept in
 `.data/cost/budgets.last.json`, so it also survives a restart. If there is no valid kept list, only the old monthly and
 key budgets apply. `GET /api/cost/budgets` reports the warning and validation reasons; save and delete answer 409 until
-the hand edit is fixed. A valid list always replaces the kept list. While `config.json` does not parse, Settings and the
-price editor do not save either: they answer 409 `config.json could not be read; fix it first`, so the file (and the
-budgets in it) is never overwritten.
+the hand edit is fixed. A valid list always replaces the kept list. While `config.json` does not parse, ZAAFPulse does
+not write it at all: Settings, the price editor and Settings → Integrations answer 409 `config.json could not be read;
+fix it first`, and every other settings page refuses its save as well. The file, and the budgets in it, stay as you
+left them until you fix it.
 
 ### What a budget counts
 
@@ -256,9 +257,10 @@ is `exceeded`, ZAAFPulse pauses one local Claude Code or Codex session, once per
   indexed yet, or a process table that does not read, nothing is used up, and a later pass can pause a session that
   starts running later in the period. A budget that becomes exceeded before the server has read the running sessions
   acts on the first live pass.
-- **A change wins.** If the budget is saved while its agent is being looked up (pause turned off, another scope,
-  measure or period, or no longer exceeded), nothing is signalled and nothing is used up; the next pass decides with
-  the budget as it is now.
+- **A change wins, until the pause is sent.** If the budget is saved while its agent is being looked up (pause turned
+  off, another scope, measure or period, or no longer exceeded), nothing is signalled and nothing is used up; the next
+  pass decides with the budget as it is now. A save that lands once the pause has started (while the process is being
+  verified for the signal) does not stop it; resume the agent from the dashboard.
 - **No candidate** (no running session in scope has spent anything this period) is reported once in the bell, and
   the budget keeps looking. When the home folder is not known, project and center budgets cannot match a session's
   folder: they pause nothing and say so once, path-free. Source, model and global budgets still pause.
