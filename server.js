@@ -256,18 +256,19 @@ function rawConfig() {
 // one top-level section is replaced and the cache is refreshed from what was written. Demo mode keeps it in memory.
 // config.json is read again here, not from the cache: rawConfig() reads a file that does not parse as {}, and saving
 // on top of that would drop every other section. Such a file (often a hand edit gone wrong) is refused and left as it
-// is. The write goes through a temp file of its own (two saves never share one) at mode 0600, then a rename. Every
-// failure throws a status-500 error whose message holds no path, so each API can pass it on.
-// saveConfigSections(patch) replaces several top-level sections in one write.
+// is, with a status-409 error (CONFIG_BROKEN: fix the file first). The write goes through a temp file of its own (two
+// saves never share one) at mode 0600, then a rename; a failure there throws a status-500 error. No message holds a
+// path, so each API can pass it on. saveConfigSections(patch) replaces several top-level sections in one write.
 const CONFIG_UNSAVED = 'the settings could not be saved';
+const CONFIG_BROKEN = 'config.json could not be read; fix it first';
 function saveConfigSections(patch) {
   if (DEMO) {
     rawCache.value = { ...rawCache.value, ...patch };
     return;
   }
-  const refuse = (message, err) => {
+  const refuse = (message, err, status = 500) => {
     console.error(`config: ${message}${err && err.code ? ` (${err.code})` : ''}`);
-    return Object.assign(new Error(message), { status: 500 });
+    return Object.assign(new Error(message), { status });
   };
   let text = '';
   try {
@@ -282,7 +283,7 @@ function saveConfigSections(patch) {
     base = null;
   }
   if (!base || typeof base !== 'object' || Array.isArray(base))
-    throw refuse(`${CONFIG_UNSAVED}: config.json does not parse as an object; fix it by hand first`);
+    throw refuse(CONFIG_BROKEN, null, 409);
   const raw = { ...base, ...patch };
   const tmpFile = `${CONFIG_FILE}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
   try {
@@ -300,7 +301,6 @@ function saveConfigSections(patch) {
 }
 // config.json is there but does not read as an object (often a hand edit gone wrong). A save over it would drop every
 // other section (the budgets, the cost centers), so Settings and the price editor refuse with 409 until it is fixed.
-const CONFIG_BROKEN = 'config.json could not be read; fix it first';
 function configBroken() {
   let text = '';
   try {

@@ -552,3 +552,44 @@ test('engine: a budget pass asked for while one runs runs again after it, with w
   assert.equal(e.state.states().find((x) => x.rule === 'budget').state, 'warn_80', 'the change was evaluated');
   assert.deepEqual(d.pauses, []);
 });
+
+test('engine: where agent control is off, a pause budget says so once per period and signals nothing', async () => {
+  const offFor = async (opts) => {
+    const kills = [];
+    const makeControl = () =>
+      createAgentControl({
+        platform: 'linux',
+        now: () => T0,
+        audit: { record: () => {} },
+        kill: (pid, signal) => (kills.push([pid, signal]), true), // a spy: nothing is signalled
+        processes: { rows: async () => [] },
+        ...opts,
+      });
+    const e = setup({ makeControl, views: exceeded() });
+    await e.cycle();
+    await e.cycle();
+    const notes = pauseNotes(e.state);
+    e.data.views = exceeded({ periodKey: 'month:2026-11-01' });
+    await e.cycle();
+    await e.cycle();
+    return { kills, notes, after: pauseNotes(e.state) };
+  };
+  for (const [opts, reason] of [
+    [{ serverMode: 'server', inDocker: false }, 'could not pause: agent control is off on this server'],
+    [
+      { serverMode: 'no-sign-in', inDocker: false },
+      'could not pause: agent control is off without a dashboard sign-in',
+    ],
+    [{ serverMode: false, inDocker: true }, 'could not pause: agent control is off in Docker'],
+  ]) {
+    const r = await offFor(opts);
+    assert.deepEqual(r.kills, [], 'no signal');
+    assert.deepEqual(
+      r.notes.map((n) => [n.ok, n.code, n.reason]),
+      [[false, 'off', reason]],
+      'once in the period, not "no candidate"',
+    );
+    assert.equal(r.after.length, 2, 'once again in the next period');
+    assert.doesNotMatch(reason, /[\\/]/);
+  }
+});

@@ -200,8 +200,8 @@ test('runtimes over HTTP: a config.json that does not parse is refused, never ov
   try {
     const entry = { id: 'fake-llm', command: ['zp-no-such-program', '--port', '18081'], port: 18081 };
     const saved = await c.post('/api/runtimes/save', { entry });
-    assert.equal(saved.status, 500);
-    assert.equal(saved.json.error, 'the settings could not be saved');
+    assert.equal(saved.status, 409);
+    assert.equal(saved.json.error, 'config.json could not be read; fix it first');
     assert.equal(fs.readFileSync(file, 'utf8'), broken, 'config.json is untouched');
     assert.deepEqual(fs.readdirSync(data).filter((f) => f.startsWith('config.json')), ['config.json'], 'no temp file left');
     noPaths(c.bodies);
