@@ -330,7 +330,7 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 <br>
 <table>
 <tr>
-<td width="50%"><img alt="Settings, Monitors: rule cards for daily cost, month projection, cost burn, tool loop, agent stuck and accuracy drop, each with its state, limits, snooze and pause switch" src="docs/assets/screen-monitors.jpg"><br><sub>Monitors: eight rules, each with its state, limits, snooze and auto-pause.</sub></td>
+<td width="50%"><img alt="Settings, Monitors, in an earlier version: rule cards for daily cost and month projection (both since replaced by budgets), cost burn, tool loop, agent stuck and accuracy drop, each with its state, limits, snooze and pause switch" src="docs/assets/screen-monitors.jpg"><br><sub>Monitors: each rule with its state, limits, snooze and auto-pause. The daily cost and month projection cards in this screenshot are budgets now.</sub></td>
 <td width="50%"><img alt="Alerts drawer: a paused-agent banner with Resume and Stop, and recent alerts for cost burn, unsafe content, accuracy drop and month projection" src="docs/assets/screen-alerts.jpg"><br><sub>Alerts: the bell's drawer, with Resume and Stop for a paused agent.</sub></td>
 </tr>
 <tr>
