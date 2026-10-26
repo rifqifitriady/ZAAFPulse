@@ -76,6 +76,7 @@ function setup({
   home = HOME,
   billingMode = null,
   makeControl = null,
+  aggregate,
 } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-budgets-engine-'));
   const clock = { t: T0 };
@@ -137,6 +138,7 @@ function setup({
     },
     retired,
     home,
+    ...(aggregate ? { aggregate } : {}),
   });
   // The order of the server: the index refresh (aggregate), then the ledger pass (budgets), and the live pass.
   const cycle = async () => {
@@ -252,6 +254,36 @@ test('engine: retired rules are not evaluated', async () => {
   await off.monitors.tickAggregate();
   assert.equal(off.sent.filter((s) => s.alert.rule === 'daily_cost' || s.alert.rule === 'month_projection').length, 0);
   assert.equal((await off.monitors.status()).counts.triggered, 0);
+});
+
+test('engine: the period spend is built only for an exceeded pause budget not acted on this period', async () => {
+  // dedupeEvents runs once per aggregate pass for the recent usage; the period spend adds a call when it is built.
+  const real = require('../lib/aggregate');
+  const counted = () => {
+    const n = { calls: 0 };
+    const aggregate = { ...real, dedupeEvents: (...a) => (n.calls++, real.dedupeEvents(...a)) };
+    return { n, aggregate };
+  };
+  const a = counted();
+  const quiet = setup({
+    aggregate: a.aggregate,
+    views: [
+      view({ state: 'exceeded', enforce: 'block' }),
+      view({ id: 'w', state: 'warn_80', enforce: 'pause' }),
+      view({ id: 'n', state: 'exceeded', enforce: 'none' }),
+    ],
+  });
+  await quiet.cycle();
+  await quiet.cycle();
+  assert.equal(a.n.calls, 2, 'no budget pauses: the period spend is never built');
+  const b = counted();
+  const e = setup({ aggregate: b.aggregate, views: [view({ state: 'exceeded', percent: 120, enforce: 'pause' })] });
+  await e.cycle();
+  assert.equal(e.calls.pause.length, 1);
+  assert.equal(b.n.calls, 2, 'built once, for the pause');
+  await e.cycle();
+  await e.cycle();
+  assert.equal(b.n.calls, 4, 'acted on this period: not built again');
 });
 
 // ---- the target of a budget's pause: the running session that spent the most in the budget's scope and period ----

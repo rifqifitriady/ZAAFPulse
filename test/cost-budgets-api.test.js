@@ -311,6 +311,30 @@ test('a settings save that would make a saved budget invalid is refused until th
   assert.deepEqual(s.st.saved.budgets, [], 'the list stays as the budget routes left it');
 });
 
+test('the settings check: skipped while the saved list is a broken hand edit; its 409 reasons stop at 50', async () => {
+  const onAcme = (i) => ({
+    id: `c${i}`,
+    name: `Center ${i}`,
+    scope: { dim: 'center', value: 'acme' },
+    period: 'month',
+    amount: 5,
+  });
+  // A hand edit that does not validate: a settings save is the owner's way to fix it, so it is not checked.
+  const s = setup({ budgets: [onAcme(0)] });
+  assert.equal((await s.call('GET', '/api/cost/budgets')).status, 200);
+  s.st.saved = { ...BASE, budgets: [onAcme(0), { id: 'x' }] };
+  const r = await s.call('POST', '/api/cost/settings', { body: { ...BASE, centers: [] } });
+  assert.equal(r.status, 200, 'not checked while the saved list does not validate');
+  assert.deepEqual(s.st.saved.centers, []);
+  assert.equal(s.st.saved.budgets.length, 2, 'the hand edit is kept as it is');
+  // 80 budgets on the center: the refusal lists 50 of them.
+  const many = setup({ budgets: Array.from({ length: 80 }, (_, i) => onAcme(i)) });
+  const refused = await many.call('POST', '/api/cost/settings', { body: { ...BASE, centers: [] } });
+  assert.equal(refused.status, 409);
+  assert.equal(refused.body.reasons.length, 50);
+  assert.equal(refused.body.reasons[49], 'budget c49: scope.value: unknown cost center');
+});
+
 test('a restate refreshes the budgets; the 101st budget is refused with reasons; editing at the limit is not', async () => {
   const s = setup();
   const r = await s.call('POST', '/api/cost/restate', {
