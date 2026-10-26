@@ -1502,7 +1502,14 @@ const handler = async (req, res) => {
         return send(res, 200, await integrationConfig.test(body));
       }
       if (DEMO) return send(res, 200, { errors: ['Demo mode: changes are not saved.'] });
-      const r = url.pathname.endsWith('/save') ? integrationConfig.save(body) : integrationConfig.remove(body.id);
+      let r;
+      try {
+        r = url.pathname.endsWith('/save') ? integrationConfig.save(body) : integrationConfig.remove(body.id);
+      } catch (err) {
+        // 409 while config.json does not parse (it is never written over), 500 when the write failed: path-free.
+        if (err && (err.status === 409 || err.status === 500)) return send(res, err.status, { error: err.message });
+        throw err;
+      }
       if (r.errors) return send(res, 200, r);
       config = loadConfig(); // keep Settings saves from writing back a stale integrations list
       if (url.pathname.endsWith('/delete')) return send(res, 200, r);

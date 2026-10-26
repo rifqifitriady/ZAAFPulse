@@ -151,3 +151,33 @@ test('a dry run uses the pasted secret in memory and masks it in errors', async 
   assert.equal(r.status.error, 'bad key ***');
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).integrations, {});
 });
+
+test('a config.json that does not parse is never written over; a save is 0600 through a temp file of its own', () => {
+  const ic = (file) => createIntegrationConfig({ file, secrets: fakeSecrets, store: () => {} });
+  const form = { id: 'c', type: 'router', values: { flavor: '9router' } };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'acc-ic-'));
+  const file = path.join(dir, 'config.json');
+  const broken = '{ "cost": { "budgets": [ ';
+  fs.writeFileSync(file, broken);
+  for (const run of [() => ic(file).save(form), () => ic(file).remove('c')]) {
+    assert.throws(run, (e) => {
+      assert.equal(e.status, 409);
+      assert.equal(e.message, 'config.json could not be read; fix it first');
+      return true;
+    });
+  }
+  assert.equal(fs.readFileSync(file, 'utf8'), broken, 'left as it is');
+  assert.deepEqual(fs.readdirSync(dir), ['config.json'], 'no temp file left');
+  assert.deepEqual(ic(file).describe(), ic(path.join(dir, 'none.json')).describe(), 'reading for the page still works');
+  // A healthy file keeps its other sections and becomes 0600; an absent file is created.
+  fs.writeFileSync(file, JSON.stringify({ cost: { budgets: [{ id: 'b' }] } }), { mode: 0o644 });
+  assert.equal(ic(file).save(form).id, 'c');
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(saved.cost, { budgets: [{ id: 'b' }] });
+  assert.ok(saved.integrations.c);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  assert.deepEqual(fs.readdirSync(dir), ['config.json']);
+  const fresh = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'acc-ic-')), 'config.json');
+  assert.equal(ic(fresh).save(form).id, 'c');
+  assert.ok(JSON.parse(fs.readFileSync(fresh, 'utf8')).integrations.c);
+});
