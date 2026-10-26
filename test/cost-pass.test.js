@@ -1010,3 +1010,15 @@ test('an invalid cost section: the pass waits across a day boundary, then attrib
   assert.deepEqual(requestsBy(r.cost, '2026-10-22', 'center'), { beta: 1, unassigned: 1 }, 'late lines, fixed rules');
   assert.deepEqual(requestsBy(r.cost, '2026-10-23', 'center'), { beta: 1, unassigned: 1 });
 });
+
+test('billingFor hands out a copy of { mode, assumed }, never the history itself', () => {
+  const r = rig({ settings: { billing: { claude: MAX } } });
+  r.st.entries.push(file('a', [ev(at(22), 'm1')]));
+  r.cost.update();
+  const b = r.cost.billingFor('claude', '2026-10-22');
+  assert.deepEqual(b, { mode: 'plan', assumed: false });
+  b.mode = 'metered';
+  assert.equal(r.cost.billingFor('claude', '2026-10-22').mode, 'plan', 'a caller cannot change the history');
+  assert.equal(r.cost.billingHistory().entries.find((e) => e.source === 'claude').billing.mode, 'plan');
+  assert.deepEqual(r.cost.billingFor('codex', '2026-10-22'), { mode: 'metered', assumed: false });
+});

@@ -40,6 +40,10 @@ async function startServer(env, { data = tmp() } = {}) {
         ZAAFPULSE_DATA: data,
         HOME: data,
         USERPROFILE: data,
+        // The demo makes a throwaway folder in the temp folder: this test's own, so stop() removes it.
+        TMPDIR: data,
+        TEMP: data,
+        TMP: data,
       },
       stdio: 'ignore',
     });
@@ -61,7 +65,7 @@ async function startServer(env, { data = tmp() } = {}) {
       try {
         await fetch(`${base}/api/session`, { signal: AbortSignal.timeout(2000) });
         await new Promise((r) => setTimeout(r, 200));
-        if (!exited) return { base, stop };
+        if (!exited) return { base, stop, data };
       } catch {
         await new Promise((r) => setTimeout(r, 150));
       }
@@ -97,6 +101,8 @@ test('budgets over HTTP: the demo budgets and budget alerts, the retired rules, 
   const s = await startServer({ DEMO: '1', ZAAFPULSE_AUTH: 'none' });
   const c = client(s.base);
   try {
+    // The demo's throwaway folder is made in the test's own folder, so stop() removes it with the rest.
+    assert.equal(fs.readdirSync(s.data).filter((f) => f.startsWith('zp-demo-')).length, 1);
     const r = await c.call('/api/cost/budgets');
     assert.equal(r.status, 200);
     const v = Object.fromEntries(r.json.budgets.map((b) => [b.id, b]));
@@ -225,7 +231,10 @@ test('budgets over HTTP: sign-in only; a key budget answers 402 at once; a legac
     assert.equal((await c.post('/api/cost/budgets/acme-month/delete', {})).status, 200);
     assert.equal((await c.post(`/api/cost/budgets/legacy-key-${key.id}/delete`, {})).status, 200);
     assert.equal((await chat()).status, 200, 'the key budget is gone with its budgetUSD');
-    assert.equal((await c.call('/api/monitors')).json.rules.some((r) => r.id === 'daily_cost'), false);
+    assert.equal(
+      (await c.call('/api/monitors')).json.rules.some((r) => r.id === 'daily_cost'),
+      false,
+    );
     const kept = JSON.parse(fs.readFileSync(path.join(data, '.data', 'cost', 'budgets.last.json'), 'utf8'));
     assert.deepEqual(
       kept.budgets.map((b) => b.id),
@@ -238,5 +247,49 @@ test('budgets over HTTP: sign-in only; a key budget answers 402 at once; a legac
   } finally {
     await s.stop();
     await upstream.close();
+  }
+});
+
+test('budgets over HTTP: a hand-broken config.json is never overwritten by a Settings or a price save', async () => {
+  const data = tmp();
+  const blk = { id: 'blk', name: 'Everything', scope: 'global', period: 'month', amount: 5, enforce: 'block' };
+  fs.writeFileSync(
+    path.join(data, 'config.json'),
+    JSON.stringify({
+      pricingSync: { enabled: false },
+      cost: { centers: [{ id: 'acme', name: 'Acme' }], budgets: [blk] },
+    }),
+  );
+  const s = await startServer({ ZAAFPULSE_AUTH: 'none' }, { data });
+  const c = client(s.base);
+  try {
+    const ids = async () => (await c.call('/api/cost/budgets')).json.budgets.map((b) => b.id);
+    assert.ok((await ids()).includes('blk'));
+    const configFile = path.join(data, 'config.json');
+    const keptFile = path.join(data, '.data', 'cost', 'budgets.last.json');
+    fs.writeFileSync(configFile, '{ "userName": "a hand edit gone wrong", ');
+    const before = { config: fs.readFileSync(configFile), kept: fs.readFileSync(keptFile) };
+    assert.ok((await ids()).includes('blk'), 'the last valid list is in force');
+    const saves = [
+      ['/api/config', { userName: 'x', monthlyBudgetUSD: 5 }],
+      ['/api/prices', { action: 'set', key: 'llama-9', price: { input: 1 } }],
+      ['/api/prices', { action: 'toggle', enabled: true }],
+    ];
+    for (const [route, body] of saves) {
+      const r = await c.post(route, body);
+      assert.equal(r.status, 409, route);
+      assert.deepEqual(r.json, { error: 'config.json could not be read; fix it first' });
+    }
+    assert.deepEqual(fs.readFileSync(configFile), before.config, 'config.json is left as it is');
+    assert.deepEqual(fs.readFileSync(keptFile), before.kept, 'the kept list is left as it is');
+    const after = await c.call('/api/cost/budgets');
+    assert.deepEqual(
+      after.json.budgets.filter((b) => !b.legacy).map((b) => [b.id, b.enforce]),
+      [['blk', 'block']],
+    );
+    assert.match(after.json.error, /config\.json could not be read/);
+    for (const b of c.bodies) assert.doesNotMatch(b, PATHS, 'a response body holds a file path');
+  } finally {
+    await s.stop();
   }
 });

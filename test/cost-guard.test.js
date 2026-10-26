@@ -206,6 +206,48 @@ test('guard: an unread list is reported until a list reads; a refusal keeps the 
   assert.deepEqual(s.listed(), [['a', 3000]], 'the list read: only budget a is left');
 });
 
+test('guard: a check that throws lets the request through and says so until a check works again', () => {
+  const s = live();
+  s.budgets = [blk('a', 'global')];
+  // A failure outside the guard's own reads (here the request itself): fail open, one guard-level reason.
+  const bad = {
+    get keyId() {
+      throw new Error(`no such file ${HOME}/x`);
+    },
+  };
+  assert.equal(s.guard.check(bad), null);
+  assert.equal(s.reports.at(-1), 'the budget check failed, so requests are allowed');
+  assert.deepEqual(s.listed(), [[null, 1000]]);
+  s.t = 2000;
+  assert.equal(s.guard.check(bad), null);
+  assert.deepEqual(s.listed(), [[null, 1000]], 'since is when it started; still one reason');
+  assert.equal(s.guard.check({}), null);
+  assert.equal(s.reports.at(-1), null, 'cleared by the next check that works');
+  assert.deepEqual(s.listed(), []);
+  // keyLimited fails open (the key is not limited) and is reported the same way.
+  s.budgets = new Error('boom');
+  assert.equal(s.guard.keyLimited('key_a'), false);
+  assert.equal(s.reports.at(-1), 'the budget check failed, so requests are allowed');
+  // The gateway's own catch reports through failed().
+  s.budgets = [];
+  s.guard.check({});
+  s.guard.failed();
+  assert.deepEqual(s.listed(), [[null, 2000]]);
+  // A status that cannot be kept never breaks the check.
+  const quiet = createGuard({
+    service: {
+      list: () => ({ budgets: [] }),
+      evaluateOne: () => ({ state: 'ok' }),
+      keyCenter: () => 'unassigned',
+      reportGuard: () => {
+        throw new Error('down');
+      },
+    },
+  });
+  assert.equal(quiet.check({}), null);
+  assert.equal(quiet.check(bad), null);
+});
+
 test('guard: keyLimited for blocking key and center budgets only', () => {
   const g = (list) => fake(list).guard;
   assert.equal(g([blk('k', { dim: 'key', value: 'key_a' })]).keyLimited('key_a'), true);
@@ -470,11 +512,13 @@ test('route: a guard whose methods throw lets the request through', async () => 
   const boom = () => {
     throw new Error('guard down');
   };
-  const t = await routeSetup(() => ({ check: boom, keyLimited: boom, record: boom }));
+  const failed = [];
+  const t = await routeSetup(() => ({ check: boom, keyLimited: boom, record: boom, failed: () => failed.push(1) }));
   try {
     const r = await t.chat();
     assert.equal(r.status, 200);
     assert.match(r.text, /"id":"A"/);
+    assert.ok(failed.length >= 1, 'the gateway reports the failure to the guard');
   } finally {
     await t.close();
   }

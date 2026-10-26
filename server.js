@@ -298,6 +298,24 @@ function saveConfigSections(patch) {
     rawCache = { mtime: 0, value: raw }; // saved; the next read checks the file again
   }
 }
+// config.json is there but does not read as an object (often a hand edit gone wrong). A save over it would drop every
+// other section (the budgets, the cost centers), so Settings and the price editor refuse with 409 until it is fixed.
+const CONFIG_BROKEN = 'config.json could not be read; fix it first';
+function configBroken() {
+  let text = '';
+  try {
+    text = fs.readFileSync(CONFIG_FILE, 'utf8');
+  } catch (e) {
+    return e.code !== 'ENOENT';
+  }
+  if (!text.trim()) return false;
+  try {
+    const v = JSON.parse(text);
+    return !v || typeof v !== 'object' || Array.isArray(v);
+  } catch {
+    return true;
+  }
+}
 // One section, for every settings page. A budget save writes two top-level fields at once (budget-service.js).
 function saveConfigSection(name, value) {
   return saveConfigSections({ [name]: value });
@@ -378,6 +396,7 @@ const budgetGuard = {
   check: (ctx) => (costGuard ? costGuard.check(ctx) : null),
   keyLimited: (keyId) => !!costGuard && costGuard.keyLimited(keyId),
   record: (entry) => costBudgets && costBudgets.record(entry),
+  failed: () => costGuard && costGuard.failed(),
 };
 const gateway = createGateway({
   dataDir: DEMO ? demoDir : path.join(DIR, '.data'),
@@ -1331,6 +1350,7 @@ const handler = async (req, res) => {
       if (!(req.headers['content-type'] || '').startsWith('application/json'))
         return send(res, 415, { error: 'json only' });
       const body = JSON.parse(await readBody(req));
+      if (!DEMO && configBroken()) return send(res, 409, { error: CONFIG_BROKEN });
       // Once the legacy monthly budget is a saved budget, the Settings field is read-only: a posted value is ignored.
       const managed = costBudgets.monthly().monthlyBudgetManaged;
       const next = { ...config };
@@ -1354,20 +1374,14 @@ const handler = async (req, res) => {
         config = next;
         rawCache.value = { ...rawCache.value, monthlyBudgetUSD: next.monthlyBudgetUSD }; // the demo's legacy budget
       } else {
-        // Write the stored settings only, never the merged runtime prices.
-        let raw = {};
-        try {
-          raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-        } catch {
-          /* new file */
-        }
-        Object.assign(raw, {
+        // Write the stored settings only, never the merged runtime prices. saveConfigSections keeps every other section
+        // and refuses a file that does not parse.
+        saveConfigSections({
           userName: next.userName,
           monthlyBudgetUSD: next.monthlyBudgetUSD,
           vaultPaths: next.vaultPaths,
+          ...(body.pricing && typeof body.pricing === 'object' ? { pricing: next.pricing } : {}),
         });
-        if (body.pricing && typeof body.pricing === 'object') raw.pricing = next.pricing;
-        fs.writeFileSync(CONFIG_FILE, JSON.stringify(raw, null, 2));
         config = loadConfig();
       }
       memo.clear();
@@ -1414,6 +1428,7 @@ const handler = async (req, res) => {
         await priceSync.refresh();
         return send(res, 200, { status: priceSync.status() });
       }
+      if (configBroken()) return send(res, 409, { error: CONFIG_BROKEN });
       let raw = {};
       try {
         raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
@@ -1439,9 +1454,7 @@ const handler = async (req, res) => {
         delete manual[key];
         sync.pinned = sync.pinned.filter((k) => k !== key);
       } else return send(res, 400, { error: 'unknown action' });
-      raw.pricing = manual;
-      raw.pricingSync = sync;
-      fs.writeFileSync(CONFIG_FILE, JSON.stringify(raw, null, 2));
+      saveConfigSections({ pricing: manual, pricingSync: sync });
       config = loadConfig();
       memo.clear();
       insightMemo.clear();
