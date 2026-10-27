@@ -9,6 +9,7 @@ const COST_SUBS = [
   ['', 'Overview'],
   ['breakdown', 'Breakdown'],
   ['value', 'Value'],
+  ['budgets', 'Budgets'],
 ];
 const COST_RANGES = {
   '7d': 'Last 7 days',
@@ -41,6 +42,17 @@ const COST_DIM_LABEL = {
   agent: 'Agent',
   kind: 'Kind',
 };
+const COST_SCOPE_DIMS = ['center', 'key', 'project', 'model', 'provider', 'source'];
+const COST_SCOPE_LABEL = {
+  center: 'Center',
+  key: 'Key',
+  project: 'Project',
+  model: 'Model',
+  provider: 'Provider',
+  source: 'Source',
+};
+const COST_RESERVED_IDS = ['__proto__', 'constructor', 'prototype'];
+const COST_MONTH = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const COST_MONTH_LONG = [
   'January',
   'February',
@@ -165,6 +177,135 @@ function costMoney(v, cur = 'USD') {
 }
 const costPct = (x) => (x == null || !Number.isFinite(x) ? '—' : `${Math.round(x * 100)}%`);
 
+/** "Global", "Center · Platform", "Key · ci-bot", "Source · Claude Code", … */
+function costScopeLabel(scope, ctx = {}) {
+  if (!scope || scope === 'global') return 'Global';
+  const v = String(scope.value ?? '');
+  const shown =
+    scope.dim === 'center'
+      ? (ctx.centers && ctx.centers[v]) || (v === 'unassigned' ? 'Unassigned' : v)
+      : scope.dim === 'key'
+        ? (ctx.keys && ctx.keys[v]) || v
+        : scope.dim === 'source'
+          ? COST_SOURCES[v] || v
+          : v;
+  return `${COST_SCOPE_LABEL[scope.dim] || 'Scope'} · ${shown}`;
+}
+
+/** "Month · 1–31 Oct", "Week · 27 Oct – 2 Nov", "Day · 22 Oct" from a budget view's period and dates. */
+function costPeriodLabel(b) {
+  const name = { day: 'Day', week: 'Week', month: 'Month' }[b.period] || 'Period';
+  if (!costIsDay(b.from) || !costIsDay(b.to)) return name;
+  const d = (x) => Number(x.slice(8));
+  const mon = (x) => COST_MONTH[Number(x.slice(5, 7)) - 1];
+  if (b.from === b.to) return `${name} · ${d(b.from)} ${mon(b.from)}`;
+  if (b.from.slice(0, 7) === b.to.slice(0, 7)) return `${name} · ${d(b.from)}–${d(b.to)} ${mon(b.to)}`;
+  return `${name} · ${d(b.from)} ${mon(b.from)} – ${d(b.to)} ${mon(b.to)}`;
+}
+
+// As lib/cost/views.js: used up, then projected over, then by percent; without data last. Ties in plain code-unit
+// order of the name, then the id (unique), so the order does not depend on the machine's locale.
+const costRank = (b) => (b.state === 'exceeded' ? 0 : b.projected ? 1 : b.state === 'no_data' ? 3 : 2);
+const costCmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+function costBudgetOrder(list) {
+  return [...(list || [])].sort(
+    (a, b) =>
+      costRank(a) - costRank(b) ||
+      (Number(b.percent) || 0) - (Number(a.percent) || 0) ||
+      costCmp(String(a.name), String(b.name)) ||
+      costCmp(String(a.id), String(b.id)),
+  );
+}
+const costTone = (state) =>
+  state === 'exceeded' ? 'exceeded' : state === 'no_data' ? 'none' : /^warn_/.test(String(state)) ? 'warn' : 'ok';
+// The sidebar badge: budgets used up or projected over.
+const costBadgeCount = (list) =>
+  (Array.isArray(list) ? list : []).filter((b) => b && (b.state === 'exceeded' || b.projected === true)).length;
+
+/** A new budget's id from its name: lowercase a-z0-9 and dashes, with -2, -3, … when taken. */
+function costIdFrom(name, taken = []) {
+  const base =
+    String(name || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60)
+      .replace(/-+$/, '') || 'budget';
+  const used = new Set([...taken, ...COST_RESERVED_IDS]);
+  if (!used.has(base)) return base;
+  for (let n = 2; ; n++) if (!used.has(`${base}-${n}`)) return `${base}-${n}`;
+}
+
+/** The enforcement choices for a scope, mirroring lib/cost/budgets.js mayBlock and mayPause. */
+function costEnforceOptions(scope) {
+  const g = !scope || scope === 'global';
+  const dim = g ? 'global' : scope.dim;
+  const value = g ? '' : scope.value;
+  const block = g || ['key', 'center', 'model', 'provider'].includes(dim) || (dim === 'source' && value === 'gateway');
+  const pause =
+    g ||
+    ['project', 'center', 'model'].includes(dim) ||
+    (dim === 'source' && (value === 'claude' || value === 'codex'));
+  return [
+    { value: 'none', label: 'None: alerts only', ok: true, why: '' },
+    {
+      value: 'block',
+      label: 'Block gateway requests (402)',
+      ok: block,
+      why: block ? '' : 'block reaches gateway requests only: not a project or a local source',
+    },
+    {
+      value: 'pause',
+      label: 'Pause the costliest local agent',
+      ok: pause,
+      why: pause ? '' : 'pause reaches a local agent only: not a key, a provider or the gateway',
+    },
+  ];
+}
+
+/** The form's fields (strings, as FormData gives them, and projection as a boolean) to the POST body. */
+function costFormBody(f, { id }) {
+  const errors = [];
+  const name = String(f.name ?? '').trim();
+  if (!name || name.length > 60) errors.push('Name: 1 to 60 characters');
+  const dim = COST_SCOPE_DIMS.includes(f.dim) ? f.dim : 'global';
+  const scope = dim === 'global' ? 'global' : { dim, value: String(f.value ?? '').trim() };
+  if (scope !== 'global' && !scope.value) errors.push(`${COST_SCOPE_LABEL[dim]}: name one`);
+  const period = ['day', 'week', 'month'].includes(f.period) ? f.period : null;
+  if (!period) errors.push('Period: day, week or month');
+  const amount = Number(String(f.amount ?? '').trim() || NaN);
+  if (!(Number.isFinite(amount) && amount > 0)) errors.push('Amount: a number above 0');
+  const thresholds = [f.warn1, f.warn2]
+    .map((v) => String(v ?? '').trim())
+    .filter(Boolean)
+    .map(Number);
+  if (
+    !thresholds.every((t) => Number.isInteger(t) && t >= 1 && t <= 99) ||
+    (thresholds.length === 2 && thresholds[1] <= thresholds[0])
+  )
+    errors.push('Warning levels: whole numbers from 1 to 99, the second above the first');
+  const enforce = f.enforce || 'none';
+  const opt = costEnforceOptions(scope).find((o) => o.value === enforce);
+  if (!opt) errors.push('Enforcement: none, block or pause');
+  else if (!opt.ok) errors.push(`Enforcement: ${opt.why}`);
+  if (errors.length) return { ok: false, errors };
+  return {
+    ok: true,
+    body: {
+      id,
+      name,
+      scope,
+      period,
+      amount,
+      currency: f.currency || 'USD',
+      measure: f.measure === 'billed' ? 'billed' : 'list',
+      thresholds,
+      projection: f.projection === true || f.projection === 'on',
+      enforce,
+    },
+  };
+}
+
 /** The ledger status ribbon: what /api/cost/status reports as a problem, in the server's path-free words. */
 function costRibbonItems(st) {
   if (!st || typeof st !== 'object') return [];
@@ -189,6 +330,37 @@ function costUnreadText(u) {
     : `${String(u)} could not be read: figures leave it out.`;
 }
 
+/** The status lines of GET /api/cost/budgets: the hand edit that does not validate, the kept list, the guard. */
+function costBudgetBanners(a, ctx = {}) {
+  const out = [];
+  if (!a) return out;
+  if (a.error)
+    out.push({ tone: 'warn', title: a.error, lines: (a.reasons || []).map(String), note: 'Fix config.json first' });
+  if (a.kept && a.kept.error) out.push({ tone: 'muted', title: String(a.kept.error), lines: [] });
+  const g = a.guard || {};
+  const problems = Array.isArray(g.problems) ? g.problems : [];
+  if (g.error || problems.length) {
+    const names = new Map((ctx.budgets || []).map((b) => [b.id, b.name]));
+    out.push({
+      tone: 'warn',
+      title: 'The gateway is letting requests through for these budgets',
+      lines: [
+        ...(g.error ? [String(g.error)] : []),
+        ...problems.map((p) =>
+          [
+            p.budget == null ? 'All budgets' : names.get(p.budget) || p.budget,
+            p.reason,
+            Number.isFinite(p.since) ? `since ${new Date(p.since).toLocaleString('en')}` : '',
+          ]
+            .filter(Boolean)
+            .join(' · '),
+        ),
+      ],
+    });
+  }
+  return out;
+}
+
 /* ---------- the page ---------- */
 
 const COST = {
@@ -200,7 +372,14 @@ const COST = {
   ctx: null, // the page's context (currency, measure, names), set with `controls` by each page load
   table: { groupBy: ['model'], sort: { key: 'spend', dir: -1 }, filter: null, data: null },
   tableReq: 0, // as `req`, for the table's own ledger requests
+  budgets: null,
+  confirm: null, // the budget id whose delete is being confirmed
+  cardMsg: {}, // budget id -> a delete error
+  form: null, // { id, isNew, opener } while the drawer is open
+  suggest: new Map(), // scope dim -> values seen in the ledger (last 90 days)
+  focusTimer: null, // the ?focus= highlight's end, released on unmount
   hooked: false,
+  budgetHooked: false,
 };
 
 const costSub = () => (typeof state !== 'undefined' && state.sub) || '';
@@ -253,6 +432,9 @@ async function costGet(path) {
   if (r.status !== 200) throw new Error((r.json && r.json.error) || `request failed (${r.status})`);
   return r.json;
 }
+const costPost = (path, body) =>
+  costCall(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
 // Numbers count up on an animated load (render(true)), at once with reduced motion or on a quiet refresh.
 function costCountUp(root, fmt) {
   for (const el of root.querySelectorAll('[data-cost-count]')) {
@@ -277,6 +459,7 @@ function viewCost() {
     '': 'This month so far, where it is heading, and the budgets it meets.',
     breakdown: 'Where the money goes: sources, providers, models, cost centers and projects.',
     value: 'What the money bought: plans against their fees, savings, and cost against quality.',
+    budgets: 'Limits by day, week or month, with alerts and, where you choose, a block or a pause.',
   }[sub];
   const title = (COST_SUBS.find(([s]) => s === sub) || COST_SUBS[0])[1];
   return `<div class="holo-deck cost-deck" id="cost-app">
@@ -284,12 +467,17 @@ function viewCost() {
     ${subHero(`AI OBSERVABILITY · COST CONTROL`, esc(title), esc(copy || ''))}
     <div id="cost-ribbon"></div>
     <div id="cost-bar"></div>
-    <div id="cost-body"><div class="skeleton" style="height:240px"></div></div></div>`;
+    <div id="cost-body"><div class="skeleton" style="height:240px"></div></div>
+    <div id="cost-form-host"></div></div>`;
 }
 
 function mountCost() {
   costInstallEvents();
-  // The page refreshes itself (app.js leaves it out of the 60-second render).
+  costInstallBudgetEvents();
+  COST.form = null;
+  COST.confirm = null;
+  COST.cardMsg = {};
+  // The page refreshes itself (app.js leaves it out of the 60-second render): a render would close an open form.
   const timer = setInterval(() => costRefresh(true), COST_REFRESH_MS);
   onUnmount(() => {
     clearInterval(timer);
@@ -297,11 +485,18 @@ function mountCost() {
   });
   costRefresh(false);
 }
-// Leaving the page: answers still in flight are dropped.
+// Leaving the page: answers still in flight are dropped, an open form is closed with its page.
 function costUnmount() {
   COST.req++;
   COST.tableReq++;
   COST.stage = null; // unmountStages() destroys it
+  clearTimeout(COST.focusTimer);
+  COST.focusTimer = null;
+  COST.confirm = null;
+  if (COST.form) {
+    COST.form = null;
+    if (typeof document !== 'undefined') document.body.classList.remove('drawer-locked');
+  }
 }
 
 // A quiet refresh waits while the tab is hidden or the owner is in a form field of the page (a clicked button keeps
@@ -311,10 +506,12 @@ function costQuietWait(doc, app) {
   const f = doc.activeElement;
   return !!f && app.contains(f) && typeof f.matches === 'function' && f.matches('input, select, textarea');
 }
+// The Budgets page also waits while its form drawer or a delete confirmation is open: typed values are never lost.
 function costRefresh(quiet) {
   const app = $('#cost-app');
   if (!app) return;
-  if (quiet && costQuietWait(document, app)) return;
+  if (quiet && (costQuietWait(document, app) || COST.form || COST.confirm)) return;
+  if (costSub() === 'budgets') return costMountBudgets(quiet);
   return costMountPage(costSub(), quiet);
 }
 
@@ -659,6 +856,369 @@ function costValueHtml(v, ctx) {
     </div>`;
 }
 
+/* ---------- Budgets ---------- */
+
+async function costMountBudgets(quiet) {
+  const body = $('#cost-body');
+  if (!body) return;
+  const my = ++COST.req;
+  const live = () => my === COST.req && body.isConnected;
+  try {
+    const [list, settings] = await Promise.all([costGet('/api/cost/budgets'), costGet('/api/cost/settings')]);
+    if (!live()) return;
+    COST.settings = settings;
+    COST.budgets = list;
+    // Budgets has no range, currency or measure (V7), and its own status lines in place of the ledger ribbon.
+    $('#cost-bar').innerHTML = '';
+    $('#cost-ribbon').innerHTML = '';
+    costPaintBudgets();
+    costBadgePaint(list.budgets);
+    const view = $('#view');
+    // The entrance plays from this paint, not from the route change before the answer came.
+    if (!quiet && view.classList.contains('animate') && typeof settle === 'function') settle(view);
+    if (!quiet) costFocus();
+  } catch (e) {
+    if (!live()) return;
+    body.innerHTML = costErrorHtml(e.message);
+  }
+}
+// A repaint keeps the keyboard where it was: the same card's button (or `focus()`, the button to take it).
+function costPaintBudgets(focus) {
+  const body = $('#cost-body');
+  const list = COST.budgets;
+  if (!body || !list) return;
+  const was = document.activeElement;
+  const mark =
+    was && was !== body && body.contains(was) && was.tagName === 'BUTTON'
+      ? [...was.attributes].find((a) => a.name.startsWith('data-cost-'))
+      : null;
+  const ctx = costContext(COST.settings);
+  const banners = costBudgetBanners(list, { budgets: list.budgets })
+    .map(
+      (b) =>
+        `<div class="cost-banner ${esc(b.tone)}" role="status"><b>${esc(b.title)}</b>${b.lines.length ? `<ul>${b.lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>` : ''}${b.note ? `<p>${esc(b.note)}</p>` : ''}</div>`,
+    )
+    .join('');
+  const locked = !!list.error;
+  const cards = costBudgetOrder(list.budgets)
+    .map((b) => costBudgetCardHtml(b, ctx, locked))
+    .join('');
+  body.innerHTML = `${banners}<div class="cost-toolbar"><button type="button" class="btn" data-cost-add ${locked ? 'disabled title="Fix config.json first"' : ''}>${icon('dollar', 14)} Add a budget</button>${locked ? '<span class="cost-note">Fix config.json first</span>' : ''}</div>
+    ${cards ? `<div class="cost-cards">${cards}</div>` : holoEmpty('No budgets yet. Add one to get alerts at your levels, and a block or a pause where you choose.')}`;
+  const buttons = [...body.querySelectorAll('button')];
+  const next = focus ? focus() : mark && buttons.find((b) => b.getAttribute(mark.name) === mark.value);
+  if (next) next.focus({ preventScroll: true });
+}
+// A card's button, found by the card's id (no selector built from the id).
+const costCardButton = (id, attr) => () => {
+  const card = [...document.querySelectorAll('#cost-app [data-cost-card]')].find((el) => el.dataset.costCard === id);
+  return card ? card.querySelector(`[${attr}]`) : null;
+};
+function costBudgetCardHtml(b, ctx, locked) {
+  const tone = costTone(b.state);
+  const chips = [
+    COST_MEASURES[b.measure] || 'Usage value',
+    b.projected ? 'Projected over' : '',
+    b.enforce === 'block' ? 'Blocks gateway' : b.enforce === 'pause' ? 'Pauses agent' : '',
+    b.legacy ? 'From old settings' : '',
+  ]
+    .filter(Boolean)
+    .map((c) => `<span class="cost-chip${c === 'Projected over' ? ' warn' : ''}">${esc(c)}</span>`)
+    .join('');
+  const figures =
+    b.state === 'no_data'
+      ? `<p class="cost-card-reason">${esc(b.reason || 'No data')}</p>`
+      : `<p class="cost-card-spent"><b>${esc(costMoney(b.spent, b.currency))}</b> of ${esc(costMoney(b.amount, b.currency))}</p>`;
+  const msg = COST.cardMsg[b.id] ? `<p class="cost-card-reason" role="alert">${esc(COST.cardMsg[b.id])}</p>` : '';
+  const actions =
+    COST.confirm === b.id
+      ? `<p class="cost-confirm">${esc('Delete budget "' + b.name + '"? A budget from old settings also clears that setting.')}</p><button type="button" class="btn danger" data-cost-confirm-delete="${esc(b.id)}">Delete</button><button type="button" class="btn ghost" data-cost-cancel-delete>Cancel</button>`
+      : `<button type="button" class="btn ghost" data-cost-edit="${esc(b.id)}" ${locked ? 'disabled' : ''}>Edit</button><button type="button" class="btn ghost danger" data-cost-delete="${esc(b.id)}" ${locked ? 'disabled' : ''}>Delete</button>`;
+  return `<article class="holo cost-card tone-${tone}" data-cost-card="${esc(b.id)}">
+    <div class="cost-card-ring">${costRingSvg(b.percent, tone, 84)}</div>
+    <div class="cost-card-main"><h3>${esc(b.name)}</h3><p>${esc(costScopeLabel(b.scope, ctx))}</p><p>${esc(costPeriodLabel(b))}</p>${figures}<div class="cost-chips">${chips}</div>${msg}</div>
+    <div class="cost-card-actions">${actions}</div></article>`;
+}
+
+// #cost/budgets?focus=<id> (the bell, an Overview ring): scroll to the card and highlight it for a moment.
+function costFocus() {
+  const id = new URLSearchParams(costQueryOfHash()).get('focus');
+  if (!id) return;
+  const card = [...document.querySelectorAll('[data-cost-card]')].find((el) => el.dataset.costCard === id);
+  if (!card) return;
+  card.scrollIntoView({ block: 'center', behavior: reduceMotion.matches ? 'auto' : 'smooth' });
+  card.classList.add('cost-focus');
+  clearTimeout(COST.focusTimer);
+  COST.focusTimer = setTimeout(() => card.classList.remove('cost-focus'), 2400);
+}
+
+async function costBadge() {
+  try {
+    const r = await costCall('/api/cost/budgets');
+    if (r.status === 200 && r.json) costBadgePaint(r.json.budgets);
+  } catch {
+    /* the badge waits for the next cycle */
+  }
+}
+function costBadgePaint(list) {
+  const el = document.getElementById('b-cost');
+  if (!el) return;
+  const n = costBadgeCount(list);
+  el.textContent = n ? String(n) : '';
+  el.title = n ? `${n} budget${n === 1 ? '' : 's'} used up or projected over` : '';
+}
+
+/* ---------- the budget form ---------- */
+
+function costFormHtml(b, ctx, taken) {
+  const isNew = !b;
+  const v = b || {
+    name: '',
+    scope: 'global',
+    period: 'month',
+    amount: '',
+    currency: 'USD',
+    measure: 'list',
+    thresholds: [50, 80],
+    projection: true,
+    enforce: 'none',
+  };
+  const dim = v.scope === 'global' ? 'global' : v.scope.dim;
+  const value = v.scope === 'global' ? '' : v.scope.value;
+  const opt = (val, text, on) => `<option value="${esc(val)}" ${val === on ? 'selected' : ''}>${esc(text)}</option>`;
+  const currencies = ctx.display ? ['USD', ctx.display] : ['USD'];
+  if (!currencies.includes(v.currency)) currencies.push(v.currency);
+  return `<div class="cost-drawer-backdrop" data-cost-close-form></div>
+  <aside class="cost-drawer holo-deck" role="dialog" aria-modal="true" aria-labelledby="cost-form-title">
+    <form id="cost-form" novalidate data-cost-id="${esc(isNew ? '' : b.id)}">
+      <div class="cost-drawer-head"><h2 id="cost-form-title">${isNew ? 'Add a budget' : 'Edit budget'}</h2><button type="button" class="btn ghost" data-cost-close-form aria-label="Close">×</button></div>
+      ${b && b.legacy ? '<p class="cost-note warn">Saving moves this budget out of the old setting (monthly budget / key budget), which is cleared.</p>' : ''}
+      <label>Name<input class="input" name="name" maxlength="60" required value="${esc(v.name)}" autocomplete="off"></label>
+      <p class="cost-id">Id <code id="cost-form-id">${esc(isNew ? costIdFrom(v.name, taken) : b.id)}</code>${isNew ? ' · made from the name' : ''}</p>
+      <div class="cost-row">
+        <label>Scope<select class="input" name="dim">${opt('global', 'Global', dim)}${COST_SCOPE_DIMS.map((d) => opt(d, COST_SCOPE_LABEL[d], dim)).join('')}</select></label>
+        <label>Value<input class="input" name="value" list="cost-scope-values" value="${esc(value)}" ${dim === 'global' ? 'disabled' : ''} autocomplete="off"><datalist id="cost-scope-values">${costSuggestOptions(dim, ctx)}</datalist></label>
+      </div>
+      <div class="cost-row">
+        <label>Period<select class="input" name="period">${opt('day', 'Day', v.period)}${opt('week', 'Week (from Monday)', v.period)}${opt('month', 'Month', v.period)}</select></label>
+        <label>Amount<input class="input" name="amount" type="number" min="0" step="any" required value="${esc(v.amount)}"></label>
+        <label>Currency<select class="input" name="currency">${currencies.map((c) => opt(c, c, v.currency)).join('')}</select></label>
+      </div>
+      <label>Measure<select class="input" name="measure">${opt('list', 'Usage value', v.measure)}${opt('billed', 'Paid', v.measure)}</select></label>
+      <fieldset class="cost-row"><legend>Warning levels (%), up to two</legend><input class="input" name="warn1" type="number" min="1" max="99" step="1" value="${esc(v.thresholds[0] ?? '')}" aria-label="First warning level"><input class="input" name="warn2" type="number" min="1" max="99" step="1" value="${esc(v.thresholds[1] ?? '')}" aria-label="Second warning level"></fieldset>
+      <label class="cost-check"><input type="checkbox" name="projection" ${v.projection ? 'checked' : ''}> Alert when the projection passes the amount</label>
+      <fieldset id="cost-enforce"><legend>Enforcement</legend>${costEnforceHtml(v.scope, v.enforce)}</fieldset>
+      <div id="cost-form-msg" role="alert"></div>
+      <div class="cost-drawer-foot"><button class="btn" type="submit">Save</button><button class="btn ghost" type="button" data-cost-close-form>Cancel</button></div>
+    </form>
+  </aside>`;
+}
+function costEnforceHtml(scope, current) {
+  const opts = costEnforceOptions(scope);
+  const pick = opts.some((o) => o.value === current && o.ok) ? current : 'none';
+  return opts
+    .map(
+      (o) =>
+        `<label class="cost-radio${o.ok ? '' : ' off'}"><input type="radio" name="enforce" value="${esc(o.value)}" ${o.value === pick ? 'checked' : ''} ${o.ok ? '' : 'disabled'}> ${esc(o.label)}${o.ok ? '' : ` <small>${esc(o.why)}</small>`}</label>`,
+    )
+    .join('');
+}
+// Known values for a scope dimension; free entry stays allowed.
+function costSuggestOptions(dim, ctx) {
+  let vals = [];
+  if (dim === 'center') vals = [...Object.entries(ctx.centers), ['unassigned', 'Unassigned']];
+  else if (dim === 'key') vals = Object.entries(ctx.keys);
+  else if (dim === 'source') vals = ctx.sources.map((s) => [s, COST_SOURCES[s] || s]);
+  else if (COST.suggest.has(dim)) vals = COST.suggest.get(dim).map((v) => [v, v]);
+  return vals.map(([v, label]) => `<option value="${esc(v)}">${esc(label)}</option>`).join('');
+}
+// Projects, models and providers with spend in the last 90 days, read once per dimension.
+async function costLoadSuggest(dim) {
+  if (!['project', 'model', 'provider'].includes(dim) || COST.suggest.has(dim)) return;
+  const to = costToday();
+  try {
+    const led = await costGet(`/api/cost/ledger?from=${costAddDays(to, -89)}&to=${to}&groupBy=${dim}`);
+    COST.suggest.set(
+      dim,
+      (led.rows || [])
+        .map((r) => r[dim])
+        .filter((v) => typeof v === 'string' && v)
+        .slice(0, 200),
+    );
+    const list = document.getElementById('cost-scope-values');
+    const form = document.getElementById('cost-form');
+    if (list && form && form.elements.dim.value === dim)
+      list.innerHTML = costSuggestOptions(dim, costContext(COST.settings));
+  } catch {
+    /* free entry still works */
+  }
+}
+function costOpenForm(id, opener) {
+  const host = $('#cost-form-host');
+  if (!host || !COST.budgets || COST.budgets.error) return; // the API answers 409 until config.json is fixed
+  const list = COST.budgets.budgets || [];
+  const b = id ? list.find((x) => x.id === id) : null;
+  if (id && !b) return;
+  const ctx = costContext(COST.settings);
+  COST.form = { id: b ? b.id : null, isNew: !b, opener };
+  host.innerHTML = costFormHtml(
+    b,
+    ctx,
+    list.map((x) => x.id),
+  );
+  document.body.classList.add('drawer-locked');
+  const dim = b && b.scope !== 'global' ? b.scope.dim : 'global';
+  costLoadSuggest(dim);
+  const first = host.querySelector('input[name="name"]');
+  if (first) first.focus();
+}
+function costCloseForm() {
+  const host = $('#cost-form-host');
+  if (host) host.innerHTML = '';
+  document.body.classList.remove('drawer-locked');
+  const opener = COST.form && COST.form.opener;
+  COST.form = null;
+  if (opener && document.contains(opener)) opener.focus({ preventScroll: true });
+}
+function costFormFields(form) {
+  const f = Object.fromEntries(new FormData(form));
+  f.projection = form.elements.projection.checked;
+  if (form.elements.value.disabled) f.value = '';
+  return f;
+}
+const costReasonsHtml = (list) => `<ul class="cost-reasons">${list.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>`;
+async function costSubmitForm(form) {
+  const msg = $('#cost-form-msg');
+  const taken = ((COST.budgets && COST.budgets.budgets) || []).map((b) => b.id);
+  const id = form.dataset.costId || costIdFrom(form.elements.name.value, taken);
+  const r = costFormBody(costFormFields(form), { id });
+  if (!r.ok) {
+    msg.innerHTML = costReasonsHtml(r.errors);
+    return;
+  }
+  const btn = form.querySelector('button[type="submit"]');
+  btn.disabled = true;
+  try {
+    const res = await costPost('/api/cost/budgets', r.body);
+    if (res.status === 200) {
+      costCloseForm();
+      await costMountBudgets(true);
+      return;
+    }
+    const j = res.json || {};
+    msg.innerHTML =
+      res.status === 400 && Array.isArray(j.reasons)
+        ? costReasonsHtml(j.reasons)
+        : `<p>${esc(j.error || `Could not save (${res.status})`)}</p>`;
+  } catch (e) {
+    msg.innerHTML = `<p>${esc(e.message)}</p>`;
+  } finally {
+    if (btn.isConnected) btn.disabled = false;
+  }
+}
+async function costDelete(id) {
+  try {
+    const res = await costPost(`/api/cost/budgets/${encodeURIComponent(id)}/delete`, {});
+    COST.confirm = null;
+    if (res.status !== 200) COST.cardMsg[id] = (res.json && res.json.error) || `Could not delete (${res.status})`;
+    else delete COST.cardMsg[id];
+    await costMountBudgets(true);
+    // The keyboard stays on the card that failed, or moves to Add once the card is gone.
+    const to = res.status === 200 ? $('#cost-app [data-cost-add]') : costCardButton(id, 'data-cost-delete')();
+    if (to) to.focus({ preventScroll: true });
+  } catch (e) {
+    COST.confirm = null;
+    COST.cardMsg[id] = e.message;
+    costPaintBudgets(costCardButton(id, 'data-cost-delete'));
+  }
+}
+
+// The Budgets page's own listeners: the cards' buttons, the drawer form and its fields.
+const COST_BUDGET_CLICKS = ['add', 'edit', 'delete', 'confirm-delete', 'cancel-delete', 'close-form']
+  .map((k) => `#cost-app [data-cost-${k}]`)
+  .join(', ');
+function costInstallBudgetEvents() {
+  if (COST.budgetHooked) return;
+  COST.budgetHooked = true;
+  document.addEventListener('click', (e) => {
+    const t = e.target.closest && e.target.closest(COST_BUDGET_CLICKS);
+    if (!t) return;
+    const d = t.dataset;
+    if (t.hasAttribute('data-cost-add')) return costOpenForm(null, t);
+    if (d.costEdit) return costOpenForm(d.costEdit, t);
+    if (d.costDelete) {
+      COST.confirm = d.costDelete;
+      return costPaintBudgets(costCardButton(d.costDelete, 'data-cost-cancel-delete'));
+    }
+    if (d.costConfirmDelete) {
+      t.disabled = true; // one request per confirmation
+      return void costDelete(d.costConfirmDelete);
+    }
+    if (t.hasAttribute('data-cost-cancel-delete')) {
+      const id = COST.confirm;
+      COST.confirm = null;
+      return costPaintBudgets(id ? costCardButton(id, 'data-cost-delete') : null);
+    }
+    if (t.hasAttribute('data-cost-close-form')) return costCloseForm();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (!COST.form) return;
+    if (e.key === 'Escape') return costCloseForm();
+    // A modal drawer: Tab cycles inside it.
+    const drawer = document.querySelector('#cost-form-host .cost-drawer');
+    if (e.key !== 'Tab' || !drawer) return;
+    const items = [...drawer.querySelectorAll('input, select, button, textarea')].filter(
+      (el) => !el.disabled && el.offsetParent !== null,
+    );
+    if (!items.length) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (!drawer.contains(document.activeElement)) {
+      e.preventDefault();
+      first.focus();
+    } else if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  });
+  document.addEventListener('change', (e) => {
+    const t = e.target;
+    if (!t.form || t.form.id !== 'cost-form') return;
+    if (t.name === 'dim') {
+      const form = t.form;
+      form.elements.value.disabled = t.value === 'global';
+      if (t.value === 'global') form.elements.value.value = '';
+      $('#cost-scope-values').innerHTML = costSuggestOptions(t.value, costContext(COST.settings));
+      costLoadSuggest(t.value);
+      costPaintEnforce(form);
+    }
+    if (t.name === 'value') costPaintEnforce(t.form);
+  });
+  document.addEventListener('input', (e) => {
+    const t = e.target;
+    if (t.name === 'name' && t.form && t.form.id === 'cost-form' && !t.form.dataset.costId) {
+      const taken = ((COST.budgets && COST.budgets.budgets) || []).map((b) => b.id);
+      $('#cost-form-id').textContent = costIdFrom(t.value, taken);
+    }
+    // The enforcement choices follow the scope value as it is typed (a source of gateway allows block).
+    if (t.name === 'value' && t.form && t.form.id === 'cost-form') costPaintEnforce(t.form);
+  });
+  document.addEventListener('submit', (e) => {
+    if (e.target.id !== 'cost-form') return;
+    e.preventDefault();
+    costSubmitForm(e.target);
+  });
+}
+function costPaintEnforce(form) {
+  const dim = form.elements.dim.value;
+  const scope = dim === 'global' ? 'global' : { dim, value: form.elements.value.value.trim() };
+  const current = (form.querySelector('input[name="enforce"]:checked') || {}).value || 'none';
+  $('#cost-enforce').innerHTML = `<legend>Enforcement</legend>${costEnforceHtml(scope, current)}`;
+}
+
 /* ---------- events (installed once) ---------- */
 
 function costSetControls(next) {
@@ -747,9 +1307,20 @@ if (typeof module !== 'undefined')
     costStoreGet,
     costStoreSet,
     costMoney,
+    costScopeLabel,
+    costPeriodLabel,
+    costBudgetOrder,
+    costTone,
+    costBadgeCount,
+    costIdFrom,
+    costEnforceOptions,
+    costFormBody,
     costRibbonItems,
     costUnreadText,
+    costBudgetBanners,
     costTableRows,
+    costBudgetCardHtml,
+    costFormHtml,
     costContext,
     costOverviewHtml,
     costValueHtml,

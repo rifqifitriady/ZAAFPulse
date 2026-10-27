@@ -100,6 +100,7 @@ function monMeasure(rule, value, threshold) {
 // A budget alert (rule `budget`): the level it reached or fell back to, or its projection, with its share of the
 // period. The budget's name is the line's session part (the owner's own words, shown as text).
 const MON_PERIOD = { day: 'today', week: 'this week', month: 'this month' };
+const MON_BUDGET_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/; // lib/cost/budgets.js
 const monBudgetRank = (s) => (s === 'exceeded' ? 100 : /^warn_\d{1,2}$/.test(String(s || '')) ? Number(s.slice(5)) : 0);
 function monBudgetChange(a) {
   const now = monBudgetRank(a.state);
@@ -155,6 +156,9 @@ function alertLine(a, rules, agents) {
     // The bell's rule list (/api/monitors) has no budget rule, so its title is named here when the server sent none.
     const title = monText(a.ruleTitle, MON_MAX_TITLE) || 'Budget';
     line = { ...base, kind: 'change', title, measure: monBudgetMeasure(a), ...monBudgetChange(a) };
+    // Its card in Cost Control → Budgets, when the server named the budget.
+    if (typeof a.budget === 'string' && MON_BUDGET_ID.test(a.budget))
+      line.budgetHref = `#cost/budgets?focus=${encodeURIComponent(a.budget)}`;
   } else {
     const st = typeof a.state === 'string' ? a.state : '';
     const prev = typeof a.previous === 'string' ? a.previous : '';
@@ -552,7 +556,7 @@ function monAlertRow(l, unread) {
   return `<div class="mon-alert ${esc(l.tone)}${unread ? ' unread' : ''}" role="listitem">
     <i class="mon-dot" aria-hidden="true"></i>
     <div class="mon-alert-main"><div class="mon-alert-top"><b>${esc(l.title)}</b><span class="mon-change">${esc(l.change)}</span>${unread ? '<span class="mon-new">new</span>' : ''}</div>
-      ${l.measure ? `<div class="mon-measure">${esc(l.measure)}</div>` : ''}${session}</div>${time}</div>`;
+      ${l.measure ? `<div class="mon-measure">${esc(l.measure)}</div>` : ''}${session}${l.budgetHref ? `<a class="mon-session" href="${esc(l.budgetHref)}">Open in Budgets →</a>` : ''}</div>${time}</div>`;
 }
 
 function monBannerHtml(p, actions) {
