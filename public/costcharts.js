@@ -78,8 +78,8 @@ function costAxis(W, m, ih, max, fmt) {
 
 // Cumulative spend per day of the month, the forecast from today to the month's end with its band, and the global
 // monthly budgets as levels. `o` is the overview answer. The scale follows the spend: a budget more than twice the
-// band's top (the forecast's end without a band) is pinned at the top edge as "↑ Budget <amount>", so a large budget
-// never flattens the curve.
+// reach (the larger of the forecast's end and the band's top) is pinned at the top edge as "↑ Budget <amount>", so a
+// large budget never flattens the curve.
 const COST_BUDGET_FIT = 2;
 function costBurnSvg(o, fmt) {
   const W = 1100; // a full-width panel: a wider drawing keeps its text at the panel's size
