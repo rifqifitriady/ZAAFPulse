@@ -412,6 +412,12 @@ function costPlanBarsHtml(plans, fmt, label) {
     .join('')}</div>`;
 }
 
+// A step's change with its sign; a change that formats as zero (under a cent, or under one whole unit of IDR) has none.
+function costStepText(amount, fmt) {
+  const shown = fmt(Math.abs(amount));
+  return shown === fmt(0) ? shown : `${amount < 0 ? '−' : '+'}${shown}`;
+}
+
 // Without cache → cache savings (down) → plan savings (down, or up when a plan cost more) → paid.
 function costWaterfallSvg(w, fmt) {
   const W = 640;
@@ -455,7 +461,7 @@ function costWaterfallSvg(w, fmt) {
     const h = Math.max(1, Math.abs(y(s.from) - y(s.to)));
     const amount = i === 0 || i === 3 ? s.to : s.to - s.from;
     out.push(
-      `<g data-tip="${costTip([s.name, fmt(amount), s.tip])}"><rect class="cost-grow" x="${costF(x)}" y="${costF(top)}" width="${costF(bw)}" height="${costF(h)}" rx="2" fill="${s.color}" fill-opacity=".85" style="filter:drop-shadow(0 0 4px ${s.color})"/><text x="${costF(x + bw / 2)}" y="${costF(top - 6)}" text-anchor="middle" class="cost-val">${esc(i === 0 || i === 3 ? fmt(amount) : Math.abs(amount) < 0.005 ? fmt(0) : `${amount < 0 ? '−' : '+'}${fmt(Math.abs(amount))}`)}</text><text x="${costF(x + bw / 2)}" y="${H - 12}" text-anchor="middle">${esc(s.name)}</text></g>`,
+      `<g data-tip="${costTip([s.name, fmt(amount), s.tip])}"><rect class="cost-grow" x="${costF(x)}" y="${costF(top)}" width="${costF(bw)}" height="${costF(h)}" rx="2" fill="${s.color}" fill-opacity=".85" style="filter:drop-shadow(0 0 4px ${s.color})"/><text x="${costF(x + bw / 2)}" y="${costF(top - 6)}" text-anchor="middle" class="cost-val">${esc(i === 0 || i === 3 ? fmt(amount) : costStepText(amount, fmt))}</text><text x="${costF(x + bw / 2)}" y="${H - 12}" text-anchor="middle">${esc(s.name)}</text></g>`,
     );
     if (i < steps.length - 1) {
       const next = m.l + (i + 1) * step + (step - bw) / 2;

@@ -136,9 +136,16 @@ test('fix round 1: multiplier below 1x keeps two decimals, a zero step has no si
   const p = (multiplier) => ({ source: 'claude', plan: 'P', days: 30, value: 1, fee: 1, multiplier });
   assert.match(C.costPlanBarsHtml([p(0.96)], fmt, String), />0\.96× the fee</);
   assert.match(C.costPlanBarsHtml([p(4.14)], fmt, String), />4\.1× the fee</);
-  const svg = C.costWaterfallSvg({ withoutCache: 5, cacheSaved: 0, usage: 5, planSaved: 0, paid: 5 }, fmt);
-  assert.match(svg, />\$0\.00</);
+  // A step that formats as zero has no sign: under a cent in USD, under one whole unit in IDR.
+  const svg = C.costWaterfallSvg({ withoutCache: 5.004, cacheSaved: 0.004, usage: 5, planSaved: 0, paid: 5 }, fmt);
+  assert.equal(count(svg, /class="cost-val">\$0\.00</g), 2, 'the cache and plan steps');
   assert.doesNotMatch(svg, />[−+]\$0\.00</);
+  const idr = (v) => `IDR ${Math.round(Number(v) || 0).toLocaleString('en')}`;
+  const w = C.costWaterfallSvg({ withoutCache: 80000.4, cacheSaved: 0.4, usage: 80000, planSaved: 0.3, paid: 79999.7 }, idr);
+  assert.equal(count(w, /class="cost-val">IDR 0</g), 2);
+  assert.doesNotMatch(w, />[−+]IDR 0</);
+  const big = C.costWaterfallSvg({ withoutCache: 80002, cacheSaved: 2, usage: 80000, planSaved: 0, paid: 80000 }, idr);
+  assert.match(big, />−IDR 2</, 'a step that shows an amount keeps its sign');
 });
 
 test('fix round 1: waterfall upward step spans paid (top) to usage (bottom)', () => {
