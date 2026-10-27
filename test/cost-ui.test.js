@@ -410,6 +410,29 @@ test('table: under Paid, Unassigned leaves plan fees out, and a plan fee reads "
   assert.doesNotMatch(host.innerHTML, /<td>Unknown<\/td>/);
 });
 
+test('table: a flow node that is not a ledger value (Other, Unknown, Plan fee) never becomes a filter', async () => {
+  const host = tableHost();
+  const L = fakeLedger();
+  const saved = global.reduceMotion;
+  global.reduceMotion = { matches: true };
+  try {
+    resetTable();
+    for (const id of ['model:__other', 'provider:__none', 'provider:__plan']) {
+      U.costFilterTo(id);
+      assert.equal(U.COST.table.filter, null, id);
+    }
+    assert.equal(L.calls.length, 0, 'no table request for them');
+    U.costFilterTo('center:unassigned');
+    assert.deepEqual(U.COST.table.filter, { dim: 'center', key: 'unassigned' });
+    assert.equal(L.calls.length, 1);
+    L.answer(0, []);
+  } finally {
+    global.reduceMotion = saved;
+    resetTable();
+    host.innerHTML = '';
+  }
+});
+
 test('table: aria-sort sits on the header cell; a sort key whose column is gone falls back to spend', () => {
   const host = tableHost();
   resetTable({ sort: { key: 'requests', dir: -1 } });

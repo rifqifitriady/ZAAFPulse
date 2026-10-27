@@ -1313,11 +1313,13 @@ function costInstallEvents() {
   });
 }
 // A flow node filters the table to it (the ledger is asked for its dimension too: costTablePlan).
+// Only a real ledger value filters: Other, Unknown and Plan fee are groupings the flow made, not values of a row.
+const COST_NOT_FILTERS = ['__other', '__none', '__plan'];
 function costFilterTo(id) {
   const i = String(id).indexOf(':');
   if (i < 0) return;
   const dim = id.slice(0, i);
-  if (!COST_DIMS.includes(dim)) return;
+  if (!COST_DIMS.includes(dim) || COST_NOT_FILTERS.includes(id.slice(i + 1))) return;
   COST.table.filter = { dim, key: id.slice(i + 1) };
   costLoadTable();
   const host = $('#cost-table');
@@ -1364,4 +1366,5 @@ if (typeof module !== 'undefined')
     costLoadTable,
     costTablePlan,
     costPaintTable,
+    costFilterTo,
   };
