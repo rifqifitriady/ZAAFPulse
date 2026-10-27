@@ -886,11 +886,12 @@ async function costMountBudgets(quiet) {
     body.innerHTML = costErrorHtml(e.message);
   }
 }
-// A repaint keeps the keyboard where it was: the same card's button (or `focus()`, the button to take it).
+// A repaint keeps the keyboard where it was: the same card's button (or `focus()`, the button to take it). It paints
+// only into the Budgets page: a delete's error can come after the owner moved to another sub-page.
 function costPaintBudgets(focus) {
   const body = $('#cost-body');
   const list = COST.budgets;
-  if (!body || !list) return;
+  if (!body || !list || costSub() !== 'budgets') return;
   const was = document.activeElement;
   const mark =
     was && was !== body && body.contains(was) && was.tagName === 'BUTTON'
@@ -1329,6 +1330,7 @@ if (typeof module !== 'undefined')
     costMountBudgets,
     costRefresh,
     costDelete,
+    costPaintBudgets,
     costContext,
     costOverviewHtml,
     costValueHtml,

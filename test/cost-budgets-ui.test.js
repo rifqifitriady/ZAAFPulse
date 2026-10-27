@@ -395,6 +395,32 @@ test('a delete answer clears only its own confirmation', async () => {
   }
 });
 
+test('a failed delete never paints budget cards into another sub-page', async () => {
+  const p = stubPage(''); // the owner moved to Overview while the delete was out
+  const savedIcon = global.icon;
+  const savedBudgets = U.COST.budgets;
+  try {
+    global.icon = () => '';
+    p.body.querySelectorAll = () => [];
+    global.document.querySelectorAll = () => [];
+    U.COST.budgets = { budgets: [view()] };
+    U.COST.confirm = 'team';
+    await U.costDelete('team'); // fetch rejects: the error path repaints
+    assert.equal(p.body.innerHTML, 'BREAKDOWN', 'Overview is untouched');
+    U.costPaintBudgets();
+    assert.equal(p.body.innerHTML, 'BREAKDOWN');
+    global.state.sub = 'budgets';
+    U.costPaintBudgets();
+    assert.match(p.body.innerHTML, /data-cost-card="team"/, 'on Budgets the cards are painted');
+  } finally {
+    global.icon = savedIcon;
+    U.COST.budgets = savedBudgets;
+    U.COST.confirm = null;
+    U.COST.cardMsg = {};
+    p.restore();
+  }
+});
+
 test('the delete confirmation names the old setting only for a budget from old settings', () => {
   try {
     U.COST.confirm = 'team';
