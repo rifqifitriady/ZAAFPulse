@@ -558,6 +558,22 @@ function costNotesHtml(v) {
 }
 const costErrorHtml = (msg) =>
   `<section class="holo panel cost-error" role="alert"><p>Could not load this page: ${esc(msg)}</p><button type="button" class="btn" data-cost-retry>Retry</button></section>`;
+// A load that failed: the error panel with Retry, except on a quiet refresh over figures already on screen, which
+// stay with a small note in front of them (as text, never markup). The next good answer repaints the page without it.
+function costShowError(body, msg, quiet) {
+  if (!quiet || body.querySelector('.skeleton, .cost-error')) {
+    body.innerHTML = costErrorHtml(msg);
+    return;
+  }
+  let note = body.querySelector('.cost-stale');
+  if (!note) {
+    note = document.createElement('p');
+    note.className = 'cost-note warn cost-stale';
+    note.setAttribute('role', 'status');
+    body.prepend(note);
+  }
+  note.textContent = 'Could not refresh: ' + msg + '. Showing the last figures.';
+}
 
 async function costMountPage(sub, quiet) {
   const body = $('#cost-body');
@@ -621,7 +637,7 @@ async function costMountPage(sub, quiet) {
     }
   } catch (e) {
     if (!live()) return;
-    body.innerHTML = costErrorHtml(e.message);
+    costShowError(body, e.message, quiet);
   }
 }
 
@@ -883,7 +899,7 @@ async function costMountBudgets(quiet) {
     if (!quiet) costFocus();
   } catch (e) {
     if (!live()) return;
-    body.innerHTML = costErrorHtml(e.message);
+    costShowError(body, e.message, quiet);
   }
 }
 // A repaint keeps the keyboard where it was: the same card's button (or `focus()`, the button to take it). It paints
