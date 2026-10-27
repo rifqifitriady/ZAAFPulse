@@ -99,7 +99,7 @@ test('cost view: Breakdown and Value over a range, with the quality readers give
   const dflt = (await s.get('page=breakdown')).body;
   assert.deepEqual([dflt.from, dflt.to], [addDays(TODAY, -29), TODAY], 'the last 30 days by default');
   const v = (await s.get(`page=value&from=${from}&to=${TODAY}&measure=billed`)).body;
-  assert.equal(v.measure, 'billed');
+  assert.equal(v.measure, null, 'Value ignores the measure, so it does not echo one');
   assert.deepEqual(s.seen.pop(), { from, to: TODAY });
   assert.equal(v.plans[0].source, 'claude');
   assert.ok(v.plans[0].multiplier > 0);
