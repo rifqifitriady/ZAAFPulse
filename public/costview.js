@@ -765,8 +765,9 @@ function costTablePlan(groupBy, filter) {
   const show = checked.slice(0, 3);
   return { query: [filter.dim, ...show], show, left: checked[3] };
 }
-// A row's key in a dimension, as the flow names it: a row without a center is "unassigned".
-const costRowKey = (x, dim) => (dim === 'center' ? x.center || 'unassigned' : String(x[dim] ?? ''));
+// A row's key in a dimension, as the flow names it. The ledger gives a usage row without a rule the center
+// "unassigned"; only a plan fee has no center, and it reads "Plan fee" (it never matches center:unassigned).
+const costRowKey = (x, dim) => (dim === 'center' ? (x.center == null ? '__plan' : x.center) : String(x[dim] ?? ''));
 function costTableRows(led, groupBy, { measure, cur, filter }) {
   const field = measure === 'billed' ? (cur === 'USD' ? 'billedUSD' : 'billed') : cur === 'USD' ? 'listUSD' : 'list';
   const rows = (led.rows || [])
@@ -776,7 +777,7 @@ function costTableRows(led, groupBy, { measure, cur, filter }) {
       if (!spend && !x.requests) return null; // a plan row under usage value: nothing to show
       const tokens = Object.values(x.tokens || {}).reduce((a, n) => a + (Number(n) || 0), 0);
       return {
-        keys: groupBy.map((d) => x[d]),
+        keys: groupBy.map((d) => (d === 'center' ? costRowKey(x, d) : x[d])),
         spend,
         requests: x.requests,
         tokens,
