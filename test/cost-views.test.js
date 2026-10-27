@@ -2,6 +2,9 @@
 // numbers out, no clock and no files.
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const V = require('../lib/cost/views');
 const { createCost } = require('../lib/cost');
 
@@ -249,4 +252,62 @@ test('overview: names that are Object.prototype keys neither crash nor pollute',
   assert.equal(o.spikes[1].topModel, 'toString');
   assert.equal(o.topCenter.center, 'constructor');
   assert.equal({}.spend, undefined, 'Object.prototype is untouched');
+});
+
+test('overview: missingRate lists only days with spend in the chosen measure and no rate', () => {
+  const rateOf = (day) => (day >= '2026-10-04' ? 10 : null);
+  const rows = [row({ day: '2026-10-05', listUSD: 2 }), row({ day: '2026-10-06', listUSD: 0, billedUSD: 4 })];
+  const o = V.overview({ rows, today: '2026-10-06', rateOf, currency: 'IDR' });
+  assert.deepEqual(o.missingRate, [], 'days 1-3 and 6 have no list spend; day 6 billed is the other measure');
+  const o2 = V.overview({ rows: [row({ day: '2026-10-02', listUSD: 2 }), ...rows], today: '2026-10-06', rateOf });
+  assert.deepEqual(o2.missingRate, ['2026-10-02']);
+});
+
+test('overview: a plan fee never makes a spike or lifts a baseline, in either measure', () => {
+  const usage = [1, 2, 3, 4].map((d) => row({ day: `2026-10-0${d}`, listUSD: 1, billedUSD: 1 }));
+  const o = V.overview({ rows: [...usage, planRow('2026-10-05', 200)], today: '2026-10-05', measure: 'billed' });
+  assert.ok(o.spikes.every((s) => !s.spike));
+  assert.equal(o.spikes[4].spend, 0, 'the spike series is usage only');
+  assert.equal(o.daily[4].spend, 200, 'the burn-down still holds the fee');
+  const next = V.overview({
+    rows: [...usage, planRow('2026-10-05', 200), row({ day: '2026-10-06', billedUSD: 1 })],
+    today: '2026-10-06',
+    measure: 'billed',
+  });
+  assert.equal(next.spikes[5].baseline, 0.8, 'the fee is not in the baseline');
+});
+
+test('overview: the month total is the daily series sum, the share is rounded once, ties are not locale-dependent', () => {
+  const rows = [
+    row({ day: '2026-10-01', listUSD: 0.1 }),
+    row({ day: '2026-10-02', listUSD: 0.2, center: 'b' }),
+    row({ day: '2026-10-03', listUSD: 0.4, center: 'c' }),
+  ];
+  const o = V.overview({ rows, today: '2026-10-03', rateOf: () => 3 });
+  assert.equal(o.total, o.daily[2].cum);
+  assert.equal(o.topCenter.share, 0.5714);
+  const b = (id, name) => budget({ id, name, percent: 10 });
+  assert.deepEqual(
+    V.budgetOrder([b('1', 'b'), b('2', 'B'), b('3', 'a')]).map((x) => x.name),
+    ['B', 'a', 'b'],
+  );
+});
+
+test('budgetRows: a lost billing history is named', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-views-'));
+  const make = () =>
+    createCost({
+      dir: path.join(dir, 'cost'),
+      gatewayLog: path.join(dir, 'gw.jsonl'),
+      home: '/home/owner',
+      now: () => new Date(2026, 9, 20, 12).getTime(),
+    });
+  const first = make();
+  first.update();
+  fs.writeFileSync(path.join(dir, 'cost', 'ledger-2026-10.jsonl'), `${JSON.stringify(row())}\n`);
+  const file = path.join(dir, 'cost', 'billing.json');
+  fs.writeFileSync(file, '{ nope');
+  fs.writeFileSync(`${file}.bak`, '[]');
+  assert.equal(make().budgetRows({ from: '2026-10-01', to: '2026-10-20' }).historyLost, true);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
