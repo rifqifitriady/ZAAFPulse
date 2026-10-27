@@ -84,7 +84,9 @@ test('ordering, tones and the badge: riskiest first; used up or projected over c
 
 test('the id of a new budget comes from its name, with a suffix when taken', () => {
   assert.equal(U.costIdFrom('Whole Team!'), 'whole-team');
-  assert.equal(U.costIdFrom('  Ácme — gateway  '), 'cme-gateway');
+  assert.equal(U.costIdFrom('  Ácme — gateway  '), 'acme-gateway'); // accents are dropped, not the letter
+  assert.equal(U.costIdFrom('Ácme Gateway'), 'acme-gateway');
+  assert.equal(U.costIdFrom('Crème brûlée'), 'creme-brulee');
   assert.equal(U.costIdFrom(''), 'budget');
   assert.equal(U.costIdFrom('***'), 'budget');
   assert.equal(U.costIdFrom('Team', ['team', 'team-2']), 'team-3');
@@ -310,10 +312,100 @@ test('Budgets is wired: the sidebar link, the sub-page, the badge at start and o
   assert.match(pub('iso.js'), /\['value', 'Value'\],\s*\['budgets', 'Budgets'\],/);
   const app = pub('app.js');
   assert.match(app, /monMountBell\(\);[^\n]*\n\s*costBadge\(\);/);
-  assert.match(app, /await loadSummary\(\);\n\s*costBadge\(\);/);
+  // The badge refreshes on the cycle even when the summary does not load: it is called before the await.
+  assert.match(app, /setInterval\(async \(\) => \{\n\s*costBadge\(\);[^\n]*\n\s*await loadSummary\(\);/);
   const css = pub('styles.css');
   for (const c of ['.cost-card', '.cost-card.cost-focus', '.cost-drawer', '.cost-radio.off'])
     assert.ok(css.includes(c), c);
+});
+
+/* ---------- fix round 1: the page's lifecycle against stubs ---------- */
+
+// A stub page: the router's sub-page, the deck's elements and fetch, restored after each test.
+function stubPage(sub) {
+  const saved = { $: global.$, state: global.state, document: global.document, fetch: global.fetch };
+  const calls = [];
+  const body = { isConnected: true, innerHTML: 'BREAKDOWN' };
+  const app = { contains: () => false };
+  global.state = { sub };
+  global.document = { hidden: false, activeElement: null };
+  global.$ = (s) => (s === '#cost-body' ? body : s === '#cost-app' ? app : null);
+  global.fetch = (url, opts) => {
+    calls.push({ url, opts });
+    return Promise.reject(new Error('offline'));
+  };
+  const restore = () => Object.assign(global, saved);
+  return { calls, body, restore };
+}
+
+test('a reload after a save or a delete paints only into the Budgets page', async () => {
+  const p = stubPage('breakdown'); // the owner moved on while the request was out
+  try {
+    const req = U.COST.req;
+    await U.costMountBudgets(true);
+    assert.equal(p.calls.length, 0, 'no budgets request for another sub-page');
+    assert.equal(p.body.innerHTML, 'BREAKDOWN', 'the other page is untouched');
+    assert.equal(U.COST.req, req, "the other page's own load is not dropped");
+    global.state.sub = 'budgets';
+    await U.costMountBudgets(true);
+    assert.ok(p.calls.length > 0);
+    assert.match(p.body.innerHTML, /Could not load this page: offline/);
+  } finally {
+    p.restore();
+  }
+});
+
+test('the quiet refresh waits while the form drawer or a delete confirmation is open', async () => {
+  const p = stubPage('budgets');
+  try {
+    U.COST.form = { id: null, isNew: true, opener: null };
+    await U.costRefresh(true);
+    U.COST.form = null;
+    U.COST.confirm = 'team';
+    await U.costRefresh(true);
+    assert.equal(p.calls.length, 0, 'nothing reloaded under an open form or confirmation');
+    assert.equal(p.body.innerHTML, 'BREAKDOWN');
+    U.COST.confirm = null;
+    await U.costRefresh(true);
+    assert.ok(p.calls.length > 0, 'with neither open, the quiet refresh loads');
+  } finally {
+    U.COST.form = null;
+    U.COST.confirm = null;
+    p.restore();
+  }
+});
+
+test('a delete answer clears only its own confirmation', async () => {
+  const p = stubPage('breakdown'); // the reload after it is skipped: this test is about the confirmation
+  try {
+    let answer;
+    global.fetch = () => new Promise((r) => (answer = r));
+    U.COST.confirm = 'a';
+    const pending = U.costDelete('a');
+    U.COST.confirm = 'b'; // the owner asked to delete another card meanwhile
+    answer({ status: 200, json: async () => ({ ok: true }) });
+    await pending;
+    assert.equal(U.COST.confirm, 'b');
+    global.fetch = () => Promise.resolve({ status: 200, json: async () => ({ ok: true }) });
+    await U.costDelete('b');
+    assert.equal(U.COST.confirm, null);
+  } finally {
+    U.COST.confirm = null;
+    p.restore();
+  }
+});
+
+test('the delete confirmation names the old setting only for a budget from old settings', () => {
+  try {
+    U.COST.confirm = 'team';
+    const plain = U.costBudgetCardHtml(view(), CTX, false);
+    assert.match(plain, /Delete budget &quot;Team&quot;\?<\/p>/);
+    assert.doesNotMatch(plain, /old settings also clears/);
+    const legacy = U.costBudgetCardHtml(view({ legacy: 'monthlyBudgetUSD' }), CTX, false);
+    assert.match(legacy, /Delete budget &quot;Team&quot;\? A budget from old settings also clears that setting\.<\/p>/);
+  } finally {
+    U.COST.confirm = null;
+  }
 });
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'zp-cost-budgets-ui-'));
