@@ -412,8 +412,8 @@ const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'zp-cost-budgets-ui-'));
 const freePort = () =>
   new Promise((resolve) => {
     const s = net.createServer();
-    // A range of its own: no other test uses 8800-9199.
-    const port = 8800 + Math.floor(Math.random() * 400);
+    // A range of its own: 9000-9199 (test/cost-view-api.test.js takes 8800-8999; no other test uses either).
+    const port = 9000 + Math.floor(Math.random() * 200);
     s.once('error', () => resolve(freePort()));
     s.listen(port, '127.0.0.1', () => s.close(() => resolve(port)));
   });
@@ -445,15 +445,22 @@ test('over HTTP: the demo budget alerts name their budget for the link, path-fre
         },
         stdio: 'ignore',
       });
-      for (let i = 0; i < 80; i++) {
+      for (let i = 0; i < 80 && child.exitCode === null; i++) {
         try {
           await fetch(`http://127.0.0.1:${port}/api/session`, { signal: AbortSignal.timeout(2000) });
-          base = `http://127.0.0.1:${port}`;
+          // An answer could come from another process on the port: trust it only while our child is still up
+          // (a child that lost the port exits).
+          await new Promise((r) => setTimeout(r, 200));
+          if (child.exitCode === null) base = `http://127.0.0.1:${port}`;
           break;
         } catch {
-          if (child.exitCode !== null) break;
           await new Promise((r) => setTimeout(r, 150));
         }
+      }
+      if (!base && child.exitCode === null) {
+        const gone = new Promise((r) => child.once('exit', r));
+        child.kill();
+        await gone;
       }
     }
     assert.ok(base, 'the demo server started');
