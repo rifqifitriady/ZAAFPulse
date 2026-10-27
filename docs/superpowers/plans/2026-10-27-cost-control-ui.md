@@ -37,7 +37,7 @@
 - **Tests.**
   - Never call a real provider or the network: spawned servers run with `NO_JUDGE_PORTS` and a `config.json` with `"pricingSync": { "enabled": false }`; in-process tests use fakes.
   - Never signal a real process.
-  - Spawned servers in this plan take ports from **8800–9199**, a range no other test uses (cost ledger 8000-8399, budgets 8400-8799).
+  - Spawned servers in this plan take ports from **8800–9199**, a range no other test uses (cost ledger 8000-8399, budgets 8400-8799), split between its two files so they never race each other: `test/cost-view-api.test.js` 8800–8999, `test/cost-budgets-ui.test.js` 9000–9199. A test trusts an answer only after it has seen its own child still running (~200 ms after the first answer).
 - **Housekeeping.**
   - Prettier style by hand (`.prettierrc.json`: printWidth 120, singleQuote, trailingComma all, arrowParens always). Short "why" comments, as in `lib/cost/*.js`. Some lines in this plan's code blocks run past 120 columns: wrap them as Prettier would when you write them; the content stays as shown.
   - Commits carry **no `Co-Authored-By`, no "Generated with", no AI attribution of any kind** (owner rule).

@@ -183,8 +183,8 @@ const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'zp-cost-view-'));
 const freePort = () =>
   new Promise((resolve) => {
     const s = net.createServer();
-    // A range of its own: no other test uses 8800-9199.
-    const port = 8800 + Math.floor(Math.random() * 400);
+    // A range of its own: 8800-8999 (test/cost-budgets-ui.test.js takes 9000-9199; no other test uses either).
+    const port = 8800 + Math.floor(Math.random() * 200);
     s.once('error', () => resolve(freePort()));
     s.listen(port, '127.0.0.1', () => s.close(() => resolve(port)));
   });
