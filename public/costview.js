@@ -222,10 +222,13 @@ const costTone = (state) =>
 const costBadgeCount = (list) =>
   (Array.isArray(list) ? list : []).filter((b) => b && (b.state === 'exceeded' || b.projected === true)).length;
 
-/** A new budget's id from its name: lowercase a-z0-9 and dashes, with -2, -3, … when taken. */
+/** A new budget's id from its name: lowercase a-z0-9 and dashes, with -2, -3, … when taken. Accents are dropped
+ *  first, so "Ácme" keeps its letter: "acme". */
 function costIdFrom(name, taken = []) {
   const base =
     String(name || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '')
@@ -860,9 +863,10 @@ function costValueHtml(v, ctx) {
 
 async function costMountBudgets(quiet) {
   const body = $('#cost-body');
-  if (!body) return;
+  // The reload after a save or a delete can come after the owner moved to another sub-page: it never paints there.
+  if (!body || costSub() !== 'budgets') return;
   const my = ++COST.req;
-  const live = () => my === COST.req && body.isConnected;
+  const live = () => my === COST.req && body.isConnected && costSub() === 'budgets';
   try {
     const [list, settings] = await Promise.all([costGet('/api/cost/budgets'), costGet('/api/cost/settings')]);
     if (!live()) return;
@@ -932,7 +936,7 @@ function costBudgetCardHtml(b, ctx, locked) {
   const msg = COST.cardMsg[b.id] ? `<p class="cost-card-reason" role="alert">${esc(COST.cardMsg[b.id])}</p>` : '';
   const actions =
     COST.confirm === b.id
-      ? `<p class="cost-confirm">${esc('Delete budget "' + b.name + '"? A budget from old settings also clears that setting.')}</p><button type="button" class="btn danger" data-cost-confirm-delete="${esc(b.id)}">Delete</button><button type="button" class="btn ghost" data-cost-cancel-delete>Cancel</button>`
+      ? `<p class="cost-confirm">${esc('Delete budget "' + b.name + '"?' + (b.legacy ? ' A budget from old settings also clears that setting.' : ''))}</p><button type="button" class="btn danger" data-cost-confirm-delete="${esc(b.id)}">Delete</button><button type="button" class="btn ghost" data-cost-cancel-delete>Cancel</button>`
       : `<button type="button" class="btn ghost" data-cost-edit="${esc(b.id)}" ${locked ? 'disabled' : ''}>Edit</button><button type="button" class="btn ghost danger" data-cost-delete="${esc(b.id)}" ${locked ? 'disabled' : ''}>Delete</button>`;
   return `<article class="holo cost-card tone-${tone}" data-cost-card="${esc(b.id)}">
     <div class="cost-card-ring">${costRingSvg(b.percent, tone, 84)}</div>
@@ -1119,7 +1123,8 @@ async function costSubmitForm(form) {
 async function costDelete(id) {
   try {
     const res = await costPost(`/api/cost/budgets/${encodeURIComponent(id)}/delete`, {});
-    COST.confirm = null;
+    // Another card's confirmation, asked for while this request was out, stays open.
+    if (COST.confirm === id) COST.confirm = null;
     if (res.status !== 200) COST.cardMsg[id] = (res.json && res.json.error) || `Could not delete (${res.status})`;
     else delete COST.cardMsg[id];
     await costMountBudgets(true);
@@ -1127,7 +1132,7 @@ async function costDelete(id) {
     const to = res.status === 200 ? $('#cost-app [data-cost-add]') : costCardButton(id, 'data-cost-delete')();
     if (to) to.focus({ preventScroll: true });
   } catch (e) {
-    COST.confirm = null;
+    if (COST.confirm === id) COST.confirm = null;
     COST.cardMsg[id] = e.message;
     costPaintBudgets(costCardButton(id, 'data-cost-delete'));
   }
@@ -1321,6 +1326,9 @@ if (typeof module !== 'undefined')
     costTableRows,
     costBudgetCardHtml,
     costFormHtml,
+    costMountBudgets,
+    costRefresh,
+    costDelete,
     costContext,
     costOverviewHtml,
     costValueHtml,

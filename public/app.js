@@ -1328,8 +1328,8 @@ function applyTheme() {
     if (drawer.kind === 'apps') paintDrawer(false);
   }, 5000);
   setInterval(async () => {
+    costBadge(); // before the summary: the badge refreshes even when the summary does not load
     await loadSummary();
-    costBadge();
     if (state.route === 'live' && updateLive()) {
       /* patched in place */
     } else if (
