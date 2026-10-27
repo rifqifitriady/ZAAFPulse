@@ -55,6 +55,14 @@ function costPath(pts) {
   }
   return d;
 }
+// The y-axis labels are right-anchored 6 px left of the margin: the margin grows to fit the longest one ("IDR 20,000"),
+// at about 0.62 em per glyph of the 10.5 px axis text.
+const COST_GLYPH = 0.62 * 10.5;
+function costAxisLeft(max, fmt, min) {
+  let n = 0;
+  for (let i = 0; i <= 4; i++) n = Math.max(n, String(fmt(max * (1 - i / 4))).length);
+  return Math.max(min, Math.ceil(n * COST_GLYPH + 8));
+}
 function costAxis(W, m, ih, max, fmt) {
   const out = [];
   for (let i = 0; i <= 4; i++) {
@@ -77,7 +85,6 @@ function costBurnSvg(o, fmt) {
   const W = 1100; // a full-width panel: a wider drawing keeps its text at the panel's size
   const H = 300;
   const m = { t: 14, r: 12, b: 24, l: 60 };
-  const iw = W - m.l - m.r;
   const ih = H - m.t - m.b;
   const days = o.month.days;
   const f = o.forecast;
@@ -87,6 +94,8 @@ function costBurnSvg(o, fmt) {
   const lines = o.budgetLines.filter(fits);
   const pinned = o.budgetLines.filter((l) => !fits(l));
   const max = costNiceMax(Math.max(o.total || 0, reach, ...lines.map((l) => l.amount || 0)) * 1.1);
+  m.l = costAxisLeft(max, fmt, m.l);
+  const iw = W - m.l - m.r;
   const x = (day) => m.l + ((Number(day.slice(8, 10)) - 1) / Math.max(1, days - 1)) * iw;
   const y = (v) => m.t + ih - (Math.min(v, max) / max) * ih;
   const out = [costAxis(W, m, ih, max, fmt)];
@@ -137,10 +146,11 @@ function costSpikeSvg(spikes, fmt) {
   const W = 640;
   const H = 170;
   const m = { t: 12, r: 10, b: 22, l: 60 };
-  const iw = W - m.l - m.r;
   const ih = H - m.t - m.b;
   const n = Math.max(1, spikes.length);
   const max = costNiceMax(Math.max(...spikes.map((s) => Math.max(s.spend || 0, s.baseline || 0)), 0));
+  m.l = costAxisLeft(max, fmt, m.l);
+  const iw = W - m.l - m.r;
   const step = iw / n;
   const bw = Math.max(2, Math.min(18, step * 0.62));
   const y = (v) => m.t + ih - (Math.min(v || 0, max) / max) * ih;
@@ -407,9 +417,10 @@ function costWaterfallSvg(w, fmt) {
   const W = 640;
   const H = 230;
   const m = { t: 22, r: 12, b: 34, l: 60 };
-  const iw = W - m.l - m.r;
   const ih = H - m.t - m.b;
   const max = costNiceMax(Math.max(w.withoutCache, w.usage, w.paid, 0));
+  m.l = costAxisLeft(max, fmt, m.l);
+  const iw = W - m.l - m.r;
   const y = (v) => m.t + ih - (Math.max(0, Math.min(v, max)) / max) * ih;
   const steps = [
     {
@@ -536,10 +547,11 @@ function costUnitSvg(unit, key, fmt, color) {
   const W = 340;
   const H = 170;
   const m = { t: 10, r: 8, b: 22, l: 56 };
-  const iw = W - m.l - m.r;
   const ih = H - m.t - m.b;
   const vals = unit.map((u) => u[key]);
   const max = costNiceMax(Math.max(0, ...vals.filter((v) => v != null)));
+  m.l = costAxisLeft(max, fmt, m.l);
+  const iw = W - m.l - m.r;
   const x = (i) => m.l + (unit.length < 2 ? iw / 2 : (i / (unit.length - 1)) * iw);
   const y = (v) => (v == null ? null : m.t + ih - (Math.min(v, max) / max) * ih);
   const out = [costAxis(W, m, ih, max, fmt)];
@@ -565,6 +577,7 @@ if (typeof module !== 'undefined')
   module.exports = {
     COST_TONE,
     costNiceMax,
+    costAxisLeft,
     costDayLabel,
     costPath,
     costBurnSvg,

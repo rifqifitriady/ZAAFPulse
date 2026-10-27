@@ -208,3 +208,35 @@ test('costcharts.js builds no markup from server names without esc() (S1) and lo
   for (const [name] of src.matchAll(/^(?:const|let|function|async function)\s+([A-Za-z_$][\w$]*)/gm))
     assert.match(name.split(/\s+/).pop(), /^(?:cost|COST)/, `${name}: every top-level name starts with cost`);
 });
+
+// Fix round 1 (Task 7 review): a y-axis label is right-anchored at the left margin; the margin grows to fit the
+// longest one, so "IDR 20,000" is not cut off at the chart's left edge. Width estimate: 0.62 em at 10.5 px per glyph.
+test('axis labels: the left margin fits the longest tick label in any currency', () => {
+  const idr = (v) => `IDR ${Math.round(v).toLocaleString('en')}`;
+  const GLYPH = 0.62 * 10.5;
+  const fits = (svg, name) => {
+    const ticks = [...svg.matchAll(/<text x="([\d.]+)" y="[\d.]+" text-anchor="end">([^<]*)<\/text>/g)];
+    assert.ok(ticks.length >= 5, `${name}: axis labels found`);
+    for (const [, x, label] of ticks) assert.ok(Number(x) - label.length * GLYPH >= 0, `${name}: "${label}" at ${x}`);
+  };
+  const spikes = ['2026-10-01', '2026-10-02'].map((day, i) => ({
+    day,
+    spend: 18000 + i,
+    baseline: null,
+    spike: false,
+    topModel: null,
+  }));
+  fits(C.costSpikeSvg(spikes, idr), 'spikes');
+  const rows = [9000, 12000, 15000, 11000].map((v, i) => row({ day: `2026-10-0${i + 1}`, listUSD: v }));
+  fits(C.costBurnSvg(V.overview({ rows, today: '2026-10-04' }), idr), 'burn-down');
+  const w = { withoutCache: 912000, cacheSaved: 12000, usage: 900000, planSaved: 100000, paid: 800000 };
+  fits(C.costWaterfallSvg(w, idr), 'waterfall');
+  const unit = ['2026-10-01', '2026-10-02'].map((day) => ({ day, perRequest: 23456, perMillionTokens: null }));
+  fits(C.costUnitSvg(unit, 'perRequest', idr, '#fff'), 'unit');
+  // Short labels keep the drawn margin.
+  const small = C.costSpikeSvg(
+    spikes.map((s) => ({ ...s, spend: 3 })),
+    fmt,
+  );
+  assert.match(small, /<text x="54" y="[\d.]+" text-anchor="end">\$3\.00</);
+});
