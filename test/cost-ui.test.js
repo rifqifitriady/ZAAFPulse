@@ -351,7 +351,11 @@ test("table: the query and the labels come from the page's current controls and 
 
 test('table: Unassigned filters the unassigned rows; a filter never drops a checked grouping', () => {
   const led = { rows: [ROW('a', { center: 'unassigned' }), ROW('b', { center: 'acme' })] };
-  const un = U.costTableRows(led, ['model'], { measure: 'list', cur: 'USD', filter: { dim: 'center', key: 'unassigned' } });
+  const un = U.costTableRows(led, ['model'], {
+    measure: 'list',
+    cur: 'USD',
+    filter: { dim: 'center', key: 'unassigned' },
+  });
   assert.deepEqual(
     un.rows.map((r) => r.keys[0]),
     ['a'],

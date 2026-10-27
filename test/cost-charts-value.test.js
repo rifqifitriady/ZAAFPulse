@@ -141,7 +141,10 @@ test('fix round 1: multiplier below 1x keeps two decimals, a zero step has no si
   assert.equal(count(svg, /class="cost-val">\$0\.00</g), 2, 'the cache and plan steps');
   assert.doesNotMatch(svg, />[−+]\$0\.00</);
   const idr = (v) => `IDR ${Math.round(Number(v) || 0).toLocaleString('en')}`;
-  const w = C.costWaterfallSvg({ withoutCache: 80000.4, cacheSaved: 0.4, usage: 80000, planSaved: 0.3, paid: 79999.7 }, idr);
+  const w = C.costWaterfallSvg(
+    { withoutCache: 80000.4, cacheSaved: 0.4, usage: 80000, planSaved: 0.3, paid: 79999.7 },
+    idr,
+  );
   assert.equal(count(w, /class="cost-val">IDR 0</g), 2);
   assert.doesNotMatch(w, />[−+]IDR 0</);
   const big = C.costWaterfallSvg({ withoutCache: 80002, cacheSaved: 2, usage: 80000, planSaved: 0, paid: 80000 }, idr);
