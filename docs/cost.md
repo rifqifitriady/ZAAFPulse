@@ -311,6 +311,73 @@ These routes have the same dashboard sign-in and JSON requirements as the other 
 Writes need `Content-Type: application/json` (415 otherwise). Responses and validation reasons never expose a file
 path.
 
+## Cost Control menu
+
+The sidebar's **Cost Control** (after Quality & safety) has four pages. Each reads the ledger as billed, with the
+corrections and billing applied, and shows only numbers, names, `~` folders and model names.
+
+| Page | Question | What it shows |
+|---|---|---|
+| Overview (`#cost`) | How much this month, and is it safe? | Month to date in both measures; the forecast at the mean daily spend, with a band from the 25th to 75th percentile day (none before the 3rd day); the global monthly budgets as lines; daily spend against a baseline; budget rings, riskiest first |
+| Breakdown (`#cost/breakdown`) | Where does the money go? | Source, provider, model and cost center as a flow (top 6 per column, the rest as Other; plan fees as "Plan fee"); projects by cost center as an isometric treemap; a calendar of the range; a table grouped by up to four dimensions |
+| Value (`#cost/value`) | Is it worth it? | Usage value of each plan's days against its fee, with the multiplier; a waterfall from "without cache" through cache and plan savings to what was paid; local models (requests and tokens, not priced); spend per request against tool-call accuracy per model; spend per request, per million tokens and per 1,000 successful tool calls, per day |
+| Budgets (`#cost/budgets`) | Set the limits | One card per budget with its ring, scope, period, spent of amount and chips; add, edit and delete in a drawer |
+
+**Controls.** One bar on every page but Budgets: the range (7 days, 30 days, this month, last month or two dates, at
+most 400 days), the currency (USD, or the display currency once it has a rate) and the measure (usage value or paid).
+They live in the URL, `#cost/<page>?range=7d&cur=IDR&measure=billed`, and the last choice is kept in the browser's
+`localStorage` (`zp.cost.controls`). A value that does not read falls back to 30 days, USD and usage value. The
+Overview is always the current month. Value shows both measures and hides that switch.
+
+**Spikes.** A day is a spike when its usage spend is more than twice its baseline and at least $1 over it. The baseline
+is the mean of the known days among the 7 before it. A day needs at least 3 known days of baseline; days before the
+ledger's first row are unknown, not zero, so a new ledger shows no spikes at first. A plan fee never counts as a spike
+in either measure. The burn-down still includes plan fees, under "Paid".
+
+**Burn-down scale.** The axis covers the spend so far, the forecast's end and the band. A budget more than twice that
+reach is not drawn to scale: it is pinned at the top edge as "↑ Budget <amount>", so the curve stays readable.
+
+**Breakdown.** The treemap shows at most 40 blocks. With spend in more than 39 cost centers, the smallest fold into
+one "Other centers" block. Clicking a node in the flow filters the table by it; that adds the node's dimension to the
+table's grouping. The table takes up to four groupings: with four checked and a filter on, the last grouping is left
+out while the filter is on, and an amber chip says so.
+
+**Budgets page.**
+
+- The id comes from the name: accents stripped, lowercase `a-z`, `0-9` and dashes, with `-2`, `-3` when taken.
+- The enforcement options match what the server accepts. Block: global, key, cost center, model, provider and source
+  gateway. Pause: global, project, cost center, model and source `claude` or `codex`.
+- Deleting a budget that came from the old settings says so; a budget saved from this page does not.
+- A budget alert in the bell has an "Open in Budgets" link to `#cost/budgets?focus=<id>`, which shows that card.
+- The badge on the menu counts the budgets used up or projected over.
+
+**Refresh.** The cost pages refresh every 60 seconds, quietly, and keep what is on screen until the new answer comes.
+A refresh waits while a form field has focus, while the Budgets drawer or a delete confirmation is open, and while the
+tab is hidden. With the system's reduced motion setting, charts and numbers appear at their final state.
+
+**Cache savings** are an estimate: cache-read tokens × (input price − cache-read price) at the base rates of each
+row's price version. Prompt-length tiers and US-only pricing are left out. Free (local) rows add no money.
+
+**Tool-call accuracy per model** follows the Quality page's definition (see
+[docs/quality-metrics.md](quality-metrics.md#accuracy-which-failures-count-against-the-model)), counted per model from
+the Claude Code and Codex logs. A model with fewer than 50 tool results in the range is drawn hollow ("little data"); a
+model without tool calls (gateway only) is listed under the chart. When a Datasets experiment that ended in the range
+ran a model, its pass rate (passes over totals across its evaluators) is in the dot's tooltip. After the update that
+added these counts, the index is rebuilt once at the first start.
+
+**Gaps and notes.** A month that did not read, a day that had no rate and billing that did not read are named above the
+charts. A day with no rate is counted in USD, and only those days are listed in `missingRate`. A unit-cost day without
+its denominator is a gap, not a zero. A ribbon repeats the ledger status problems (`GET /api/cost/status`). If the
+budgets or the accuracy cannot be read, the page says so and draws the rest.
+
+**Limits of these pages.**
+
+- Cache savings is an estimate, as above.
+- Local models are not priced. They show requests and tokens only.
+- Per-session cost is not shown.
+- A new budget saved with an id that another browser tab just created replaces that budget. There is no create-only
+  mode yet.
+
 ## Fail closed
 
 The ledger never guesses over data it could not read.
@@ -358,6 +425,7 @@ These routes need the dashboard sign-in. A gateway API key, MCP or A2A is never 
 | `GET /api/cost/ledger?from&to&groupBy&currency` | rows grouped by 1–4 of `day`, `source`, `provider`, `model`, `project`, `center`, `keyId`, `agent`, `kind`; at most 400 days; `to` defaults to today, `from` to the first of its month |
 | `GET /api/cost/status` | the collectors, the price version, unpriced and backfilled counts, settings, billing and ledger health |
 | `GET /api/cost/settings` | `{ settings, error, sources, unassigned, keys: [{ id, name }] }` |
+| `GET /api/cost/view?page&from&to&currency&measure` | what one Cost Control page draws. `page` is `overview` (always the current month), `breakdown` or `value`; `from`/`to` default to the last 30 days, at most 400; `measure` is `list` (default) or `billed`. The answer is `{ page, from, to, currency, measure, unread, missingRate, billing: { error, historyLost } }` beside the page's data, plus `budgetsError` on Overview and `accuracyError` on Value (a fixed phrase, or null). 400 for an unknown page, a bad measure or date, a range over 400 days or a currency without rates; 503 with a `code` while the ledger does not read |
 | `POST /api/cost/settings` | 200 `{ settings }` (normalized; today's rows are re-attributed at once), or 400 `{ error, reasons }` |
 | `GET /api/cost/budgets` | the budgets in force, their state, list warnings, guard problems and kept-file status |
 | `POST /api/cost/budgets` | create or replace one budget; 400 for validation, 409 while a hand edit is invalid or pause is unavailable |
@@ -386,7 +454,7 @@ Errors: 400 for bad input, 409 for a restate while the saved settings are invali
 
 ## Demo mode
 
-The demo shows a synthetic ledger held in memory: three cost centers, Claude Code on a plan, an IDR rate, two price versions, backfilled days, an unpriced model and a free local judge. No files are written and the pass never runs; settings and restate work in memory.
+The demo shows a synthetic ledger held in memory: three cost centers, Claude Code on a plan, an IDR rate, two price versions, backfilled days, an unpriced model and a free local judge. No files are written and the pass never runs; settings and restate work in memory. The Cost Control pages draw from it too; the demo's quality signals carry per-model tool results, so Value shows a scatter.
 
 ## Known limits
 
