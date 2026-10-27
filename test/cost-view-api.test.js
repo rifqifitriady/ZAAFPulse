@@ -21,7 +21,7 @@ const NOW = new Date(2026, 9, 22, 15).getTime(); // a Thursday afternoon, 70 % i
 const TODAY = dayOf(NOW);
 const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-3, msg || `${a} is not ${b}`);
 
-function setup({ accuracy, passRates, cost: fake } = {}) {
+function setup({ accuracy, passRates, cost: fake, budgets: fakeBudgets } = {}) {
   const d = costDemo(NOW);
   const cost =
     fake || createCost({ demo: d, getSettings: () => d.settings, home: HOME, now: () => NOW, nocase: false });
@@ -42,7 +42,7 @@ function setup({ accuracy, passRates, cost: fake } = {}) {
     settings: { get: () => d.settings, save: () => {} },
     home: HOME,
     now: () => NOW,
-    budgets,
+    budgets: fakeBudgets || budgets,
     accuracy:
       accuracy ||
       ((range) => {
@@ -138,7 +138,24 @@ test('cost view: 400 for a bad page, measure, currency or range; quality readers
   const v = await s.get('page=value');
   assert.equal(v.status, 200);
   assert.deepEqual(v.body.scatter.dots, []);
+  assert.equal(v.body.accuracyError, 'tool-call accuracy could not be read');
+  const ok = await setup().get('page=value');
+  assert.equal(ok.body.accuracyError, null);
   for (const b of s.bodies) assert.doesNotMatch(b, PATHS);
+});
+
+test('cost view: budgets that cannot be evaluated are said so on the Overview', async () => {
+  const bad = setup({
+    budgets: {
+      evaluate: () => {
+        throw new Error('boom');
+      },
+    },
+  });
+  const o = (await bad.get('page=overview')).body;
+  assert.equal(o.budgetsError, 'budgets could not be read');
+  assert.deepEqual(o.rings, []);
+  assert.equal((await setup().get('page=overview')).body.budgetsError, null);
 });
 
 test('cost view: a ledger that is not available is a path-free 503 with its code', async () => {
