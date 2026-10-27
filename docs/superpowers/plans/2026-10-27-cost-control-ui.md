@@ -55,7 +55,7 @@
 - Band: the 25th and 75th percentile (linear interpolation) of the elapsed days' spends, each × days left, added to month-to-date. Fewer than 3 elapsed days: `early: true`, `low`/`high` null.
 - Budget lines: budgets with `scope: 'global'` and `period: 'month'`, at `amount` in their own currency, or converted at the display currency's latest rate (`display: { code, rate }`), else skipped (`budgetsSkipped`).
 - Spike: a day whose spend is > 2 × its baseline **and** ≥ $1 over it, in USD. The baseline is the mean of the **known** days among the 7 before it (the days before the 1st read from `before`); a day before the ledger's first row (the earliest day of any row in `rows` + `before`) is unknown, not 0. With fewer than 3 known days (`BASELINE_MIN`) the baseline is `null` and the day is never a spike; the chart draws no baseline segment there.
-- Burn-down scale (drawn in Task 5): the y-axis top is the larger of the cumulative spend and the band's top (the forecast's end when there is no band), × 1.1, rounded up to a nice value. A budget line is part of the scale only when its amount is ≤ 2 × the band's top (or the forecast's end); otherwise it is pinned at the top edge as a dashed marker labeled "↑ Budget <amount>" (`COST_BUDGET_FIT`).
+- Burn-down scale (drawn in Task 5): the y-axis top is the larger of the cumulative spend and the reach (the larger of the forecast's end and the band's top; the forecast's end when there is no band), × 1.1, rounded up to a nice value. A budget line is part of the scale only when its amount is ≤ 2 × the reach; otherwise it is pinned at the top edge as a dashed marker labeled "↑ Budget <amount>" (`COST_BUDGET_FIT`).
 - Rings: at most 8, riskiest first (`exceeded`, then `projected`, then the highest percent, `no_data` last), `moreBudgets` for the rest. Tone: `ok` → cyan, `warn_*` → orange, `exceeded` → pink, `no_data` → muted, dashed.
 - At risk: budgets `exceeded`, `projected` or at a warning level.
 
@@ -5711,7 +5711,7 @@ The spec left these open, or a detail of it did not fit the code; each is built 
 17. **The index rebuild** from `CACHE_VERSION` 11 is a one-time reindex at the first start after the update, as for every earlier bump.
 18. **Count-up.** Tile numbers count up on an animated load and are set to their final value after 1 s even when frames stop (a hidden tab).
 19. **Spike baseline** (owner decision, 2026-10-27): only known days count; fewer than 3 known days means no baseline and no spike (V3).
-20. **Burn-down scale** (owner decision, 2026-10-27): the axis follows the spend and the band; a budget beyond twice the band's top is pinned at the top edge (V3).
+20. **Burn-down scale** (owner decision, 2026-10-27): the axis follows the spend, the forecast's end and the band; a budget beyond twice that reach is pinned at the top edge (V3). Amended in Task 5's review: with skewed spend the mean forecast passes the band's top, and a scale on the band alone clipped it.
 21. **Local-models wording** (owner decision, 2026-10-27): "Not priced: these run on your own machine. A later version compares them with a cloud model."
 22. **The demo** gets per-model tool counts without changing any other demo number (the model of each call is drawn in the same order as before). Its experiments ran models the demo ledger does not have (Haiku, local models), so no pass rate shows in the demo's scatter; the tooltip path is tested in Node.
 
