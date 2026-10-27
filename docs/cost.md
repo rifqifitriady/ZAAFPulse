@@ -319,15 +319,16 @@ corrections and billing applied, and shows only numbers, names, `~` folders and 
 | Page | Question | What it shows |
 |---|---|---|
 | Overview (`#cost`) | How much this month, and is it safe? | Month to date in both measures; the forecast at the mean daily spend, with a band from the 25th to 75th percentile day (none before the 3rd day); the global monthly budgets as lines; daily spend against a baseline; budget rings, riskiest first |
-| Breakdown (`#cost/breakdown`) | Where does the money go? | Source, provider, model and cost center as a flow (top 6 per column, the rest as Other; plan fees as "Plan fee"); projects by cost center as an isometric treemap; a calendar of the range; a table grouped by up to four dimensions |
+| Breakdown (`#cost/breakdown`) | Where does the money go? | Source, provider, model and cost center as a flow (top 6 per column, the rest as Other; plan fees as "Plan fee"); projects by cost center as an isometric treemap (footprint by spend, block height by spend per request); a calendar of the range; a table grouped by up to four dimensions, read from `/api/cost/ledger` |
 | Value (`#cost/value`) | Is it worth it? | Usage value of each plan's days against its fee, with the multiplier; a waterfall from "without cache" through cache and plan savings to what was paid; local models (requests and tokens, not priced); spend per request against tool-call accuracy per model; spend per request, per million tokens and per 1,000 successful tool calls, per day |
-| Budgets (`#cost/budgets`) | Set the limits | One card per budget with its ring, scope, period, spent of amount and chips; add, edit and delete in a drawer |
+| Budgets (`#cost/budgets`) | Set the limits | One card per budget with its ring, scope, period, spent of amount and chips; add, edit and delete in a drawer (the rules are in [Budgets](#budgets)) |
 
 **Controls.** One bar on every page but Budgets: the range (7 days, 30 days, this month, last month or two dates, at
 most 400 days), the currency (USD, or the display currency once it has a rate) and the measure (usage value or paid).
 They live in the URL, `#cost/<page>?range=7d&cur=IDR&measure=billed`, and the last choice is kept in the browser's
 `localStorage` (`zp.cost.controls`). A value that does not read falls back to 30 days, USD and usage value. The
-Overview is always the current month. Value shows both measures and hides that switch.
+Overview is always the current month. Value hides the measure switch: its plan and waterfall figures show both
+measures, and the accuracy chart and the unit costs use usage value (local models show requests and tokens, no money).
 
 **Spikes.** A day is a spike when its usage spend is more than twice its baseline and at least $1 over it. The baseline
 is the mean of the known days among the 7 before it. A day needs at least 3 known days of baseline; days before the
@@ -337,9 +338,11 @@ in either measure. The burn-down still includes plan fees, under "Paid".
 **Burn-down scale.** The axis covers the spend so far, the forecast's end and the band. A budget more than twice that
 reach is not drawn to scale: it is pinned at the top edge as "↑ Budget <amount>", so the curve stays readable.
 
-**Breakdown.** The treemap shows at most 40 blocks. With spend in more than 39 cost centers, the smallest fold into
-one "Other centers" block. Clicking a node in the flow filters the table by it; that adds the node's dimension to the
-table's grouping. The table takes up to four groupings: with four checked and a filter on, the last grouping is left
+**Breakdown.** The treemap shows at most 40 blocks, the per-center "Other" blocks (a center's smallest projects
+beyond the cap) included. With spend in more than 39 cost centers, the smallest fold into one "Other centers" block.
+Clicking a node in the flow filters the table by it: the table asks the ledger for that dimension too, without a column
+for it (every row has the same value). Under "Paid", Unassigned holds the usage rows without a center rule; plan fees
+have no center and read "Plan fee". The table takes up to four groupings: with four checked and a filter on, the last grouping is left
 out while the filter is on, and an amber chip says so.
 
 **Budgets page.**
@@ -353,7 +356,8 @@ out while the filter is on, and an amber chip says so.
 
 **Refresh.** The cost pages refresh every 60 seconds, quietly, and keep what is on screen until the new answer comes.
 A refresh waits while a form field has focus, while the Budgets drawer or a delete confirmation is open, and while the
-tab is hidden. With the system's reduced motion setting, charts and numbers appear at their final state.
+tab is hidden. A quiet refresh that fails keeps the last figures with a note ("Could not refresh: …"); a load that
+fails shows the error with Retry. With the system's reduced motion setting, charts and numbers appear at their final state.
 
 **Cache savings** are an estimate: cache-read tokens × (input price − cache-read price) at the base rates of each
 row's price version. Prompt-length tiers and US-only pricing are left out. Free (local) rows add no money.
@@ -366,7 +370,8 @@ ran a model, its pass rate (passes over totals across its evaluators) is in the 
 added these counts, the index is rebuilt once at the first start.
 
 **Gaps and notes.** A month that did not read, a day that had no rate and billing that did not read are named above the
-charts. A day with no rate is counted in USD, and only those days are listed in `missingRate`. A unit-cost day without
+charts. A day with no rate is counted in USD; `missingRate` lists only the days that had spend in the chosen measure (or a
+drawn baseline) without a rate. A unit-cost day without
 its denominator is a gap, not a zero. A ribbon repeats the ledger status problems (`GET /api/cost/status`). If the
 budgets or the accuracy cannot be read, the page says so and draws the rest.
 
