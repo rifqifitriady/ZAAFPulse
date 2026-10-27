@@ -586,6 +586,11 @@ const SUBPAGES = {
     ['agents', 'Specialist agents'],
     ['collaboration', 'Collaboration'],
   ],
+  cost: [
+    ['', 'Overview'],
+    ['breakdown', 'Breakdown'],
+    ['value', 'Value'],
+  ],
   squad: [
     ['', 'Office'],
     ['logs', 'Logs'],
