@@ -263,6 +263,16 @@ test('overview: missingRate lists only days with spend in the chosen measure and
   assert.deepEqual(o2.missingRate, ['2026-10-02']);
 });
 
+test('overview: a day whose baseline was drawn without a rate is named in missingRate, even with no spend', () => {
+  // Days 1-3 have a rate and 1 USD each; day 4 has no rate and no spend, but its baseline (1 USD) is drawn in USD.
+  const rateOf = (day) => (day <= '2026-10-03' ? 10 : null);
+  const rows = [1, 2, 3].map((d) => row({ day: `2026-10-0${d}`, listUSD: 1 }));
+  const o = V.overview({ rows, today: '2026-10-04', rateOf, currency: 'IDR' });
+  assert.equal(o.spikes[3].spend, 0);
+  assert.equal(o.spikes[3].baseline, 1, 'the baseline counted in USD');
+  assert.deepEqual(o.missingRate, ['2026-10-04']);
+});
+
 test('overview: a plan fee never makes a spike or lifts a baseline, in either measure', () => {
   const usage = [1, 2, 3, 4].map((d) => row({ day: `2026-10-0${d}`, listUSD: 1, billedUSD: 1 }));
   const o = V.overview({ rows: [...usage, planRow('2026-10-05', 200)], today: '2026-10-05', measure: 'billed' });
@@ -302,12 +312,15 @@ test('budgetRows: a lost billing history is named', () => {
       home: '/home/owner',
       now: () => new Date(2026, 9, 20, 12).getTime(),
     });
-  const first = make();
-  first.update();
-  fs.writeFileSync(path.join(dir, 'cost', 'ledger-2026-10.jsonl'), `${JSON.stringify(row())}\n`);
-  const file = path.join(dir, 'cost', 'billing.json');
-  fs.writeFileSync(file, '{ nope');
-  fs.writeFileSync(`${file}.bak`, '[]');
-  assert.equal(make().budgetRows({ from: '2026-10-01', to: '2026-10-20' }).historyLost, true);
-  fs.rmSync(dir, { recursive: true, force: true });
+  try {
+    const first = make();
+    first.update();
+    fs.writeFileSync(path.join(dir, 'cost', 'ledger-2026-10.jsonl'), `${JSON.stringify(row())}\n`);
+    const file = path.join(dir, 'cost', 'billing.json');
+    fs.writeFileSync(file, '{ nope');
+    fs.writeFileSync(`${file}.bak`, '[]');
+    assert.equal(make().budgetRows({ from: '2026-10-01', to: '2026-10-20' }).historyLost, true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

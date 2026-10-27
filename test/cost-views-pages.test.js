@@ -387,3 +387,15 @@ test('breakdown and value: missingRate lists only days where something was count
   assert.deepEqual(V.breakdown({ rows, ...RANGE, rateOf }).missingRate, ['2026-10-02']);
   assert.deepEqual(V.value({ rows, ...RANGE, rateOf }).missingRate, ['2026-10-02']);
 });
+
+test('value: local models with the same requests and name are ordered by source', () => {
+  const free = (source) => row({ source, provider: 'ollama', model: 'q', free: true, listUSD: 0, requests: 2 });
+  for (const order of [
+    ['judge', 'gateway'],
+    ['gateway', 'judge'],
+  ])
+    assert.deepEqual(
+      V.value({ rows: order.map(free), ...RANGE }).local.models.map((m) => m.source),
+      ['gateway', 'judge'],
+    );
+});
