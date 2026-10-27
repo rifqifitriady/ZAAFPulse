@@ -331,8 +331,19 @@ function stubPage(sub) {
     isConnected: true,
     innerHTML: 'BREAKDOWN',
     kids,
-    querySelector: (sel) =>
-      kids.find((k) => sel.split(',').some((x) => k.className.split(' ').includes(x.trim().slice(1)))) || null,
+    // `kids` are the body's own children; `nested` sit deeper (the table's own skeleton inside #cost-table).
+    // ":scope > .x" matches a child only; ".x" matches at any depth, as the DOM does.
+    nested: [],
+    querySelector(sel) {
+      const has = (k, cls) => k.className.split(' ').includes(cls);
+      for (const part of sel.split(',').map((x) => x.trim())) {
+        const own = part.startsWith(':scope > ');
+        const cls = part.replace(':scope > ', '').slice(1);
+        const hit = (own ? kids : [...kids, ...this.nested]).find((k) => has(k, cls));
+        if (hit) return hit;
+      }
+      return null;
+    },
     prepend: (el) => kids.unshift(el),
   };
   const app = { contains: () => false };
@@ -474,6 +485,21 @@ test('a failed quiet refresh keeps the figures on screen with a note; a load tha
     } finally {
       p.restore();
     }
+  }
+});
+
+test("a failed quiet refresh keeps Breakdown while only the table's own skeleton is loading", async () => {
+  const p = stubPage('breakdown');
+  try {
+    global.fetch = () => Promise.reject(new Error('offline'));
+    p.body.innerHTML = 'FIGURES';
+    p.body.nested.push({ className: 'skeleton' }); // the table's request is still out
+    await U.costRefresh(true);
+    assert.equal(p.body.innerHTML, 'FIGURES', 'the page stays');
+    assert.equal(p.body.kids.length, 1);
+    assert.equal(p.body.kids[0].textContent, 'Could not refresh: offline. Showing the last figures.');
+  } finally {
+    p.restore();
   }
 });
 

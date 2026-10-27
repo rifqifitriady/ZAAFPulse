@@ -568,11 +568,12 @@ const costErrorHtml = (msg) =>
 // A load that failed: the error panel with Retry, except on a quiet refresh over figures already on screen, which
 // stay with a small note in front of them (as text, never markup). The next good answer repaints the page without it.
 function costShowError(body, msg, quiet) {
-  if (!quiet || body.querySelector('.skeleton, .cost-error')) {
+  // The page's own skeleton or error panel only: the table's skeleton deeper down does not count.
+  if (!quiet || body.querySelector(':scope > .skeleton, :scope > .cost-error')) {
     body.innerHTML = costErrorHtml(msg);
     return;
   }
-  let note = body.querySelector('.cost-stale');
+  let note = body.querySelector(':scope > .cost-stale');
   if (!note) {
     note = document.createElement('p');
     note.className = 'cost-note warn cost-stale';
