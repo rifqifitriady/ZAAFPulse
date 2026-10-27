@@ -349,8 +349,8 @@ test("table: the query and the labels come from the page's current controls and 
   assert.match(host.innerHTML, /IDR 16,000/);
 });
 
-test('table: Unassigned filters rows without a center; a filter never drops a checked grouping', () => {
-  const led = { rows: [ROW('a', { center: null }), ROW('b', { center: 'acme' })] };
+test('table: Unassigned filters the unassigned rows; a filter never drops a checked grouping', () => {
+  const led = { rows: [ROW('a', { center: 'unassigned' }), ROW('b', { center: 'acme' })] };
   const un = U.costTableRows(led, ['model'], { measure: 'list', cur: 'USD', filter: { dim: 'center', key: 'unassigned' } });
   assert.deepEqual(
     un.rows.map((r) => r.keys[0]),
@@ -373,6 +373,37 @@ test('table: Unassigned filters rows without a center; a filter never drops a ch
   assert.ok(full.query.includes('center'), 'the filter needs its dimension');
   assert.equal(full.left, 'project', 'the grouping left out is named, not dropped silently');
   assert.deepEqual(full.show, ['source', 'provider', 'model']);
+});
+
+test('table: under Paid, Unassigned leaves plan fees out, and a plan fee reads "Plan fee", not "Unknown"', () => {
+  // The ledger gives a usage row without a rule the center "unassigned"; a plan fee has no center at all (null).
+  const led = {
+    rows: [
+      ROW(null, { center: null, kind: 'plan', requests: 0, listUSD: 0, list: 0, billedUSD: 20, billed: 320000 }),
+      ROW('opus', { center: 'unassigned', billedUSD: 2 }),
+      ROW('opus', { center: 'acme', billedUSD: 3 }),
+    ],
+  };
+  const paid = { measure: 'billed', cur: 'USD' };
+  const un = U.costTableRows(led, ['center', 'model'], { ...paid, filter: { dim: 'center', key: 'unassigned' } });
+  assert.deepEqual(
+    un.rows.map((r) => r.spend),
+    [2],
+    'only the usage row of center:unassigned',
+  );
+  const all = U.costTableRows(led, ['center'], { ...paid, filter: null });
+  assert.deepEqual(
+    all.rows.map((r) => r.keys[0]),
+    ['__plan', 'unassigned', 'acme'],
+  );
+
+  const host = tableHost();
+  resetTable({ groupBy: ['center'] });
+  U.COST.table.data = { led, plan: U.costTablePlan(['center'], null), ctx: { ...CTX(), measure: 'billed' } };
+  U.costPaintTable();
+  assert.match(host.innerHTML, /<td>Plan fee<\/td>/);
+  assert.match(host.innerHTML, /<td>Unassigned<\/td>/);
+  assert.doesNotMatch(host.innerHTML, /<td>Unknown<\/td>/);
 });
 
 test('table: aria-sort sits on the header cell; a sort key whose column is gone falls back to spend', () => {
