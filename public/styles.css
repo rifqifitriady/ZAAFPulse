@@ -9359,3 +9359,170 @@ label.mon-cand.on {
     transition: none !important;
   }
 }
+/* ---------- Cost Control: Budgets (public/costview.js) ---------- */
+.cost-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.cost-banner {
+  margin-bottom: 10px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+  font-size: 13px;
+}
+.cost-banner.muted {
+  border-color: var(--border);
+  background: var(--surface-2);
+  color: var(--h-muted);
+}
+.cost-banner ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.cost-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
+}
+.cost-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 14px;
+  padding: 16px;
+  border-radius: 16px;
+  transition: box-shadow 0.4s ease;
+}
+.cost-card h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.cost-card p {
+  margin: 2px 0;
+  color: var(--h-muted);
+  font-size: 12.5px;
+}
+.cost-card .cost-card-spent {
+  color: var(--h-text);
+}
+.cost-card .cost-card-reason {
+  color: var(--warn-ink);
+}
+.cost-card-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.cost-confirm {
+  flex-basis: 100%;
+  color: var(--h-text) !important;
+}
+.cost-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.cost-card.cost-focus {
+  box-shadow:
+    0 0 0 2px var(--h-cyan),
+    0 0 24px rgba(77, 232, 255, 0.45);
+}
+.cost-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(6, 12, 18, 0.5);
+  backdrop-filter: blur(3px);
+}
+.cost-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 45;
+  width: min(560px, 100vw);
+  border-radius: 0;
+  overflow-y: auto;
+  animation: cost-slide 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.cost-drawer form {
+  display: grid;
+  gap: 12px;
+}
+.cost-drawer label {
+  display: grid;
+  gap: 4px;
+  font-size: 12.5px;
+  color: var(--h-muted);
+}
+.cost-drawer fieldset {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 6px;
+}
+.cost-drawer-head,
+.cost-drawer-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.cost-drawer-head h2 {
+  margin: 0;
+  flex: 1;
+}
+.cost-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+}
+.cost-radio {
+  display: flex !important;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--h-text) !important;
+}
+.cost-radio.off {
+  opacity: 0.55;
+}
+.cost-radio small {
+  flex-basis: 100%;
+  padding-left: 22px;
+  color: var(--h-muted);
+}
+.cost-id code {
+  color: var(--h-cyan);
+}
+.cost-reasons {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--warn-ink);
+  font-size: 12.5px;
+}
+/* The checkbox row sits on one line (the drawer's labels stack their field under the text). */
+.cost-drawer .cost-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--h-text);
+}
+/* The confirmed delete: a solid destructive button, readable on the card. */
+.cost-card-actions .btn.danger:not(.ghost) {
+  background: #ff4f6d;
+  border-color: #ff4f6d;
+  color: #fff;
+}
+.cost-deck .btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

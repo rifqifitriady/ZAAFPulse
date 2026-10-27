@@ -1298,6 +1298,7 @@ function applyTheme() {
   applyTheme();
   hydrateIcons();
   monMountBell(); // the alerts bell polls on its own, every 15 s while the page is on screen
+  costBadge(); // Cost Control's badge: budgets used up or projected over (public/costview.js)
   render(false);
   await Promise.all([
     loadLive(),
@@ -1328,6 +1329,7 @@ function applyTheme() {
   }, 5000);
   setInterval(async () => {
     await loadSummary();
+    costBadge();
     if (state.route === 'live' && updateLive()) {
       /* patched in place */
     } else if (
