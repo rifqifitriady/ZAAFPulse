@@ -197,7 +197,9 @@ const COST = {
   controls: { ...COST_DEFAULT },
   view: null,
   stage: null, // the treemap's isoStage, destroyed before a repaint
-  table: { groupBy: ['model'], sort: { key: 'spend', dir: -1 }, filter: null, rows: null, data: null },
+  ctx: null, // the page's context (currency, measure, names), set with `controls` by each page load
+  table: { groupBy: ['model'], sort: { key: 'spend', dir: -1 }, filter: null, data: null },
+  tableReq: 0, // as `req`, for the table's own ledger requests
   hooked: false,
 };
 
@@ -291,17 +293,28 @@ function mountCost() {
   const timer = setInterval(() => costRefresh(true), COST_REFRESH_MS);
   onUnmount(() => {
     clearInterval(timer);
-    COST.req++; // drop a load still in flight
-    COST.stage = null; // unmountStages() destroys it
+    costUnmount();
   });
   costRefresh(false);
 }
+// Leaving the page: answers still in flight are dropped.
+function costUnmount() {
+  COST.req++;
+  COST.tableReq++;
+  COST.stage = null; // unmountStages() destroys it
+}
 
-// A quiet refresh waits while the owner is in a field of the page, and while the tab is hidden.
+// A quiet refresh waits while the tab is hidden or the owner is in a form field of the page (a clicked button keeps
+// the focus and does not count).
+function costQuietWait(doc, app) {
+  if (doc.hidden) return true;
+  const f = doc.activeElement;
+  return !!f && app.contains(f) && typeof f.matches === 'function' && f.matches('input, select, textarea');
+}
 function costRefresh(quiet) {
   const app = $('#cost-app');
   if (!app) return;
-  if (quiet && (document.hidden || app.contains(document.activeElement))) return;
+  if (quiet && costQuietWait(document, app)) return;
   return costMountPage(costSub(), quiet);
 }
 
@@ -363,6 +376,7 @@ async function costMountPage(sub, quiet) {
     COST.controls = c;
     costStoreSet(c);
     const ctx = { ...base, cur: c.cur, measure: c.measure, fmt: (v) => costMoney(v, c.cur) };
+    COST.ctx = ctx; // with COST.controls: the table's query and its labels always come from the same load
     $('#cost-bar').innerHTML = costBarHtml(sub, c, ctx);
     $('#cost-ribbon').innerHTML = costRibbonHtml(status);
     const page = sub || 'overview';
@@ -378,6 +392,10 @@ async function costMountPage(sub, quiet) {
     COST.view = v;
     if (COST.stage) COST.stage.destroy();
     COST.stage = null;
+    const view = $('#view');
+    const animated = !quiet && view.classList.contains('animate');
+    // A quiet refresh keeps the table on screen until its new answer comes: no skeleton, no jump in height.
+    const kept = quiet && $('#cost-table') ? $('#cost-table').innerHTML : '';
     const html =
       page === 'overview'
         ? costOverviewHtml(v, ctx)
@@ -391,12 +409,12 @@ async function costMountPage(sub, quiet) {
         COST.stage = costMountTreemap(canvas, costTreemapLayout(v.treemap), {
           fmt: ctx.fmt,
           label: (col, key) => costName(col, key, ctx),
-          grow: !quiet,
+          grow: animated,
         });
-      costLoadTable(ctx, live);
+      if (kept && $('#cost-table')) $('#cost-table').innerHTML = kept;
+      costLoadTable(live);
     }
-    const view = $('#view');
-    if (!quiet && view.classList.contains('animate')) {
+    if (animated) {
       costCountUp(body, ctx.fmt);
       // The entrance plays from this paint, not from the route change before the answer came.
       if (typeof settle === 'function') settle(view);
@@ -497,31 +515,46 @@ function costBreakdownHtml(b, ctx) {
 }
 
 // The table reads GET /api/cost/ledger with its own grouping, so it can be regrouped without a new view request.
-async function costLoadTable(ctx, live) {
+// Its query and its labels come from the page's current controls and context; a newer table request, a newer page
+// load (`live`) or leaving the page drops an older answer.
+async function costLoadTable(live) {
   const host = $('#cost-table');
   const t = COST.table;
-  ctx = ctx || (t.data && t.data.ctx); // a regroup or a filter keeps the page's context
-  if (!host || !ctx) return;
+  const ctx = COST.ctx;
   const c = COST.controls;
+  if (!host || !ctx) return;
+  const my = ++COST.tableReq;
+  const current = () => my === COST.tableReq && host.isConnected && (!live || live());
   const r = costRangeDays(c, costToday());
-  const groupBy = [...t.groupBy];
-  if (t.filter && !groupBy.includes(t.filter.dim)) groupBy.unshift(t.filter.dim);
-  const q = new URLSearchParams({ from: r.from, to: r.to, groupBy: groupBy.slice(0, 4).join(',') });
+  const plan = costTablePlan(t.groupBy, t.filter);
+  const q = new URLSearchParams({ from: r.from, to: r.to, groupBy: plan.query.join(',') });
   if (c.cur !== 'USD') q.set('currency', c.cur);
   try {
     const led = await costGet(`/api/cost/ledger?${q}`);
-    if (live && !live()) return;
-    t.data = { led, groupBy: groupBy.slice(0, 4), ctx };
+    if (!current()) return;
+    t.data = { led, plan, ctx };
     costPaintTable();
   } catch (e) {
-    if (live && !live()) return;
+    if (!current()) return;
     host.innerHTML = `<p class="cost-note">${esc('The table did not load: ' + e.message)}</p>`;
   }
 }
+// What the ledger is asked to group by (`query`, at most 4) and the columns shown (`show`). A filter needs its
+// dimension in the query; it is not shown as a column (every row has the same value). With 4 groupings checked, the
+// last one is `left` out while the filter is on, and the table says so.
+function costTablePlan(groupBy, filter) {
+  const checked = groupBy.slice(0, 4);
+  if (!filter || checked.includes(filter.dim)) return { query: checked, show: checked, left: null };
+  if (checked.length < 4) return { query: [filter.dim, ...checked], show: checked, left: null };
+  const show = checked.slice(0, 3);
+  return { query: [filter.dim, ...show], show, left: checked[3] };
+}
+// A row's key in a dimension, as the flow names it: a row without a center is "unassigned".
+const costRowKey = (x, dim) => (dim === 'center' ? x.center || 'unassigned' : String(x[dim] ?? ''));
 function costTableRows(led, groupBy, { measure, cur, filter }) {
   const field = measure === 'billed' ? (cur === 'USD' ? 'billedUSD' : 'billed') : cur === 'USD' ? 'listUSD' : 'list';
   const rows = (led.rows || [])
-    .filter((x) => !filter || String(x[filter.dim] ?? '') === filter.key)
+    .filter((x) => !filter || costRowKey(x, filter.dim) === filter.key)
     .map((x) => {
       const spend = x[field] == null ? x[measure === 'billed' ? 'billedUSD' : 'listUSD'] : x[field];
       if (!spend && !x.requests) return null; // a plan row under usage value: nothing to show
@@ -539,21 +572,31 @@ function costTableRows(led, groupBy, { measure, cur, filter }) {
   for (const x of rows) x.share = total > 0 ? x.spend / total : null;
   return { rows, total };
 }
+const COST_SORT_NUM = ['spend', 'share', 'requests', 'tokens', 'perRequest'];
 function costPaintTable() {
   const host = $('#cost-table');
   const t = COST.table;
   if (!host || !t.data) return;
-  const { led, groupBy, ctx } = t.data;
-  const { rows } = costTableRows(led, groupBy, { measure: ctx.measure, cur: ctx.cur, filter: t.filter });
+  const { led, plan, ctx } = t.data;
+  const show = plan.show;
+  const { rows } = costTableRows(led, show, { measure: ctx.measure, cur: ctx.cur, filter: t.filter });
+  // A column sort follows its dimension; when that column is gone, the table sorts by spend again.
+  const valid = (k) => COST_SORT_NUM.includes(k) || (k.startsWith('d:') && show.includes(k.slice(2)));
+  if (!valid(t.sort.key)) t.sort = { key: 'spend', dir: -1 };
   const s = t.sort;
-  const val = (x) => (s.key.startsWith('k') ? String(x.keys[Number(s.key.slice(1))] ?? '') : x[s.key] ?? -Infinity);
+  const col = s.key.startsWith('d:') ? show.indexOf(s.key.slice(2)) : -1;
+  const val = (x) => (col >= 0 ? String(x.keys[col] ?? '') : (x[s.key] ?? -Infinity));
   rows.sort((a, b) => {
     const A = val(a);
     const B = val(b);
     return (typeof A === 'string' ? A.localeCompare(B) : A - B) * s.dir;
   });
-  const head = (key, text, num) =>
-    `<th${num ? ' class="num"' : ''}><button type="button" class="cost-sort" data-cost-sort="${key}" aria-sort="${s.key === key ? (s.dir > 0 ? 'ascending' : 'descending') : 'none'}">${esc(text)}${s.key === key ? (s.dir > 0 ? ' ↑' : ' ↓') : ''}</button></th>`;
+  const head = (key, text, num) => {
+    const on = s.key === key;
+    const sort = on ? (s.dir > 0 ? 'ascending' : 'descending') : 'none';
+    const arrow = on ? (s.dir > 0 ? ' ↑' : ' ↓') : '';
+    return `<th${num ? ' class="num"' : ''} aria-sort="${sort}"><button type="button" class="cost-sort" data-cost-sort="${esc(key)}">${esc(text + arrow)}</button></th>`;
+  };
   const picks = COST_DIMS.map(
     (d) =>
       `<label class="cost-check"><input type="checkbox" data-cost-group="${d}" ${t.groupBy.includes(d) ? 'checked' : ''} ${!t.groupBy.includes(d) && t.groupBy.length >= 4 ? 'disabled' : ''}> ${COST_DIM_LABEL[d]}</label>`,
@@ -561,17 +604,21 @@ function costPaintTable() {
   const chip = t.filter
     ? `<span class="cost-chip">${esc(`${COST_DIM_LABEL[t.filter.dim] || t.filter.dim}: ${costName(t.filter.dim, t.filter.key, ctx)}`)} <button type="button" data-cost-clear-filter aria-label="Clear the filter">×</button></span>`
     : '';
+  const left = plan.left
+    ? `<span class="cost-chip warn">${esc(`${COST_DIM_LABEL[plan.left]} is left out while filtering (4 groupings at most)`)}</span>`
+    : '';
   const body = rows.length
     ? rows
         .slice(0, 500)
         .map(
           (x) =>
-            `<tr>${x.keys.map((k, i) => `<td>${esc(costName(groupBy[i], k, ctx))}</td>`).join('')}<td class="num">${esc(ctx.fmt(x.spend))}</td><td class="num">${esc(costPct(x.share))}</td><td class="num">${(x.requests || 0).toLocaleString('en')}</td><td class="num">${(x.tokens || 0).toLocaleString('en')}</td><td class="num">${esc(ctx.fmt(x.perRequest))}</td></tr>`,
+            `<tr>${x.keys.map((k, i) => `<td>${esc(costName(show[i], k, ctx))}</td>`).join('')}<td class="num">${esc(ctx.fmt(x.spend))}</td><td class="num">${esc(costPct(x.share))}</td><td class="num">${(x.requests || 0).toLocaleString('en')}</td><td class="num">${(x.tokens || 0).toLocaleString('en')}</td><td class="num">${esc(ctx.fmt(x.perRequest))}</td></tr>`,
         )
         .join('')
-    : `<tr><td colspan="${groupBy.length + 5}">${esc('Nothing in this range.')}</td></tr>`;
-  host.innerHTML = `<div class="cost-table-bar"><span>Group by (up to 4):</span>${picks}${chip}</div>
-    <div class="table-wrap"><table class="cost-table"><thead><tr>${groupBy.map((d, i) => head(`k${i}`, COST_DIM_LABEL[d] || d, false)).join('')}${head('spend', 'Spend', true)}${head('share', 'Share', true)}${head('requests', 'Requests', true)}${head('tokens', 'Tokens', true)}${head('perRequest', 'Per request', true)}</tr></thead><tbody>${body}</tbody></table></div>`;
+    : `<tr><td colspan="${show.length + 5}">${esc('Nothing in this range.')}</td></tr>`;
+  const heads = show.map((d) => head(`d:${d}`, COST_DIM_LABEL[d] || d, false)).join('');
+  host.innerHTML = `<div class="cost-table-bar"><span>Group by (up to 4):</span>${picks}${chip}${left}</div>
+    <div class="table-wrap"><table class="cost-table"><thead><tr>${heads}${head('spend', 'Spend', true)}${head('share', 'Share', true)}${head('requests', 'Requests', true)}${head('tokens', 'Tokens', true)}${head('perRequest', 'Per request', true)}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 /* ---------- Value ---------- */
@@ -608,7 +655,7 @@ function costValueHtml(v, ctx) {
     <div class="cost-units">
       ${unit('perRequest', 'Per request', COST_C.cyan, 'spend per request')}
       ${unit('perMillionTokens', 'Per million tokens', COST_C.violet, 'all token kinds')}
-      ${unit('perThousandToolCalls', 'Per 1,000 successful tool calls', COST_C.pink, 'Claude Code and Codex spend only')}
+      ${unit('perThousandToolCalls', 'Per 1,000 successful tool calls', COST_C.pink, 'Claude Code and Codex only')}
     </div>`;
 }
 
@@ -640,7 +687,7 @@ function costInstallEvents() {
     if (d.costNode) return costFilterTo(d.costNode);
     if (t.hasAttribute('data-cost-clear-filter')) {
       COST.table.filter = null;
-      return void costLoadTable(null, null);
+      return void costLoadTable();
     }
     if (d.costSort) {
       const s = COST.table.sort;
@@ -671,18 +718,18 @@ function costInstallEvents() {
       const g = COST.table.groupBy.filter((x) => x !== t.dataset.costGroup);
       if (t.checked) g.push(t.dataset.costGroup);
       if (g.length) COST.table.groupBy = COST_DIMS.filter((x) => g.includes(x)).slice(0, 4);
-      costLoadTable(null, null);
+      costLoadTable();
     }
   });
 }
-// A flow node filters the table to it (its dimension is added to the grouping when missing).
+// A flow node filters the table to it (the ledger is asked for its dimension too: costTablePlan).
 function costFilterTo(id) {
   const i = String(id).indexOf(':');
   if (i < 0) return;
   const dim = id.slice(0, i);
   if (!COST_DIMS.includes(dim)) return;
   COST.table.filter = { dim, key: id.slice(i + 1) };
-  costLoadTable(null, null);
+  costLoadTable();
   const host = $('#cost-table');
   if (host) host.scrollIntoView({ block: 'nearest', behavior: reduceMotion.matches ? 'auto' : 'smooth' });
 }
@@ -706,4 +753,10 @@ if (typeof module !== 'undefined')
     costContext,
     costOverviewHtml,
     costValueHtml,
+    COST,
+    costUnmount,
+    costQuietWait,
+    costLoadTable,
+    costTablePlan,
+    costPaintTable,
   };

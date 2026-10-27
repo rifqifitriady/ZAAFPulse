@@ -276,3 +276,123 @@ test('pages: a budget list that did not read is said, not drawn as "no budgets";
   assert.doesNotMatch(ok, /could not be read/);
   assert.match(ok, /No tool calls to measure: &lt;b&gt;m&lt;\/b&gt;/);
 });
+
+/* ---------- fix round 1 ---------- */
+
+const ROW = (model, extra = {}) => ({
+  model,
+  requests: 1,
+  tokens: {},
+  listUSD: 1,
+  billedUSD: 1,
+  list: 16000,
+  billed: 16000,
+  ...extra,
+});
+const CTX = (cur = 'USD') => ({ measure: 'list', cur, fmt: (v) => U.costMoney(v, cur), centers: {}, keys: {} });
+// A fake ledger: each request waits until the test answers it.
+function fakeLedger() {
+  const calls = [];
+  global.fetch = (url) => new Promise((res) => calls.push({ url, res }));
+  const answer = (i, rows) => calls[i].res({ status: 200, json: async () => ({ rows }) });
+  return { calls, answer };
+}
+function tableHost() {
+  const host = { isConnected: true, innerHTML: '', scrollIntoView() {} };
+  global.$ = (s) => (s === '#cost-table' ? host : null);
+  return host;
+}
+function resetTable(over = {}) {
+  U.COST.table = { groupBy: ['model'], sort: { key: 'spend', dir: -1 }, filter: null, data: null, ...over };
+  U.COST.controls = { range: '7d', from: null, to: null, cur: 'USD', measure: 'list' };
+  U.COST.ctx = CTX();
+}
+
+test('table: an older ledger answer never paints over a newer one, nor after the page is left', async () => {
+  const host = tableHost();
+  const L = fakeLedger();
+  resetTable();
+  const a = U.costLoadTable();
+  const b = U.costLoadTable();
+  L.answer(1, [ROW('newer')]);
+  await b;
+  L.answer(0, [ROW('older')]);
+  await a;
+  assert.match(host.innerHTML, /newer/);
+  assert.doesNotMatch(host.innerHTML, /older/);
+  const c = U.costLoadTable();
+  U.costUnmount(); // leaving the page
+  L.answer(2, [ROW('gone')]);
+  await c;
+  assert.doesNotMatch(host.innerHTML, /gone/);
+  const d = U.costLoadTable(() => false); // a newer page load
+  L.answer(3, [ROW('stale')]);
+  await d;
+  assert.doesNotMatch(host.innerHTML, /stale/);
+  host.isConnected = false;
+  const e = U.costLoadTable();
+  L.answer(4, [ROW('detached')]);
+  await e;
+  assert.doesNotMatch(host.innerHTML, /detached/);
+});
+
+test("table: the query and the labels come from the page's current controls and context together", async () => {
+  const host = tableHost();
+  const L = fakeLedger();
+  resetTable();
+  U.COST.controls = { ...U.COST.controls, cur: 'IDR' };
+  U.COST.ctx = CTX('IDR');
+  const p = U.costLoadTable();
+  assert.match(L.calls[0].url, /currency=IDR/);
+  L.answer(0, [ROW('opus')]);
+  await p;
+  assert.match(host.innerHTML, /IDR 16,000/);
+});
+
+test('table: Unassigned filters rows without a center; a filter never drops a checked grouping', () => {
+  const led = { rows: [ROW('a', { center: null }), ROW('b', { center: 'acme' })] };
+  const un = U.costTableRows(led, ['model'], { measure: 'list', cur: 'USD', filter: { dim: 'center', key: 'unassigned' } });
+  assert.deepEqual(
+    un.rows.map((r) => r.keys[0]),
+    ['a'],
+  );
+  const four = ['source', 'provider', 'model', 'project'];
+  assert.deepEqual(U.costTablePlan(['model'], null), { query: ['model'], show: ['model'], left: null });
+  assert.deepEqual(U.costTablePlan(['model'], { dim: 'model', key: 'x' }), {
+    query: ['model'],
+    show: ['model'],
+    left: null,
+  });
+  assert.deepEqual(U.costTablePlan(['model'], { dim: 'center', key: 'x' }), {
+    query: ['center', 'model'],
+    show: ['model'],
+    left: null,
+  });
+  const full = U.costTablePlan(four, { dim: 'center', key: 'x' });
+  assert.equal(full.query.length, 4, 'the ledger groups by 4 at most');
+  assert.ok(full.query.includes('center'), 'the filter needs its dimension');
+  assert.equal(full.left, 'project', 'the grouping left out is named, not dropped silently');
+  assert.deepEqual(full.show, ['source', 'provider', 'model']);
+});
+
+test('table: aria-sort sits on the header cell; a sort key whose column is gone falls back to spend', () => {
+  const host = tableHost();
+  resetTable({ sort: { key: 'requests', dir: -1 } });
+  U.COST.table.data = { led: { rows: [ROW('a'), ROW('b')] }, plan: U.costTablePlan(['model'], null), ctx: CTX() };
+  U.costPaintTable();
+  assert.match(host.innerHTML, /<th class="num" aria-sort="descending"><button[^>]*data-cost-sort="requests"/);
+  assert.doesNotMatch(host.innerHTML, /<button[^>]*aria-sort/);
+  U.COST.table.sort = { key: 'd:project', dir: 1 };
+  U.costPaintTable();
+  assert.deepEqual(U.COST.table.sort, { key: 'spend', dir: -1 });
+});
+
+test('quiet refresh: waits in a form field of the page or a hidden tab, not after a click on a button', () => {
+  const field = { matches: (s) => s.includes('input') };
+  const button = { matches: () => false };
+  const app = { contains: (el) => el === field || el === button };
+  assert.equal(U.costQuietWait({ hidden: false, activeElement: field }, app), true);
+  assert.equal(U.costQuietWait({ hidden: false, activeElement: button }, app), false);
+  assert.equal(U.costQuietWait({ hidden: true, activeElement: null }, app), true);
+  assert.equal(U.costQuietWait({ hidden: false, activeElement: { matches: () => true } }, app), false, 'outside');
+});
