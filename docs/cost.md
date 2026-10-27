@@ -338,13 +338,13 @@ in either measure. The burn-down still includes plan fees, under "Paid".
 **Burn-down scale.** The axis covers the spend so far, the forecast's end and the band. A budget more than twice that
 reach is not drawn to scale: it is pinned at the top edge as "↑ Budget <amount>", so the curve stays readable.
 
-**Breakdown.** The treemap shows at most 40 blocks, the per-center "Other" blocks (a center's smallest projects
-beyond the cap) included. With spend in more than 39 cost centers, the smallest fold into one "Other centers" block.
-Clicking a node in the flow filters the table by it (Other, Unknown and Plan fee are groupings, not ledger values, and
-are not filters; their tooltip says so): the table asks the ledger for that dimension too, without a column
-for it (every row has the same value). Under "Paid", Unassigned holds the usage rows without a center rule; plan fees
-have no center and read "Plan fee". The table takes up to four groupings: with four checked and a filter on, the last grouping is left
-out while the filter is on, and an amber chip says so.
+**Breakdown.** The treemap shows at most 40 blocks, the per-center "Other" blocks (a center's smallest projects beyond
+the cap) included. With spend in more than 39 cost centers, the smallest fold into one "Other centers" block. Clicking a
+node in the flow filters the table by it (Other, Unknown and Plan fee are groupings, not ledger values, and are not
+filters; their tooltip says so): the table asks the ledger for that dimension too, without a column for it (every row
+has the same value). Under "Paid", Unassigned holds the usage rows without a center rule; plan fees have no center and
+read "Plan fee". The table takes up to four groupings: with four checked and a filter on, the last grouping is left out
+while the filter is on, and an amber chip says so.
 
 **Budgets page.**
 
@@ -355,10 +355,10 @@ out while the filter is on, and an amber chip says so.
 - A budget alert in the bell has an "Open in Budgets" link to `#cost/budgets?focus=<id>`, which shows that card.
 - The badge on the menu counts the budgets used up or projected over.
 
-**Refresh.** The cost pages refresh every 60 seconds, quietly, and keep what is on screen until the new answer comes.
-A refresh waits while a form field has focus, while the Budgets drawer or a delete confirmation is open, and while the
-tab is hidden. A quiet refresh that fails keeps the last figures with a note ("Could not refresh: …"); a load that
-fails shows the error with Retry. With the system's reduced motion setting, charts and numbers appear at their final state.
+**Refresh.** The cost pages refresh every 60 seconds, quietly, and keep what is on screen until the new answer comes. A
+refresh waits while a form field has focus, while the Budgets drawer or a delete confirmation is open, and while the tab
+is hidden. A quiet refresh that fails keeps the last figures with a note ("Could not refresh: …"); a load that fails
+shows the error with Retry. With the system's reduced motion setting, charts and numbers appear at their final state.
 
 **Cache savings** are an estimate: cache-read tokens × (input price − cache-read price) at the base rates of each
 row's price version. Prompt-length tiers and US-only pricing are left out. Free (local) rows add no money.
@@ -371,10 +371,10 @@ ran a model, its pass rate (passes over totals across its evaluators) is in the 
 added these counts, the index is rebuilt once at the first start.
 
 **Gaps and notes.** A month that did not read, a day that had no rate and billing that did not read are named above the
-charts. A day with no rate is counted in USD; `missingRate` lists only the days that had spend in the chosen measure (or a
-drawn baseline) without a rate. A unit-cost day without
-its denominator is a gap, not a zero. A ribbon repeats the ledger status problems (`GET /api/cost/status`). If the
-budgets or the accuracy cannot be read, the page says so and draws the rest.
+charts. A day with no rate is counted in USD; `missingRate` lists only the days that had spend in the chosen measure (or
+a drawn baseline) without a rate. A unit-cost day without its denominator is a gap, not a zero. A ribbon repeats the
+ledger status problems (`GET /api/cost/status`). If the budgets or the accuracy cannot be read, the page says so and
+draws the rest.
 
 **Limits of these pages.**
 
