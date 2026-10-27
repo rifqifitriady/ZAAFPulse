@@ -72,6 +72,32 @@ test('burn-down: a budget over twice the band top is pinned at the top edge and 
   assert.equal(count(early, /class="cost-fade cost-pinned"/g), 2);
 });
 
+test('burn-down: right-skewed spend keeps the forecast end inside the scale and a budget under it in scale', () => {
+  const rows = [1, 1, 1, 1, 20].map((v, i) => row({ day: `2026-10-0${i + 1}`, listUSD: v }));
+  const budgets = [{ id: 'b', name: 'B', scope: 'global', period: 'month', amount: 120, currency: 'USD' }];
+  const o = V.overview({ rows, today: '2026-10-05', budgets });
+  assert.ok(o.forecast.projected > o.forecast.high, 'projected is above the band top');
+  const svg = C.costBurnSvg(o, fmt);
+  assert.equal(count(svg, /cost-pinned/g), 0, 'the $120 budget is drawn as a line');
+  assert.match(svg, />B · \$120\.00</);
+  const d = svg.match(/<path class="cost-fade" d="([^"]*)" fill="none" stroke="#8b7bff"/)[1];
+  const ys = [...d.matchAll(/,(-?[\d.]+)/g)].map((m) => Number(m[1]));
+  assert.ok(ys.length > 2 && Math.min(...ys) > 14 + 0.5, 'the forecast is never clamped to the top margin');
+  const top = Number([...svg.matchAll(/>\$(\d+)\.00</g)].map((m) => m[1]).sort((a, b) => b - a)[0]);
+  assert.ok(top >= o.forecast.projected, 'the axis covers the projected total');
+});
+
+test('chart roles: the flow is a labelled group, image charts are labelled images', () => {
+  const b = V.breakdown({ rows: [row()], from: '2026-10-01', to: '2026-10-07' });
+  const flow = C.costFlowSvg(b.flow, { fmt, label: (c, k) => k });
+  assert.match(flow, /role="group" aria-label="Cost flow"/);
+  assert.doesNotMatch(flow, /role="img"/);
+  assert.match(C.costCalendarSvg(b.calendar, fmt), /role="img" aria-label="Spend calendar"/);
+  const o = V.overview({ rows: [row()], today: '2026-10-02' });
+  assert.match(C.costBurnSvg(o, fmt), /role="img" aria-label="Burn-down"/);
+  assert.match(C.costSpikeSvg(o.spikes, fmt), /role="img" aria-label="Daily spend"/);
+});
+
 test('spike line: one marker per spike, its tooltip with the baseline and the top model', () => {
   const before = ['24', '25', '26', '27', '28', '29', '30'].map((d) => row({ day: `2026-09-${d}`, listUSD: 0.2 }));
   const rows = [row({ listUSD: 0.5 }), row({ day: '2026-10-02', listUSD: 3, model: EVIL })];
