@@ -216,8 +216,9 @@ function costRingsHtml(rings, more) {
 
 /* ---------- Breakdown ---------- */
 
-// The flow: four columns of nodes, links as bands whose width is the spend. A node is a button for the table filter
-// (data-cost-node="<column>:<key>"). `label(col, key)` names a node (center names, Other, Plan fee).
+// The flow: four columns of nodes, links as bands whose width is the spend. A node of a real ledger value is a button
+// for the table filter (data-cost-node="<column>:<key>"); Other, Unknown and Plan fee are not, and their tooltip says
+// "(not filterable)". `label(col, key)` names a node (center names, Other, Plan fee).
 function costFlowSvg(flow, { fmt, label }) {
   const W = 900;
   const H = 320;
@@ -269,7 +270,7 @@ function costFlowSvg(flow, { fmt, label }) {
     const filterable = n.key !== COST_OTHER && n.key !== COST_PLAN && n.key !== COST_NONE;
     const left = n.col === 0;
     out.push(
-      `<g class="cost-node${filterable ? ' cost-click' : ''}"${filterable ? ` data-cost-node="${esc(n.id)}" role="button" tabindex="0" aria-label="${esc(`Filter the table to ${name}`)}"` : ''} data-tip="${costTip([name, fmt(n.value), costPctText(n.value / total)])}"><rect class="cost-grow" x="${costF(p.x)}" y="${costF(p.y)}" width="${nodeW}" height="${costF(p.h)}" rx="2" fill="${color}" style="filter:drop-shadow(0 0 4px ${color})"/><text x="${costF(left ? p.x - 6 : p.x + nodeW + 6)}" y="${costF(p.y + p.h / 2 + 4)}" text-anchor="${left ? 'end' : 'start'}">${esc(name.length > 26 ? `${name.slice(0, 25)}…` : name)}</text></g>`,
+      `<g class="cost-node${filterable ? ' cost-click' : ''}"${filterable ? ` data-cost-node="${esc(n.id)}" role="button" tabindex="0" aria-label="${esc(`Filter the table to ${name}`)}"` : ''} data-tip="${costTip([name, fmt(n.value), costPctText(n.value / total) + (filterable ? '' : ' (not filterable)')])}"><rect class="cost-grow" x="${costF(p.x)}" y="${costF(p.y)}" width="${nodeW}" height="${costF(p.h)}" rx="2" fill="${color}" style="filter:drop-shadow(0 0 4px ${color})"/><text x="${costF(left ? p.x - 6 : p.x + nodeW + 6)}" y="${costF(p.y + p.h / 2 + 4)}" text-anchor="${left ? 'end' : 'start'}">${esc(name.length > 26 ? `${name.slice(0, 25)}…` : name)}</text></g>`,
     );
   }
   return costSvg(W, H, out.join(''), 'cost-flow', false, 'Cost flow', 'group');

@@ -340,7 +340,8 @@ reach is not drawn to scale: it is pinned at the top edge as "↑ Budget <amount
 
 **Breakdown.** The treemap shows at most 40 blocks, the per-center "Other" blocks (a center's smallest projects
 beyond the cap) included. With spend in more than 39 cost centers, the smallest fold into one "Other centers" block.
-Clicking a node in the flow filters the table by it: the table asks the ledger for that dimension too, without a column
+Clicking a node in the flow filters the table by it (Other, Unknown and Plan fee are groupings, not ledger values, and
+are not filters; their tooltip says so): the table asks the ledger for that dimension too, without a column
 for it (every row has the same value). Under "Paid", Unassigned holds the usage rows without a center rule; plan fees
 have no center and read "Plan fee". The table takes up to four groupings: with four checked and a filter on, the last grouping is left
 out while the filter is on, and an amber chip says so.

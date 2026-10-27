@@ -162,6 +162,33 @@ test('flow: nodes per column, a band per link, Other and Plan fee not filterable
   assert.doesNotMatch(svg, /<img/);
 });
 
+test('flow: Other, Unknown and Plan fee are not filters (no button role, no tabindex, said in the tooltip); Unassigned is', () => {
+  const rows = [];
+  for (let i = 1; i <= 8; i++) rows.push(row({ model: `m${i}`, listUSD: i, billedUSD: i }));
+  rows.push(row({ provider: null, model: null, center: 'unassigned', listUSD: 3, billedUSD: 3 }));
+  rows.push({
+    ...row({ provider: null, model: null, center: null, kind: 'plan', requests: 0, listUSD: 0 }),
+    billedUSD: 5,
+  });
+  const b = V.breakdown({ rows, from: '2026-10-01', to: '2026-10-07', measure: 'billed' });
+  const names = { __other: 'Other', __plan: 'Plan fee', __none: 'Unknown' };
+  const svg = C.costFlowSvg(b.flow, { fmt, label: (col, key) => names[key] || key });
+  const nodes = [...svg.matchAll(/<g class="cost-node[^>]*>/g)].map((m) => m[0]);
+  const fake = b.flow.nodes.filter((n) => n.key in names);
+  assert.ok(
+    ['__other', '__plan', '__none'].every((k) => fake.some((n) => n.key === k)),
+    'all three kinds are drawn',
+  );
+  assert.equal(nodes.length, b.flow.nodes.length);
+  for (const g of nodes) {
+    const tip = /data-tip="([^"]*)"/.exec(g)[1];
+    const fakeNode = /^(Other|Plan fee|Unknown) · /.test(tip);
+    assert.equal(/role="button"|tabindex|data-cost-node|cost-click/.test(g), !fakeNode, g);
+    assert.equal(tip.endsWith(' (not filterable)'), fakeNode, tip);
+  }
+  assert.match(svg, /data-cost-node="center:unassigned" role="button" tabindex="0"/);
+});
+
 test('calendar: a fixed-size cell per day, empty days outlined, each month named once', () => {
   const rows = [row({ day: '2026-09-30', listUSD: 2 }), row({ day: '2026-10-02', listUSD: 4 })];
   const b = V.breakdown({ rows, from: '2026-09-28', to: '2026-10-11' });
