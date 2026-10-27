@@ -41,6 +41,10 @@ Some failed commands are the model's fault: a made-up npm script or flag. Those 
 `hallucination` ("Command or option that does not exist"), not `execution`, so they still count.
 Expect accuracy to read higher than in 1.0.3: failing test runs no longer pull it down.
 
+Accuracy is also counted per model: each tool result belongs to the model that made the call (in Claude Code logs the
+model of the assistant message holding the `tool_use`, in Codex logs the model of the turn). Cost Control's Value page
+sets it against spend per request. The index is rebuilt once after the update that added these counts.
+
 ## Method
 
 - **Three sets per detector**, all in `test/fixtures/signals/`:
