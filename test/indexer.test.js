@@ -193,3 +193,43 @@ test('indexer: a cache from another version is not used', async () => {
   const ix = new Indexer([src], cache, { workers: 0 });
   assert.deepStrictEqual(ix.files, {});
 });
+
+test('indexer: an old-version base is replaced by the first save, so a restart parses nothing', async () => {
+  const dir = tmp();
+  const files = [0, 1, 2].map((i) => {
+    const f = path.join(dir, `s${i}.jsonl`);
+    fs.writeFileSync(f, `line ${i}\n`);
+    return f;
+  });
+  let parsed = 0;
+  const src = {
+    id: 'claude',
+    listFiles: () => files,
+    parseFile: async () => {
+      parsed++;
+      return { stub: true };
+    },
+  };
+  const cache = path.join(tmp(), 'index.json');
+  // A small base and journal from the previous cache version.
+  const old = CACHE_VERSION - 1;
+  fs.writeFileSync(cache, JSON.stringify({ version: old, gen: 3, files: { gone: { result: {} } } }));
+  fs.writeFileSync(cache + '.journal', JSON.stringify({ v: old, g: 3, f: 'gone', e: null }) + '\n');
+
+  const first = new Indexer([src], cache, { workers: 0 });
+  await first.refresh();
+  assert.strictEqual(parsed, files.length);
+  assert.strictEqual(JSON.parse(fs.readFileSync(cache, 'utf8')).version, CACHE_VERSION);
+  const journalSize = () => (fs.existsSync(cache + '.journal') ? fs.statSync(cache + '.journal').size : 0);
+  const after1 = journalSize();
+
+  for (let run = 2; run <= 3; run++) {
+    parsed = 0;
+    const again = new Indexer([src], cache, { workers: 0 });
+    await again.refresh();
+    assert.strictEqual(parsed, 0, `start ${run} should parse nothing`);
+    assert.strictEqual(again.state.total, 0);
+    assert.strictEqual(JSON.parse(fs.readFileSync(cache, 'utf8')).version, CACHE_VERSION);
+    assert.strictEqual(journalSize(), after1, 'journal does not grow');
+  }
+});

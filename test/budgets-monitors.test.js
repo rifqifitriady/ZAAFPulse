@@ -420,6 +420,7 @@ test('alerts API: a budget row has its title, the budget name, the period and th
       threshold: 80,
       period: 'month',
       projected: true,
+      budget: 'team', // the budget's own id, for the bell's "Open in Budgets" link (Cost Control 3a)
       state: 'warn_80',
       previous: 'ok',
     },

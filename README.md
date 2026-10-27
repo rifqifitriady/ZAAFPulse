@@ -807,6 +807,8 @@ ZAAFPulse also keeps a **daily cost ledger** in `.data/cost/`, the base of the C
 
 **Budgets** sit on the ledger: global or per cost center, key, project, model, provider or source, by day, week (from Monday) or month, on the usage value or on what was paid, in USD or your display currency. Alerts at your levels (50 and 80 % by default), at 100 % and when the projection passes the amount, in the bell, the desktop or a webhook. A budget can also block matching gateway requests with 402 at once, or pause the local agent that spent the most in its scope and period. The old monthly budget and key budgets are read as budgets. See [docs/cost.md#budgets](docs/cost.md#budgets).
 
+The **Cost Control** menu draws the ledger: an Overview of the month with a forecast band, budget lines and spikes; a Breakdown from source to cost center with an isometric treemap of projects and a calendar; a Value page with plan value against its fee, a savings waterfall and cost against tool-call accuracy per model; and a Budgets page to add and edit budgets. See [docs/cost.md#cost-control-menu](docs/cost.md#cost-control-menu).
+
 Who counts what, frozen cost, billing, restate, settings, the `/api/cost/*` routes (dashboard sign-in only) and the known limits: **[docs/cost.md](docs/cost.md)**.
 
 ## Privacy
@@ -923,7 +925,7 @@ docs/release-hardening.md tag ruleset and immutable releases
 docs/monitors.md       monitors, alerts, webhook, pausing an agent: rules, channels, limits, API
 docs/local-models.md   starting and stopping local model servers: runtimes, your own entries, safety, API
 docs/topology.md       the Overview's provider topology: layers, colours, sources, tool routing, privacy
-docs/cost.md           cost ledger: who counts what, frozen cost, billing, cost centers, restate, API, limits
+docs/cost.md           cost ledger: who counts what, frozen cost, billing, cost centers, restate, the Cost Control menu, API, limits
 docs/assets/           README banner, diagrams, screenshots and GIFs
 ```
 </details>

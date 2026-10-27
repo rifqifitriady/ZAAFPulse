@@ -9012,3 +9012,517 @@ label.mon-cand.on {
     animation: none;
   }
 }
+
+/* ---------- Cost Control (public/costview.js, public/costcharts.js) ---------- */
+.cost-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.cost-spacer {
+  flex: 1;
+}
+.cost-month {
+  color: var(--h-muted);
+  font-size: 13px;
+}
+.cost-dates {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.cost-dates .input {
+  width: 150px;
+}
+.cost-ribbon {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  padding: 8px 14px;
+  border: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+  border-radius: 12px;
+  font-size: 12.5px;
+}
+.cost-notes {
+  display: grid;
+  gap: 4px;
+}
+.cost-note {
+  margin: 6px 0 0;
+  color: var(--h-muted);
+  font-size: 12.5px;
+}
+.cost-note.warn {
+  color: var(--warn-ink);
+}
+.cost-note a,
+.cost-deck .empty a {
+  color: var(--h-cyan);
+}
+.cost-error {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  justify-content: space-between;
+}
+.cost-tile-link {
+  color: inherit;
+  text-decoration: none;
+  display: block;
+}
+.cost-tile-link .metric {
+  height: 100%;
+}
+/* A counting value inside a tile's number: .metric span is the tile's label style. */
+.metric b [data-cost-count] {
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: none;
+  color: inherit;
+}
+.cost-chart text {
+  fill: var(--h-muted);
+  font-size: 10.5px;
+}
+.cost-chart .cost-val {
+  fill: var(--h-text);
+  font-weight: 600;
+}
+.cost-today {
+  stroke: rgba(223, 230, 255, 0.35);
+  stroke-dasharray: 2 3;
+}
+.cost-join {
+  stroke: rgba(223, 230, 255, 0.3);
+  stroke-dasharray: 3 3;
+}
+.cost-rings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.cost-ring {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  width: 92px;
+  color: var(--h-text);
+  text-decoration: none;
+  font-size: 11.5px;
+  text-align: center;
+}
+.cost-ring span {
+  max-width: 92px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cost-ring-svg text {
+  fill: var(--h-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+.cost-more {
+  align-self: center;
+  color: var(--h-cyan);
+}
+.cost-node.cost-click {
+  cursor: pointer;
+}
+.cost-node.cost-click:focus-visible rect,
+.cost-node.cost-click:hover rect {
+  stroke: #fff;
+  stroke-width: 1.5;
+}
+.cost-node text {
+  fill: var(--h-text);
+  font-size: 11px;
+}
+.cost-link:hover {
+  fill-opacity: 0.5;
+}
+.cost-scroll {
+  overflow-x: auto;
+}
+.cost-calendar {
+  display: block;
+}
+.cost-stage {
+  height: clamp(320px, 40vw, 440px);
+}
+.cost-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+.cost-legend i {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  margin-right: 6px;
+}
+.cost-table-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin-bottom: 10px;
+  font-size: 12.5px;
+  color: var(--h-muted);
+}
+.cost-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.cost-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--chip-blue);
+  color: var(--chip-blue-ink);
+  font-size: 11.5px;
+}
+.cost-chip.warn {
+  background: var(--chip-amber);
+  color: var(--chip-amber-ink);
+}
+.cost-chip button {
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+.cost-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.cost-table th,
+.cost-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--grid);
+  text-align: left;
+}
+.cost-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.cost-sort {
+  border: 0;
+  background: none;
+  color: var(--h-muted);
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+.cost-plans {
+  display: grid;
+  gap: 14px;
+}
+.cost-plan-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: baseline;
+  margin-bottom: 6px;
+}
+.cost-plan-head span {
+  color: var(--h-muted);
+  font-size: 12px;
+}
+.cost-plan-head em {
+  margin-left: auto;
+  font-style: normal;
+  font-weight: 700;
+  color: var(--h-cyan);
+}
+.cost-plan.under .cost-plan-head em {
+  color: #ff9a3c;
+}
+.cost-plan .cost-pbar {
+  position: relative;
+  height: 22px;
+  margin: 4px 0;
+  border-radius: 6px;
+  background: rgba(120, 140, 255, 0.08);
+  overflow: hidden;
+}
+.cost-plan .cost-pbar i {
+  display: block;
+  height: 100%;
+  border-radius: 6px;
+}
+.cost-plan .cost-pbar span {
+  position: absolute;
+  left: 8px;
+  top: 3px;
+  font-size: 12px;
+  color: var(--h-text);
+}
+.cost-units {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+/* Three narrow panels: the note sits under the title in each, so the charts start at the same height. */
+.cost-units .panel-head {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.cost-dot text {
+  fill: var(--h-text);
+  font-size: 11px;
+}
+/* Entrance motion, only while #view has .animate (render(true) without prefers-reduced-motion). */
+.animate .cost-line {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: cost-draw 1.2s ease-out forwards;
+}
+.animate .cost-grow {
+  transform-box: fill-box;
+  transform-origin: bottom;
+  animation: cost-grow 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.animate .cost-grow-x {
+  transform-origin: left;
+  animation: cost-grow-x 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.animate .cost-fade,
+.animate .cost-cell,
+.animate .cost-band {
+  animation: cost-fade 0.9s ease-out both;
+}
+.animate .cost-pop,
+.animate .cost-ring-arc {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: cost-pop 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.animate .cost-spike {
+  animation: cost-pulse 1.6s ease-in-out 0.8s 2;
+}
+@keyframes cost-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes cost-grow {
+  from {
+    transform: scaleY(0);
+  }
+}
+@keyframes cost-grow-x {
+  from {
+    transform: scaleX(0);
+  }
+}
+@keyframes cost-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes cost-pop {
+  from {
+    transform: scale(0.2);
+    opacity: 0;
+  }
+}
+@keyframes cost-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@keyframes cost-slide {
+  from {
+    transform: translateX(100%);
+  }
+}
+@media (max-width: 900px) {
+  .cost-units {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cost-deck *,
+  .cost-drawer {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+/* ---------- Cost Control: Budgets (public/costview.js) ---------- */
+.cost-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.cost-banner {
+  margin-bottom: 10px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+  font-size: 13px;
+}
+.cost-banner.muted {
+  border-color: var(--border);
+  background: var(--surface-2);
+  color: var(--h-muted);
+}
+.cost-banner ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.cost-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 14px;
+}
+.cost-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 14px;
+  padding: 16px;
+  border-radius: 16px;
+  transition: box-shadow 0.4s ease;
+}
+.cost-card h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.cost-card p {
+  margin: 2px 0;
+  color: var(--h-muted);
+  font-size: 12.5px;
+}
+.cost-card .cost-card-spent {
+  color: var(--h-text);
+}
+.cost-card .cost-card-reason {
+  color: var(--warn-ink);
+}
+.cost-card-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.cost-confirm {
+  flex-basis: 100%;
+  color: var(--h-text) !important;
+}
+.cost-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.cost-card.cost-focus {
+  box-shadow:
+    0 0 0 2px var(--h-cyan),
+    0 0 24px rgba(77, 232, 255, 0.45);
+}
+.cost-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(6, 12, 18, 0.5);
+  backdrop-filter: blur(3px);
+}
+.cost-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 45;
+  width: min(560px, 100vw);
+  border-radius: 0;
+  overflow-y: auto;
+  animation: cost-slide 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.cost-drawer form {
+  display: grid;
+  gap: 12px;
+}
+.cost-drawer label {
+  display: grid;
+  gap: 4px;
+  font-size: 12.5px;
+  color: var(--h-muted);
+}
+.cost-drawer fieldset {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 6px;
+}
+.cost-drawer-head,
+.cost-drawer-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.cost-drawer-head h2 {
+  margin: 0;
+  flex: 1;
+}
+.cost-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+}
+.cost-radio {
+  display: flex !important;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--h-text) !important;
+}
+.cost-radio.off {
+  opacity: 0.55;
+}
+.cost-radio small {
+  flex-basis: 100%;
+  padding-left: 22px;
+  color: var(--h-muted);
+}
+.cost-id code {
+  color: var(--h-cyan);
+}
+.cost-reasons {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--warn-ink);
+  font-size: 12.5px;
+}
+/* The checkbox row sits on one line (the drawer's labels stack their field under the text). */
+.cost-drawer .cost-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--h-text);
+}
+/* The confirmed delete: a solid destructive button, readable on the card. */
+.cost-card-actions .btn.danger:not(.ghost) {
+  background: #ff4f6d;
+  border-color: #ff4f6d;
+  color: #fff;
+}
+.cost-deck .btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
