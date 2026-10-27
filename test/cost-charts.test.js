@@ -36,7 +36,15 @@ const count = (s, re) => (s.match(re) || []).length;
 test('helpers: a nice axis top, a day label without a Date, a path broken at a gap', () => {
   assert.deepEqual([C.costNiceMax(0), C.costNiceMax(7.2), C.costNiceMax(1234)], [1, 8, 1500]);
   assert.equal(C.costDayLabel('2026-10-05'), '5 Oct');
-  assert.equal(C.costPath([[0, 1], [1, null], [2, 3], [3, 4]]), 'M0.0,1.0M2.0,3.0L3.0,4.0');
+  assert.equal(
+    C.costPath([
+      [0, 1],
+      [1, null],
+      [2, 3],
+      [3, 4],
+    ]),
+    'M0.0,1.0M2.0,3.0L3.0,4.0',
+  );
 });
 
 test('burn-down: actual line, forecast, band only past the third day, budget lines named as text', () => {
@@ -136,9 +144,15 @@ test('rings: percent capped on the ring with a pink overflow arc; no data dashed
 test('flow: nodes per column, a band per link, Other and Plan fee not filterable, names escaped', () => {
   const rows = [];
   for (let i = 1; i <= 8; i++) rows.push(row({ model: i === 8 ? EVIL : `m${i}`, listUSD: i, billedUSD: i }));
-  rows.push({ ...row({ provider: null, model: null, center: null, kind: 'plan', requests: 0, listUSD: 0 }), billedUSD: 5 });
+  rows.push({
+    ...row({ provider: null, model: null, center: null, kind: 'plan', requests: 0, listUSD: 0 }),
+    billedUSD: 5,
+  });
   const b = V.breakdown({ rows, from: '2026-10-01', to: '2026-10-07', measure: 'billed' });
-  const svg = C.costFlowSvg(b.flow, { fmt, label: (col, key) => (key === '__other' ? 'Other' : key === '__plan' ? 'Plan fee' : key) });
+  const svg = C.costFlowSvg(b.flow, {
+    fmt,
+    label: (col, key) => (key === '__other' ? 'Other' : key === '__plan' ? 'Plan fee' : key),
+  });
   assert.equal(count(svg, /class="cost-link/g), b.flow.links.length);
   assert.equal(count(svg, /class="cost-node/g), b.flow.nodes.length);
   assert.match(svg, /data-cost-node="model:m7"/);
@@ -201,7 +215,8 @@ test('treemap: the global Other block (more than 39 centers) is named "Other cen
 
 test('costcharts.js builds no markup from server names without esc() (S1) and loads in Node', () => {
   const src = fs.readFileSync(SRC, 'utf8');
-  const CONTENT = /\.(name|reason|project|model|center|provider|source|plan|label|title|text|error|message|id|key|day|topModel)$/;
+  const CONTENT =
+    /\.(name|reason|project|model|center|provider|source|plan|label|title|text|error|message|id|key|day|topModel)$/;
   const bare = [...src.matchAll(/\$\{\s*([A-Za-z_$][\w$.]*)\s*\}/g)].map((m) => m[1]).filter((e) => CONTENT.test(e));
   assert.deepEqual(bare, [], 'content interpolated without esc()');
   assert.doesNotMatch(src, /insertAdjacentHTML|outerHTML\s*=|document\.write|\son[a-z]+=/);

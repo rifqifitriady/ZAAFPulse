@@ -331,7 +331,8 @@ function stubPage(sub) {
     isConnected: true,
     innerHTML: 'BREAKDOWN',
     kids,
-    querySelector: (sel) => kids.find((k) => sel.split(',').some((x) => k.className.split(' ').includes(x.trim().slice(1)))) || null,
+    querySelector: (sel) =>
+      kids.find((k) => sel.split(',').some((x) => k.className.split(' ').includes(x.trim().slice(1)))) || null,
     prepend: (el) => kids.unshift(el),
   };
   const app = { contains: () => false };
@@ -339,7 +340,15 @@ function stubPage(sub) {
   global.document = {
     hidden: false,
     activeElement: null,
-    createElement: (tag) => ({ tag, className: '', textContent: '', attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } }),
+    createElement: (tag) => ({
+      tag,
+      className: '',
+      textContent: '',
+      attrs: {},
+      setAttribute(k, v) {
+        this.attrs[k] = v;
+      },
+    }),
   };
   global.$ = (s) => (s === '#cost-body' ? body : s === '#cost-app' ? app : null);
   global.fetch = (url, opts) => {

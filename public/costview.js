@@ -533,7 +533,14 @@ function costBarHtml(sub, c, ctx) {
           ? `<span class="cost-dates"><input class="input" type="date" data-cost-date="from" value="${esc(c.from)}" aria-label="From"> – <input class="input" type="date" data-cost-date="to" value="${esc(c.to)}" aria-label="To"></span>`
           : '');
   const cur =
-    ctx.currencies.length > 1 ? seg('data-cost-cur', ctx.currencies.map((x) => [x, x]), c.cur, 'Currency') : '';
+    ctx.currencies.length > 1
+      ? seg(
+          'data-cost-cur',
+          ctx.currencies.map((x) => [x, x]),
+          c.cur,
+          'Currency',
+        )
+      : '';
   const measure = sub === 'value' ? '' : seg('data-cost-measure', Object.entries(COST_MEASURES), c.measure, 'Measure');
   return `<div class="cost-bar">${range}<span class="cost-spacer"></span>${cur}${measure}</div>`;
 }
