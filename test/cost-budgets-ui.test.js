@@ -325,10 +325,22 @@ test('Budgets is wired: the sidebar link, the sub-page, the badge at start and o
 function stubPage(sub) {
   const saved = { $: global.$, state: global.state, document: global.document, fetch: global.fetch };
   const calls = [];
-  const body = { isConnected: true, innerHTML: 'BREAKDOWN' };
+  // The body's DOM calls: a quiet refresh that fails adds a note (`kids`) in front of what is on screen.
+  const kids = [];
+  const body = {
+    isConnected: true,
+    innerHTML: 'BREAKDOWN',
+    kids,
+    querySelector: (sel) => kids.find((k) => sel.split(',').some((x) => k.className.split(' ').includes(x.trim().slice(1)))) || null,
+    prepend: (el) => kids.unshift(el),
+  };
   const app = { contains: () => false };
   global.state = { sub };
-  global.document = { hidden: false, activeElement: null };
+  global.document = {
+    hidden: false,
+    activeElement: null,
+    createElement: (tag) => ({ tag, className: '', textContent: '', attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } }),
+  };
   global.$ = (s) => (s === '#cost-body' ? body : s === '#cost-app' ? app : null);
   global.fetch = (url, opts) => {
     calls.push({ url, opts });
@@ -347,7 +359,7 @@ test('a reload after a save or a delete paints only into the Budgets page', asyn
     assert.equal(p.body.innerHTML, 'BREAKDOWN', 'the other page is untouched');
     assert.equal(U.COST.req, req, "the other page's own load is not dropped");
     global.state.sub = 'budgets';
-    await U.costMountBudgets(true);
+    await U.costMountBudgets(false);
     assert.ok(p.calls.length > 0);
     assert.match(p.body.innerHTML, /Could not load this page: offline/);
   } finally {
@@ -418,6 +430,41 @@ test('a failed delete never paints budget cards into another sub-page', async ()
     U.COST.confirm = null;
     U.COST.cardMsg = {};
     p.restore();
+  }
+});
+
+test('a failed quiet refresh keeps the figures on screen with a note; a load that fails shows the error and Retry', async () => {
+  for (const sub of ['', 'breakdown', 'value', 'budgets']) {
+    const p = stubPage(sub);
+    try {
+      global.fetch = () => Promise.reject(new Error(EVIL));
+      p.body.innerHTML = 'FIGURES';
+      await U.costRefresh(true);
+      assert.equal(p.body.innerHTML, 'FIGURES', `${sub || 'overview'}: the last figures stay`);
+      assert.equal(p.body.kids.length, 1);
+      const note = p.body.kids[0];
+      assert.equal(note.tag, 'p');
+      assert.match(note.className, /cost-stale/);
+      assert.equal(note.attrs.role, 'status');
+      // Text, never markup: the message cannot add elements.
+      assert.equal(note.textContent, 'Could not refresh: ' + EVIL + '. Showing the last figures.');
+      await U.costRefresh(true);
+      assert.equal(p.body.kids.length, 1, 'a second failure reuses the note');
+
+      // A page still on its skeleton or its error panel has no figures to keep: the error panel shows.
+      p.body.kids.length = 0;
+      p.body.kids.push({ className: 'skeleton' });
+      await U.costRefresh(true);
+      assert.match(p.body.innerHTML, /Could not load this page: &lt;img/);
+
+      p.body.kids.length = 0;
+      p.body.innerHTML = 'FIGURES';
+      await U.costRefresh(false);
+      assert.match(p.body.innerHTML, /Could not load this page: &lt;img src=x onerror=alert\(1\)&gt;/);
+      assert.match(p.body.innerHTML, /data-cost-retry/);
+    } finally {
+      p.restore();
+    }
   }
 });
 
