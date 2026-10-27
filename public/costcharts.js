@@ -93,7 +93,9 @@ function costBurnSvg(o, fmt) {
   if (!f.early) {
     const top = f.line.map((p) => [x(p.day), y(p.high)]);
     const bottom = f.line.map((p) => [x(p.day), y(p.low)]).reverse();
-    out.push(`<path class="cost-band" d="${costPath([...top, ...bottom])}Z" fill="${COST_C.violet}" fill-opacity=".16"/>`);
+    out.push(
+      `<path class="cost-band" d="${costPath([...top, ...bottom])}Z" fill="${COST_C.violet}" fill-opacity=".16"/>`,
+    );
   }
   out.push(
     `<path class="cost-line" pathLength="1" d="${costPath(o.daily.map((d) => [x(d.day), y(d.cum)]))}" fill="none" stroke="${COST_C.cyan}" stroke-width="2.4" style="filter:drop-shadow(0 0 4px ${COST_C.cyan})"/>`,
@@ -123,7 +125,9 @@ function costBurnSvg(o, fmt) {
       `<rect x="${costF(x(p.day) - step / 2)}" y="${m.t}" width="${costF(step)}" height="${ih}" fill="transparent" data-tip="${costTip([costDayLabel(p.day), `forecast ${fmt(p.cum)}`, f.early ? 'early in the month' : `${fmt(p.low)} – ${fmt(p.high)}`])}"/>`,
     );
   for (let i = 1; i <= days; i += Math.ceil(days / 8))
-    out.push(`<text x="${costF(m.l + ((i - 1) / Math.max(1, days - 1)) * iw)}" y="${H - 6}" text-anchor="middle">${i}</text>`);
+    out.push(
+      `<text x="${costF(m.l + ((i - 1) / Math.max(1, days - 1)) * iw)}" y="${H - 6}" text-anchor="middle">${i}</text>`,
+    );
   return costSvg(W, H, out.join(''), 'cost-burn', false, 'Burn-down');
 }
 
@@ -163,7 +167,9 @@ function costSpikeSvg(spikes, fmt) {
   const k = Math.ceil(n / 8);
   spikes.forEach((s, i) => {
     if (i % k === 0)
-      out.push(`<text x="${costF(m.l + i * step + step / 2)}" y="${H - 6}" text-anchor="middle">${esc(costDayLabel(s.day))}</text>`);
+      out.push(
+        `<text x="${costF(m.l + i * step + step / 2)}" y="${H - 6}" text-anchor="middle">${esc(costDayLabel(s.day))}</text>`,
+      );
   });
   return costSvg(W, H, out.join(''), 'cost-spikes', false, 'Daily spend');
 }
@@ -348,7 +354,10 @@ function costMountTreemap(canvas, blocks, { fmt, label, grow = true }) {
         const h = still ? b.h : (grown.get(i) ?? 0.02) + (b.h - (grown.get(i) ?? 0.02)) * 0.08;
         grown.set(i, h);
         tops.push({ at: P(b.x + b.w / 2, h, b.z + b.d / 2), b });
-        return { depth: P(b.x + b.w / 2, 0, b.z + b.d / 2)[2], draw: () => g.box(b.x, b.z, b.w, b.d, h, b.color, { slices: 0.4, glow: 10 }) };
+        return {
+          depth: P(b.x + b.w / 2, 0, b.z + b.d / 2)[2],
+          draw: () => g.box(b.x, b.z, b.w, b.d, h, b.color, { slices: 0.4, glow: 10 }),
+        };
       });
       items.sort((a, b) => a.depth - b.depth).forEach((it) => it.draw());
       g.particles();
@@ -372,6 +381,175 @@ function costMountTreemap(canvas, blocks, { fmt, label, grow = true }) {
     },
   });
 }
+/* ---------- Value ---------- */
+
+// Usage value against plan fee per source on a plan, with the multiplier; below 1× the bar is orange and says so.
+// `label(source)` names a source.
+function costPlanBarsHtml(plans, fmt, label) {
+  if (!plans.length) return '';
+  const max = Math.max(1e-9, ...plans.flatMap((p) => [p.value, p.fee]));
+  const bar = (v, color, text) =>
+    `<div class="cost-pbar"><i class="cost-grow-x" style="width:${costF(Math.max(0.5, (v / max) * 100))}%;background:${color};box-shadow:0 0 8px ${color}"></i><span>${esc(text)}</span></div>`;
+  return `<div class="cost-plans">${plans
+    .map((p) => {
+      const under = p.multiplier != null && p.multiplier < 1;
+      const times = p.multiplier == null ? 'no fee in this range' : `${p.multiplier.toFixed(1)}× the fee`;
+      return `<div class="cost-plan${under ? ' under' : ''}"><div class="cost-plan-head"><b>${esc(label(p.source))}</b><span>${esc(p.plan || 'Plan')} · ${p.days} days</span><em>${esc(times)}</em></div>
+        ${bar(p.value, under ? COST_C.orange : COST_C.cyan, `Usage value ${fmt(p.value)}`)}${bar(p.fee, COST_C.violet, `Plan fee ${fmt(p.fee)}`)}
+        ${under ? '<p class="cost-note">The plan cost more than metered use would have.</p>' : ''}</div>`;
+    })
+    .join('')}</div>`;
+}
+
+// Without cache → cache savings (down) → plan savings (down, or up when a plan cost more) → paid.
+function costWaterfallSvg(w, fmt) {
+  const W = 640;
+  const H = 230;
+  const m = { t: 22, r: 12, b: 34, l: 60 };
+  const iw = W - m.l - m.r;
+  const ih = H - m.t - m.b;
+  const max = costNiceMax(Math.max(w.withoutCache, w.usage, w.paid, 0));
+  const y = (v) => m.t + ih - (Math.max(0, Math.min(v, max)) / max) * ih;
+  const steps = [
+    {
+      name: 'Without cache',
+      from: 0,
+      to: w.withoutCache,
+      color: COST_C.cyan,
+      tip: 'usage value plus the cache savings',
+    },
+    {
+      name: 'Cache savings',
+      from: w.withoutCache,
+      to: w.usage,
+      color: COST_C.green,
+      tip: 'estimate: base rates of each day',
+    },
+    {
+      name: w.planSaved >= 0 ? 'Plan savings' : 'Plan cost more',
+      from: w.usage,
+      to: w.paid,
+      color: w.planSaved >= 0 ? COST_C.green : COST_C.orange,
+      tip: 'usage value minus what was paid',
+    },
+    { name: 'Paid', from: 0, to: w.paid, color: COST_C.violet, tip: 'what was paid' },
+  ];
+  const step = iw / steps.length;
+  const bw = Math.min(90, step * 0.56);
+  const out = [costAxis(W, m, ih, max, fmt)];
+  steps.forEach((s, i) => {
+    const x = m.l + i * step + (step - bw) / 2;
+    const top = y(Math.max(s.from, s.to));
+    const h = Math.max(1, Math.abs(y(s.from) - y(s.to)));
+    const amount = i === 0 || i === 3 ? s.to : s.to - s.from;
+    out.push(
+      `<g data-tip="${costTip([s.name, fmt(amount), s.tip])}"><rect class="cost-grow" x="${costF(x)}" y="${costF(top)}" width="${costF(bw)}" height="${costF(h)}" rx="2" fill="${s.color}" fill-opacity=".85" style="filter:drop-shadow(0 0 4px ${s.color})"/><text x="${costF(x + bw / 2)}" y="${costF(top - 6)}" text-anchor="middle" class="cost-val">${esc(i === 0 || i === 3 ? fmt(amount) : `${amount <= 0 ? '−' : '+'}${fmt(Math.abs(amount))}`)}</text><text x="${costF(x + bw / 2)}" y="${H - 12}" text-anchor="middle">${esc(s.name)}</text></g>`,
+    );
+    if (i < steps.length - 1) {
+      const next = m.l + (i + 1) * step + (step - bw) / 2;
+      out.push(
+        `<line x1="${costF(x + bw)}" x2="${costF(next)}" y1="${costF(y(s.to))}" y2="${costF(y(s.to))}" class="cost-join"/>`,
+      );
+    }
+  });
+  return costSvg(W, H, out.join(''), 'cost-waterfall', false, 'Savings waterfall');
+}
+
+// Free local models: requests and tokens, never money.
+function costLocalHtml(local) {
+  if (!local.requests) return '<p class="cost-note">No local model calls in this range.</p>';
+  const rows = local.models
+    .map(
+      (l) =>
+        `<tr><td>${esc(l.model || 'Unknown model')}</td><td>${esc(l.source)}</td><td class="num">${l.requests.toLocaleString('en')}</td><td class="num">${l.tokens.toLocaleString('en')}</td></tr>`,
+    )
+    .join('');
+  return `<table class="cost-table"><thead><tr><th>Model</th><th>Source</th><th class="num">Requests</th><th class="num">Tokens</th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="cost-note">Not priced: these run on your own machine. A later version compares them with a cloud model.</p>`;
+}
+
+// One dot per model: spend per request across, tool-call accuracy up, size by requests; hollow with little data.
+// With `accuracyError` (the Value answer's fixed phrase) the accuracy could not be read: say so instead of a chart.
+function costScatterSvg(scatter, fmt, { accuracyError = null } = {}) {
+  if (accuracyError) return '<p class="cost-note">Tool-call accuracy could not be read.</p>';
+  const dots = scatter.dots;
+  const W = 1100;
+  const H = 320;
+  const m = { t: 16, r: 20, b: 30, l: 56 };
+  const iw = W - m.l - m.r;
+  const ih = H - m.t - m.b;
+  const maxX = costNiceMax(Math.max(0, ...dots.map((d) => d.perRequest || 0)));
+  const lowY = Math.max(0, Math.floor((Math.min(1, ...dots.map((d) => d.accuracy)) - 0.01) * 50) / 50);
+  const x = (v) => m.l + (Math.min(v || 0, maxX) / maxX) * iw;
+  const y = (a) => m.t + ih - ((a - lowY) / Math.max(1e-9, 1 - lowY)) * ih;
+  const maxReq = Math.max(1, ...dots.map((d) => d.requests));
+  const out = [];
+  for (let i = 0; i <= 4; i++) {
+    const a = lowY + ((1 - lowY) * (4 - i)) / 4;
+    const yy = costF(y(a));
+    out.push(
+      `<line x1="${m.l}" x2="${W - m.r}" y1="${yy}" y2="${yy}" class="gl"/><text x="${m.l - 6}" y="${costF(y(a) + 3)}" text-anchor="end">${(a * 100).toFixed(1)}%</text>`,
+    );
+  }
+  for (let i = 0; i <= 4; i++)
+    out.push(
+      `<text x="${costF(m.l + (iw * i) / 4)}" y="${H - 8}" text-anchor="middle">${esc(fmt((maxX * i) / 4))}</text>`,
+    );
+  dots.forEach((d, i) => {
+    const r = 4 + 14 * Math.sqrt(d.requests / maxReq);
+    const color = COST_SERIES[i % COST_SERIES.length];
+    const pass =
+      d.passRate && d.passRate.total
+        ? `Datasets pass rate ${costPctText(d.passRate.pass / d.passRate.total)} (${d.passRate.pass}/${d.passRate.total})`
+        : '';
+    const tip = costTip([
+      d.model,
+      `${fmt(d.perRequest)} per request`,
+      `accuracy ${costPctText(d.accuracy)}`,
+      `${d.toolResults.toLocaleString('en')} tool results`,
+      `${d.requests.toLocaleString('en')} requests`,
+      d.littleData ? 'little data' : '',
+      pass,
+    ]);
+    out.push(
+      `<g class="cost-dot" data-tip="${tip}"><circle class="cost-pop" cx="${costF(x(d.perRequest))}" cy="${costF(y(d.accuracy))}" r="${costF(r)}" fill="${d.littleData ? 'none' : color}" fill-opacity=".55" stroke="${color}" stroke-width="2"${d.littleData ? ' stroke-dasharray="3 3"' : ''}/><text x="${costF(x(d.perRequest) + r + 4)}" y="${costF(y(d.accuracy) + 4)}">${esc(d.model)}${d.littleData ? ' · little data' : ''}</text></g>`,
+    );
+  });
+  const none = (scatter.noToolCalls || []).length
+    ? `<p class="cost-note">No tool calls to measure: ${scatter.noToolCalls.map((n) => esc(n.model)).join(', ')}</p>`
+    : '';
+  return costSvg(W, H, out.join(''), 'cost-scatter', false, 'Cost vs quality') + none;
+}
+
+// One unit-cost line over the range with its own scale; a day without its denominator is a gap.
+function costUnitSvg(unit, key, fmt, color) {
+  const W = 340;
+  const H = 170;
+  const m = { t: 10, r: 8, b: 22, l: 56 };
+  const iw = W - m.l - m.r;
+  const ih = H - m.t - m.b;
+  const vals = unit.map((u) => u[key]);
+  const max = costNiceMax(Math.max(0, ...vals.filter((v) => v != null)));
+  const x = (i) => m.l + (unit.length < 2 ? iw / 2 : (i / (unit.length - 1)) * iw);
+  const y = (v) => (v == null ? null : m.t + ih - (Math.min(v, max) / max) * ih);
+  const out = [costAxis(W, m, ih, max, fmt)];
+  out.push(
+    `<path class="cost-line" pathLength="1" d="${costPath(vals.map((v, i) => [x(i), y(v)]))}" fill="none" stroke="${color}" stroke-width="2" style="filter:drop-shadow(0 0 3px ${color})"/>`,
+  );
+  vals.forEach((v, i) => {
+    if (v != null && (i === 0 || vals[i - 1] == null) && (i === vals.length - 1 || vals[i + 1] == null))
+      out.push(`<circle cx="${costF(x(i))}" cy="${costF(y(v))}" r="2.5" fill="${color}"/>`); // a lone day between gaps
+    out.push(
+      `<rect x="${costF(x(i) - iw / unit.length / 2)}" y="${m.t}" width="${costF(iw / unit.length)}" height="${ih}" fill="transparent" data-tip="${costTip([costDayLabel(unit[i].day), v == null ? 'no data' : fmt(v)])}"/>`,
+    );
+  });
+  const k = Math.ceil(unit.length / 6);
+  unit.forEach((u, i) => {
+    if (i % k === 0)
+      out.push(`<text x="${costF(x(i))}" y="${H - 6}" text-anchor="middle">${esc(costDayLabel(u.day))}</text>`);
+  });
+  return costSvg(W, H, out.join(''), 'cost-unit', false, 'Unit cost');
+}
 
 if (typeof module !== 'undefined')
   module.exports = {
@@ -387,4 +565,9 @@ if (typeof module !== 'undefined')
     costCalendarSvg,
     costTreemapLayout,
     costTreemapText,
+    costPlanBarsHtml,
+    costWaterfallSvg,
+    costLocalHtml,
+    costScatterSvg,
+    costUnitSvg,
   };
