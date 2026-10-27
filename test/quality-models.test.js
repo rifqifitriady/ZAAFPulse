@@ -38,6 +38,18 @@ test('SignalSink.modelResult: counts per day and model, with the failure categor
     'gpt-6.1-sol': { results: 1, cats: { execution: 1 } },
   });
   assert.equal(Object.getPrototypeOf(sink.days['2026-10-01'].models), Object.prototype);
+  // Names that Object.prototype inherits are ordinary model names: counted on their own, never on the prototype.
+  const toStringBefore = Object.prototype.toString;
+  const inh = new sig.SignalSink('claude');
+  inh.modelResult(ts, 'toString');
+  inh.modelResult(ts, 'valueOf', 'hallucination');
+  inh.modelResult(ts, 'valueOf', 'hallucination');
+  assert.deepEqual(inh.days['2026-10-01'].models, {
+    toString: { results: 1, cats: {} },
+    valueOf: { results: 2, cats: { hallucination: 2 } },
+  });
+  assert.equal(Object.prototype.toString, toStringBefore);
+  assert.equal(Object.prototype.valueOf.results, undefined);
   const other = new sig.SignalSink('claude');
   other.count(ts, 'results');
   assert.equal(other.days['2026-10-01'].models, undefined, 'a day gets models only when one is counted');
@@ -94,10 +106,12 @@ test('the Codex parser counts each tool result for the model of the turn that ma
     item(6, { type: 'function_call_output', call_id: 'c2', output: 'Process exited with code 0\nOutput:\na.js' }),
     item(7, { type: 'function_call', name: 'shell', call_id: 'c3', arguments: '{"command":["ls"]}' }),
     item(8, { type: 'function_call_output', call_id: 'c3', output: 'Process exited with code 0\nOutput:\na.js' }),
+    // An output whose call this file never showed is counted for the model in force now.
+    item(9, { type: 'function_call_output', call_id: 'unseen', output: 'Process exited with code 0\nOutput:\n' }),
   ]);
   assert.deepEqual(signals.days[dayAt(1)].models, {
     'gpt-6.1-sol': { results: 2, cats: { hallucination: 1 } },
-    'gpt-6-astra': { results: 1, cats: {} },
+    'gpt-6-astra': { results: 2, cats: {} },
   });
 });
 
@@ -126,6 +140,13 @@ test('accuracyByModel: model-caused failures only, over the range, with names as
   assert.deepEqual(opus.daily, { '2026-10-01': { results: 4, ok: 3 }, '2026-10-02': { results: 6, ok: 5 } });
   assert.equal(a['gpt-6.1-sol'].accuracy, 1);
   assert.deepEqual(accuracyByModel(results, { from: '2026-10-03', to: '2026-10-31' }), {});
+  for (const range of [{}, { from: '2026-10-01' }, { from: 20261001, to: '2026-10-31' }, { from: 'a', to: 'b' }])
+    assert.deepEqual(accuracyByModel(results, range), {}, 'a range that is not two days gives nothing');
+  const corrupt = [
+    { signals: { days: { '2026-10-01': { models: { m: { results: 2, cats: { hallucination: 5 } } } } } } },
+  ];
+  const c = accuracyByModel(corrupt, { from: '2026-10-01', to: '2026-10-01' }).m;
+  assert.deepEqual([c.modelFailures, c.accuracy, c.daily['2026-10-01'].ok], [2, 0, 0], 'failures never exceed results');
   assert.deepEqual(accuracyByModel([], { from: '2026-10-01', to: '2026-10-31' }), {});
 });
 
