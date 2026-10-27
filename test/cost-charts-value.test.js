@@ -24,7 +24,7 @@ test('plan bars: usage value against the fee with the multiplier; under 1× oran
     (s) => ({ claude: 'Claude Code', codex: 'Codex' })[s],
   );
   assert.match(html, /4\.1× the fee/);
-  assert.match(html, /0\.6× the fee/);
+  assert.match(html, /0\.60× the fee/);
   assert.equal(count(html, /The plan cost more than metered use would have\./g), 1);
   assert.equal(count(html, /class="cost-plan under"/g), 1);
   assert.match(html, /width:100\.0%/, 'the largest bar fills the row');
@@ -128,6 +128,64 @@ test('plan, local and unit rows show the source and label escaped once; charts c
   assert.match(w, /aria-label="Savings waterfall"/);
   assert.match(
     C.costUnitSvg([{ day: '2026-10-01', perRequest: 1 }], 'perRequest', fmt, '#fff'),
-    /aria-label="Unit cost"/,
+    /aria-label="Unit cost per request"/,
   );
+});
+
+test('fix round 1: multiplier below 1x keeps two decimals, a zero step has no sign', () => {
+  const p = (multiplier) => ({ source: 'claude', plan: 'P', days: 30, value: 1, fee: 1, multiplier });
+  assert.match(C.costPlanBarsHtml([p(0.96)], fmt, String), />0\.96× the fee</);
+  assert.match(C.costPlanBarsHtml([p(4.14)], fmt, String), />4\.1× the fee</);
+  const svg = C.costWaterfallSvg({ withoutCache: 5, cacheSaved: 0, usage: 5, planSaved: 0, paid: 5 }, fmt);
+  assert.match(svg, />\$0\.00</);
+  assert.doesNotMatch(svg, />[−+]\$0\.00</);
+});
+
+test('fix round 1: waterfall upward step spans paid (top) to usage (bottom)', () => {
+  const svg = C.costWaterfallSvg({ withoutCache: 10, cacheSaved: 0, usage: 10, planSaved: -10, paid: 20 }, fmt);
+  const rects = [
+    ...svg.matchAll(/<rect class="cost-grow" x="[^"]*" y="([\d.]+)" width="[^"]*" height="([\d.]+)"/g),
+  ].map((m) => [Number(m[1]), Number(m[2])]);
+  const [paidTop] = rects[3];
+  const [upTop, upH] = rects[2];
+  assert.equal(upTop, paidTop, 'the bar top is at paid');
+  assert.ok(Math.abs(upTop + upH - rects[0][0]) < 0.11, 'the bottom is at usage');
+});
+
+test('fix round 1: scatter edge dots stay inside the viewBox; right-hand labels end at the dot', () => {
+  const dot = (model, perRequest, accuracy) => ({
+    model,
+    requests: 100,
+    spend: 1,
+    perRequest,
+    accuracy,
+    toolResults: 100,
+    littleData: false,
+    passRate: null,
+  });
+  const svg = C.costScatterSvg({ dots: [dot('a', 0.01, 0.9), dot('far', 1, 1)], noToolCalls: [] }, fmt);
+  const cs = [...svg.matchAll(/<circle[^>]* cx="([\d.]+)" cy="([\d.]+)" r="([\d.]+)"/g)].map((m) =>
+    m.slice(1).map(Number),
+  );
+  for (const [cx, cy, r] of cs) {
+    assert.ok(cx + r <= 1100 && cx - r >= 0 && cy - r >= 0 && cy + r <= 320);
+  }
+  assert.match(svg, /text-anchor="end"[^>]*>far</);
+});
+
+test('fix round 1: unit charts are named by key; local rows use the source label; no dots says so', () => {
+  const u = [{ day: '2026-10-01', perRequest: 1 }];
+  assert.match(C.costUnitSvg(u, 'perRequest', fmt, '#fff'), /aria-label="Unit cost per request"/);
+  assert.match(C.costUnitSvg(u, 'perMillionTokens', fmt, '#fff'), /aria-label="Unit cost per million tokens"/);
+  assert.match(
+    C.costUnitSvg(u, 'perThousandToolCalls', fmt, '#fff'),
+    /aria-label="Unit cost per 1,000 successful tool calls"/,
+  );
+  const l = C.costLocalHtml(
+    { requests: 1, tokens: 1, models: [{ model: 'm', source: 'judge', requests: 1, tokens: 1 }] },
+    () => EVIL,
+  );
+  assert.match(l, /<td>&lt;img src=x/);
+  assert.doesNotMatch(l, /&amp;lt;|<img/);
+  assert.match(C.costScatterSvg({ dots: [], noToolCalls: [] }, fmt), /No model had requests in this range\./);
 });
