@@ -52,6 +52,8 @@ const { createModelMemory } = require('./lib/runtimes/models');
 const { createRuntimeApi } = require('./lib/runtimes/api');
 const { createCost } = require('./lib/cost');
 const { createCostApi } = require('./lib/cost/api');
+const { passRates: costPassRates } = require('./lib/cost/views');
+const { accuracyByModel } = require('./lib/quality');
 const { createBudgetService } = require('./lib/cost/budget-service');
 const { createGuard } = require('./lib/cost/guard');
 const { isRef } = require('./lib/secrets');
@@ -491,6 +493,21 @@ const budgetsChanged = () => {
   costBudgets.invalidate();
   monitors.tickBudgets().catch(() => {});
 };
+// Tool-call accuracy per model for the Cost Control Value page: one scan of the signals per index version and range,
+// so a refresh does not rescan them (a handful of ranges are in use at a time).
+const accuracyMemo = { version: null, ranges: new Map() };
+function costAccuracy({ from, to }) {
+  if (accuracyMemo.version !== indexer.version) {
+    accuracyMemo.version = indexer.version;
+    accuracyMemo.ranges.clear();
+  }
+  const key = `${from}|${to}`;
+  if (!accuracyMemo.ranges.has(key)) {
+    if (accuracyMemo.ranges.size >= 8) accuracyMemo.ranges.clear();
+    accuracyMemo.ranges.set(key, accuracyByModel(indexer.results(), { from, to }));
+  }
+  return accuracyMemo.ranges.get(key);
+}
 const costApi = createCostApi({
   cost,
   settings: { get: costSettings, save: (value) => saveConfigSection('cost', value) },
@@ -500,6 +517,9 @@ const costApi = createCostApi({
   budgetStore: { save: saveBudgets },
   pauseOff: budgetPauseOff,
   onChange: () => budgetsChanged(),
+  accuracy: costAccuracy,
+  // The experiment store is made below; this runs only on a request, after it is.
+  passRates: (range) => costPassRates(experiments.list(), range),
 });
 
 // Local evals: judge models read the masked text of finished turns, one queue, local first.
