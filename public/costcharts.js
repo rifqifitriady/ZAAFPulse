@@ -37,8 +37,8 @@ function costNiceMax(v) {
 // "22 Oct" from YYYY-MM-DD, without a Date (no time zone can move it).
 const costDayLabel = (day) => `${Number(day.slice(8, 10))} ${COST_MONTHS[Number(day.slice(5, 7)) - 1] || ''}`;
 // A chart that scales to its panel; `fixed` keeps its drawn size (the calendar's cells stay square and small).
-const costSvg = (W, H, body, cls = '', fixed = false) =>
-  `<svg class="${fixed ? '' : 'hchart '}cost-chart${cls ? ` ${cls}` : ''}" viewBox="0 0 ${W} ${H}"${fixed ? ` width="${W}" height="${H}"` : ''} role="img">${body}</svg>`;
+const costSvg = (W, H, body, cls = '', fixed = false, label = '', role = 'img') =>
+  `<svg class="${fixed ? '' : 'hchart '}cost-chart${cls ? ` ${cls}` : ''}" viewBox="0 0 ${W} ${H}"${fixed ? ` width="${W}" height="${H}"` : ''} role="${role}" aria-label="${esc(label)}">${body}</svg>`;
 const costTip = (parts) => esc(parts.filter((x) => x !== '' && x != null).join(' · '));
 const costPctText = (x) => (x == null ? '—' : `${(x * 100).toFixed(x >= 0.995 || x < 0.1 ? 1 : 0)}%`);
 // A path through points; a null y breaks it (a gap, not zero).
@@ -81,7 +81,8 @@ function costBurnSvg(o, fmt) {
   const ih = H - m.t - m.b;
   const days = o.month.days;
   const f = o.forecast;
-  const reach = Math.max(f.early ? f.projected || 0 : f.high || 0, 0);
+  // The forecast's end sets the reach, or the band's top when that is higher (right-skewed spend: end above the band).
+  const reach = Math.max(f.projected || 0, f.early ? 0 : f.high || 0);
   const fits = (l) => (l.amount || 0) <= COST_BUDGET_FIT * reach;
   const lines = o.budgetLines.filter(fits);
   const pinned = o.budgetLines.filter((l) => !fits(l));
@@ -123,7 +124,7 @@ function costBurnSvg(o, fmt) {
     );
   for (let i = 1; i <= days; i += Math.ceil(days / 8))
     out.push(`<text x="${costF(m.l + ((i - 1) / Math.max(1, days - 1)) * iw)}" y="${H - 6}" text-anchor="middle">${i}</text>`);
-  return costSvg(W, H, out.join(''), 'cost-burn');
+  return costSvg(W, H, out.join(''), 'cost-burn', false, 'Burn-down');
 }
 
 // Daily spend as bars against each day's 7-day baseline; a spike is a pink marker with its day, spend, baseline and
@@ -164,7 +165,7 @@ function costSpikeSvg(spikes, fmt) {
     if (i % k === 0)
       out.push(`<text x="${costF(m.l + i * step + step / 2)}" y="${H - 6}" text-anchor="middle">${esc(costDayLabel(s.day))}</text>`);
   });
-  return costSvg(W, H, out.join(''), 'cost-spikes');
+  return costSvg(W, H, out.join(''), 'cost-spikes', false, 'Daily spend');
 }
 
 // One budget ring: the percent (capped at 100 % on the ring, the overflow as a pink outer arc), dashed and muted
@@ -255,7 +256,7 @@ function costFlowSvg(flow, { fmt, label }) {
       `<g class="cost-node${filterable ? ' cost-click' : ''}"${filterable ? ` data-cost-node="${esc(n.id)}" role="button" tabindex="0" aria-label="${esc(`Filter the table to ${name}`)}"` : ''} data-tip="${costTip([name, fmt(n.value), costPctText(n.value / total)])}"><rect class="cost-grow" x="${costF(p.x)}" y="${costF(p.y)}" width="${nodeW}" height="${costF(p.h)}" rx="2" fill="${color}" style="filter:drop-shadow(0 0 4px ${color})"/><text x="${costF(left ? p.x - 6 : p.x + nodeW + 6)}" y="${costF(p.y + p.h / 2 + 4)}" text-anchor="${left ? 'end' : 'start'}">${esc(name.length > 26 ? `${name.slice(0, 25)}…` : name)}</text></g>`,
     );
   }
-  return costSvg(W, H, out.join(''), 'cost-flow');
+  return costSvg(W, H, out.join(''), 'cost-flow', false, 'Cost flow', 'group');
 }
 
 // Weeks as columns, Monday to Sunday as rows; the color step is the day's level (lib/cost/views.js calendarOf).
@@ -285,7 +286,7 @@ function costCalendarSvg(cal, fmt) {
       `<rect class="cost-cell" x="${x}" y="${y}" width="${cell}" height="${cell}" rx="3" fill="${fill}"${d.level ? '' : ' stroke="rgba(120,140,255,.22)"'} data-tip="${costTip([costDayLabel(d.day), d.spend ? fmt(d.spend) : 'nothing spent', d.topModel ? 'top model ' + d.topModel : ''])}"/>`,
     );
   }
-  return costSvg(W, H, out.join(''), 'cost-calendar', true);
+  return costSvg(W, H, out.join(''), 'cost-calendar', true, 'Spend calendar');
 }
 
 // Center strips across the platform, each as wide as its share; inside, one block per project as deep as its share
