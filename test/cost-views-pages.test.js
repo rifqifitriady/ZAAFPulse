@@ -308,6 +308,79 @@ test('breakdown and value: data-derived names like __proto__ and toString neithe
   assert.equal(Object.getPrototypeOf(b.flow.links), Array.prototype);
 });
 
+test('hostile names from parsed JSON come out as own keys and leave the prototypes alone', () => {
+  const before = Object.prototype.toString;
+  const at = new Date(2026, 9, 2, 12).getTime();
+  const ev = '{"evaluators":{"e":{"pass":1,"total":2}}}';
+  const records = [JSON.parse(`{"endedAt":${at},"summary":{"models":{"__proto__":${ev},"toString":${ev}}}}`)];
+  const pr = V.passRates(records, RANGE);
+  assert.ok(Object.hasOwn(pr, '__proto__'));
+  assert.ok(Object.hasOwn(pr, 'tostring'));
+  const acc = '{"results":60,"accuracy":0.5,"daily":{}}';
+  const accuracy = JSON.parse(`{"__proto__":${acc},"tostring":${acc}}`);
+  const rows = ['__proto__', 'tostring'].map((m) => row({ model: m, listUSD: 1, requests: 1 }));
+  const v = V.value({ rows, ...RANGE, accuracy, passRates: pr });
+  assert.deepEqual(v.scatter.dots.map((d) => d.model).sort(), ['__proto__', 'tostring']);
+  assert.ok(v.scatter.dots.every((d) => d.passRate && d.passRate.total === 2));
+  assert.equal(Object.prototype.toString, before);
+  assert.equal(Object.getPrototypeOf({}), Object.prototype);
+  assert.equal({}.pass, undefined);
+});
+
+test('breakdown treemap: more than 40 centers fold into one global Other, at most 40 blocks', () => {
+  const rows = [];
+  for (let i = 0; i < 45; i++)
+    for (let j = 0; j < 2; j++)
+      rows.push(
+        row({ center: `c${String(i).padStart(2, '0')}`, project: `~/p${j}`, listUSD: 100 - i + (j ? 0 : 0.5) }),
+      );
+  const t = V.breakdown({ rows, ...RANGE }).treemap;
+  const blocks = t.flatMap((c) => c.blocks);
+  assert.ok(blocks.length <= 40);
+  assert.ok(
+    blocks.some((b) => b.project && b.project !== '__other'),
+    'a real project shows',
+  );
+  const g = blocks.filter((b) => b.center === '__other');
+  assert.equal(g.length, 1);
+  assert.equal(g[0].project, '__other');
+  assert.equal(g[0].projects, 2 * (45 - 38));
+  near(
+    blocks.reduce((a, b) => a + b.spend, 0),
+    rows.reduce((a, r) => a + r.listUSD, 0),
+  );
+  for (const b of blocks) assert.equal(b.share, Math.round(b.share * 1e4) / 1e4);
+});
+
+test('breakdown flow: a link or node whose rounded value is 0 is dropped', () => {
+  const f = V.breakdown({ rows: [row({ listUSD: 0.00001 }), row({ model: 'big', listUSD: 5 })], ...RANGE }).flow;
+  assert.ok(f.links.every((l) => l.value > 0));
+  assert.equal(
+    f.nodes.some((n) => n.key === 'deepseek-chat'),
+    false,
+  );
+  assert.ok(f.nodes.every((n) => n.value > 0));
+});
+
+test("value: the plan label is the latest day's; a local model is reported per source", () => {
+  const rows = [
+    { ...planRow('2026-10-01', 10), plan: 'Claude Pro' },
+    { ...planRow('2026-10-03', 10), plan: 'Claude Max' },
+    { ...planRow('2026-10-02', 10), plan: 'Claude Mid' },
+    row({ source: 'judge', provider: 'ollama', model: 'q', free: true, listUSD: 0, requests: 2 }),
+    row({ source: 'gateway', provider: 'ollama', model: 'q', free: true, listUSD: 0, requests: 3 }),
+  ];
+  const v = V.value({ rows, ...RANGE });
+  assert.equal(v.plans[0].plan, 'Claude Max');
+  assert.deepEqual(
+    v.local.models.map((m) => [m.model, m.source, m.requests]),
+    [
+      ['q', 'gateway', 3],
+      ['q', 'judge', 2],
+    ],
+  );
+});
+
 test('breakdown and value: missingRate lists only days where something was counted in USD', () => {
   const rows = [row({ listUSD: 0, billedUSD: 0 }), row({ day: '2026-10-02', listUSD: 3 })];
   const rateOf = () => null;
