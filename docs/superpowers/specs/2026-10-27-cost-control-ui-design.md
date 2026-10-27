@@ -31,7 +31,7 @@ A badge on the menu (`#b-cost`) counts the budgets that are `exceeded` or `proje
 **Routes.** `#cost/<sub>?range=30d&from=…&to=…&cur=IDR&measure=billed`.
 - `range`: `7d`, `30d`, `month`, `lastmonth` or `custom` (then `from` and `to`, at most 400 days, the API's limit). The days end today, in local time.
 - Overview ignores `range` and always shows the current month. Its control bar hides the range buttons and shows "This month · day 27 of 31" instead.
-- An invalid value (a broken date, `cur` without rates, an unknown `measure`) falls back to the default silently: `30d`, USD, `list`. No error page.
+- An invalid value (a broken date, `cur` without rates, an unknown `measure`) falls back to the default silently: `30d`, USD, `list`. No error page. Breakdown and Value default to the last 30 days, in the page and in the API.
 - Budgets has no range or measure control; its currency switch is not shown either (each budget has its own currency).
 
 **Control bar** at the top of each sub-page, in the `subHero` pattern of `public/iso.js`:
@@ -40,7 +40,7 @@ A badge on the menu (`#b-cost`) counts the budgets that are `exceeded` or `proje
 - **Measure:** "Usage value" (`list`, the default, as for budgets) / "Paid" (`billed`).
 - The last choice is stored in `localStorage` (`zp.cost.controls`) and used when the URL names nothing. Every access is wrapped in try/catch; the page works without storage.
 
-**Refresh.** Data reloads on a route or control change (with the entrance animation) and on the dashboard's refresh cycle (quietly, as other pages do with `render(false)`). Animation runs only on the open sub-page; canvases are released through `onUnmount`. With `prefers-reduced-motion`, numbers and charts appear at their final state.
+**Refresh.** Data reloads on a route or control change (with the entrance animation). The cost pages also refresh themselves every 60 s, quietly (no motion, no skeleton), and `app.js` leaves them out of its 60-second `render(false)`: a render would rebuild the page and close an open budget form. A quiet refresh is skipped while the form or a delete confirmation is open, a field of the page has focus, or the tab is hidden. Animation runs only on the open sub-page; canvases are released through `onUnmount`. With `prefers-reduced-motion`, numbers and charts appear at their final state.
 
 **Ledger status ribbon.** A thin ribbon above the content when `/api/cost/status` reports a problem: the ledger waiting on a broken config, months that did not read, the billing history lost, prices with problems. It uses the server's path-free wording. Charts still show what was read, and the view answer's `unread` marks what is missing.
 
@@ -59,8 +59,9 @@ The current month, day 1 to today.
 - a **band** between the 25th and 75th percentile of the daily spends of the elapsed days, each multiplied by the remaining days and added to today's cumulative spend;
 - the **budget line**: the global monthly budgets (scope `global`, period `month`), each a horizontal line at its amount in the chosen currency; a budget whose currency differs from the chosen one is converted with the latest rate, and skipped when there is none. With no such budget, no line and a link "Add a monthly budget".
 - Fewer than 3 elapsed days: no band, only the forecast line, marked "early in the month".
+- **Scale.** The y-axis top is the larger of the cumulative spend and the band's top (the forecast's end when there is no band), × 1.1, rounded up to a nice value. A budget line is part of the scale only when its amount is at most twice the band's top (or the forecast's end); a larger budget is pinned at the top edge as a dashed marker labeled "↑ Budget <amount>", so the curve stays readable.
 
-**Spike line.** Daily spend for the month, each day compared with its **baseline**, the mean of the 7 days before it (the days before the 1st are read too). A day is a **spike** when it is more than twice its baseline and at least $1 more than it (in USD, before conversion), so a quiet week does not make every small day a spike. A spike is a marker with a tooltip: the day, the spend, the baseline, and the top model of that day.
+**Spike line.** Daily spend for the month, each day compared with its **baseline**: the mean of the **known** days among the 7 before it (the days before the 1st are read too). A day before the ledger's first row (the earliest day with any row read for the month and the 7 days before it) is unknown, not zero. With fewer than 3 known days the day has no baseline (no dashed segment there) and is never a spike, so a ledger that starts mid-month does not mark its first days. A day is a **spike** when it is more than twice its baseline and at least $1 more than it (in USD, before conversion), so a quiet week does not make every small day a spike. A spike is a marker with a tooltip: the day, the spend, the baseline, and the top model of that day.
 
 **Budget rings (compact).** One small ring per budget, at most 8, the riskiest first (`exceeded`, then `projected`, then the highest percent); a "+ N more" link goes to Budgets. Ring colors by state: `ok` cyan, warning levels orange, `exceeded` pink, `no_data` muted with a dashed ring.
 
@@ -91,17 +92,17 @@ The chosen range and currency. The measure switch is hidden: this page compares 
 3. **Plan savings** (down, or up when a plan cost more): usage value minus what was paid.
 4. **Paid**: what was paid.
 
-Under the waterfall, **local models**: requests and tokens of free rows (Ollama, LM Studio, other local judges) in the range, with the note "Not priced: sub-project 4 compares them with a cloud model."
+Under the waterfall, **local models**: requests and tokens of free rows (Ollama, LM Studio, other local judges) in the range, with the note "Not priced: these run on your own machine. A later version compares them with a cloud model."
 
 **Cost vs quality.** A scatter, one dot per model with at least one request in the range:
-- x: spend per request (ledger, chosen currency);
+- x: spend per request (ledger, chosen currency, on the **usage value**: on a plan every usage row is billed 0, so "Paid" would put each plan model at zero);
 - y: tool-call accuracy (below);
 - dot size: requests;
 - a model with fewer than 50 tool results in the range is drawn hollow and labeled "little data";
 - a model without tool results (a gateway-only model) is listed under the chart as "no tool calls to measure", not drawn;
 - the tooltip adds the Datasets pass rate when an experiment that ended in the range ran that model.
 
-**Unit cost trends.** Three daily lines over the range, each with its own scale:
+**Unit cost trends.** Three daily lines over the range, each with its own scale, on the usage value:
 - spend per request;
 - spend per million tokens (all token kinds);
 - spend per 1,000 successful tool calls (tool results that were not a model-caused failure), for Claude Code and Codex spend only, since only their tool calls are counted.
@@ -138,26 +139,27 @@ Accuracy follows the existing definition on the Quality page: `1 − model-cause
 - **Measure** (usage value, paid).
 - **Warning levels**: up to two integers, 1–99, ascending; default 50 and 80.
 - **Projection alert** (on by default).
-- **Enforcement**: none, block, pause. Options the scope does not allow are disabled with the reason, mirroring the server's rules: block not for `project` or a `source` other than `gateway`; pause not for `key` or `provider`.
+- **Enforcement**: none, block, pause. Options the scope does not allow are disabled with the reason, mirroring the server's `mayBlock` and `mayPause` (`lib/cost/budgets.js`) exactly: block on global, `key`, `center`, `model`, `provider` or `source` `gateway` (not `project`, not another source); pause on global, `project`, `center`, `model` or `source` `claude`/`codex` (not `key`, not `provider`, not another source). The choices are redrawn when the scope changes.
 - Save posts to `POST /api/cost/budgets`. A 400 shows its `reasons` beside the form; a 409 shows its message. On success, the drawer closes and the list reloads.
 - A legacy budget's form says "Saving moves this budget out of the old setting (monthly budget / key budget), which is cleared."
 
 **Delete** asks for confirmation in place ("Delete budget "<name>"? A budget from old settings also clears that setting.") and posts `POST /api/cost/budgets/<id>/delete`.
 
-**From the bell.** A budget alert in the alerts drawer gains a link "Open in Budgets" to `#cost/budgets?focus=<id>`, which scrolls to the card and highlights it for a moment.
+**From the bell.** A budget alert in the alerts drawer gains a link "Open in Budgets" to `#cost/budgets?focus=<id>`, which scrolls to the card and highlights it for a moment. `/api/alerts` keeps `instance` opaque (an HMAC), so a budget alert row gains a `budget` field with the budget's id (validated as a budget id; the owner's own id, shown to the owner only), and the link is built from it.
 
 ## Section 6: Server, API and data flow
 
 **`lib/cost/views.js`** (new, pure: no I/O, no clock). One function per page, each taking plain inputs:
 
 ```
-overview({ rows, before, today, budgets, rateOf, measure })
+overview({ rows, before, today, budgets, rateOf, measure, currency, display })
 breakdown({ rows, from, to, rateOf, measure })
 value({ rows, from, to, rateOf, cacheSaved, accuracy, passRates })
 ```
 
 - `rows`: ledger rows as billed (`cost.budgetRows`), corrections applied, plan rows included; `before`: the 7 days before the month for the spike baseline.
-- `rateOf(day)`: the display-currency rate, or null for USD. A day with no rate is counted in USD and named in `missingRate`, as the ledger answer does.
+- `rateOf(day)`: the display-currency rate, or null for USD. A day with no rate is counted in USD and listed in `missingRate`, an array of those days (the ledger answer gives a count; the view answers name the days).
+- `currency` (Overview): the chosen code; `display` (Overview): `{ code, rate }`, the display currency and its latest rate on or before today, or null. With `rateOf` null for USD, the budget lines need it to convert a budget in the display currency to USD and back.
 - `cacheSaved(row)`: the USD cache savings of a row (from `cost`, which holds the price versions).
 - `accuracy`: `accuracyByModel(...)`; `passRates`: `{ [model]: { pass, total } }`.
 - Amounts are summed in USD and converted per day, then rounded once for display (to the cent, or the whole unit for IDR).
@@ -166,7 +168,7 @@ value({ rows, from, to, rateOf, cacheSaved, accuracy, passRates })
 
 **Route.** `GET /api/cost/view?page=overview|breakdown|value&from&to&currency&measure`, in `lib/cost/api.js`.
 - Same rules as the other cost routes: dashboard session only (never a gateway key, MCP or A2A), path-free errors.
-- Range rules as `/api/cost/ledger` (400 for a bad date or more than 400 days). Overview ignores `from` and `to`.
+- Range rules as `/api/cost/ledger` (400 for a bad date or more than 400 days). Overview ignores `from` and `to`; Breakdown and Value without dates are the last 30 days.
 - 400 for an unknown page or measure, or a currency without rates; 503 with the code when the ledger is unavailable (as `/api/cost/ledger`).
 - The answer always carries `from`, `to`, `currency`, `measure`, `unread`, `missingRate` and `billing` (error, historyLost), beside the page's data.
 - Quality inputs come from the server's index (memoized on the indexer's version and the range), and pass rates from the experiment store. In demo mode, from the demo data, with no files and no network.
@@ -186,11 +188,12 @@ value({ rows, from, to, rateOf, cacheSaved, accuracy, passRates })
 
 ## Testing
 
-- `views.js`: forecast and band (including fewer than 3 days), budget lines with conversion and a skipped currency, spike rule (twice and at least $1), riskiest-first rings, top-6 plus Other in the flow, plan rows into "Plan fee", treemap capping, calendar quantiles and empty days, plan multiplier, waterfall steps adding up to what was paid, local rows kept out of money, scatter little-data marking, unit-cost gaps, currency per day with `missingRate`.
+- `views.js`: forecast and band (including fewer than 3 days), budget lines with conversion and a skipped currency, spike rule (twice and at least $1; known days only, no baseline under 3, a ledger that starts mid-month), riskiest-first rings, top-6 plus Other in the flow, plan rows into "Plan fee", treemap capping, calendar quantiles and empty days, plan multiplier, waterfall steps adding up to what was paid, local rows kept out of money, scatter little-data marking, unit-cost gaps, currency per day with `missingRate`.
 - `cacheSaved`: base rates of the row's version, zero cases.
 - Signals: Claude Code and Codex parsers attribute tool results and model-caused failures per model; `accuracyByModel` over a range; normalized names.
 - API: 401 without a session, a gateway key refused, 400 cases, 503 when the ledger is unavailable, no paths in errors, demo answers for each page.
-- UI helpers (in Node, without a browser, as `test/monitors-ui.test.js` does): parsing and defaults of the controls from the hash and storage, the budget form to request body, the id from a name with suffixes, enforce options per scope, ring state colors and ordering, and an audit that every owner-written or server string goes through `esc()`.
+- Charts (in Node): the burn-down's scale with a budget inside and one pinned at the top edge, the spike line's gap where there is no baseline.
+- UI helpers (in Node, without a browser, as `test/monitors-ui.test.js` does): parsing and defaults of the controls from the hash and storage, the budget form to request body, the id from a name with suffixes, enforce options per scope (equal to `mayBlock`/`mayPause` for every dimension), the bell's link from the alert's `budget` field, ring state colors and ordering, and an audit that every owner-written or server string goes through `esc()`.
 - Tests never call a real provider or network, and never signal a real process.
 
 ## Out of scope

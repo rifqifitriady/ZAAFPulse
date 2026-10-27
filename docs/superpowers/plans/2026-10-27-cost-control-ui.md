@@ -22,7 +22,7 @@
 
 **Baseline:** `npm test` on `82fbb50`: 1804 tests, 1802 pass, 2 skipped, 0 fail.
 
-**Checked while planning:** every task's code and tests were applied to a scratch copy of `82fbb50` and run. Each task's tests pass, and so does the whole suite (1866 tests: the baseline's plus 62 new), except `test/platform.test.js`, which fails in any copy of the repository under a temp folder (it fails the same way on an untouched copy) and passes in the worktree. The pages were also driven in headless Chrome against the demo (`DEMO=1`): every page rendered with no script error; the control bar, the URL and storage round trip, the table regroup, sort and flow filter, and the Budgets add, edit (400 reasons), delete and focus flows behaved as described; Task 7 was checked on its own (before Task 8) the same way.
+**Checked while planning:** every task's code and tests were applied to a scratch copy of `82fbb50` and run. Each task's tests pass, and so does the whole suite (1868 tests: the baseline's plus 64 new), except `test/platform.test.js`, which fails in any copy of the repository under a temp folder (it fails the same way on an untouched copy) and passes in the worktree. The pages were also driven in headless Chrome against the demo (`DEMO=1`): every page rendered with no script error; the control bar, the URL and storage round trip, the table regroup, sort and flow filter, and the Budgets add, edit (400 reasons), delete and focus flows behaved as described; Task 7 was checked on its own (before Task 8) the same way.
 
 ## Global Constraints
 
@@ -54,7 +54,8 @@
 - `forecast.perDay` = month-to-date ÷ elapsed days (today a whole day); `projected` = month-to-date + `perDay` × days left.
 - Band: the 25th and 75th percentile (linear interpolation) of the elapsed days' spends, each × days left, added to month-to-date. Fewer than 3 elapsed days: `early: true`, `low`/`high` null.
 - Budget lines: budgets with `scope: 'global'` and `period: 'month'`, at `amount` in their own currency, or converted at the display currency's latest rate (`display: { code, rate }`), else skipped (`budgetsSkipped`).
-- Spike: a day whose spend is > 2 × its baseline (the mean of the 7 days before it, the days before the 1st read from `before`) **and** ≥ $1 over it, in USD.
+- Spike: a day whose spend is > 2 × its baseline **and** ≥ $1 over it, in USD. The baseline is the mean of the **known** days among the 7 before it (the days before the 1st read from `before`); a day before the ledger's first row (the earliest day of any row in `rows` + `before`) is unknown, not 0. With fewer than 3 known days (`BASELINE_MIN`) the baseline is `null` and the day is never a spike; the chart draws no baseline segment there.
+- Burn-down scale (drawn in Task 5): the y-axis top is the larger of the cumulative spend and the band's top (the forecast's end when there is no band), × 1.1, rounded up to a nice value. A budget line is part of the scale only when its amount is ≤ 2 × the band's top (or the forecast's end); otherwise it is pinned at the top edge as a dashed marker labeled "↑ Budget <amount>" (`COST_BUDGET_FIT`).
 - Rings: at most 8, riskiest first (`exceeded`, then `projected`, then the highest percent, `no_data` last), `moreBudgets` for the rest. Tone: `ok` → cyan, `warn_*` → orange, `exceeded` → pink, `no_data` → muted, dashed.
 - At risk: budgets `exceeded`, `projected` or at a warning level.
 
@@ -538,14 +539,14 @@ git commit -m "Count tool results per model in the signals, and accuracyByModel 
 - Consumes: `addDays`, `daysBetween`, `daysInMonth` (`lib/cost/days.js`); the evaluated budget views of `lib/cost/budgets.js` `evaluateBudget` (`id, name, scope, period, amount, currency, state, projected, percent, amountUSD`).
 - Produces:
   - `cost.cacheSaved(row) → number` (USD); `cost.budgetRows({ from, to })` also returns `historyLost` (boolean).
-  - `lib/cost/views.js` exports `SPIKE_RATIO` (2), `SPIKE_MIN_USD` (1), `RINGS` (8), `quantile(sorted, q)`, `budgetOrder(views)`, `overview(input)`.
+  - `lib/cost/views.js` exports `SPIKE_RATIO` (2), `SPIKE_MIN_USD` (1), `BASELINE_MIN` (3), `RINGS` (8), `quantile(sorted, q)`, `budgetOrder(views)`, `overview(input)`.
   - `overview({ rows, before, today, budgets, rateOf, measure, currency, display }) →`
     ```
     { month: { from, to, today, day, days }, spent: { list, billed }, total,
       daily: [{ day, spend, cum }],
       forecast: { perDay, projected, low, high, early, line: [{ day, cum, low, high }] },
       budgetLines: [{ id, name, amount }], budgetsSkipped,
-      spikes: [{ day, spend, baseline, spike, topModel }],
+      spikes: [{ day, spend, baseline /* null with fewer than 3 known days */, spike, topModel }],
       rings: [{ id, name, state, tone, percent, projected }], moreBudgets,
       atRisk: { count, total }, topCenter: { center, spend, share } | null, missingRate: [day] }
     ```
@@ -697,6 +698,25 @@ test('overview: a spike is over twice its 7-day baseline and at least $1 over it
   assert.equal(o.spikes[0].baseline, 2);
 });
 
+test('overview: a ledger that starts mid-month has no baseline before 3 known days; unknown days are not zeros', () => {
+  const rows = [
+    row({ day: '2026-10-10', listUSD: 1 }),
+    row({ day: '2026-10-11', listUSD: 1 }),
+    row({ day: '2026-10-12', listUSD: 10 }), // ten times its two known days, but two days are not a baseline
+    row({ day: '2026-10-13', listUSD: 1 }),
+    row({ day: '2026-10-14', listUSD: 20 }),
+  ];
+  const o = V.overview({ rows, today: '2026-10-15' });
+  const by = Object.fromEntries(o.spikes.map((s) => [s.day, s]));
+  for (const d of ['2026-10-01', '2026-10-09', '2026-10-10', '2026-10-11', '2026-10-12'])
+    assert.deepEqual([by[d].baseline, by[d].spike], [null, false], d);
+  assert.deepEqual([by['2026-10-13'].baseline, by['2026-10-13'].spike], [4, false], 'the mean of 3 known days');
+  assert.deepEqual([by['2026-10-14'].baseline, by['2026-10-14'].spike], [3.25, true]);
+  assert.equal(by['2026-10-15'].baseline, 6.6, 'five known days, the days before the first row left out');
+  assert.equal(V.BASELINE_MIN, 3);
+  assert.ok(V.overview({ rows: [], today: '2026-10-15' }).spikes.every((s) => s.baseline === null && !s.spike));
+});
+
 test('overview: rings riskiest first, at most 8; at-risk count and the top cost center', () => {
   const states = [
     ['ok', 10, false],
@@ -820,6 +840,7 @@ const { addDays, daysBetween, daysInMonth } = require('./days');
 const SPIKE_RATIO = 2; // a day over twice its baseline...
 const SPIKE_MIN_USD = 1; // ...and at least $1 over it, so a quiet week does not make every small day a spike
 const BASELINE_DAYS = 7;
+const BASELINE_MIN = 3; // known days a baseline needs
 const BAND_MIN_DAYS = 3; // fewer elapsed days than this: a forecast line only, no band
 const RINGS = 8;
 
@@ -946,19 +967,29 @@ function overview({ rows = [], before = [], today, budgets = [], rateOf = null, 
       high: early ? null : round(cum + p75 * k),
     });
 
-  // Spikes: each day against the mean of the 7 days before it, in USD (the $1 floor is in USD).
-  const allUSD = dailyUSD([...(before || []), ...inMonth], measure);
+  // Spikes: each day against the mean of the known days among the 7 before it, in USD (the $1 floor is in USD). A day
+  // before the ledger's first row is unknown, not zero; with fewer than 3 known days there is no baseline, so a young
+  // ledger does not mark its first days as spikes.
+  const known = [...(before || []), ...inMonth].filter(Boolean);
+  const firstDay = known.reduce((a, r) => (!a || r.day < a ? r.day : a), null);
+  const allUSD = dailyUSD(known, measure);
   const top = topModels(inMonth, measure);
   const spikes = month.map((day) => {
-    let base = 0;
-    for (let k = 1; k <= BASELINE_DAYS; k++) base += allUSD.get(addDays(day, -k)) || 0;
-    base /= BASELINE_DAYS;
+    let sum = 0;
+    let n = 0;
+    for (let k = 1; k <= BASELINE_DAYS; k++) {
+      const d = addDays(day, -k);
+      if (!firstDay || d < firstDay) continue;
+      sum += allUSD.get(d) || 0;
+      n++;
+    }
+    const base = n >= BASELINE_MIN ? sum / n : null;
     const v = allUSD.get(day) || 0;
     return {
       day,
       spend: round(c.conv(day, v)),
-      baseline: round(c.conv(day, base)),
-      spike: v > SPIKE_RATIO * base && v - base >= SPIKE_MIN_USD,
+      baseline: base == null ? null : round(c.conv(day, base)),
+      spike: base != null && v > SPIKE_RATIO * base && v - base >= SPIKE_MIN_USD,
       topModel: top.get(day) || null,
     };
   });
@@ -1011,7 +1042,7 @@ function overview({ rows = [], before = [], today, budgets = [], rateOf = null, 
   };
 }
 
-module.exports = { SPIKE_RATIO, SPIKE_MIN_USD, RINGS, quantile, budgetOrder, overview };
+module.exports = { SPIKE_RATIO, SPIKE_MIN_USD, BASELINE_MIN, RINGS, quantile, budgetOrder, overview };
 ```
 
 - [ ] **Step 5: Run the tests to verify they pass**
@@ -1667,6 +1698,7 @@ and replace the `module.exports` line with:
 module.exports = {
   SPIKE_RATIO,
   SPIKE_MIN_USD,
+  BASELINE_MIN,
   RINGS,
   FLOW_TOP,
   TREEMAP_MAX,
@@ -2191,7 +2223,7 @@ git commit -m "GET /api/cost/view: the Overview, Breakdown and Value data behind
 - Consumes: the view answers of Tasks 2–3 (`overview`, `breakdown`); in the browser the globals `esc` (`public/app.js`), `isoStage`, `showTip`, `hideTip` (`public/iso.js`, `public/app.js`). The builders never touch the DOM; only `costMountTreemap` does.
 - Produces (globals for `public/costview.js`, also exported for Node):
   - `COST_C` (palette), `COST_TONE` (`{ ok, warn, exceeded, none }` → color), `COST_SERIES` (series colors), `COST_OTHER`/`COST_PLAN`/`COST_NONE` (the special keys), `costNiceMax(v)`, `costDayLabel(day)` (`'5 Oct'`), `costPath(points)` (a null y breaks the path), `costSvg(W, H, body, cls, fixed)`, `costTip(parts)` (an escaped `·`-joined tooltip), `costPctText(x)`, `costF(n)`.
-  - `costBurnSvg(overview, fmt)`, `costSpikeSvg(overview.spikes, fmt)`, `costRingSvg(percent, tone, size = 64)`, `costRingsHtml(overview.rings, overview.moreBudgets)`.
+  - `costBurnSvg(overview, fmt)` (scale and pinned budgets as in V3), `costSpikeSvg(overview.spikes, fmt)` (a `null` baseline breaks the dashed line), `costRingSvg(percent, tone, size = 64)`, `costRingsHtml(overview.rings, overview.moreBudgets)`.
   - `costFlowSvg(breakdown.flow, { fmt, label(col, key) })`: filterable nodes carry `data-cost-node="<col>:<key>"` (never for `__other`, `__plan`, `__none`), with `role="button"` and `tabindex="0"`.
   - `costCalendarSvg(breakdown.calendar, fmt)` (fixed size, cells 24 px).
   - `costTreemapLayout(breakdown.treemap) → [{ ...block, x, z, w, d, h, color }]` on the platform `[-5.6, 5.6] × [-2.2, 2.2]`, and `costMountTreemap(canvas, blocks, { fmt, label, grow = true }) → stage` (browser only).
@@ -2250,9 +2282,28 @@ test('burn-down: actual line, forecast, band only past the third day, budget lin
   assert.match(svg, /&lt;img src=x onerror=alert\(1\)&gt; · \$100\.00/);
   assert.doesNotMatch(svg, /<img/);
   assert.match(svg, /class="cost-today"/);
+  assert.match(svg, />\$150\.00</, 'the scale follows the band top (124 × 1.1, rounded up), the budget fits under it');
+  assert.equal(count(svg, /cost-pinned/g), 0);
   const early = C.costBurnSvg(V.overview({ rows: rows.slice(0, 2), today: '2026-10-02' }), fmt);
   assert.equal(count(early, /class="cost-band"/g), 0);
   assert.match(early, /early in the month/);
+});
+
+test('burn-down: a budget over twice the band top is pinned at the top edge and keeps the curve readable', () => {
+  const rows = [1, 2, 3, 4, 10].map((v, i) => row({ day: `2026-10-0${i + 1}`, listUSD: v }));
+  const budgets = [
+    { id: 'big', name: 'Big', scope: 'global', period: 'month', amount: 1000, currency: 'USD' },
+    { id: 'near', name: 'Near', scope: 'global', period: 'month', amount: 240, currency: 'USD' },
+  ];
+  const svg = C.costBurnSvg(V.overview({ rows, today: '2026-10-05', budgets }), fmt);
+  assert.equal(count(svg, /class="cost-fade cost-pinned"/g), 1);
+  assert.match(svg, />↑ Budget \$1000\.00</);
+  assert.match(svg, /data-tip="Monthly budget · Big · \$1000\.00 · above this scale"/);
+  assert.match(svg, />Near · \$240\.00</, '240 is within twice the band top (124): drawn as a line');
+  assert.match(svg, />\$300\.00</, 'the axis tops at the nearer budget × 1.1, not at 1,000');
+  const early = C.costBurnSvg(V.overview({ rows: rows.slice(0, 2), today: '2026-10-02', budgets }), fmt);
+  // Without a band the forecast's end (1.5 × 31 = 46.5) sets the reach: both budgets are over twice it.
+  assert.equal(count(early, /class="cost-fade cost-pinned"/g), 2);
 });
 
 test('spike line: one marker per spike, its tooltip with the baseline and the top model', () => {
@@ -2263,6 +2314,11 @@ test('spike line: one marker per spike, its tooltip with the baseline and the to
   assert.equal(count(svg, /class="cost-spike"/g), 1);
   assert.match(svg, /data-tip="2 Oct · \$3\.00 · baseline \$0\.24 · spike · top model &lt;img/);
   assert.doesNotMatch(svg, /<img/);
+  // A ledger that starts on the 1st: no baseline yet, so no dashed segment and no marker.
+  const young = C.costSpikeSvg(V.overview({ rows: [row({ listUSD: 9 })], today: '2026-10-02' }).spikes, fmt);
+  assert.match(young, /<path class="cost-fade" d="" /);
+  assert.match(young, /data-tip="1 Oct · \$9\.00 · no baseline yet · top model claude-opus-5-5"/);
+  assert.equal(count(young, /class="cost-spike"/g), 0);
 });
 
 test('rings: percent capped on the ring with a pink overflow arc; no data dashed; linked to the card', () => {
@@ -2428,7 +2484,10 @@ function costAxis(W, m, ih, max, fmt) {
 /* ---------- Overview ---------- */
 
 // Cumulative spend per day of the month, the forecast from today to the month's end with its band, and the global
-// monthly budgets as levels. `o` is the overview answer.
+// monthly budgets as levels. `o` is the overview answer. The scale follows the spend: a budget more than twice the
+// band's top (the forecast's end without a band) is pinned at the top edge as "↑ Budget <amount>", so a large budget
+// never flattens the curve.
+const COST_BUDGET_FIT = 2;
 function costBurnSvg(o, fmt) {
   const W = 1100; // a full-width panel: a wider drawing keeps its text at the panel's size
   const H = 300;
@@ -2437,9 +2496,11 @@ function costBurnSvg(o, fmt) {
   const ih = H - m.t - m.b;
   const days = o.month.days;
   const f = o.forecast;
-  const max = costNiceMax(
-    Math.max(o.total || 0, f.projected || 0, f.high || 0, ...o.budgetLines.map((l) => l.amount || 0)),
-  );
+  const reach = Math.max(f.early ? f.projected || 0 : f.high || 0, 0);
+  const fits = (l) => (l.amount || 0) <= COST_BUDGET_FIT * reach;
+  const lines = o.budgetLines.filter(fits);
+  const pinned = o.budgetLines.filter((l) => !fits(l));
+  const max = costNiceMax(Math.max(o.total || 0, reach, ...lines.map((l) => l.amount || 0)) * 1.1);
   const x = (day) => m.l + ((Number(day.slice(8, 10)) - 1) / Math.max(1, days - 1)) * iw;
   const y = (v) => m.t + ih - (Math.min(v, max) / max) * ih;
   const out = [costAxis(W, m, ih, max, fmt)];
@@ -2452,12 +2513,18 @@ function costBurnSvg(o, fmt) {
     `<path class="cost-line" pathLength="1" d="${costPath(o.daily.map((d) => [x(d.day), y(d.cum)]))}" fill="none" stroke="${COST_C.cyan}" stroke-width="2.4" style="filter:drop-shadow(0 0 4px ${COST_C.cyan})"/>`,
     `<path class="cost-fade" d="${costPath(f.line.map((p) => [x(p.day), y(p.cum)]))}" fill="none" stroke="${COST_C.violet}" stroke-width="2" stroke-dasharray="6 5"/>`,
   );
-  for (const l of o.budgetLines) {
+  for (const l of lines) {
     const yy = costF(y(l.amount));
     out.push(
       `<g class="cost-fade" data-tip="${costTip(['Monthly budget', l.name, fmt(l.amount)])}"><line x1="${m.l}" x2="${W - m.r}" y1="${yy}" y2="${yy}" stroke="${COST_C.orange}" stroke-width="1.6" stroke-dasharray="4 4"/><text x="${W - m.r - 4}" y="${costF(y(l.amount) - 5)}" text-anchor="end" fill="${COST_C.orange}">${esc(l.name)} · ${esc(fmt(l.amount))}</text></g>`,
     );
   }
+  pinned.forEach((l, i) => {
+    const yy = m.t + 12 + i * 14;
+    out.push(
+      `<g class="cost-fade cost-pinned" data-tip="${costTip(['Monthly budget', l.name, fmt(l.amount), 'above this scale'])}"><line x1="${W - m.r - 190}" x2="${W - m.r}" y1="${m.t}" y2="${m.t}" stroke="${COST_C.orange}" stroke-width="1.6" stroke-dasharray="4 4"/><text x="${W - m.r - 4}" y="${yy}" text-anchor="end" fill="${COST_C.orange}">${esc(`↑ Budget ${fmt(l.amount)}`)}</text></g>`,
+    );
+  });
   const today = x(o.month.today);
   out.push(`<line x1="${costF(today)}" x2="${costF(today)}" y1="${m.t}" y2="${m.t + ih}" class="cost-today"/>`);
   const step = iw / Math.max(1, days - 1);
@@ -2495,7 +2562,7 @@ function costSpikeSvg(spikes, fmt) {
     const tip = costTip([
       costDayLabel(s.day),
       fmt(s.spend),
-      `baseline ${fmt(s.baseline)}`,
+      s.baseline == null ? 'no baseline yet' : `baseline ${fmt(s.baseline)}`,
       s.spike ? 'spike' : '',
       s.topModel ? 'top model ' + s.topModel : '', // costTip escapes the whole line
     ]);
@@ -2504,7 +2571,8 @@ function costSpikeSvg(spikes, fmt) {
     );
   });
   out.push(
-    `<path class="cost-fade" d="${costPath(spikes.map((s, i) => [m.l + i * step + step / 2, y(s.baseline)]))}" fill="none" stroke="${COST_C.orange}" stroke-width="1.4" stroke-dasharray="4 4"/>`,
+    // No baseline (fewer than 3 known days before): no dashed segment there.
+    `<path class="cost-fade" d="${costPath(spikes.map((s, i) => [m.l + i * step + step / 2, s.baseline == null ? null : y(s.baseline)]))}" fill="none" stroke="${COST_C.orange}" stroke-width="1.4" stroke-dasharray="4 4"/>`,
   );
   const k = Math.ceil(n / 8);
   spikes.forEach((s, i) => {
@@ -2803,7 +2871,7 @@ test('waterfall: four steps, savings down, a dearer plan up, labels as text', ()
 
 test('local models: requests and tokens only, with the note; none in the range says so', () => {
   const html = C.costLocalHtml({ requests: 25, tokens: 1570, models: [{ model: EVIL, source: 'judge', requests: 25, tokens: 1570 }] });
-  assert.match(html, /Not priced: sub-project 4 compares them with a cloud model\./);
+  assert.match(html, /Not priced: these run on your own machine\. A later version compares them with a cloud model\./);
   assert.match(html, />1,570</);
   assert.doesNotMatch(html, /<img|\$/);
   assert.match(C.costLocalHtml({ requests: 0, tokens: 0, models: [] }), /No local model calls/);
@@ -2921,7 +2989,7 @@ function costLocalHtml(local) {
     )
     .join('');
   return `<table class="cost-table"><thead><tr><th>Model</th><th>Source</th><th class="num">Requests</th><th class="num">Tokens</th></tr></thead><tbody>${rows}</tbody></table>
-    <p class="cost-note">Not priced: sub-project 4 compares them with a cloud model.</p>`;
+    <p class="cost-note">Not priced: these run on your own machine. A later version compares them with a cloud model.</p>`;
 }
 
 // One dot per model: spend per request across, tool-call accuracy up, size by requests; hollow with little data.
@@ -2993,7 +3061,6 @@ function costUnitSvg(unit, key, fmt, color) {
   });
   return costSvg(W, H, out.join(''), 'cost-unit');
 }
-
 ```
 
 and add to the exports, after `costTreemapLayout,`:
@@ -3006,7 +3073,7 @@ and add to the exports, after `costTreemapLayout,`:
     costUnitSvg,
 ```
 
-The local-models note keeps the spec's wording ("Not priced: sub-project 4 compares them with a cloud model."); see "Decisions made while planning".
+The local-models note reads "Not priced: these run on your own machine. A later version compares them with a cloud model."
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -4338,7 +4405,7 @@ Expected: PASS.
 Run: `npm run demo` and open the dashboard.
 Expected:
 - the sidebar shows Cost Control (dollar icon) after Quality & safety, with Breakdown and Value under it when open;
-- Overview: four tiles counting up, the burn-down with its forecast and band and the $1,000 "Monthly budget" line, the spike bars (a pink marker on a day that doubled its baseline, if any), the budget rings (Acme gateway key first, pink and over 100 %);
+- Overview: four tiles counting up, the burn-down with its forecast and band scaled to the spend, the $1,000 "Monthly budget" pinned at the top edge as "↑ Budget $1,000.00", the spike bars (a pink marker on a day that doubled its baseline, if any), the budget rings (Acme gateway key first, pink and over 100 %);
 - Breakdown: the flow (Claude Code → anthropic → claude-opus-5-5 → Client: Acme …), the isometric treemap growing (drag to turn), the calendar, the table; clicking a model node shows a "Model: …" chip and filters the table; "Paid" adds the "Plan fee" node;
 - Value: the Claude Max bars (below 1× in the demo, so orange with its note), the waterfall, the qwen3:8b local row, a scatter of claude-opus-5-5, claude-sonnet-5-5 and gpt-6.1-sol, "No tool calls to measure: deepseek-chat, llama-3.3-70b, qwen3:8b", three unit lines;
 - the range, IDR and Paid buttons change the URL and survive a reload; `#cost/value?range=garbage` shows Last 30 days; with the system's reduced motion on, everything appears at once.
@@ -5551,7 +5618,7 @@ corrections and billing applied, and shows only numbers, names, `~` folders and 
 
 | Page | Question | What it shows |
 |---|---|---|
-| Overview (`#cost`) | How much this month, and is it safe? | Month to date in both measures; the forecast at the mean daily spend with a band from the 25th–75th percentile days (none before the 3rd day); the global monthly budgets as lines; daily spend against the mean of the 7 days before each day (a spike is over twice that and at least $1 over it); budget rings, riskiest first |
+| Overview (`#cost`) | How much this month, and is it safe? | Month to date in both measures; the forecast at the mean daily spend with a band from the 25th–75th percentile days (none before the 3rd day); the global monthly budgets as lines (a budget over twice the forecast's reach is pinned at the top edge, so the curve stays readable); daily spend against the mean of the known days among the 7 before each day (a spike is over twice that and at least $1 over it; a day with fewer than 3 known days before it, as in a new ledger, has no baseline); budget rings, riskiest first |
 | Breakdown (`#cost/breakdown`) | Where does the money go? | Source → provider → model → cost center flow (top 6 per column, the rest as Other; plan fees as "Plan fee"); projects by cost center as an isometric treemap (footprint = share, height = spend per request, at most 40 blocks); a calendar of the range; a table grouped by up to four dimensions, read from `/api/cost/ledger` |
 | Value (`#cost/value`) | Is it worth it? | Usage value of each plan's days against its fee, with the multiplier; a waterfall from "without cache" through cache and plan savings to what was paid; local models (requests and tokens, not priced); spend per request against tool-call accuracy per model; spend per request, per million tokens and per 1,000 successful tool calls per day |
 | Budgets (`#cost/budgets`) | Set the limits | One card per budget with its ring, scope, period, spent of amount and chips; add, edit and delete in a drawer (see [Budgets](#budgets)) |
@@ -5643,17 +5710,16 @@ The spec left these open, or a detail of it did not fit the code; each is built 
 16. **Accuracy memo.** Per index version, at most 8 ranges at a time (`server.js`).
 17. **The index rebuild** from `CACHE_VERSION` 11 is a one-time reindex at the first start after the update, as for every earlier bump.
 18. **Count-up.** Tile numbers count up on an animated load and are set to their final value after 1 s even when frames stop (a hidden tab).
-19. **The demo** gets per-model tool counts without changing any other demo number (the model of each call is drawn in the same order as before). Its experiments ran models the demo ledger does not have (Haiku, local models), so no pass rate shows in the demo's scatter; the tooltip path is tested in Node.
+19. **Spike baseline** (owner decision, 2026-10-27): only known days count; fewer than 3 known days means no baseline and no spike (V3).
+20. **Burn-down scale** (owner decision, 2026-10-27): the axis follows the spend and the band; a budget beyond twice the band's top is pinned at the top edge (V3).
+21. **Local-models wording** (owner decision, 2026-10-27): "Not priced: these run on your own machine. A later version compares them with a cloud model."
+22. **The demo** gets per-model tool counts without changing any other demo number (the model of each call is drawn in the same order as before). Its experiments ran models the demo ledger does not have (Haiku, local models), so no pass rate shows in the demo's scatter; the tooltip path is tested in Node.
 
 ## Spec points that do not fit, for the owner
 
-- **Enforcement rules.** The spec says "pause not for `key` or `provider`". The server (`lib/cost/budgets.js` `mayPause`) also refuses pause on a `source` other than `claude` or `codex`, and block on a `source` other than `gateway`. The form follows the server.
-- **`overview` signature and `missingRate`.** See decisions 1 and 2.
-- **The bell's link** cannot be built from `/api/alerts` as it is (decision 6): a small change to `lib/monitors/api.js` is part of Task 8.
-- **"Quietly, as other pages do with `render(false)`"** would close an open form; the page refreshes itself instead (decision 7).
-- **Wording shown to the owner.** The spec's note "Not priced: sub-project 4 compares them with a cloud model." is kept verbatim, but "sub-project 4" is project jargon on a user-facing page; consider "Not priced yet: a later version compares them with a cloud model."
-- **Spike rule on a young ledger.** Days before the ledger's first day count as 0 in the baseline, so the first days with at least $1 of spend are marked as spikes. The rule is built as written.
-- **Budget lines and the burn-down scale.** The axis includes the budget amount, so a budget far above the spend (the demo: $1,000 against about $90) flattens the curve and its band. Built as written; a later option could clip the axis and mark the budget above it.
+The owner decided the open points on 2026-10-27 (decisions 19–21), and the spec was brought in line with decisions 1–3, 6, 7, 8 and 14. One point still stands:
+
+- **Demo pass rates.** The demo's experiments ran models the demo ledger does not have, so no Datasets pass rate shows in the demo's scatter. The tooltip is tested in Node (Task 6, Task 4 with a fake reader).
 
 ## Self-review
 
@@ -5662,7 +5728,7 @@ The spec left these open, or a detail of it did not fit the code; each is built 
 - Routes and controls: `range` (7d, 30d, month, lastmonth, custom up to 400 days), `cur`, `measure`, silent fallback, Overview's "This month · day N of M", Value without the measure, Budgets without controls, `localStorage` with try/catch → Task 7 (`costParseControls`, `costRangeDays`, `costBarHtml`, tests).
 - Refresh, motion, `onUnmount`, reduced motion → Task 7 (self-refresh, `.animate` CSS, count-up), Task 5 (`grow` in the treemap; `still` in `isoStage`).
 - Ledger status ribbon → Task 7 (`costRibbonItems`, ribbon), unread notes → Task 7 (`costNotesHtml`).
-- Overview: four KPI tiles, burn-down with forecast, band (25th–75th, none under 3 days), budget lines with conversion and skip, "Add a monthly budget" link, spike line (2× and $1, days before the 1st), compact rings (8, riskiest first, colors, dashed no data, "+ N more") → Task 2 (data), Task 5 (charts), Task 7 (page).
+- Overview: four KPI tiles, burn-down with forecast, band (25th–75th, none under 3 days), budget lines with conversion and skip, a far budget pinned at the top edge, "Add a monthly budget" link, spike line (2× and $1, days before the 1st, known days only, no baseline under 3), compact rings (8, riskiest first, colors, dashed no data, "+ N more") → Task 2 (data), Task 5 (charts), Task 7 (page).
 - Breakdown: flow (top 6 + Other, Plan fee, hover, click filter), iso treemap (footprint, height, `~` names, 40 cap, Other per center), calendar (week × weekday, 5 quantile steps, empty days, tooltip), table (`/api/cost/ledger` `groupBy`, up to 4, sortable, spend, share, requests, tokens, per request, filter chip with clear) → Task 3, Task 5, Task 7.
 - Value: plan bars with multiplier and the under-1× wording, waterfall (four steps, cache estimate, plan up or down), local models note, scatter (x, y, size, hollow under 50, unlisted gateway-only models, pass rate tooltip), unit lines with gaps → Task 3, Task 6, Task 7.
 - Accuracy per model (attribution in both parsers, `days[day].models`, normalized names, `CACHE_VERSION`, `accuracyByModel`), pass rates → Task 1, Task 3.
