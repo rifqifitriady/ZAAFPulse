@@ -189,3 +189,22 @@ test('fix round 1: unit charts are named by key; local rows use the source label
   assert.doesNotMatch(l, /&amp;lt;|<img/);
   assert.match(C.costScatterSvg({ dots: [], noToolCalls: [] }, fmt), /No model had requests in this range\./);
 });
+
+test('fix round 2: scatter ticks use the dot scale; a sub-cent step is unsigned', () => {
+  const d = {
+    model: 'a',
+    requests: 10,
+    spend: 1,
+    perRequest: 1,
+    accuracy: 0.9,
+    toolResults: 100,
+    littleData: false,
+    passRate: null,
+  };
+  const svg = C.costScatterSvg({ dots: [d, { ...d, model: 'b', perRequest: 0.2 }], noToolCalls: [] }, fmt);
+  const cx = Number(/<circle[^>]* cx="([\d.]+)"/.exec(svg)[1]);
+  const tx = Number(/<text x="([\d.]+)" y="[\d.]+" text-anchor="middle">\$1\.00</.exec(svg)[1]);
+  assert.equal(tx, cx, 'the tick labelled with the largest cost sits where that dot is');
+  const w = C.costWaterfallSvg({ withoutCache: 5, cacheSaved: 0.004, usage: 5, planSaved: 0, paid: 5 }, fmt);
+  assert.doesNotMatch(w, />[−+]\$0\.00</);
+});

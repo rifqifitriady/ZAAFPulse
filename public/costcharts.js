@@ -444,7 +444,7 @@ function costWaterfallSvg(w, fmt) {
     const h = Math.max(1, Math.abs(y(s.from) - y(s.to)));
     const amount = i === 0 || i === 3 ? s.to : s.to - s.from;
     out.push(
-      `<g data-tip="${costTip([s.name, fmt(amount), s.tip])}"><rect class="cost-grow" x="${costF(x)}" y="${costF(top)}" width="${costF(bw)}" height="${costF(h)}" rx="2" fill="${s.color}" fill-opacity=".85" style="filter:drop-shadow(0 0 4px ${s.color})"/><text x="${costF(x + bw / 2)}" y="${costF(top - 6)}" text-anchor="middle" class="cost-val">${esc(i === 0 || i === 3 ? fmt(amount) : amount === 0 ? fmt(0) : `${amount < 0 ? '−' : '+'}${fmt(Math.abs(amount))}`)}</text><text x="${costF(x + bw / 2)}" y="${H - 12}" text-anchor="middle">${esc(s.name)}</text></g>`,
+      `<g data-tip="${costTip([s.name, fmt(amount), s.tip])}"><rect class="cost-grow" x="${costF(x)}" y="${costF(top)}" width="${costF(bw)}" height="${costF(h)}" rx="2" fill="${s.color}" fill-opacity=".85" style="filter:drop-shadow(0 0 4px ${s.color})"/><text x="${costF(x + bw / 2)}" y="${costF(top - 6)}" text-anchor="middle" class="cost-val">${esc(i === 0 || i === 3 ? fmt(amount) : Math.abs(amount) < 0.005 ? fmt(0) : `${amount < 0 ? '−' : '+'}${fmt(Math.abs(amount))}`)}</text><text x="${costF(x + bw / 2)}" y="${H - 12}" text-anchor="middle">${esc(s.name)}</text></g>`,
     );
     if (i < steps.length - 1) {
       const next = m.l + (i + 1) * step + (step - bw) / 2;
@@ -497,7 +497,7 @@ function costScatterSvg(scatter, fmt, { accuracyError = null } = {}) {
   }
   for (let i = 0; i <= 4; i++)
     out.push(
-      `<text x="${costF(m.l + (iw * i) / 4)}" y="${H - 8}" text-anchor="middle">${esc(fmt((maxX * i) / 4))}</text>`,
+      `<text x="${costF(x((maxX * i) / 4))}" y="${H - 8}" text-anchor="middle">${esc(fmt((maxX * i) / 4))}</text>`,
     );
   dots.forEach((d, i) => {
     const r = 4 + 14 * Math.sqrt(d.requests / maxReq);
