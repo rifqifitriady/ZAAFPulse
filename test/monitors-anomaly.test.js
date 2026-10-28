@@ -297,3 +297,61 @@ test('channels: the desktop and the webhook carry the rule, the change, the numb
     await srv.close();
   }
 });
+
+test('a snooze does not carry an earlier ok into the resolution hold of a rule without reminders', () => {
+  const clock = { t: T28 };
+  const s = store(clock);
+  const apply = (spent) =>
+    s.apply(
+      'cost_anomaly',
+      evaluate(RULE, {}, { costAnomaly: { yesterday: null, today: fig('2026-10-28', spent, 6.1) } }, clock.t),
+    );
+  assert.equal(apply(18.4).length, 1);
+  clock.t = T28 + MIN;
+  assert.deepEqual(apply(1), [], 'ok: the hold starts');
+  clock.t = T28 + 2 * MIN;
+  s.snooze('cost_anomaly', null, 40 * MIN);
+  clock.t = T28 + 30 * MIN;
+  assert.deepEqual(apply(19), [], 'triggered again inside the snooze');
+  clock.t = T28 + 63 * MIN;
+  assert.deepEqual(apply(1), [], 'ok after the snooze: the hold starts afresh, no resolution at once');
+  clock.t = T28 + 70 * MIN;
+  assert.deepEqual(
+    apply(1).map((a) => a.state),
+    ['ok'],
+    'resolved once the hold has passed',
+  );
+});
+
+test('a provider that failed once leaves no "all" no_data beside the day instances', () => {
+  const clock = { t: T28 };
+  const s = store(clock);
+  s.apply('cost_anomaly', evaluate(RULE, {}, {}, clock.t));
+  assert.deepEqual(
+    s.states().map((e) => e.instance),
+    ['all'],
+  );
+  clock.t = T28 + 5 * MIN;
+  s.apply(
+    'cost_anomaly',
+    evaluate(RULE, {}, { costAnomaly: { yesterday: null, today: fig('2026-10-28', 3, 2) } }, clock.t),
+  );
+  assert.deepEqual(
+    s.states().map((e) => e.instance),
+    ['2026-10-27', '2026-10-28'],
+  );
+});
+
+test('an ordinary rule still starts afresh when its snooze ends', () => {
+  const clock = { t: T28 };
+  const s = store(clock);
+  const unsafe = RULES.find((r) => r.id === 'unsafe_content');
+  const snap = { signals: [{ kind: 'secret', ts: T28 }] };
+  const apply = () => s.apply('unsafe_content', evaluate(unsafe, {}, snap, clock.t));
+  assert.equal(apply().length, 1);
+  s.snooze('unsafe_content', null, 10 * MIN);
+  clock.t = T28 + 5 * MIN;
+  assert.deepEqual(apply(), []);
+  clock.t = T28 + 11 * MIN;
+  assert.equal(apply().length, 1, 'still triggered after the snooze: alerts again, as it always has');
+});
