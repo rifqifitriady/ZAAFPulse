@@ -232,3 +232,38 @@ test('spendByModel: usage value per model over the rows, plan rows out, and the 
   });
   assert.deepEqual(R.spendByModel(undefined), { spend: {}, onPlan: [] });
 });
+
+test('recommend: a missing or non-finite now counts no experiment', () => {
+  const x = exp({ [OPUS]: rel(10, 1, 20), [SONNET]: rel(10, 0.5, 20) }, { endedAt: NOW - 200 * DAY });
+  for (const now of [undefined, NaN, Infinity, '1'])
+    assert.equal(R.recommend({ experiments: [x], spend: { [OPUS]: 10 }, now }).basis.experiments, 0, String(now));
+});
+
+test('recommend: a limit that is not a finite number falls back to its default', () => {
+  const models = { [OPUS]: rel(10, 1, 20), [SONNET]: rel(10, 0.5, 20), [HAIKU]: rel(10, 0.9, 20) };
+  const x = exp(models);
+  const base = run([x], { [OPUS]: 10 });
+  const bad = { minRows: undefined, maxCostRatio: undefined, maxDropPoints: undefined, maxAgeDays: 'x', maxItems: NaN };
+  assert.equal(base.items.length, 1, 'only Sonnet qualifies by default');
+  assert.deepEqual(run([x], { [OPUS]: 10 }, { limits: bad }), base);
+  assert.deepEqual(run([x], { [OPUS]: 10 }, { limits: { maxItems: undefined } }).items.length, 1);
+  assert.equal(R.recommend({ experiments: [], now: NOW, limits: null }).items.length, 0);
+});
+
+test('spendByModel: a truthy input that is not an array reads as no rows', () => {
+  for (const bad of [{}, 5, 'rows', true, new Set([{}])])
+    assert.deepEqual(R.spendByModel(bad), { spend: {}, onPlan: [] });
+});
+
+test('recommend: equal displayed cost ratios fall through to the pass rate, not float noise', () => {
+  const lower = exp({ [OPUS]: rel(10, 1, 20), [SONNET]: rel(10, 0.7, 19) }, { endedAt: NOW - DAY });
+  const higher = exp({ [OPUS]: rel(10, 0.1, 20), [HAIKU]: rel(10, 0.07, 20) }, { endedAt: NOW - 9 * DAY });
+  const [r] = run([lower, higher], { [OPUS]: 100 }).items;
+  assert.equal(r.candidate, HAIKU, '0.07 / 0.1 and 0.7 / 1 are the same ratio; the better pass rate wins');
+});
+
+test('recommend: a negative candidate cost reads as 0, and onPlan matches under a raw name', () => {
+  const x = exp({ [OPUS]: rel(10, 1, 20), [QWEN]: rel(10, -3, 20) });
+  const [r] = run([x], { [OPUS]: 30 }, { onPlan: ['Anthropic/Claude-Opus-5-5'] }).items;
+  assert.deepEqual([r.local, r.costRatio, r.savingUSD, r.onPlan], [true, 0, 30, true]);
+});
