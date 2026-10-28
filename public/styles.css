@@ -9586,6 +9586,14 @@ label.mon-cand.on {
 .cost-set-table .input {
   width: 100%;
 }
+.cost-set-table td:first-child .input {
+  min-width: 26ch; /* a center name of about 24 characters shows in full */
+}
+@media (max-width: 640px) {
+  .cost-set-table td:first-child .input {
+    min-width: 0;
+  }
+}
 .cost-set-rules {
   display: grid;
   gap: 8px;

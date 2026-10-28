@@ -357,7 +357,12 @@ async function costSetSaveRun(panel) {
       COST_SET.msg[panel] = { tone: 'warn', text: fresh.error, reasons: fresh.reasons || [] };
       return;
     }
-    const draft = costSetDraftOf(panel);
+    // No draft: nothing was changed here, and the panel would be built from the page-load answer, not from `fresh`.
+    if (!COST_SET.drafts[panel]) {
+      COST_SET.msg[panel] = { tone: 'ok', text: 'Nothing to save.' };
+      return;
+    }
+    const draft = COST_SET.drafts[panel];
     if (panel === 'currency' && COST_SET.drafts.currency && draft.currency.on === 'on') {
       draft.currency.rates.sort(costSetByFrom);
       costSetPaintPanel(panel);
@@ -371,6 +376,11 @@ async function costSetSaveRun(panel) {
       const now = COST_SET.drafts[panel];
       if (!now || JSON.stringify(costSetBody(panel, fresh.settings, now, fresh.sources)) === sent)
         delete COST_SET.drafts[panel];
+      else if (panel === 'rules') {
+        // A kept draft: its centers that went out are saved now, so their ids are fixed.
+        const sentIds = new Set(JSON.parse(sent).centers.map((c) => c.id));
+        for (const c of now.centers) if (c.isNew && sentIds.has(String(c.id ?? '').trim())) c.isNew = false;
+      }
       COST_SET.marks[panel] = [];
       COST_SET.gen++;
       COST_SET.msg[panel] =
@@ -696,7 +706,6 @@ async function costSetRunPreview() {
   const path = String(COST_SET.testPath || '').trim();
   if (path) body.testPath = path;
   const my = ++COST_SET.previewReq;
-  const host = document.querySelector('#cost-app [data-cost-set-preview-body]');
   const aside = document.querySelector('#cost-app .cost-set-preview');
   if (aside) aside.setAttribute('aria-busy', 'true');
   let next;
