@@ -383,12 +383,16 @@ test('evals api: demo settings are validated, kept in memory and never reach a f
 
 // A Claude log with a key in the last prompt and in each answer; the key is built here from parts, so no
 // secret-shaped literal sits in the source.
+const FIXTURE_DAY = '2026-10-20';
+const recentDay = () => new Date(Date.now() - 86400e3).toISOString().slice(0, 10);
 const FAKE_KEY = 'sk-' + 'ant-api03-' + 'abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKL';
 function writeClaudeLog(home, { key = FAKE_KEY, turns = 2, idle = false } = {}) {
   const dir = path.join(home, '.claude', 'projects', '-w-p');
   fs.mkdirSync(dir, { recursive: true });
   const raw = fs.readFileSync(path.join(__dirname, 'fixtures', 'trace', 'claude', 'proj', 's1.jsonl'), 'utf8');
+  // The fixture is dated; the sessions list keeps the last days only, so its day becomes yesterday.
   const withKey = raw
+    .replaceAll(FIXTURE_DAY, recentDay())
     .replace('now run the tests', `now run the tests with ${key}`)
     .replace('Changed the redirect.', `Changed the redirect. The key was ${key}`)
     .replace('Done.', `Done. The key was ${key}`);
