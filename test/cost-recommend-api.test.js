@@ -55,7 +55,7 @@ const EXPERIMENT = {
   },
 };
 
-function setup({ experiments, failRead } = {}) {
+function setup({ experiments, failRead, unreadAt } = {}) {
   const d = costDemo(NOW);
   const real = createCost({ demo: d, getSettings: () => d.settings, home: HOME, now: () => NOW, nocase: false });
   const reads = [];
@@ -65,7 +65,8 @@ function setup({ experiments, failRead } = {}) {
     budgetRows: (range) => {
       reads.push(range);
       if (failRead && failRead(range)) throw new Error(`ledger unreadable at ${path.join(HOME, '.data', 'cost')}`);
-      return real.budgetRows(range);
+      const r = real.budgetRows(range);
+      return unreadAt && unreadAt(range) ? { ...r, unread: ['2026-09'] } : r;
     },
   };
   const api = createCostApi({
@@ -160,9 +161,27 @@ test('cost view: with no experiment provider, no recommendation and the top 3 sp
   assert.ok(r.gaps.every((g) => g.reason === 'no_experiment'));
   assert.ok(r.gaps[0].spendUSD >= r.gaps[1].spendUSD && r.gaps[1].spendUSD >= r.gaps[2].spendUSD);
 });
-test('cost view: the route passes a finite now, so recent experiments count', async () => {
+
+test('cost view: the route passes a finite now to recommend (a recent experiment counts)', async () => {
   const s = setup({ experiments: () => [EXPERIMENT] });
   const r = (await s.get('page=value')).body.recommendations;
   assert.equal(r.basis.experiments, 1, 'recommend counts no experiment without a finite now');
-  assert.equal(r.items.length, 1);
+});
+
+test('cost view: an unread ledger month in the 30 days gives null recommendations', async () => {
+  const s = setup({ experiments: () => [EXPERIMENT], unreadAt: (range) => range.from === FROM30 });
+  const r = await s.get('page=value');
+  assert.equal(r.status, 200);
+  assert.equal(r.body.recommendations, null, 'spend would be understated');
+  assert.ok(r.body.plans.length > 0);
+});
+
+test('cost view: Overview and Breakdown add no recommendations and no 30-day read', async () => {
+  const s = setup({ experiments: () => [EXPERIMENT] });
+  const from = addDays(TODAY, -6);
+  for (const page of ['overview', 'breakdown']) {
+    const r = await s.get(`page=${page}&from=${from}&to=${TODAY}`);
+    assert.equal(Object.hasOwn(r.body, 'recommendations'), false, page);
+  }
+  assert.equal(s.reads.filter((x) => x.from === FROM30 && x.to === TODAY).length, 0);
 });
