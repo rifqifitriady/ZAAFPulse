@@ -522,6 +522,7 @@ const costApi = createCostApi({
   accuracy: costAccuracy,
   // The experiment store is made below; this runs only on a request, after it is.
   passRates: (range) => costPassRates(experiments.list(), range),
+  experiments: () => experiments.list(),
   // The cost_anomaly rule's saved parameters, from the store the Monitors page shows (the demo's own), made below.
   anomalyParams: () => monitorApiState.settings('cost_anomaly').params,
 });
