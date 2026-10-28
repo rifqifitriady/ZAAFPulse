@@ -471,6 +471,350 @@ function costSetInstallEvents() {
   });
 }
 
+/* ---------- panel: cost centers & rules, with the server preview ---------- */
+
+const COST_SET_RESERVED_IDS = ['unassigned', '__proto__', 'constructor', 'prototype'];
+
+/** A new center's id from its name (R5): lowercase a-z0-9 and dashes, at most 40, with -2, -3, … when taken. */
+function costSetCenterId(name, taken = []) {
+  const base =
+    String(name || '')
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40)
+      .replace(/-+$/, '') || 'center';
+  const used = new Set([...taken, ...COST_SET_RESERVED_IDS]);
+  if (!used.has(base)) return base;
+  for (let n = 2; ; n++) {
+    const tail = `-${n}`;
+    const id = base.slice(0, 40 - tail.length).replace(/-+$/, '') + tail;
+    if (!used.has(id)) return id;
+  }
+}
+/** What points at each center: gateway keys (by name), folder rules (#k) and budgets (by name). */
+function costSetCenterUse(draft, keys, budgets) {
+  const out = {};
+  const at = (id) => (out[id] = out[id] || { keys: [], rules: [], budgets: [] });
+  const names = new Map((keys || []).map((k) => [k.id, k.name || k.id]));
+  for (const [key, center] of Object.entries(draft.keyCenters || {})) at(center).keys.push(names.get(key) || key);
+  (draft.folderRules || []).forEach((r, i) => {
+    if (r.center) at(r.center).rules.push(i + 1);
+  });
+  for (const b of budgets || [])
+    if (b && b.scope && b.scope.dim === 'center') at(String(b.scope.value)).budgets.push(b.name || b.id);
+  return out;
+}
+/** Why a center cannot be deleted ("In use: key ci-bot, rule #2"), or '' when it can. Budgets do not block the form:
+ *  the server refuses that Save (409) and names them. */
+function costSetDeleteBlock(use) {
+  if (!use || (!use.keys.length && !use.rules.length)) return '';
+  return 'In use: ' + [...use.keys.map((k) => 'key ' + k), ...use.rules.map((k) => 'rule #' + k)].join(', ');
+}
+/** "Key ci-bot, Rule #2, Budget Team", or "—". */
+function costSetUsedBy(use) {
+  if (!use) return '—';
+  const all = [
+    ...use.keys.map((k) => 'Key ' + k),
+    ...use.rules.map((k) => 'Rule #' + k),
+    ...use.budgets.map((b) => 'Budget ' + b),
+  ];
+  return all.length ? all.join(', ') : '—';
+}
+/** The rule "Create rule" adds for an Unassigned project: the folder itself and everything below it. */
+const costSetRuleGlob = (project) => `${String(project).replace(/\/+$/, '')}/**`;
+/** A center as people read it: its name, Unassigned, or its id when the settings no longer name it. */
+function costSetCenterName(id, centers) {
+  if (id == null || id === 'unassigned') return 'Unassigned';
+  const c = (centers || []).find((x) => x.id === id);
+  return c ? c.name || c.id : String(id);
+}
+// The settings preview's answer is for the draft on screen when it was asked with the rules sent now.
+function costSetPreviewCurrent(st) {
+  const p = st.preview;
+  if (!p || !p.sent || !st.answer) return false;
+  const now = costSetBody(
+    'rules',
+    st.answer.settings,
+    st.drafts.rules || costSetFromSaved('rules', st.answer.settings, st.answer.sources),
+    st.answer.sources,
+  );
+  return JSON.stringify(now.folderRules) === JSON.stringify(p.sent.folderRules);
+}
+/** The warning beside rule i: "Matches nothing in the last 30 days" or "Never used: rule #k above takes every path it
+ *  matches", from a preview of the draft on screen. */
+function costSetWarnText(st, i) {
+  const a = st.preview && st.preview.answer;
+  const r = a && costSetPreviewCurrent(st) && a.rules.find((x) => x.index === i);
+  if (!r) return '';
+  if (r.status === 'none') return 'Matches nothing in the last 30 days';
+  if (r.status === 'shadowed') return `Never used: rule #${r.by + 1} above takes every path it matches`;
+  return '';
+}
+
+function costSetRulesHtml(st) {
+  const a = st.answer || {};
+  const d = st.drafts.rules || costSetFromSaved('rules', a.settings, a.sources);
+  const keys = a.keys || [];
+  const use = costSetCenterUse(d, keys, st.budgets);
+  const f = (path) => costSetField('rules', path, st);
+  const opt = (v, text, on) => `<option value="${esc(v)}" ${v === on ? 'selected' : ''}>${esc(text)}</option>`;
+  const centerOpts = (on) =>
+    d.centers
+      .filter((c) => c.id)
+      .map((c) => opt(c.id, c.name || c.id, on))
+      .join('');
+  const centers = d.centers
+    .map((c, i) => {
+      const block = costSetDeleteBlock(use[c.id]);
+      const budgets =
+        use[c.id] && use[c.id].budgets.length && !block ? 'Budgets use it: the Save is refused until they change' : '';
+      const id = c.isNew
+        ? `<input class="input" ${f(`centers.${i}.id`)} data-cost-set-repaint maxlength="40" value="${esc(c.id)}" aria-label="Id of center ${i + 1}" autocomplete="off">`
+        : `<code>${esc(c.id)}</code>`;
+      return `<tr><td><input class="input" ${f(`centers.${i}.name`)} data-cost-set-repaint maxlength="60" value="${esc(c.name)}" aria-label="Name of center ${i + 1}" autocomplete="off"></td><td>${id}</td><td>${esc(costSetUsedBy(use[c.id]))}</td><td><button type="button" class="btn ghost danger" data-cost-set-act="del-center" data-i="${i}" ${block ? 'disabled' : ''} title="${esc(block || budgets)}">Delete</button></td></tr>`;
+    })
+    .join('');
+  const fullCenters = d.centers.length >= COST_SET_LIMITS.centers;
+  const keyRows = keys
+    .map(
+      (k) =>
+        `<tr><td>${esc(k.name || k.id)} <small>${esc(k.id)}</small></td><td><select class="input" ${f('keyCenters.' + k.id)} data-cost-set-repaint aria-label="${esc('Center of key ' + (k.name || k.id))}">${opt('', 'Folder rules decide', d.keyCenters[k.id] || '')}${centerOpts(d.keyCenters[k.id] || '')}</select></td></tr>`,
+    )
+    .join('');
+  const gone = Object.keys(d.keyCenters).filter((id) => !keys.some((k) => k.id === id));
+  const goneHtml = gone.length
+    ? `<p class="cost-note warn">Key no longer exists</p><ul class="cost-set-unassigned">${gone
+        .map(
+          (id, i) =>
+            `<li><code>${esc(id)}</code><span>${esc('→ ' + costSetCenterName(d.keyCenters[id], d.centers))}</span><button type="button" class="btn ghost" data-cost-set-act="remove-key" data-i="${i}">Remove</button></li>`,
+        )
+        .join('')}</ul>`
+    : '';
+  const rules = d.folderRules
+    .map((r, i) => {
+      const k = i + 1;
+      return `<li class="cost-set-rule"><span class="cost-set-num">#${k}</span><input class="input" ${f(`folderRules.${i}.glob`)} maxlength="300" value="${esc(r.glob)}" aria-label="Glob of rule #${k}" autocomplete="off" spellcheck="false"><select class="input" ${f(`folderRules.${i}.center`)} data-cost-set-repaint aria-label="Center of rule #${k}">${opt('', 'Choose a center', r.center || '')}${centerOpts(r.center || '')}</select><span class="cost-set-actions"><button type="button" class="btn ghost" data-cost-set-act="rule-up" data-i="${i}" ${i === 0 ? 'disabled' : ''} aria-label="Move rule #${k} up">Up</button><button type="button" class="btn ghost" data-cost-set-act="rule-down" data-i="${i}" ${i === d.folderRules.length - 1 ? 'disabled' : ''} aria-label="Move rule #${k} down">Down</button><button type="button" class="btn ghost danger" data-cost-set-act="del-rule" data-i="${i}" aria-label="Delete rule #${k}">Delete</button></span><span class="cost-set-warn" data-cost-set-warn="${i}">${esc(costSetWarnText(st, i))}</span></li>`;
+    })
+    .join('');
+  const fullRules = d.folderRules.length >= COST_SET_LIMITS.folderRules;
+  const noCenter = !d.centers.some((c) => c.id);
+  return `<div class="cost-set-grid"><div class="cost-set-forms">
+    <h4>Cost centers</h4>
+    <table class="cost-table cost-set-table"><thead><tr><th>Name</th><th>Id</th><th>Used by</th><th></th></tr></thead><tbody>${centers || '<tr><td colspan="4">No cost centers yet.</td></tr>'}</tbody></table>
+    <div><button type="button" class="btn ghost" data-cost-set-act="add-center" ${fullCenters ? `disabled title="At most ${COST_SET_LIMITS.centers} cost centers"` : ''}>Add</button></div>
+    <h4>Gateway keys</h4>
+    <p class="cost-note">A key's center always wins over folder rules.</p>
+    ${keyRows ? `<table class="cost-table cost-set-table"><tbody>${keyRows}</tbody></table>` : '<p class="cost-note">No gateway keys. Keys are managed on the Gateway page.</p>'}
+    ${goneHtml}
+    <h4>Folder rules</h4>
+    <p class="cost-note">The first matching rule wins; a path no rule matches is Unassigned.</p>
+    <p class="cost-note">Globs: <code>*</code> stays in one folder, <code>**</code> crosses folders, a trailing <code>/**</code> also matches the folder itself; start with <code>~</code>, <code>/</code> or a drive letter.</p>
+    ${rules ? `<ol class="cost-set-rules">${rules}</ol>` : '<p class="cost-note">No folder rules yet.</p>'}
+    <div><button type="button" class="btn ghost" data-cost-set-act="add-rule" ${fullRules || noCenter ? `disabled title="${fullRules ? `At most ${COST_SET_LIMITS.folderRules} folder rules` : 'Add a cost center first'}"` : ''}>Add</button></div>
+  </div><aside class="cost-set-preview" aria-label="Preview">
+    <div data-cost-set-preview-body aria-busy="false">${costSetPreviewHtml(st)}</div>
+    <div class="cost-set-test"><label>Test a path<input class="input" data-cost-set-test value="${esc(st.testPath)}" maxlength="1000" placeholder="~/Github/acme/web" autocomplete="off" spellcheck="false"></label><div data-cost-set-test-out role="status">${costSetTestHtml(st)}</div></div>
+  </aside></div>`;
+}
+
+/** The preview column: moves, Unassigned projects with Create rule, or the draft's reasons, or the error with Retry. */
+function costSetPreviewHtml(st) {
+  const p = st.preview;
+  if (!p) return '<p class="cost-note">The preview is loading…</p>';
+  if (p.error)
+    return `<p class="cost-note warn">The preview could not load: ${esc(p.error)}</p><button type="button" class="btn ghost" data-cost-set-act="retry-preview">Retry</button>`;
+  if (p.reasons)
+    return `<p class="cost-note warn">This draft does not validate; Save would answer with the same reasons:</p>${costReasonsHtml(p.reasons)}`;
+  const a = p.answer;
+  const saved = (st.answer && st.answer.settings) || {};
+  const drafted = (p.sent && p.sent.centers) || [];
+  const moves = a.moves.length
+    ? `<table class="cost-table cost-set-moves"><tbody>${a.moves
+        .map(
+          (m) =>
+            `<tr><td>${esc(m.project != null ? m.project : 'Key: ' + (m.keyName || m.keyId))}</td><td class="num">${esc(costMoney(m.listUSD))}</td><td>${esc(costSetCenterName(m.from, saved.centers) + ' → ' + costSetCenterName(m.to, drafted))}</td></tr>`,
+        )
+        .join('')}</tbody></table>${a.more ? `<p class="cost-note">and ${Number(a.more)} more</p>` : ''}`
+    : '<p class="cost-note">No project or key changes center.</p>';
+  const full =
+    ((st.drafts.rules && st.drafts.rules.folderRules) || saved.folderRules || []).length >= COST_SET_LIMITS.folderRules;
+  const unassigned = a.unassigned.length
+    ? `<ul class="cost-set-unassigned">${a.unassigned
+        .map(
+          (u, i) =>
+            `<li><span>${esc(u.project)}</span><span class="num">${esc(costMoney(u.listUSD))}</span><button type="button" class="btn ghost" data-cost-set-act="create-rule" data-i="${i}" ${full ? 'disabled' : ''}>Create rule</button></li>`,
+        )
+        .join('')}</ul>`
+    : '<p class="cost-note">No project of the last 30 days is Unassigned.</p>';
+  const notes = (a.unread || []).map((u) => `<p class="cost-note warn">${esc(costUnreadText(u))}</p>`).join('');
+  return `${notes}<h4>Moves</h4><p class="cost-note">The last 30 days in USD: center now → under this draft.</p>${moves}<h4>Unassigned</h4>${unassigned}`;
+}
+/** Where the typed test path goes: "Acme · rule #3 ~/Github/acme/**", or "Unassigned, no rule matches". */
+function costSetTestHtml(st) {
+  const p = st.preview;
+  const t = p && p.answer && p.answer.test;
+  if (!String(st.testPath || '').trim() || !t) return '';
+  if (t.rule == null) return '<p>Unassigned, no rule matches</p>';
+  const r = (p.sent.folderRules || [])[t.rule] || {};
+  return `<p>${esc(costSetCenterName(t.center, p.sent.centers))} · rule #${t.rule + 1} <code>${esc(r.glob)}</code></p>`;
+}
+
+// The preview follows the rules draft about 400 ms after its last edit; a newer request supersedes an older one.
+function costSetSchedulePreview(ms = COST_SET_PREVIEW_MS) {
+  clearTimeout(COST_SET.previewTimer);
+  COST_SET.previewTimer = setTimeout(() => void costSetRunPreview(), ms);
+}
+async function costSetRunPreview() {
+  const a = COST_SET.answer;
+  if (!a) return;
+  const body = { settings: costSetBody('rules', a.settings, costSetDraftOf('rules'), a.sources) };
+  const path = String(COST_SET.testPath || '').trim();
+  if (path) body.testPath = path;
+  const my = ++COST_SET.previewReq;
+  const host = document.querySelector('#cost-app [data-cost-set-preview-body]');
+  if (host) host.setAttribute('aria-busy', 'true');
+  let next;
+  try {
+    const r = await costPost('/api/cost/settings/preview', body);
+    const j = r.json || {};
+    next =
+      r.status === 200
+        ? { sent: body.settings, answer: j }
+        : r.status === 400 && Array.isArray(j.reasons)
+          ? { sent: body.settings, reasons: j.reasons }
+          : { error: j.error || `request failed (${r.status})` };
+  } catch (e) {
+    next = { error: e.message };
+  }
+  if (my !== COST_SET.previewReq) return; // a newer draft was sent meanwhile, or the page was left
+  COST_SET.preview = next;
+  costSetPaintPreview();
+}
+// The preview's parts on screen, without touching the forms (the owner may be typing in one).
+function costSetPaintPreview() {
+  const host = document.querySelector('#cost-app [data-cost-set-preview-body]');
+  if (host) {
+    host.innerHTML = costSetPreviewHtml(COST_SET);
+    host.setAttribute('aria-busy', 'false');
+  }
+  const out = document.querySelector('#cost-app [data-cost-set-test-out]');
+  if (out) out.innerHTML = costSetTestHtml(COST_SET);
+  for (const el of document.querySelectorAll('#cost-app [data-cost-set-warn]'))
+    el.textContent = costSetWarnText(COST_SET, Number(el.dataset.costSetWarn));
+}
+
+// A structural edit of the rules: the draft changes, the panel is drawn again, and the preview follows.
+function costSetRulesEdit(fn, focus) {
+  costSetEdit('rules', fn);
+  costSetPaintPanel('rules', focus);
+  costSetSchedulePreview();
+}
+const costSetAt = (b) => Number(b.dataset.i);
+Object.assign(COST_SET_ACTIONS, {
+  'add-center': () => {
+    const d = costSetDraftOf('rules');
+    if (d.centers.length >= COST_SET_LIMITS.centers) return;
+    const i = d.centers.length;
+    costSetRulesEdit(
+      (x) => x.centers.push({ id: '', name: '', isNew: true, idEdited: false, prevId: '' }),
+      [['data-cost-set-field', `rules:centers.${i}.name`]],
+    );
+  },
+  'del-center': (b) => costSetRulesEdit((x) => x.centers.splice(costSetAt(b), 1)),
+  'remove-key': (b) =>
+    costSetRulesEdit((x) => {
+      const keys = (COST_SET.answer && COST_SET.answer.keys) || [];
+      const gone = Object.keys(x.keyCenters).filter((id) => !keys.some((k) => k.id === id));
+      delete x.keyCenters[gone[costSetAt(b)]];
+    }),
+  'add-rule': () => {
+    const d = costSetDraftOf('rules');
+    if (d.folderRules.length >= COST_SET_LIMITS.folderRules) return;
+    const i = d.folderRules.length;
+    costSetRulesEdit(
+      (x) => x.folderRules.push({ glob: '', center: '' }),
+      [['data-cost-set-field', `rules:folderRules.${i}.glob`]],
+    );
+  },
+  'rule-up': (b) => {
+    const i = costSetAt(b);
+    if (i < 1) return;
+    costSetRulesEdit(
+      (x) => x.folderRules.splice(i - 1, 0, ...x.folderRules.splice(i, 1)),
+      [
+        ['data-cost-set-act', 'rule-up'],
+        ['data-i', String(i - 1)],
+      ],
+    );
+  },
+  'rule-down': (b) => {
+    const i = costSetAt(b);
+    if (i >= costSetDraftOf('rules').folderRules.length - 1) return;
+    costSetRulesEdit(
+      (x) => x.folderRules.splice(i + 1, 0, ...x.folderRules.splice(i, 1)),
+      [
+        ['data-cost-set-act', 'rule-down'],
+        ['data-i', String(i + 1)],
+      ],
+    );
+  },
+  'del-rule': (b) => costSetRulesEdit((x) => x.folderRules.splice(costSetAt(b), 1)),
+  // An Unassigned project gets a rule for its folder; the keyboard goes to the new rule's center.
+  'create-rule': (b) => {
+    const u = COST_SET.preview && COST_SET.preview.answer && COST_SET.preview.answer.unassigned[costSetAt(b)];
+    const d = costSetDraftOf('rules');
+    if (!u || d.folderRules.length >= COST_SET_LIMITS.folderRules) return;
+    const field = `rules:folderRules.${d.folderRules.length}.center`;
+    costSetRulesEdit(
+      (x) => x.folderRules.push({ glob: costSetRuleGlob(u.project), center: '' }),
+      [['data-cost-set-field', field]],
+    );
+    const sel = [...document.querySelectorAll('#cost-app [data-cost-set-field]')].find(
+      (el) => el.dataset.costSetField === field,
+    );
+    if (sel) sel.scrollIntoView({ block: 'center', behavior: reduceMotion.matches ? 'auto' : 'smooth' });
+  },
+  'retry-preview': () => costSetSchedulePreview(0),
+});
+// A typed edit of the rules panel (or the test path). A new center's id follows its name until the owner types one,
+// and the keys and rules that chose it follow its id; a saved center's id never changes.
+function costSetRulesInput(t, panel, path) {
+  if (t.hasAttribute && t.hasAttribute('data-cost-set-test')) {
+    COST_SET.testPath = t.value;
+    return costSetSchedulePreview();
+  }
+  if (panel !== 'rules') return;
+  const m = path && /^centers\.(\d+)\.(name|id)$/.exec(path);
+  const d = COST_SET.drafts.rules;
+  const c = m && d.centers[Number(m[1])];
+  if (c && c.isNew) {
+    const was = c.prevId ?? '';
+    if (m[2] === 'id') c.idEdited = true;
+    else if (!c.idEdited) {
+      c.id = costSetCenterId(
+        c.name,
+        d.centers.filter((x) => x !== c).map((x) => x.id),
+      );
+      const el = [...document.querySelectorAll('#cost-app [data-cost-set-field]')].find(
+        (x) => x.dataset.costSetField === `rules:centers.${m[1]}.id`,
+      );
+      if (el) el.value = c.id;
+    }
+    if (was && was !== c.id) {
+      for (const [k, v] of Object.entries(d.keyCenters)) if (v === was) d.keyCenters[k] = c.id;
+      for (const r of d.folderRules) if (r.center === was) r.center = c.id;
+    }
+    c.prevId = c.id;
+  }
+  costSetSchedulePreview();
+}
+COST_SET_ON_INPUT.push(costSetRulesInput);
+COST_SET_BODIES.rules = costSetRulesHtml;
+COST_SET_ON_LOAD.push(() => costSetSchedulePreview(0));
+
 if (typeof module !== 'undefined')
   module.exports = {
     COST_SET,
@@ -494,4 +838,16 @@ if (typeof module !== 'undefined')
     costSetLoad,
     costSetUnmount,
     costMountSettings,
+    costSetCenterId,
+    costSetCenterUse,
+    costSetDeleteBlock,
+    costSetUsedBy,
+    costSetRuleGlob,
+    costSetCenterName,
+    costSetWarnText,
+    costSetRulesHtml,
+    costSetPreviewHtml,
+    costSetTestHtml,
+    costSetRunPreview,
+    costSetRulesInput,
   };

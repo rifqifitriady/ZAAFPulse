@@ -387,3 +387,225 @@ test('unmount while a Save runs does not re-enable its Save button', async () =>
   assert.equal(U.COST_SET.busy.rules, false, 'the Save clears its own flag');
   assert.equal(calls.filter((c) => c.method === 'POST').length, 1);
 });
+
+/* ---------- Task 6: cost centers & rules, the preview ---------- */
+
+const R = require('../lib/cost/rules');
+
+test('center id from a name: lower-case, suffixed when taken, never unassigned or a reserved name, always valid', () => {
+  assert.equal(U.costSetCenterId('Client: Acme'), 'client-acme');
+  assert.equal(U.costSetCenterId('Ácme Ünïon'), 'acme-union');
+  assert.equal(U.costSetCenterId('Acme', ['acme']), 'acme-2');
+  assert.equal(U.costSetCenterId('Acme', ['acme', 'acme-2']), 'acme-3');
+  assert.equal(U.costSetCenterId('Unassigned'), 'unassigned-2');
+  assert.equal(U.costSetCenterId('Constructor'), 'constructor-2');
+  assert.equal(U.costSetCenterId('  ***  '), 'center');
+  const long = 'x'.repeat(45);
+  assert.equal(U.costSetCenterId(long).length, 40);
+  assert.equal(U.costSetCenterId(long, [U.costSetCenterId(long)]), 'x'.repeat(38) + '-2');
+  for (const name of ['Client: Acme', 'Unassigned', '', long, '__proto__', 'a'.repeat(80)]) {
+    const id = U.costSetCenterId(name, ['a'.repeat(40)]);
+    assert.ok(R.validate({ centers: [{ id, name: 'N' }] }).ok, `${name} → ${id}`);
+  }
+});
+
+test('Used by and Delete: a key or a rule blocks the delete and is named; budgets alone do not block it', () => {
+  const d = U.costSetFromSaved('rules', SAVED, SOURCES);
+  const budgets = [
+    { id: 'team', name: 'Team', scope: { dim: 'center', value: 'acme' } },
+    { id: 'g', name: 'All', scope: 'global' },
+  ];
+  const use = U.costSetCenterUse(d, ANSWER().keys, budgets);
+  assert.deepEqual(use.lab, { keys: ['ci-bot'], rules: [], budgets: [] });
+  assert.deepEqual(use.acme, { keys: [], rules: [1], budgets: ['Team'] });
+  assert.equal(U.costSetDeleteBlock(use.lab), 'In use: key ci-bot');
+  assert.equal(U.costSetUsedBy(use.acme), 'Rule #1, Budget Team');
+  assert.equal(U.costSetUsedBy(undefined), '—');
+  const html = U.costSetRulesHtml(ST({ budgets }));
+  assert.match(html, /data-cost-set-act="del-center" data-i="0" disabled title="In use: rule #1"/);
+  assert.match(html, /data-cost-set-act="del-center" data-i="1" disabled title="In use: key ci-bot"/);
+  d.folderRules = [];
+  d.keyCenters = {};
+  const free = U.costSetRulesHtml(ST({ budgets, drafts: { rules: d } }));
+  assert.match(
+    free,
+    /data-cost-set-act="del-center" data-i="0"  title="Budgets use it: the Save is refused until they change"/,
+  );
+  assert.match(free, /data-cost-set-act="del-center" data-i="1"  title=""/);
+});
+
+test('rules panel: saved ids read-only, new ids editable, key choices, a gone key, rule order buttons, limits', () => {
+  const d = U.costSetFromSaved('rules', SAVED, SOURCES);
+  d.centers.push({ id: 'ops', name: 'Ops', isNew: true, idEdited: false, prevId: 'ops' });
+  d.keyCenters.key_gone = 'ops';
+  d.folderRules.push({ glob: '~/ops/**', center: 'ops' });
+  const html = U.costSetRulesHtml(ST({ drafts: { rules: d } }));
+  assert.match(html, /<td><code>acme<\/code><\/td>/);
+  assert.match(html, /data-cost-set-field="rules:centers\.2\.id" data-cost-set-repaint maxlength="40" value="ops"/);
+  assert.match(
+    html,
+    /<option value="" >Folder rules decide<\/option><option value="acme" >Acme<\/option><option value="lab" selected>Lab<\/option>/,
+  );
+  assert.match(
+    html,
+    /Key no longer exists[\s\S]*<code>key_gone<\/code><span>→ Ops<\/span><button[^>]*data-cost-set-act="remove-key" data-i="0"/,
+  );
+  assert.match(html, /data-cost-set-act="rule-up" data-i="0" disabled/);
+  assert.match(html, /data-cost-set-act="rule-down" data-i="1" disabled/);
+  assert.match(html, /A key's center always wins over folder rules\./);
+  assert.match(html, /The first matching rule wins; a path no rule matches is Unassigned\./);
+  const many = { ...d, centers: Array.from({ length: 50 }, (_, i) => ({ id: `c${i}`, name: `C${i}` })) };
+  assert.match(
+    U.costSetRulesHtml(ST({ drafts: { rules: many } })),
+    /data-cost-set-act="add-center" disabled title="At most 50 cost centers"/,
+  );
+  const none = { centers: [], keyCenters: {}, folderRules: [] };
+  assert.match(
+    U.costSetRulesHtml(ST({ drafts: { rules: none } })),
+    /data-cost-set-act="add-rule" disabled title="Add a cost center first"/,
+  );
+  const marked = U.costSetRulesHtml(ST({ drafts: { rules: d }, marks: { rules: ['folderRules.1.center'] } }));
+  assert.match(marked, /data-cost-set-field="rules:folderRules\.1\.center" aria-invalid="true"/);
+});
+
+test('Create rule: the glob of the folder and everything below it, appended with the focus on its center', () => {
+  assert.equal(U.costSetRuleGlob('~/work/acme'), '~/work/acme/**');
+  assert.equal(U.costSetRuleGlob('~/work/acme/'), '~/work/acme/**');
+  assert.ok(R.globToRegExp(U.costSetRuleGlob('~/work/acme')).test('~/work/acme'));
+  resetState();
+  U.COST_SET.preview = {
+    sent: SAVED,
+    answer: { moves: [], more: 0, rules: [], unassigned: [{ project: '~/play', listUSD: 2 }], test: null },
+  };
+  global.reduceMotion = { matches: true };
+  U.COST_SET_ACTIONS['create-rule']({ dataset: { i: '0' } });
+  assert.deepEqual(U.COST_SET.drafts.rules.folderRules[1], { glob: '~/play/**', center: '' });
+  clearTimeout(U.COST_SET.previewTimer);
+});
+
+test('a new center: its id follows its name until typed, and the keys and rules that chose it follow the id', () => {
+  resetState();
+  U.COST_SET_ACTIONS['add-center']();
+  const d = U.COST_SET.drafts.rules;
+  const field = { hasAttribute: () => false };
+  d.centers[2].name = 'Ops Team';
+  U.costSetRulesInput(field, 'rules', 'centers.2.name');
+  assert.equal(d.centers[2].id, 'ops-team');
+  d.folderRules.push({ glob: '~/ops/**', center: 'ops-team' });
+  d.keyCenters.key_web = 'ops-team';
+  d.centers[2].name = 'Ops';
+  U.costSetRulesInput(field, 'rules', 'centers.2.name');
+  assert.deepEqual([d.centers[2].id, d.folderRules[1].center, d.keyCenters.key_web], ['ops', 'ops', 'ops']);
+  d.centers[2].id = 'operations';
+  U.costSetRulesInput(field, 'rules', 'centers.2.id');
+  d.centers[2].name = 'Something else';
+  U.costSetRulesInput(field, 'rules', 'centers.2.name');
+  assert.deepEqual([d.centers[2].id, d.folderRules[1].center], ['operations', 'operations'], 'a typed id stays');
+  U.costSetRulesInput(field, 'rules', 'centers.0.name');
+  assert.equal(d.centers[0].id, 'acme', 'a saved id never changes');
+  clearTimeout(U.COST_SET.previewTimer);
+});
+
+const ANSWERED = (over = {}) => ({
+  sent: SAVED,
+  answer: {
+    from: '2026-09-29',
+    to: '2026-10-28',
+    unread: [],
+    moves: [
+      { project: EVIL, keyId: null, keyName: null, listUSD: 12, from: 'unassigned', to: 'acme' },
+      { project: null, keyId: 'key_ci', keyName: 'ci-bot', listUSD: 3, from: 'lab', to: 'gone' },
+    ],
+    more: 4,
+    rules: [{ index: 0, status: 'shadowed', by: 0 }],
+    unassigned: [{ project: '~/play', listUSD: 2 }],
+    test: { center: 'acme', rule: 0 },
+    ...over,
+  },
+});
+
+test('preview: moves with names, "and N more", Unassigned with Create rule, the test path, all escaped', () => {
+  const html = U.costSetPreviewHtml(ST({ preview: ANSWERED() }));
+  assert.match(
+    html,
+    /<td>&lt;img src=x onerror=alert\(1\)&gt;<\/td><td class="num">\$12\.00<\/td><td>Unassigned → Acme<\/td>/,
+  );
+  assert.match(html, /<td>Key: ci-bot<\/td><td class="num">\$3\.00<\/td><td>Lab → gone<\/td>/);
+  assert.match(html, /and 4 more/);
+  assert.match(
+    html,
+    /<span>~\/play<\/span><span class="num">\$2\.00<\/span><button[^>]*data-cost-set-act="create-rule" data-i="0"/,
+  );
+  assert.doesNotMatch(html, /<img/);
+  assert.match(
+    U.costSetPreviewHtml(ST({ preview: ANSWERED({ moves: [], more: 0 }) })),
+    /No project or key changes center\./,
+  );
+  const bad = U.costSetPreviewHtml(ST({ preview: { sent: SAVED, reasons: [EVIL] } }));
+  assert.match(bad, /does not validate[\s\S]*<li>&lt;img/);
+  const failed = U.costSetPreviewHtml(ST({ preview: { error: 'a ledger month could not be read' } }));
+  assert.match(failed, /a ledger month could not be read<\/p><button[^>]*data-cost-set-act="retry-preview">Retry/);
+  assert.equal(U.costSetTestHtml(ST({ preview: ANSWERED(), testPath: '' })), '');
+  assert.equal(
+    U.costSetTestHtml(ST({ preview: ANSWERED(), testPath: '~/work/acme/web' })),
+    '<p>Acme · rule #1 <code>~/work/acme/**</code></p>',
+  );
+  assert.equal(
+    U.costSetTestHtml(ST({ preview: ANSWERED({ test: { center: 'unassigned', rule: null } }), testPath: '~/x' })),
+    '<p>Unassigned, no rule matches</p>',
+  );
+});
+
+test('rule warnings: none and shadowed beside their rule, only for the draft the preview was asked for', () => {
+  const none = ST({ preview: ANSWERED({ rules: [{ index: 0, status: 'none', by: null }] }) });
+  assert.equal(U.costSetWarnText(none, 0), 'Matches nothing in the last 30 days');
+  const two = { ...SAVED, folderRules: [...SAVED.folderRules, { glob: '~/work/acme/web/**', center: 'lab' }] };
+  const sh = ST({
+    answer: ANSWER({ settings: two }),
+    preview: {
+      sent: two,
+      answer: {
+        ...ANSWERED().answer,
+        rules: [
+          { index: 0, status: 'ok', by: null },
+          { index: 1, status: 'shadowed', by: 0 },
+        ],
+      },
+    },
+  });
+  assert.equal(U.costSetWarnText(sh, 1), 'Never used: rule #1 above takes every path it matches');
+  assert.equal(U.costSetWarnText(sh, 0), '');
+  const edited = U.costSetFromSaved('rules', two, SOURCES);
+  edited.folderRules[1].glob = '~/elsewhere/**';
+  assert.equal(
+    U.costSetWarnText({ ...sh, drafts: { rules: edited } }, 1),
+    '',
+    'an answer for an older draft says nothing',
+  );
+});
+
+test('preview requests: the draft and test path are sent; an older answer never replaces a newer one', async () => {
+  resetState();
+  const pending = [];
+  global.fetch = (url, opts) =>
+    new Promise((res) =>
+      pending.push({ url, body: JSON.parse(opts.body), res: (json) => res({ status: 200, json: async () => json }) }),
+    );
+  U.costSetEdit('rules', (d) => d.folderRules.push({ glob: ' ~/x/** ', center: 'lab' }));
+  U.COST_SET.testPath = ' ~/x/y ';
+  const first = U.costSetRunPreview();
+  const second = U.costSetRunPreview();
+  assert.equal(pending[0].url, '/api/cost/settings/preview');
+  assert.deepEqual(pending[0].body.settings.folderRules[1], { glob: '~/x/**', center: 'lab' });
+  assert.equal(pending[0].body.testPath, '~/x/y');
+  pending[1].res({ moves: [], more: 0, rules: [], unassigned: [], test: null, tag: 'newer' });
+  await second;
+  pending[0].res({ moves: [], more: 0, rules: [], unassigned: [], test: null, tag: 'older' });
+  await first;
+  assert.equal(U.COST_SET.preview.answer.tag, 'newer');
+  const third = U.costSetRunPreview();
+  U.costSetUnmount(); // leaving the page drops the answer in flight
+  pending[2].res({ tag: 'gone' });
+  await third;
+  assert.equal(U.COST_SET.preview.answer.tag, 'newer');
+});
