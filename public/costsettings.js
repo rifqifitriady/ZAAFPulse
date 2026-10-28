@@ -182,6 +182,7 @@ const COST_SET = {
     loading: false,
   },
   restateReq: 0,
+  savesPending: 0, // Saves started and not yet answered: Run restate waits for them
   saving: null, // the chain of Saves in flight
   history: null, // GET /api/cost/restates → restates
   historyError: null,
@@ -339,7 +340,9 @@ async function costSetLoad(quiet) {
 function costSetSave(panel) {
   if (COST_SET.busy[panel] || costSetLocked(COST_SET.answer)) return Promise.resolve();
   COST_SET.busy[panel] = true;
+  COST_SET.savesPending++;
   costSetPaintPanel(panel);
+  costSetPaintPanel('restate');
   const run = (COST_SET.saving || Promise.resolve()).then(() => costSetSaveRun(panel));
   COST_SET.saving = run.catch(() => {});
   return run;
@@ -387,6 +390,7 @@ async function costSetSaveRun(panel) {
     COST_SET.msg[panel] = { tone: 'warn', text: e.message }; // the draft stays
   } finally {
     COST_SET.busy[panel] = false;
+    COST_SET.savesPending = Math.max(0, COST_SET.savesPending - 1);
     if (saved) await costSetLoad(true);
     else costSetPaint();
   }
@@ -411,6 +415,12 @@ function costSetUnmount() {
   COST_SET.restateReq++;
   COST_SET.historyReq++;
   COST_SET.historyLoading = false;
+  // A run in flight is dropped with its answer, but the correction may have been recorded: no second click, and the
+  // held history reloads.
+  if (COST_SET.restate.running) {
+    Object.assign(COST_SET.restate, { preview: null, of: null, reason: '', ack: false });
+    COST_SET.history = null;
+  }
   COST_SET.restate.running = false;
   COST_SET.restate.loading = false;
 }
@@ -990,10 +1000,11 @@ function costSetPreviewState(r, gen) {
   return 'fresh';
 }
 /** Run restate: a fresh preview, a reason of 1-200 characters, the box checked, settings that read (R7). */
-function costSetCanRun(r, gen, locked) {
+function costSetCanRun(r, gen, locked, pending = COST_SET.savesPending) {
   const why = String((r && r.reason) || '').trim();
   return (
     !locked &&
+    !pending && // a Save in flight changes the settings the preview did not show
     !r.running &&
     !r.loading &&
     costSetPreviewState(r, gen) === 'fresh' &&
@@ -1062,7 +1073,7 @@ function costSetRestateHtml(st) {
     ? `${stale}<div class="${state === 'fresh' ? '' : 'cost-set-stale'}">${costSetRestateSummaryHtml(r.preview, centers)}</div>
       <div class="cost-set-confirm"><label>Reason<input class="input" data-cost-set-restate="reason" maxlength="${COST_SET_MAX_REASON}" value="${esc(r.reason)}" autocomplete="off"></label>
       <label class="cost-check"><input type="checkbox" data-cost-set-restate="ack" ${r.ack ? 'checked' : ''}> I understand this correction cannot be undone</label>
-      <div class="cost-set-save"><button type="button" class="btn danger" data-cost-set-act="restate-run" ${costSetCanRun(r, st.gen, locked) ? '' : 'disabled'}>Run restate</button>${locked ? '<span class="cost-note">Fix config.json first</span>' : ''}</div></div>`
+      <div class="cost-set-save"><button type="button" class="btn danger" data-cost-set-act="restate-run" ${costSetCanRun(r, st.gen, locked, st.savesPending) ? '' : 'disabled'}>Run restate</button>${locked ? '<span class="cost-note">Fix config.json first</span>' : ''}</div></div>`
     : '';
   return `<p>${esc(COST_SET_RESTATE_TEXT)}</p>
     <div class="cost-row"><label>From<input class="input" type="date" data-cost-set-restate="from" value="${esc(r.from)}" max="${esc(costAddDays(today, -1))}"></label><label>To<input class="input" type="date" data-cost-set-restate="to" value="${esc(r.to)}" max="${esc(costAddDays(today, -1))}"></label></div>
@@ -1131,10 +1142,15 @@ async function costSetRunRestate() {
   r.running = false;
   costSetPaintPanel('restate', [['data-cost-set-act', 'restate-preview']]);
 }
+function costSetPaintHistory() {
+  const el = document.querySelector('#cost-app [data-cost-set-history]');
+  if (el) el.innerHTML = costSetHistoryHtml(COST_SET);
+}
 async function costSetLoadHistory() {
   const my = ++COST_SET.historyReq;
   COST_SET.historyError = null;
   COST_SET.historyLoading = true;
+  costSetPaintHistory();
   try {
     const j = await costGet('/api/cost/restates');
     if (my !== COST_SET.historyReq) return;
@@ -1145,8 +1161,7 @@ async function costSetLoadHistory() {
     COST_SET.historyLoading = false;
     COST_SET.historyError = e.message; // path-free: "the ledger corrections could not be read"
   }
-  const el = document.querySelector('#cost-app [data-cost-set-history]');
-  if (el) el.innerHTML = costSetHistoryHtml(COST_SET);
+  costSetPaintHistory();
 }
 // "Open Restate" after a Save: the panel opens with this month so far (to yesterday), scrolled into view.
 function costSetOpenRestate() {
@@ -1156,10 +1171,10 @@ function costSetOpenRestate() {
   const d = [...document.querySelectorAll('#cost-app [data-cost-set-panel]')].find(
     (x) => x.dataset.costSetPanel === 'restate',
   );
+  if (d) d.open = true; // first: a control in a closed <details> cannot take the focus
   costSetPaintPanel('restate', [['data-cost-set-act', 'restate-preview']]);
   if (costSetNeedHistory()) costSetLoadHistory();
   if (!d) return;
-  d.open = true;
   d.scrollIntoView({ block: 'start', behavior: reduceMotion.matches ? 'auto' : 'smooth' });
 }
 

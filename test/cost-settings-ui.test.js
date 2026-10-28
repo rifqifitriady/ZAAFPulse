@@ -1055,7 +1055,6 @@ test('restate: the history loads once, Open Restate fills this month, a request 
   Object.assign(U.COST_SET.open, { restate: false });
   const calls = fakeServer({ 'GET /api/cost/restates': { status: 200, json: { restates: [] } } });
   // Opened by hand, then a settings load while the request is in flight: one request.
-  global.document.querySelector = () => null;
   const first = U.costSetLoadHistory();
   assert.equal(U.COST_SET.historyLoading, true);
   U.COST_SET_ACTIONS['open-restate']();
@@ -1071,4 +1070,56 @@ test('restate: the history loads once, Open Restate fills this month, a request 
   assert.equal(calls.length, 1, 'held history is not loaded again');
   const base = { from: 'a', to: 'b', reason: 'x', ack: true, preview: {}, of: { from: 'a', to: 'b', gen: 0 } };
   assert.equal(U.costSetCanRun({ ...base, loading: true }, 0, false), false, 'a preview in flight');
+  // A preview request is ignored while a run is in flight.
+  Object.assign(U.COST_SET.restate, { from: '2026-10-01', to: '2026-10-27', running: true });
+  await U.costSetRestatePreview();
+  assert.equal(calls.length, 1, 'no preview request during a run');
+  U.COST_SET.restate.running = false;
+});
+
+test('restate: Run waits for a Save in flight; leaving the page during a run clears the held confirmation', async (t) => {
+  resetState();
+  const realFetch = global.fetch;
+  t.after(() => (global.fetch = realFetch));
+  const r = U.COST_SET.restate;
+  const arm = () =>
+    Object.assign(r, {
+      from: '2026-10-01',
+      to: '2026-10-27',
+      reason: 'why',
+      ack: true,
+      preview: { changed: 1 },
+      of: { from: '2026-10-01', to: '2026-10-27', gen: U.COST_SET.gen },
+      running: false,
+      loading: false,
+    });
+  arm();
+  assert.equal(U.costSetCanRun(r, U.COST_SET.gen, false, 0), true);
+  assert.equal(U.costSetCanRun(r, U.COST_SET.gen, false, 1), false, 'a Save is pending');
+  // A Save started and not answered: Run is refused and drawn disabled.
+  const pending = [];
+  global.fetch = (url, opts = {}) => new Promise((res) => pending.push({ url, method: opts.method || 'GET', res }));
+  const save = U.costSetSave('rules');
+  assert.equal(U.COST_SET.savesPending, 1);
+  assert.match(
+    U.costSetRestateHtml(ST({ restate: { ...r }, savesPending: 1 })),
+    /data-cost-set-act="restate-run" disabled/,
+  );
+  await U.costSetRunRestate();
+  assert.equal(pending.filter((p) => p.url === '/api/cost/restate').length, 0, 'no restate while a Save is pending');
+  pending[0].res({ status: 500, json: async () => ({ error: 'no' }) });
+  await save;
+  assert.equal(U.COST_SET.savesPending, 0, 'the Save answered');
+  // Leaving the page during a run: nothing is left to click again, and the history reloads.
+  arm();
+  U.COST_SET.history = [{}];
+  global.fetch = () => new Promise(() => {});
+  const run = U.costSetRunRestate();
+  assert.equal(r.running, true);
+  U.costSetUnmount();
+  assert.deepEqual(
+    [r.running, r.preview, r.of, r.reason, r.ack, U.COST_SET.history],
+    [false, null, null, '', false, null],
+  );
+  void run;
 });
