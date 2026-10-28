@@ -77,7 +77,8 @@ async function startServer(env) {
 // writes the states the cost_anomaly rule computed from the provider: it reads the demo ledger, not the real one.
 test('demo over HTTP: the cost_anomaly provider reads the demo ledger', async () => {
   const scratch = tmp();
-  const s = await startServer({ DEMO: '1', ZAAFPULSE_AUTH: 'none', TMPDIR: scratch });
+  // os.tmpdir() reads TMPDIR on macOS and Linux, TEMP and TMP on Windows.
+  const s = await startServer({ DEMO: '1', ZAAFPULSE_AUTH: 'none', TMPDIR: scratch, TEMP: scratch, TMP: scratch });
   try {
     let states = [];
     for (let i = 0; i < 100 && !states.length; i++) {
