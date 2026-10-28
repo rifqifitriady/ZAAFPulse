@@ -829,3 +829,246 @@ test('the rateFor parity also holds for rows typed out of date order', () => {
     assert.equal(mine ? mine.perUSD : null, R.rateFor({ rates: sorted }, day), day);
   }
 });
+
+/* ---------- Task 8: restate, history, and the esc() audit ---------- */
+
+test('restate range: the first of the month to yesterday; on the 1st, the previous month; the server checks', () => {
+  assert.deepEqual(U.costSetRestateRange('2026-10-28'), { from: '2026-10-01', to: '2026-10-27' });
+  assert.deepEqual(U.costSetRestateRange('2026-11-01'), { from: '2026-10-01', to: '2026-10-31' });
+  assert.deepEqual(U.costSetRestateRange('2027-01-01'), { from: '2026-12-01', to: '2026-12-31' });
+  const t = '2026-10-28';
+  assert.equal(U.costSetRestateCheck('2026-10-01', '2026-10-27', t), null);
+  assert.equal(U.costSetRestateCheck('2026-10-01', '', t), 'from and to are dates (YYYY-MM-DD)');
+  assert.equal(U.costSetRestateCheck('2026-02-30', '2026-03-01', t), 'from and to are dates (YYYY-MM-DD)');
+  assert.equal(U.costSetRestateCheck('2026-10-20', '2026-10-10', t), 'from must be on or before to');
+  assert.equal(U.costSetRestateCheck('2025-09-01', '2026-10-27', t), 'at most 400 days at a time');
+  assert.equal(U.costSetRestateCheck('2025-09-23', '2026-10-27', t), null, '400 days exactly');
+  assert.equal(
+    U.costSetRestateCheck('2026-10-01', '2026-10-28', t),
+    'today follows the current prices and rules already; restate up to yesterday',
+  );
+});
+
+test('restate staleness: a range edit or a Save since the preview; Run needs fresh, a reason, the box, readable settings', () => {
+  const base = {
+    from: '2026-10-01',
+    to: '2026-10-27',
+    reason: 'Acme rule',
+    ack: true,
+    preview: { changed: 1 },
+    of: { from: '2026-10-01', to: '2026-10-27', gen: 2 },
+  };
+  assert.equal(U.costSetPreviewState(base, 2), 'fresh');
+  assert.equal(U.costSetPreviewState({ ...base, to: '2026-10-26' }, 2), 'stale-range');
+  assert.equal(U.costSetPreviewState(base, 3), 'stale-settings');
+  assert.equal(U.costSetPreviewState({ ...base, preview: null }, 2), 'none');
+  assert.equal(U.costSetCanRun(base, 2, false), true);
+  assert.equal(U.costSetCanRun(base, 3, false), false, 'a Save since the preview');
+  assert.equal(U.costSetCanRun({ ...base, from: '2026-10-02' }, 2, false), false, 'the range changed');
+  assert.equal(U.costSetCanRun({ ...base, reason: '  ' }, 2, false), false);
+  assert.equal(U.costSetCanRun({ ...base, reason: 'x'.repeat(201) }, 2, false), false);
+  assert.equal(U.costSetCanRun({ ...base, ack: false }, 2, false), false);
+  assert.equal(U.costSetCanRun(base, 2, true), false, 'settings that do not read');
+  assert.equal(U.costSetCanRun({ ...base, running: true }, 2, false), false);
+  const html = (r, gen = 2) => U.costSetRestateHtml(ST({ restate: { ...base, ...r }, gen, history: [] }));
+  assert.match(html({}), /data-cost-set-act="restate-run" >Run restate/);
+  assert.match(html({}, 3), /Settings changed: preview again[\s\S]*data-cost-set-act="restate-run" disabled/);
+  assert.match(html({ to: '2026-10-26' }), /Range changed: preview again/);
+  assert.match(
+    html({ to: '2026-10-28' }),
+    /restate up to yesterday[\s\S]*data-cost-set-act="restate-preview" disabled/,
+  );
+});
+
+test('restate preview: rows, usage before → after, center moves, prices, billing; no change says so', () => {
+  const centers = SAVED.centers;
+  const billing = [
+    { source: 'claude', mode: 'plan', plan: EVIL, feeUSD: 200, period: 'month' },
+    { source: 'codex', mode: 'metered' },
+  ];
+  const p = {
+    changed: 3,
+    total: 40,
+    beforeUSD: 10,
+    afterUSD: 12.5,
+    moves: [{ from: 'unassigned', to: 'acme', listUSD: 7 }],
+    versionsBefore: [1, 2],
+    version: null,
+    newPrices: true,
+    billing,
+  };
+  const html = U.costSetRestateSummaryHtml(p, centers);
+  assert.match(html, /Rows: 3 ledger rows change, out of 40 in the range\./);
+  assert.match(html, /Usage value: \$10\.00 → \$12\.50 \(\+\$2\.50\)/);
+  assert.match(html, /<li>Unassigned → Acme: \$7\.00<\/li>/);
+  assert.match(html, /Prices: version 1, version 2 → today&#39;s prices, not yet recorded as a version/);
+  assert.match(html, /Claude Code: Plan &lt;img src=x onerror=alert\(1\)&gt;, \$200\.00 per month; Codex: Metered/);
+  assert.doesNotMatch(html, /<img/);
+  assert.match(
+    U.costSetRestateSummaryHtml({ ...p, newPrices: false, version: 3 }, centers),
+    /Prices: version 1, version 2 → version 3/,
+  );
+  const none = U.costSetRestateSummaryHtml({ ...p, changed: 0, moves: [], versionsBefore: [] }, centers);
+  assert.match(
+    none,
+    /Billing set over the range:[\s\S]*No ledger row changes\. The billing above is still set over the range\./,
+  );
+  assert.doesNotMatch(none, /Rows:/);
+  assert.match(
+    U.costSetRestateHtml(ST()),
+    /Restate recomputes a past range with today&#39;s prices, rules and billing, and records the result as a correction\. It cannot be undone\. Today is never restated: it follows the current settings already\./,
+  );
+});
+
+test('restate requests: preview then run with the previewed range and reason; history newest first, escaped', async () => {
+  resetState();
+  global.costToday = () => '2026-10-28';
+  const r = U.COST_SET.restate;
+  Object.assign(r, {
+    from: '2026-10-01',
+    to: '2026-10-27',
+    reason: '',
+    ack: false,
+    preview: null,
+    of: null,
+    error: null,
+    done: null,
+  });
+  const history = [
+    {
+      ts: Date.UTC(2026, 9, 28, 9),
+      from: '2026-10-01',
+      to: '2026-10-27',
+      reason: EVIL,
+      priceVersion: 2,
+      rows: 3,
+      billing: [],
+    },
+  ];
+  const calls = fakeServer({
+    'POST /api/cost/restate/preview': {
+      status: 200,
+      json: {
+        from: '2026-10-01',
+        to: '2026-10-27',
+        changed: 3,
+        total: 9,
+        beforeUSD: 1,
+        afterUSD: 2,
+        moves: [],
+        versionsBefore: [1],
+        version: 2,
+        newPrices: false,
+        billing: [],
+      },
+    },
+    'POST /api/cost/restate': { status: 200, json: { correction: { rows: [{}, {}, {}] }, overrides: [] } },
+    'GET /api/cost/restates': { status: 200, json: { restates: history } },
+  });
+  try {
+    await U.costSetRestatePreview();
+    assert.deepEqual(r.of, { from: '2026-10-01', to: '2026-10-27', gen: 0 });
+    await U.costSetRunRestate();
+    assert.equal(calls.length, 1, 'no run without a reason and the box');
+    U.costSetRestateInput({ dataset: { costSetRestate: 'reason' }, value: ' Acme rule ' }, 'input');
+    U.costSetRestateInput({ dataset: { costSetRestate: 'ack' }, checked: true }, 'input');
+    U.costSetRestateInput({ dataset: { costSetRestate: 'to' }, value: '2026-10-20' }, 'input');
+    assert.equal(r.to, '2026-10-27', 'a date applies on change, not while typed');
+    await U.costSetRunRestate();
+    await new Promise((res) => setImmediate(res));
+    assert.deepEqual(calls[0].body, { from: '2026-10-01', to: '2026-10-27' });
+    assert.deepEqual(calls[1].body, { from: '2026-10-01', to: '2026-10-27', reason: 'Acme rule', confirm: true });
+    assert.equal(r.done, 'Restated: 3 rows');
+    assert.deepEqual([r.preview, r.reason, r.ack], [null, '', false]);
+    assert.equal(calls[2].url, '/api/cost/restates');
+    const html = U.costSetHistoryHtml(U.COST_SET);
+    assert.match(
+      html,
+      /<td>2026-10-01 – 2026-10-27<\/td><td>&lt;img src=x onerror=alert\(1\)&gt;<\/td><td class="num">3<\/td><td class="num">2<\/td>/,
+    );
+    assert.match(U.costSetHistoryHtml({ history: [] }), /No restate yet\./);
+    assert.match(
+      U.costSetHistoryHtml({ historyError: 'the ledger corrections could not be read' }),
+      /could not be read<\/p><button[^>]*data-cost-set-act="retry-history"/,
+    );
+  } finally {
+    global.costToday = V.costToday;
+  }
+});
+
+test('restate errors: the server path-free message; a newer request drops an older answer', async () => {
+  resetState();
+  global.costToday = () => '2026-10-28';
+  const r = U.COST_SET.restate;
+  Object.assign(r, { from: '2026-10-01', to: '2026-10-27', preview: null, of: null, error: null });
+  fakeServer({
+    'POST /api/cost/restate/preview': {
+      status: 503,
+      json: { error: 'ledger month 2026-10 could not be read', code: 'LEDGER_MONTH_UNREAD' },
+    },
+  });
+  try {
+    await U.costSetRestatePreview();
+    assert.equal(r.error, 'ledger month 2026-10 could not be read');
+    assert.equal(r.preview, null);
+    const pending = [];
+    global.fetch = () => new Promise((res) => pending.push(res));
+    const a = U.costSetRestatePreview();
+    const b = U.costSetRestatePreview();
+    pending[1]({ status: 200, json: async () => ({ changed: 0, tag: 'newer' }) });
+    await b;
+    pending[0]({ status: 200, json: async () => ({ changed: 0, tag: 'older' }) });
+    await a;
+    assert.equal(r.preview.tag, 'newer');
+  } finally {
+    global.costToday = V.costToday;
+  }
+});
+
+test('costsettings.js builds no markup from server or owner text without esc() (S1), and every name is cost-prefixed', () => {
+  const src = read('costsettings.js');
+  const CONTENT =
+    /\.(name|reason|reasons|project|model|center|provider|source|plan|label|title|text|error|message|id|key|keyId|keyName|value|code|currency|cur|from|to|note|dim|budget|glob|perUSD|feeUSD|period|testPath)$/;
+  const bare = [...src.matchAll(/\$\{\s*([A-Za-z_$][\w$.]*)\s*\}/g)].map((m) => m[1]).filter((e) => CONTENT.test(e));
+  assert.deepEqual(bare, [], 'content interpolated without esc()');
+  for (const m of src.matchAll(/\.innerHTML\s*=\s*([^;]+);/g))
+    assert.doesNotMatch(m[1], /^\s*[\w$.]+\.(message|error|reason|name|text|project)\s*$/, `innerHTML = ${m[1]}`);
+  assert.doesNotMatch(src, /insertAdjacentHTML|outerHTML\s*=|document\.write|\son[a-z]+=["`']/);
+  for (const [, name] of src.matchAll(/^(?:const|let|var|class|function|async function)\s+([A-Za-z_$][\w$]*)/gm))
+    assert.match(name, /^(?:cost|COST)/, `${name}: starts with cost`);
+  // Loads in Node without a DOM (this file required it above) and every panel has a body.
+  assert.deepEqual(Object.keys(U.COST_SET_BODIES).sort(), ['billing', 'currency', 'restate', 'rules']);
+  for (const p of ['rules', 'billing', 'currency', 'restate'])
+    assert.ok(U.costSetPageHtml(ST()).includes(`data-cost-set-body="${p}"`));
+});
+
+test('restate: the history loads once, Open Restate fills this month, a request in flight blocks the others', async (t) => {
+  resetState();
+  const realFetch = global.fetch;
+  const realToday = global.costToday;
+  t.after(() => {
+    global.fetch = realFetch;
+    global.costToday = realToday;
+  });
+  global.costToday = () => '2026-11-01';
+  Object.assign(U.COST_SET, { history: null, historyError: null, historyLoading: false });
+  Object.assign(U.COST_SET.open, { restate: false });
+  const calls = fakeServer({ 'GET /api/cost/restates': { status: 200, json: { restates: [] } } });
+  // Opened by hand, then a settings load while the request is in flight: one request.
+  global.document.querySelector = () => null;
+  const first = U.costSetLoadHistory();
+  assert.equal(U.COST_SET.historyLoading, true);
+  U.COST_SET_ACTIONS['open-restate']();
+  await first;
+  assert.equal(calls.length, 1, 'no second request while the first is in flight');
+  assert.deepEqual(
+    [U.COST_SET.restate.from, U.COST_SET.restate.to],
+    ['2026-10-01', '2026-10-31'],
+    'on the 1st: last month',
+  );
+  assert.equal(U.COST_SET.open.restate, true);
+  U.COST_SET_ACTIONS['open-restate']();
+  assert.equal(calls.length, 1, 'held history is not loaded again');
+  const base = { from: 'a', to: 'b', reason: 'x', ack: true, preview: {}, of: { from: 'a', to: 'b', gen: 0 } };
+  assert.equal(U.costSetCanRun({ ...base, loading: true }, 0, false), false, 'a preview in flight');
+});

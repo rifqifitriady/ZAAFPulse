@@ -179,11 +179,13 @@ const COST_SET = {
     error: null,
     done: null,
     running: false,
+    loading: false,
   },
   restateReq: 0,
   saving: null, // the chain of Saves in flight
   history: null, // GET /api/cost/restates → restates
   historyError: null,
+  historyLoading: false,
   historyReq: 0,
   mounted: false,
   hooked: false,
@@ -408,7 +410,9 @@ function costSetUnmount() {
   COST_SET.previewReq++;
   COST_SET.restateReq++;
   COST_SET.historyReq++;
+  COST_SET.historyLoading = false;
   COST_SET.restate.running = false;
+  COST_SET.restate.loading = false;
 }
 
 Object.assign(COST_SET_ACTIONS, {
@@ -959,6 +963,243 @@ COST_SET_ON_INPUT.push((t, panel) => {
 COST_SET_BODIES.billing = costSetBillingHtml;
 COST_SET_BODIES.currency = costSetCurrencyHtml;
 
+/* ---------- panel: restate ---------- */
+
+const COST_SET_MAX_REASON = 200; // lib/cost/api.js MAX_REASON
+const COST_SET_RESTATE_TEXT =
+  "Restate recomputes a past range with today's prices, rules and billing, and records the result as a correction. It cannot be undone. Today is never restated: it follows the current settings already.";
+
+/** The default restate range (R6): the first of this month to yesterday; on the 1st, the whole previous month. */
+function costSetRestateRange(today) {
+  const to = costAddDays(today, -1);
+  return { from: `${to.slice(0, 8)}01`, to };
+}
+/** The server's check of a restate range, in its words and order (R6), or null when it passes. */
+function costSetRestateCheck(from, to, today) {
+  if (!costIsDay(from) || !costIsDay(to)) return 'from and to are dates (YYYY-MM-DD)';
+  if (from > to) return 'from must be on or before to';
+  if (costAddDays(from, COST_MAX_DAYS) <= to) return `at most ${COST_MAX_DAYS} days at a time`;
+  if (to >= today) return 'today follows the current prices and rules already; restate up to yesterday';
+  return null;
+}
+/** A restate preview against the range on screen and the settings generation (R7). */
+function costSetPreviewState(r, gen) {
+  if (!r || !r.preview || !r.of) return 'none';
+  if (r.of.from !== r.from || r.of.to !== r.to) return 'stale-range';
+  if (r.of.gen !== gen) return 'stale-settings';
+  return 'fresh';
+}
+/** Run restate: a fresh preview, a reason of 1-200 characters, the box checked, settings that read (R7). */
+function costSetCanRun(r, gen, locked) {
+  const why = String((r && r.reason) || '').trim();
+  return (
+    !locked &&
+    !r.running &&
+    !r.loading &&
+    costSetPreviewState(r, gen) === 'fresh' &&
+    why.length >= 1 &&
+    why.length <= COST_SET_MAX_REASON &&
+    r.ack === true
+  );
+}
+// Plain text, escaped where it is drawn.
+const costSetPlanText = (b) =>
+  b.mode === 'plan'
+    ? 'Plan ' + b.plan + ', ' + costMoney(b.feeUSD) + ' per ' + (b.period === 'year' ? 'year' : 'month')
+    : 'Metered';
+
+/** What a restate preview answers, as the panel lists it. */
+function costSetRestateSummaryHtml(p, centers) {
+  const billing = `<li>Billing set over the range: ${(p.billing || [])
+    .map((b) => esc((COST_SOURCES[b.source] || b.source) + ': ' + costSetPlanText(b)))
+    .join('; ')}</li>`;
+  if (!p.changed)
+    return `<ul class="cost-set-summary">${billing}</ul><p class="cost-note">No ledger row changes. The billing above is still set over the range.</p>`;
+  const diff = p.afterUSD - p.beforeUSD;
+  const moves = (p.moves || [])
+    .map(
+      (m) =>
+        `<li>${esc(costSetCenterName(m.from, centers) + ' → ' + costSetCenterName(m.to, centers) + ': ' + costMoney(m.listUSD))}</li>`,
+    )
+    .join('');
+  const before = (p.versionsBefore || []).map((v) => (v == null ? 'no version' : `version ${v}`)).join(', ');
+  const after = p.newPrices ? "today's prices, not yet recorded as a version" : `version ${p.version}`;
+  return `<ul class="cost-set-summary">
+    <li>Rows: ${Number(p.changed)} ledger rows change, out of ${Number(p.total)} in the range.</li>
+    <li>Usage value: ${esc(costMoney(p.beforeUSD))} → ${esc(costMoney(p.afterUSD))} (${diff > 0 ? '+' : ''}${esc(costMoney(diff))})</li>
+    ${moves ? `<li>Center moves (usage value):<ul>${moves}</ul></li>` : ''}
+    <li>${esc('Prices: ' + before + ' → ' + after)}</li>
+    ${billing}</ul>`;
+}
+
+function costSetHistoryHtml(st) {
+  if (st.historyError)
+    return `<p class="cost-note warn">${esc(st.historyError)}</p><button type="button" class="btn ghost" data-cost-set-act="retry-history">Retry</button>`;
+  if (!st.history) return '<p class="cost-note">Loading…</p>';
+  if (!st.history.length) return '<p class="cost-note">No restate yet.</p>';
+  return `<table class="cost-table"><thead><tr><th>When</th><th>Range</th><th>Reason</th><th class="num">Rows changed</th><th class="num">Price version</th></tr></thead><tbody>${st.history
+    .map(
+      (c) =>
+        `<tr><td>${esc(new Date(c.ts).toLocaleString('en'))}</td><td>${esc(c.from + ' – ' + c.to)}</td><td>${esc(c.reason)}</td><td class="num">${Number(c.rows)}</td><td class="num">${esc(c.priceVersion ?? '—')}</td></tr>`,
+    )
+    .join('')}</tbody></table>`;
+}
+
+function costSetRestateHtml(st) {
+  const r = st.restate;
+  const today = st.today || costToday();
+  const locked = costSetLocked(st.answer);
+  const check = costSetRestateCheck(r.from, r.to, today);
+  const state = costSetPreviewState(r, st.gen);
+  const centers = (st.answer && st.answer.settings && st.answer.settings.centers) || [];
+  const stale =
+    state === 'stale-range'
+      ? '<p class="cost-note warn">Range changed: preview again</p>'
+      : state === 'stale-settings'
+        ? '<p class="cost-note warn">Settings changed: preview again</p>'
+        : '';
+  const preview = r.preview
+    ? `${stale}<div class="${state === 'fresh' ? '' : 'cost-set-stale'}">${costSetRestateSummaryHtml(r.preview, centers)}</div>
+      <div class="cost-set-confirm"><label>Reason<input class="input" data-cost-set-restate="reason" maxlength="${COST_SET_MAX_REASON}" value="${esc(r.reason)}" autocomplete="off"></label>
+      <label class="cost-check"><input type="checkbox" data-cost-set-restate="ack" ${r.ack ? 'checked' : ''}> I understand this correction cannot be undone</label>
+      <div class="cost-set-save"><button type="button" class="btn danger" data-cost-set-act="restate-run" ${costSetCanRun(r, st.gen, locked) ? '' : 'disabled'}>Run restate</button>${locked ? '<span class="cost-note">Fix config.json first</span>' : ''}</div></div>`
+    : '';
+  return `<p>${esc(COST_SET_RESTATE_TEXT)}</p>
+    <div class="cost-row"><label>From<input class="input" type="date" data-cost-set-restate="from" value="${esc(r.from)}" max="${esc(costAddDays(today, -1))}"></label><label>To<input class="input" type="date" data-cost-set-restate="to" value="${esc(r.to)}" max="${esc(costAddDays(today, -1))}"></label></div>
+    ${check ? `<p class="cost-note warn" role="alert">${esc(check)}</p>` : ''}
+    <div><button type="button" class="btn" data-cost-set-act="restate-preview" ${check || r.loading || r.running ? 'disabled' : ''}>Preview</button></div>
+    ${r.error ? `<p class="cost-note warn" role="alert">${esc(r.error)}</p>` : ''}
+    ${r.done ? `<p class="cost-note" role="status">${esc(r.done)}</p>` : ''}
+    ${preview}
+    <h4>History</h4><div data-cost-set-history>${costSetHistoryHtml(st)}</div>`;
+}
+
+async function costSetRestatePreview() {
+  const r = COST_SET.restate;
+  const check = costSetRestateCheck(r.from, r.to, costToday());
+  if (check || r.running) return; // a run in flight keeps its answer: a newer request would drop it
+  const my = ++COST_SET.restateReq;
+  const of = { from: r.from, to: r.to, gen: COST_SET.gen };
+  Object.assign(r, { error: null, done: null, loading: true });
+  costSetPaintPanel('restate');
+  try {
+    const res = await costPost('/api/cost/restate/preview', { from: of.from, to: of.to });
+    if (my !== COST_SET.restateReq) return;
+    if (res.status === 200) Object.assign(r, { preview: res.json, of });
+    else
+      Object.assign(r, {
+        preview: null,
+        of: null,
+        error: (res.json && res.json.error) || `request failed (${res.status})`,
+      });
+  } catch (e) {
+    if (my !== COST_SET.restateReq) return;
+    Object.assign(r, { preview: null, of: null, error: e.message });
+  }
+  r.loading = false;
+  costSetPaintPanel('restate', [['data-cost-set-act', 'restate-preview']]);
+}
+async function costSetRunRestate() {
+  const r = COST_SET.restate;
+  if (!costSetCanRun(r, COST_SET.gen, costSetLocked(COST_SET.answer))) return;
+  const my = ++COST_SET.restateReq;
+  Object.assign(r, { running: true, error: null });
+  costSetPaintPanel('restate');
+  try {
+    const res = await costPost('/api/cost/restate', {
+      from: r.of.from,
+      to: r.of.to,
+      reason: r.reason.trim(),
+      confirm: true,
+    });
+    if (my !== COST_SET.restateReq) return;
+    if (res.status === 200) {
+      const n = res.json.correction.rows.length;
+      Object.assign(r, {
+        done: `Restated: ${n} row${n === 1 ? '' : 's'}`,
+        preview: null,
+        of: null,
+        reason: '',
+        ack: false,
+      });
+      costSetLoadHistory();
+    } else r.error = (res.json && res.json.error) || `Could not restate (${res.status})`;
+  } catch (e) {
+    if (my !== COST_SET.restateReq) return;
+    r.error = e.message;
+  }
+  r.running = false;
+  costSetPaintPanel('restate', [['data-cost-set-act', 'restate-preview']]);
+}
+async function costSetLoadHistory() {
+  const my = ++COST_SET.historyReq;
+  COST_SET.historyError = null;
+  COST_SET.historyLoading = true;
+  try {
+    const j = await costGet('/api/cost/restates');
+    if (my !== COST_SET.historyReq) return;
+    COST_SET.history = j.restates || [];
+    COST_SET.historyLoading = false;
+  } catch (e) {
+    if (my !== COST_SET.historyReq) return;
+    COST_SET.historyLoading = false;
+    COST_SET.historyError = e.message; // path-free: "the ledger corrections could not be read"
+  }
+  const el = document.querySelector('#cost-app [data-cost-set-history]');
+  if (el) el.innerHTML = costSetHistoryHtml(COST_SET);
+}
+// "Open Restate" after a Save: the panel opens with this month so far (to yesterday), scrolled into view.
+function costSetOpenRestate() {
+  const r = COST_SET.restate;
+  Object.assign(r, costSetRestateRange(costToday()), { error: null, done: null });
+  COST_SET.open.restate = true;
+  const d = [...document.querySelectorAll('#cost-app [data-cost-set-panel]')].find(
+    (x) => x.dataset.costSetPanel === 'restate',
+  );
+  costSetPaintPanel('restate', [['data-cost-set-act', 'restate-preview']]);
+  if (costSetNeedHistory()) costSetLoadHistory();
+  if (!d) return;
+  d.open = true;
+  d.scrollIntoView({ block: 'start', behavior: reduceMotion.matches ? 'auto' : 'smooth' });
+}
+
+Object.assign(COST_SET_ACTIONS, {
+  'restate-preview': () => void costSetRestatePreview(),
+  'restate-run': () => void costSetRunRestate(),
+  'retry-history': () => void costSetLoadHistory(),
+  'open-restate': () => costSetOpenRestate(),
+});
+// The reason and the box only enable Run restate; a date, once changed (not while typed), redraws the panel: its
+// check line and the preview's staleness.
+function costSetRestateInput(t, event) {
+  const k = t.dataset && t.dataset.costSetRestate;
+  if (!k) return;
+  const r = COST_SET.restate;
+  if (k === 'reason') r.reason = t.value;
+  else if (k === 'ack') r.ack = !!t.checked;
+  else {
+    if (event !== 'change') return;
+    r[k] = t.value;
+    r.done = null;
+    return costSetPaintSoon('restate');
+  }
+  const run = document.querySelector('#cost-app [data-cost-set-act="restate-run"]');
+  if (run) run.disabled = !costSetCanRun(r, COST_SET.gen, costSetLocked(COST_SET.answer));
+}
+COST_SET_ON_INPUT.push((t) => costSetRestateInput(t, 'input'));
+COST_SET_ON_CHANGE.push((t) => costSetRestateInput(t, 'change'));
+// The history loads once: not again while a request is in flight, nor once it is held.
+const costSetNeedHistory = () => !COST_SET.history && !COST_SET.historyLoading;
+COST_SET_ON_OPEN.push((panel) => {
+  if (panel === 'restate' && costSetNeedHistory()) costSetLoadHistory();
+});
+COST_SET_ON_LOAD.push(() => {
+  const r = COST_SET.restate;
+  if (!r.from || !r.to) Object.assign(r, costSetRestateRange(costToday()));
+  if (COST_SET.open.restate && costSetNeedHistory()) costSetLoadHistory();
+});
+COST_SET_BODIES.restate = costSetRestateHtml;
+
 if (typeof module !== 'undefined')
   module.exports = {
     COST_SET,
@@ -1000,4 +1241,15 @@ if (typeof module !== 'undefined')
     costSetRateLine,
     costSetCurrencyHtml,
     costSetMoveFocus,
+    costSetRestateRange,
+    costSetRestateCheck,
+    costSetPreviewState,
+    costSetCanRun,
+    costSetRestateSummaryHtml,
+    costSetHistoryHtml,
+    costSetRestateHtml,
+    costSetRestatePreview,
+    costSetRunRestate,
+    costSetLoadHistory,
+    costSetRestateInput,
   };
