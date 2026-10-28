@@ -13,6 +13,7 @@ const {
   dsAddResult,
   dsSlugOf,
   dsRoute,
+  dsRunOf,
   dsModelOptions,
   dsRunBody,
   dsResultCells,
@@ -123,6 +124,22 @@ test('dsRoute: the tab and the dataset of a Datasets hash', () => {
   assert.deepEqual(dsRoute('#datasets?ds=auth-regressions'), { tab: 'list', slug: 'auth-regressions' });
   assert.deepEqual(dsRoute('#datasets/experiments'), { tab: 'experiments', slug: null });
   assert.deepEqual(dsRoute('#datasets?ds=../x'), { tab: 'list', slug: null }, 'not a slug');
+});
+
+test('dsRunOf: the experiment a Datasets hash opens, from the Value page link', () => {
+  assert.equal(dsRunOf('#datasets/experiments?run=exp_00000000000000a0'), 'exp_00000000000000a0');
+  assert.equal(dsRunOf('datasets/experiments?ds=x&run=exp_0123456789abcdef'), 'exp_0123456789abcdef', 'no # is fine');
+  for (const h of [
+    '#datasets/experiments',
+    '#datasets?run=exp_00000000000000a0', // the list tab opens no run
+    '#datasets/experiments?run=exp_1',
+    '#datasets/experiments?run=../x',
+    '#datasets/experiments?run=EXP_00000000000000A0',
+    '',
+    null,
+  ])
+    assert.equal(dsRunOf(h), null, String(h));
+  assert.deepEqual(dsRoute('#datasets/experiments?run=exp_00000000000000a0'), { tab: 'experiments', slug: null });
 });
 
 test('dsAddResult: added and skipped, with the reasons', () => {
