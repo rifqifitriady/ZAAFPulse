@@ -219,7 +219,7 @@ function fakeServer(routes) {
     calls.push({ url, method: opts.method || 'GET', body: opts.body ? JSON.parse(opts.body) : undefined });
     const r = routes[`${opts.method || 'GET'} ${url}`];
     if (r instanceof Error) throw r;
-    const out = typeof r === 'function' ? r() : r;
+    const out = typeof r === 'function' ? await r() : r;
     return { status: out.status, json: async () => out.json };
   };
   return calls;
@@ -319,4 +319,71 @@ test('drafts outlive the page: leaving keeps them, and any unsaved one makes clo
     U.costSetPageHtml(ST({ drafts: U.COST_SET.drafts })),
     /Unsaved changes <button[^>]*data-cost-set-act="discard" data-panel="currency"/,
   );
+});
+
+test('save: typing while the Save runs keeps the draft; an untouched draft goes', async () => {
+  resetState();
+  const calls = fakeServer({
+    'GET /api/cost/settings': { status: 200, json: ANSWER() },
+    'POST /api/cost/settings': () => {
+      U.costSetEdit('rules', (d) => (d.centers[0].name = 'Typed meanwhile'));
+      return { status: 200, json: { settings: SAVED } };
+    },
+  });
+  U.costSetEdit('rules', (d) => (d.centers[0].name = 'Sent'));
+  await U.costSetSave('rules');
+  assert.equal(calls[1].body.centers[0].name, 'Sent');
+  assert.equal(U.COST_SET.drafts.rules.centers[0].name, 'Typed meanwhile', 'the later typing is not lost');
+  assert.equal(U.costSetAnyDirty(), true);
+});
+
+test('save: two panels saved at once go one after another, the second carrying the first result', async () => {
+  resetState();
+  let server = clone(SAVED);
+  const order = [];
+  const calls = fakeServer({
+    'GET /api/cost/settings': () => {
+      order.push('GET');
+      return { status: 200, json: ANSWER({ settings: clone(server) }) };
+    },
+    'POST /api/cost/settings': () => {
+      order.push('POST');
+      return { status: 200, json: { settings: server } };
+    },
+  });
+  const post = global.fetch;
+  global.fetch = async (url, opts = {}) => {
+    const out = await post(url, opts);
+    if (opts.method === 'POST') server = JSON.parse(opts.body); // the server keeps what it was sent
+    return out;
+  };
+  U.costSetEdit('billing', (d) => (d.billing.codex = { mode: 'plan', plan: 'Pro', feeUSD: '20', period: 'month' }));
+  U.costSetEdit('currency', (d) => (d.currency.code = 'EUR'));
+  await Promise.all([U.costSetSave('billing'), U.costSetSave('currency')]);
+  assert.deepEqual(order, ['GET', 'POST', 'GET', 'POST']);
+  const second = calls.filter((c) => c.method === 'POST')[1].body;
+  assert.equal(second.billing.codex.plan, 'Pro', 'the first Save is kept by the second');
+  assert.equal(second.currency.code, 'EUR');
+});
+
+test('unmount while a Save runs does not re-enable its Save button', async () => {
+  resetState();
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const calls = fakeServer({
+    'GET /api/cost/settings': async () => {
+      await gate;
+      return { status: 200, json: ANSWER() };
+    },
+    'POST /api/cost/settings': { status: 200, json: { settings: SAVED } },
+  });
+  U.costSetEdit('rules', (d) => (d.centers[0].name = 'X'));
+  const run = U.costSetSave('rules');
+  U.costSetUnmount();
+  assert.equal(U.COST_SET.busy.rules, true);
+  await U.costSetSave('rules'); // refused while the first runs
+  release();
+  await run;
+  assert.equal(U.COST_SET.busy.rules, false, 'the Save clears its own flag');
+  assert.equal(calls.filter((c) => c.method === 'POST').length, 1);
 });
