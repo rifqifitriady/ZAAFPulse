@@ -35,6 +35,8 @@ const MON_PARAMS = {
   minPassRate: { label: 'Minimum pass rate (%)', step: '1', pct: true },
   minSamples: { label: 'Minimum samples', step: '1', int: true }, // evaluator checks, or tool results for accuracy
   windowMin: { label: 'Window (minutes)', step: '1' },
+  ratio: { label: 'Times the usual amount', step: '0.1' }, // cost_anomaly
+  minUSD: { label: 'Minimum rise (USD)', step: '0.5' }, // cost_anomaly
 };
 const MON_SECRETS_DOC = 'https://github.com/rifqifitriady/ZAAFPulse/blob/main/docs/integrations.md#storing-a-secret';
 const MON_KEY_RE = /^[A-Za-z0-9_.:-]{1,200}$/;
@@ -80,6 +82,7 @@ const MON_MEASURE = {
   ],
   eval_pass_rate: [(v) => `${monPct(v)} passed`, 'against a minimum of', monPct],
   unsafe_content: [(v) => `${monPlural(v, 'unsafe finding')} in the window`, null, null],
+  cost_anomaly: [(v) => `${monUSD(v)} spent`, 'against an anomaly level of', monUSD],
 };
 function monMeasure(rule, value, threshold) {
   const v = monNum(value) ? value : null;
@@ -159,6 +162,17 @@ function alertLine(a, rules, agents) {
     // Its card in Cost Control → Budgets, when the server named the budget.
     if (typeof a.budget === 'string' && MON_BUDGET_ID.test(a.budget))
       line.budgetHref = `#cost/budgets?focus=${encodeURIComponent(a.budget)}`;
+  } else if (a.rule === 'cost_anomaly') {
+    // "Cost anomaly · Wed 28 Oct (so far): $18.40, usual $6.10", linked to the Cost Control Overview.
+    const st = typeof a.state === 'string' ? a.state : '';
+    const day = monText(a.title, MON_MAX_TITLE);
+    const figures = monNum(a.value) ? `${monUSD(a.value)}${monNum(a.usual) ? `, usual ${monUSD(a.usual)}` : ''}` : '';
+    const change = st === 'triggered' ? 'Triggered' : st === 'ok' ? 'Resolved' : MON_STATE[st] || 'Changed';
+    const measure = [day, figures].filter(Boolean).join(': ');
+    line = { ...base, kind: 'change', tone: st === 'triggered' ? 'bad' : 'good', change, measure, session: null };
+    line.costHref = '#cost';
+    line.text = [line.title, st === 'triggered' ? '' : change, measure].filter(Boolean).join(' · ');
+    return line;
   } else {
     const st = typeof a.state === 'string' ? a.state : '';
     const prev = typeof a.previous === 'string' ? a.previous : '';
@@ -556,7 +570,7 @@ function monAlertRow(l, unread) {
   return `<div class="mon-alert ${esc(l.tone)}${unread ? ' unread' : ''}" role="listitem">
     <i class="mon-dot" aria-hidden="true"></i>
     <div class="mon-alert-main"><div class="mon-alert-top"><b>${esc(l.title)}</b><span class="mon-change">${esc(l.change)}</span>${unread ? '<span class="mon-new">new</span>' : ''}</div>
-      ${l.measure ? `<div class="mon-measure">${esc(l.measure)}</div>` : ''}${session}${l.budgetHref ? `<a class="mon-session" href="${esc(l.budgetHref)}">Open in Budgets →</a>` : ''}</div>${time}</div>`;
+      ${l.measure ? `<div class="mon-measure">${esc(l.measure)}</div>` : ''}${session}${l.budgetHref ? `<a class="mon-session" href="${esc(l.budgetHref)}">Open in Budgets →</a>` : ''}${l.costHref ? `<a class="mon-session" href="${esc(l.costHref)}">Open in Cost Control →</a>` : ''}</div>${time}</div>`;
 }
 
 function monBannerHtml(p, actions) {
@@ -933,6 +947,17 @@ function monitorsSettingsShell() {
 function monRuleNow(r) {
   if (!r.enabled) return 'Off. Turn it on to start checking.';
   const inst = Array.isArray(r.instances) ? r.instances : [];
+  // cost_anomaly: one instance per day, today first ("Wed 28 Oct (so far): $18.40 spent against …").
+  const days = r.id === 'cost_anomaly' ? inst.filter((i) => monText(i.title, 40)) : [];
+  if (days.length)
+    return days
+      .slice()
+      .reverse()
+      .map(
+        (i) =>
+          `${monText(i.title, 40)}: ${i.state === 'no_data' ? 'not enough history' : monMeasure(r.id, i.value, i.threshold) || MON_STATE[i.state] || ''}`,
+      )
+      .join(' · ');
   if (r.kind !== 'live') {
     const i = inst[0];
     if (!i) return 'Not checked yet.';
@@ -1273,6 +1298,8 @@ if (typeof module !== 'undefined')
     pausedEntryFor,
     monAgentHtml,
     monRuleCard,
+    monRuleNow,
+    monAlertRow,
     monWriteHtml,
     monAlertsBody,
     monAfterAction,

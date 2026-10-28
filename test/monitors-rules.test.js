@@ -34,6 +34,7 @@ test('the rule table is data-driven and complete', () => {
       'accuracy_drop',
       'eval_pass_rate',
       'unsafe_content',
+      'cost_anomaly',
     ],
   );
   for (const r of RULES) {
@@ -71,6 +72,7 @@ test('defaultOn follows the budget and the fixed defaults', () => {
     accuracy_drop: true,
     eval_pass_rate: false,
     unsafe_content: true,
+    cost_anomaly: true,
   });
   assert.strictEqual(on('cost_burn', { monthlyBudgetUSD: 500 }), false);
 });

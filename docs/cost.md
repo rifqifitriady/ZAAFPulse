@@ -198,7 +198,9 @@ after the settings are fixed and the ledger pass catches up.
 ### States and alerts
 
 A budget is `ok`, `warn_<n>` at each configured level, or `exceeded` at 100 %. From 25 % of its period, it is also
-`projected` when its current pace would pass the amount. A new period begins at `ok`. An unread ledger month, folder
+`projected` when its forecast at the period's end passes the amount (see
+[Forecast and anomalies](#forecast-and-anomalies)); while the ledger is too young for a forecast, when its pace so far
+would. A new period begins at `ok`. An unread ledger month, folder
 or corrections file makes the budget `no_data`; so does missing currency data and, for a billed budget, unreadable or
 assumed billing history. `no_data` never alerts, blocks or pauses.
 
@@ -304,7 +306,7 @@ These routes have the same dashboard sign-in and JSON requirements as the other 
 
 | Route | Answer |
 |---|---|
-| `GET /api/cost/budgets` | `{ budgets, error, reasons, guard: { error, problems }, kept: { error } }`; each budget includes its period, spent, percent, state and projection |
+| `GET /api/cost/budgets` | `{ budgets, error, reasons, guard: { error, problems }, kept: { error } }`; each budget includes its period, spent, percent, state and projection, `forecastUSD` (the forecast at the period's end, or null) and `runsOut` (the day the forecast passes the amount within the period, or null; null once exceeded) |
 | `POST /api/cost/budgets` | creates or replaces one budget; 200 `{ budget }`, 400 `{ error, reasons }`, or 409 while the saved list is invalid or pause is unavailable |
 | `POST /api/cost/budgets/<id>/delete` | 200 `{ deleted }`, or 404; deleting a legacy budget also clears its old setting |
 
@@ -318,7 +320,7 @@ corrections and billing applied, and shows only numbers, names, `~` folders and 
 
 | Page | Question | What it shows |
 |---|---|---|
-| Overview (`#cost`) | How much this month, and is it safe? | Month to date in both measures; the forecast at the mean daily spend, with a band from the 25th to 75th percentile day (none before the 3rd day); the global monthly budgets as lines; daily spend against a baseline; budget rings, riskiest first |
+| Overview (`#cost`) | How much this month, and is it safe? | Month to date in both measures; the forecast by weekday with its band (see [Forecast and anomalies](#forecast-and-anomalies)); the global monthly budgets as lines; daily spend against the same weekday; today's and yesterday's anomalies with what drove them; budget rings, riskiest first, with the day each runs out |
 | Breakdown (`#cost/breakdown`) | Where does the money go? | Source, provider, model and cost center as a flow (top 6 per column, the rest as Other; plan fees as "Plan fee"); projects by cost center as an isometric treemap (footprint by spend, block height by spend per request); a calendar of the range; a table grouped by up to four dimensions, read from `/api/cost/ledger` |
 | Value (`#cost/value`) | Is it worth it? | Usage value of each plan's days against its fee, with the multiplier; a waterfall from "without cache" through cache and plan savings to what was paid; local models (requests and tokens, not priced); spend per request against tool-call accuracy per model; spend per request, per million tokens and per 1,000 successful tool calls, per day |
 | Budgets (`#cost/budgets`) | Set the limits | One card per budget with its ring, scope, period, spent of amount and chips; add, edit and delete in a drawer (the rules are in [Budgets](#budgets)) |
@@ -331,10 +333,8 @@ They live in the URL, `#cost/<page>?range=7d&cur=IDR&measure=billed`, and the la
 Overview is always the current month. Value hides the measure switch: its plan and waterfall figures show both
 measures, and the accuracy chart and the unit costs use usage value (local models show requests and tokens, no money).
 
-**Spikes.** A day is a spike when its usage spend is more than twice its baseline and at least $1 over it. The baseline
-is the mean of the known days among the 7 before it. A day needs at least 3 known days of baseline; days before the
-ledger's first row are unknown, not zero, so a new ledger shows no spikes at first. A plan fee never counts as a spike
-in either measure. The burn-down still includes plan fees, under "Paid".
+**Forecast, spikes and anomalies.** See [Forecast and anomalies](#forecast-and-anomalies). The burn-down still includes
+plan fees, under "Paid".
 
 **Burn-down scale.** The axis covers the spend so far, the forecast's end and the band. A budget more than twice that
 reach is not drawn to scale: it is pinned at the top edge as "↑ Budget <amount>", so the curve stays readable.
@@ -355,6 +355,9 @@ while the filter is on, and an amber chip says so.
 - Deleting a budget that came from the old settings says so; a budget saved from this page does not.
 - A budget alert in the bell has an "Open in Budgets" link to `#cost/budgets?focus=<id>`, which shows that card.
 - The badge on the menu counts the budgets used up or projected over.
+- Each card says when the budget runs out at this pace ("Runs out ~21 Nov at this pace"), or that it stays under its
+  amount with the forecast ("Stays under the amount this period (forecast $412.00)"); nothing without a forecast or
+  once it is used up. An Overview ring shows the same date ("runs out ~21 Nov").
 
 **Refresh.** The cost pages refresh every 60 seconds, quietly, and keep what is on screen until the new answer comes. A
 refresh waits while a form field has focus, while the Budgets drawer or a delete confirmation is open, and while the tab
@@ -384,6 +387,50 @@ draws the rest.
 - Per-session cost is not shown.
 - A new budget saved with an id that another browser tab just created replaces that budget. There is no create-only
   mode yet.
+
+### Forecast and anomalies
+
+One forecast serves the burn-down, the budgets' `projected` state and the day each budget runs out, so the Overview
+and the budgets never disagree.
+
+- **The model.** The mean spend of each weekday over the last 4 weeks of finished days (today is not one), in the
+  chosen measure, plan fees left out. A day before the ledger's first row (in the whole ledger, so the Overview, the
+  rule and a global budget count the same days; a scoped budget starts at its scope's first row, so a center that
+  began last week is not forecast from weeks of zeros) is unknown, not zero, and so is a day of a month that did not
+  read (it is never taken as zero); a known day without spend is a zero. With 7 or more known days each weekday has
+  its own mean (a weekday without a known day takes the overall mean). With 3 to 6 the forecast is the plain daily
+  mean. With fewer there is none.
+- **The line.** Today is never forecast below what it has spent already; each later day adds its weekday's mean, but
+  never less than 0 (credits can make a weekday's mean negative). Under "Paid" each day to come also adds its plan
+  fees exactly, at the billing in force now. The band is the 25th to 75th percentile of how far the known days fell
+  from their weekday's mean, applied to usage only; it always contains the line itself (its low edge is at most the
+  line, its high edge at least the line). With fewer than 3 usable days the band is the line itself (no width), as it
+  is when the 25th and 75th percentile days were as expected; the burn-down then names no band. The burn-down's caption
+  names the method: "Forecast: weekday pattern of the last 4 weeks", "Forecast: daily mean (little history yet)" or
+  "No forecast yet" (the line is then the mean of the month's days so far, without a band), followed by "band: 25th–75th
+  percentile days" only when the band has a width.
+- **Budgets.** From 25 % of its period a budget is `projected` when the forecast at the period's end passes its
+  amount; without a forecast, when its pace so far would. A day budget forecasts today only. `runsOut` is the first day
+  the forecast passes the amount, shown only inside the period and not once the budget is used up. Under "Paid" a day
+  whose billing was lost (billed as metered, assumed) says nothing of what the plan charged, so the budget's history
+  (and the Overview's forecast under "Paid") starts after the last such day; with too little left the pace decides.
+  The gateway guard checks the budget's state only and skips the forecast, so a request is never blocked or let
+  through by a projection.
+- **Anomalies.** A day is an anomaly when its usage value (list, whatever the chosen measure; plan fees are not
+  usage) is more than `ratio` times the usual amount of its weekday over the 4 weeks before it, and at least `minUSD`
+  more: the parameters of the Monitors rule [`cost_anomaly`](monitors.md#rules), 2 and $1 by default (`ratio` above 1,
+  up to 100; `minUSD` above 0, up to 1,000,000). A usual amount of $0 needs `minUSD`. The spike line marks each day
+  of the month this way, with the saved parameters, and draws that usual amount as its baseline, so the chart and the
+  alerts agree; a month that did not read is not marked. The **Anomalies** card, a full-width panel after the charts
+  and rings, shows today so far and yesterday whole: the spend against the usual amount ("$18.40, usually $6.10
+  (3.0×)"), Anomaly, Normal or "Not enough history", and, for an anomaly, up to 3 values that rose the most across
+  models, projects, cost centers and keys, each with its rise and its share of the day's rise. Its figures are in USD,
+  as the rule's. It links to Settings → Monitors (`#settings/monitors`) to change the sensitivity.
+- **What stays in the dashboard.** The drivers can name projects and keys, so only `GET /api/cost/view` carries them.
+  The rule's alerts, the desktop notification and the webhook never carry them: they carry the day, its spend, the
+  threshold and (in the bell) the usual amount.
+- **When the history does not read.** The Overview answers `forecastMethod: null` and `anomalies: null` and draws the
+  rest; the rule reports `no_data`.
 
 ### Settings page
 
@@ -476,9 +523,9 @@ These routes need the dashboard sign-in. A gateway API key, MCP or A2A is never 
 | `GET /api/cost/status` | the collectors, the price version, unpriced and backfilled counts, settings, billing and ledger health |
 | `GET /api/cost/settings` | `{ settings, error, reasons, sources, unassigned, keys: [{ id, name }] }`; `reasons` lists why the saved section does not validate (at most 50), else `[]` |
 | `POST /api/cost/settings/preview` | body `{ settings, testPath? }` (`testPath` a string of at most 1000 characters, a path written with `~` or in full). 200 `{ from, to, unread, moves: [{ project, keyId, keyName, listUSD, from, to }], more, rules: [{ index, status: ok \| none \| shadowed, by }], unassigned: [{ project, listUSD }], test: { center, rule } \| null }` over the last 30 days, the settings in force against the draft; nothing is saved. 400 for an unknown field, a `testPath` that is not a string or is over 1000 characters, or `{ error, reasons }` for a draft that does not validate; 503 with a `code` while the ledger does not read |
-| `GET /api/cost/view?page&from&to&currency&measure` | what one Cost Control page draws. `page` is `overview` (always the current month), `breakdown` or `value`; `from`/`to` default to the last 30 days, at most 400; `measure` is `list` (default) or `billed`; Value ignores `measure` and answers `measure: null`. The answer is `{ page, from, to, currency, measure, unread, missingRate, billing: { error, historyLost } }` beside the page's data, plus `budgetsError` on Overview and `accuracyError` on Value (a fixed phrase, or null). 400 for an unknown page, a bad measure or date, a range over 400 days or a currency without rates; 503 with a `code` while the ledger does not read |
+| `GET /api/cost/view?page&from&to&currency&measure` | what one Cost Control page draws. `page` is `overview` (always the current month), `breakdown` or `value`; `from`/`to` default to the last 30 days, at most 400; `measure` is `list` (default) or `billed`; Value ignores `measure` and answers `measure: null`. The answer is `{ page, from, to, currency, measure, unread, missingRate, billing: { error, historyLost } }` beside the page's data, plus `budgetsError` on Overview and `accuracyError` on Value (a fixed phrase, or null). The Overview also answers `forecastMethod` (`weekday`, `mean` or null), `anomalies: { today, yesterday }` (each `{ day, partial, spentUSD, expectedUSD, anomaly, drivers: [{ dim, value, label, extraUSD, share }] }` or null; `label` is a key's name for `keyId`; null when the history did not read), `anomalyParams: { ratio, minUSD }` (the saved parameters of the rule) and `runsOut` on each ring. 400 for an unknown page, a bad measure or date, a range over 400 days or a currency without rates; 503 with a `code` while the ledger does not read |
 | `POST /api/cost/settings` | 200 `{ settings }` (normalized; today's rows are re-attributed at once), or 400 `{ error, reasons }` |
-| `GET /api/cost/budgets` | the budgets in force, their state, list warnings, guard problems and kept-file status |
+| `GET /api/cost/budgets` | the budgets in force, their state and forecast (`forecastUSD`, `runsOut`), list warnings, guard problems and kept-file status |
 | `POST /api/cost/budgets` | create or replace one budget; 400 for validation, 409 while a hand edit is invalid or pause is unavailable |
 | `POST /api/cost/budgets/<id>/delete` | delete a saved or legacy budget |
 | `GET /api/cost/prices/versions` | `{ current, versions: [{ id, from, at, hash, changed, changedCount }] }` |
@@ -507,7 +554,7 @@ Errors: 400 for bad input, 409 for a restate while the saved settings are invali
 
 ## Demo mode
 
-The demo shows a synthetic ledger held in memory: three cost centers, Claude Code on a plan, an IDR rate, two price versions, backfilled days, an unpriced model and a free local judge. No files are written and the pass never runs; settings and restate work in memory. The Settings page previews from the demo ledger and settings; its restate history starts empty and a restate is kept in memory. The Cost Control pages draw from it too; the demo's quality signals carry per-model tool results, so Value shows a scatter.
+The demo shows a synthetic ledger held in memory: three cost centers, Claude Code on a plan, an IDR rate, two price versions, backfilled days, an unpriced model and a free local judge. No files are written and the pass never runs; settings and restate work in memory. The Settings page previews from the demo ledger and settings; its restate history starts empty and a restate is kept in memory. The Cost Control pages draw from it too; the demo's quality signals carry per-model tool results, so Value shows a scatter. Yesterday has a spike (a busy Acme key and an Opus burst on `~/acme-web`), so the Overview shows an anomaly and the Monitors page and the bell show its `cost_anomaly` alert.
 
 ## Known limits
 

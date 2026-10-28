@@ -38,8 +38,8 @@ const res = (over = {}) => ({
 });
 const brief = (a) => [a.state, a.previous, a.projected];
 
-test('the budget rule sits beside the eight fixed rules', () => {
-  assert.equal(RULES.length, 8);
+test('the budget rule sits beside the nine fixed rules', () => {
+  assert.equal(RULES.length, 9);
   assert.equal(
     RULES.some((r) => r.id === 'budget'),
     false,
@@ -444,9 +444,17 @@ test('alerts API: a budget with the id all is opaque too', async () => {
 test('alerts API: retired rules are left out, and a change to one is refused', async () => {
   const { call } = api({ retired: ['daily_cost', 'month_projection'] });
   const ids = (await call('/api/monitors')).body.rules.map((r) => r.id);
-  assert.deepEqual(ids, ['cost_burn', 'tool_loop', 'agent_stuck', 'accuracy_drop', 'eval_pass_rate', 'unsafe_content']);
+  assert.deepEqual(ids, [
+    'cost_burn',
+    'tool_loop',
+    'agent_stuck',
+    'accuracy_drop',
+    'eval_pass_rate',
+    'unsafe_content',
+    'cost_anomaly',
+  ]);
   const r = await call('/api/monitors/daily_cost', { method: 'POST', body: { enabled: true } });
   assert.equal(r.status, 410);
   assert.match(r.body.error, /replaced by budgets/);
-  assert.equal((await api().call('/api/monitors')).body.rules.length, 8, 'without the option nothing changes');
+  assert.equal((await api().call('/api/monitors')).body.rules.length, 9, 'without the option nothing changes');
 });

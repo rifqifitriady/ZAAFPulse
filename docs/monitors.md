@@ -6,7 +6,7 @@ The bell in the top bar shows open alerts. Its drawer lists recent alerts, and *
 
 ## Rules
 
-Six rules ship with ZAAFPulse. Each can be switched on or off and has its own limits. A rule that is on its default setting follows the table. Your own choices are kept in `.data/monitors.json`.
+Seven rules ship with ZAAFPulse. Each can be switched on or off and has its own limits. A rule that is on its default setting follows the table. Your own choices are kept in `.data/monitors.json`.
 
 `daily_cost` and `month_projection` have been replaced by [budgets](cost.md#budgets). They are no longer evaluated,
 listed or changed; their old states and alerts remain as history.
@@ -19,11 +19,21 @@ listed or changed; their old states and alerts remain as history.
 | `accuracy_drop` | Today's accuracy is below the previous 7 days by more than the limit, once both rest on enough results | `dropPoints`: 5, `minSamples`: 20 | yes | no |
 | `eval_pass_rate` | An evaluator passed less than the minimum share of checks in 24 hours | `minPassRate`: 0.8, `minSamples`: 20 | no | no |
 | `unsafe_content` | A secret leak, or a prompt injection from outside, in the window | `windowMin`: 60 | yes | no |
+| `cost_anomaly` | Today's or yesterday's spend is well above what the same weekday usually costs (see [Forecast and anomalies](cost.md#forecast-and-anomalies)) | `ratio`: 2 (above 1, up to 100), `minUSD`: 1 (above 0, up to 1,000,000) | yes | no |
 
 Notes:
 
 - Rules are either **live** (one instance per session: `cost_burn`, `tool_loop`, `agent_stuck`) or **aggregate** (one instance for everything).
 - `accuracy_drop` reports `no_data` unless today and the previous 7 days each rest on at least `minSamples` tool results (default 20, the same as `eval_pass_rate`). One fault among the morning's first ten results would otherwise be a ten-point drop.
+- `cost_anomaly` has one instance per day, named by its date: yesterday, checked whole, and today, checked so far
+  ("Wed 28 Oct (so far)"). It is checked after each index refresh, from the ledger. A day alerts at most once: no
+  30-minute reminder, and the whole-day check of a day that already alerted on its partial check sends nothing. After a
+  snooze, an `ok` seen before it does not shorten the resolution hold. A day before yesterday leaves the card and the
+  counts without a resolution. It reports `no_data` until the ledger has 3 known days. The alert carries the day's
+  spend (value), the level it had to pass (threshold: the larger of `ratio` × its usual amount and the usual amount
+  plus `minUSD`; `minUSD` when the usual amount is $0) and the usual amount (shown in the bell; the webhook keeps its
+  seven fields). The models, projects, centers and keys behind it are shown on the Cost Control Overview only, never
+  in the bell, the desktop notification or the webhook.
 - `eval_pass_rate` looks at the worst evaluator that has at least `minSamples` results. Evaluators with fewer are ignored.
 - `unsafe_content` counts a secret leak, or a prompt injection that came from outside (a tool result or a file, not from you).
 - A rule whose input is missing reports `no_data`. It never triggers on missing data.
@@ -37,7 +47,7 @@ Every rule instance is in one state: `ok`, `triggered` or `no_data`. A snoozed i
 An alert is sent when:
 
 - an instance **becomes triggered**;
-- a triggered instance **stays triggered**: a reminder every 30 minutes;
+- a triggered instance **stays triggered**: a reminder every 30 minutes (not for `cost_anomaly`);
 - a triggered instance **has been ok for 5 minutes**: a resolution. The wait stops a value that hovers at its limit from sending a trigger and a resolution on every check.
 
 An instance that flips between `triggered` and `no_data` does not alert on each return. `no_data` alone never sends an alert. If a live rule cannot list sessions at all, nothing changes for the sessions it knew.
@@ -179,7 +189,7 @@ All routes are behind the dashboard sign-in. They are never open to gateway API 
 | `POST /api/monitors/<rule>` | change one rule: `enabled`, `params`, `autoPause`, or `snooze` (`"1h"`, `"1d"`, `null`; add `instance` for one session) |
 | `POST /api/monitors/channels` | set the desktop channel and the webhook URL and headers (stored as secret references) |
 | `POST /api/monitors/test` | send a sample to `desktop` or `webhook` |
-| `GET /api/alerts` | recent alerts, with `since` (ms) and `limit` (1 to 500) |
+| `GET /api/alerts` | recent alerts, with `since` (ms) and `limit` (1 to 500); a `cost_anomaly` row also has `usual`, the day's usual amount in USD (or `null`) |
 | `GET /api/agents/candidates?key=` | the processes that could be behind a session |
 | `POST /api/agents/pause` · `resume` · `stop` | act on `{ pid, startTime }`; `stop` needs `confirm: true`. Errors: 400, 403, 409, 501, 502 |
 
@@ -187,7 +197,7 @@ All routes are behind the dashboard sign-in. They are never open to gateway API 
 
 - **Too many tool calls in one turn does not fire.** The `tool_loop` rule currently triggers only on loop signals the index finds. The per-turn call count is not measured yet, so `maxCalls` has no effect. Settings shows no input for it; the API still accepts it.
 - **Quiet starts.** `accuracy_drop` stays `no_data` until today and the previous 7 days each have 20 tool results (`minSamples`).
-- **No statistical detection.** The rules compare numbers to limits. They do not learn a baseline.
+- **Little statistical detection.** The rules compare numbers to limits; only `cost_anomaly` learns a baseline, the mean of each weekday over 4 weeks.
 - **Local only.** Agents on other machines, and remote paging, are out of scope.
 - **Windows:** no pause, no resume, and no session-to-process link. Stop may fail on console apps.
 - **Cost burn lags** by up to about a minute (see [Near-live](#near-live)).

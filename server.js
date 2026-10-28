@@ -56,6 +56,8 @@ const { passRates: costPassRates } = require('./lib/cost/views');
 const { accuracyByModel } = require('./lib/quality');
 const { createBudgetService } = require('./lib/cost/budget-service');
 const { createGuard } = require('./lib/cost/guard');
+const { recentDays, HISTORY_DAYS: ANOMALY_HISTORY_DAYS } = require('./lib/cost/anomaly');
+const { dayOf: costDayOf, addDays: costAddDays } = require('./lib/cost/days');
 const { isRef } = require('./lib/secrets');
 const { createPriceSync } = require('./lib/price-sync');
 const { createOpenRouter } = require('./lib/openrouter');
@@ -520,6 +522,8 @@ const costApi = createCostApi({
   accuracy: costAccuracy,
   // The experiment store is made below; this runs only on a request, after it is.
   passRates: (range) => costPassRates(experiments.list(), range),
+  // The cost_anomaly rule's saved parameters, from the store the Monitors page shows (the demo's own), made below.
+  anomalyParams: () => monitorApiState.settings('cost_anomaly').params,
 });
 
 // Local evals: judge models read the masked text of finished turns, one queue, local first.
@@ -672,6 +676,14 @@ const monitors = createMonitors({
   budgets: costBudgets,
   retired: RETIRED_RULES,
   home: os.homedir(),
+  // cost_anomaly: today so far and yesterday from the ledger as billed, each against the 4 weeks before it (the demo
+  // ledger in demo mode, where nothing is sent), its known days from the ledger's first day as the budgets and the
+  // Overview count them.
+  costAnomaly: (t) => {
+    const today = costDayOf(t);
+    const r = cost.budgetRows({ from: costAddDays(today, -ANOMALY_HISTORY_DAYS), to: today });
+    return recentDays(r.rows, { today, unread: r.unread, since: cost.firstDay() });
+  },
 });
 // The routes: rules, channels, alerts and agent control. Demo serves a seeded store of its own (mixed states, five
 // alerts) so the page always has something to show; the engine keeps evaluating into its own file.

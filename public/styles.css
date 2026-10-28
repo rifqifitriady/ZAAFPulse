@@ -9705,3 +9705,46 @@ label.mon-cand.on {
   border-color: var(--warn-ink);
   box-shadow: 0 0 0 1px var(--warn-ink);
 }
+
+/* Cost Control 4a: a ring's runs-out date, the Overview's Anomalies card and a budget card's forecast line. */
+.cost-ring .cost-ring-out {
+  color: var(--warn-ink);
+  font-size: 10.5px;
+}
+.cost-anoms {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+.cost-anom {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--h-edge);
+  border-radius: 12px;
+}
+.cost-anom.tone-bad {
+  border-color: var(--h-pink);
+}
+.cost-anom-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cost-anom-fig {
+  margin: 0;
+  color: var(--h-text);
+  font-size: 13px;
+}
+.cost-anom-drivers {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--h-muted);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.cost-card .cost-card-forecast {
+  color: var(--h-text);
+}
