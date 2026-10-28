@@ -303,15 +303,19 @@ function writeClaudeLog(home) {
   const dir = path.join(home, '.claude', 'projects', '-w-p');
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, 's1.jsonl');
-  fs.copyFileSync(path.join(__dirname, 'fixtures', 'trace', 'claude', 'proj', 's1.jsonl'), file);
+  // The fixture is dated; the sessions list keeps the last days only, so its day becomes yesterday.
+  const raw = fs.readFileSync(path.join(__dirname, 'fixtures', 'trace', 'claude', 'proj', 's1.jsonl'), 'utf8');
+  fs.writeFileSync(file, raw.replaceAll(FIXTURE_DAY, recentDay()));
   return file;
 }
+const FIXTURE_DAY = '2026-10-20';
+const recentDay = () => new Date(Date.now() - 86400e3).toISOString().slice(0, 10);
 const turnLine = (n) =>
   JSON.stringify({
     type: 'user',
     sessionId: 's1',
     uuid: `u-extra-${n}`,
-    timestamp: '2026-10-20T10:10:00.000Z',
+    timestamp: `${recentDay()}T10:10:00.000Z`,
     message: { role: 'user', content: `one more thing ${n}` },
   }) + '\n';
 
