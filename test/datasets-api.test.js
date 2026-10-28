@@ -980,7 +980,7 @@ test('datasets api: demo datasets and experiments over HTTP, masked and path-fre
 
     const exps = await c.call('/api/experiments');
     assert.equal(exps.status, 200);
-    assert.equal(exps.json.experiments.length, 2);
+    assert.equal(exps.json.experiments.length, 3, 'support tickets, auth regressions and pagination');
     assert.equal(exps.json.running, null);
     const stopped = exps.json.experiments.find((e) => e.stopped === 'cost cap');
     assert.ok(stopped, 'one run stopped at its cost cap');
