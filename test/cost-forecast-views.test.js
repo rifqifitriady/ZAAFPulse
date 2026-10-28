@@ -290,3 +290,13 @@ test('GET /api/cost/view: the history’s unread months, the plan fees and the k
   const r = await api({ rows }).get('/api/cost/view', 'page=overview');
   assert.equal(r.body.anomalies.yesterday.drivers.find((d) => d.dim === 'keyId').label, 'Acme client');
 });
+
+test('overview: under Paid, days billed as assumed are left out of the model, as the budgets leave them', () => {
+  // Every day to Sunday 4 October lost its billing: metered 50 a day, which the plan did not charge.
+  const lost = PATTERN.map((r) => (r.day <= '2026-10-04' ? { ...r, billedUSD: 50, billingAssumed: true } : r));
+  const o = V.overview({ ...split(lost), today: '2026-10-22', measure: 'billed' });
+  assert.equal(o.forecastMethod, 'weekday');
+  assert.equal(Math.round((o.forecast.projected - o.total) * 1e4) / 1e4, 36.5, 'the model rests on 5 October onward');
+  const list = V.overview({ ...split(lost), today: '2026-10-22' });
+  assert.equal(list.forecast.projected, 112, 'usage value does not depend on billing');
+});

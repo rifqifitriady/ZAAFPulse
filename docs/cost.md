@@ -409,8 +409,9 @@ and the budgets never disagree.
   amount; without a forecast, when its pace so far would. A day budget forecasts today only. `runsOut` is the first day
   the forecast passes the amount, shown only inside the period and not once the budget is used up. Under "Paid" a day
   whose billing was lost (billed as metered, assumed) says nothing of what the plan charged, so the budget's history
-  starts after the last such day; with too little left the pace decides. The gateway guard checks the budget's state
-  only and skips the forecast, so a request is never blocked or let through by a projection.
+  (and the Overview's forecast under "Paid") starts after the last such day; with too little left the pace decides.
+  The gateway guard checks the budget's state only and skips the forecast, so a request is never blocked or let
+  through by a projection.
 - **Anomalies.** A day is an anomaly when its usage value (list, whatever the chosen measure; plan fees are not
   usage) is more than `ratio` times the usual amount of its weekday over the 4 weeks before it, and at least `minUSD`
   more: the parameters of the Monitors rule [`cost_anomaly`](monitors.md#rules), 2 and $1 by default (`ratio` above 1,
