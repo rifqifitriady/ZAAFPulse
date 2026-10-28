@@ -10,6 +10,7 @@ const COST_SUBS = [
   ['breakdown', 'Breakdown'],
   ['value', 'Value'],
   ['budgets', 'Budgets'],
+  ['settings', 'Settings'],
 ];
 const COST_RANGES = {
   '7d': 'Last 7 days',
@@ -463,6 +464,7 @@ function viewCost() {
     breakdown: 'Where the money goes: sources, providers, models, cost centers and projects.',
     value: 'What the money bought: plans against their fees, savings, and cost against quality.',
     budgets: 'Limits by day, week or month, with alerts and, where you choose, a block or a pause.',
+    settings: 'Cost centers and their rules, billing per source, the display currency, and restating past days.',
   }[sub];
   const title = (COST_SUBS.find(([s]) => s === sub) || COST_SUBS[0])[1];
   return `<div class="holo-deck cost-deck" id="cost-app">
@@ -513,6 +515,8 @@ function costQuietWait(doc, app) {
 function costRefresh(quiet) {
   const app = $('#cost-app');
   if (!app) return;
+  // Settings is all forms (public/costsettings.js): it reloads after each Save, never on the quiet cycle.
+  if (costSub() === 'settings') return quiet ? undefined : costMountSettings();
   if (quiet && (costQuietWait(document, app) || COST.form || COST.confirm)) return;
   if (costSub() === 'budgets') return costMountBudgets(quiet);
   return costMountPage(costSub(), quiet);
@@ -1329,6 +1333,17 @@ function costFilterTo(id) {
 
 if (typeof module !== 'undefined')
   module.exports = {
+    COST_SUBS,
+    COST_SOURCES,
+    COST_MAX_DAYS,
+    costToday,
+    costGet,
+    costPost,
+    costSub,
+    costReasonsHtml,
+    costRibbonHtml,
+    costErrorHtml,
+    costShowError,
     COST_DEFAULT,
     COST_STORE_KEY,
     costIsDay,

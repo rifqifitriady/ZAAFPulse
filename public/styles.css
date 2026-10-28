@@ -9526,3 +9526,182 @@ label.mon-cand.on {
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+/* Cost Control → Settings (public/costsettings.js): four panels, the rules panel with its preview beside the forms. */
+.cost-set-panel {
+  margin-bottom: 14px;
+}
+.cost-set-panel > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.cost-set-panel > summary::-webkit-details-marker {
+  display: none;
+}
+.cost-set-panel > summary h3 {
+  display: inline;
+  margin: 0;
+}
+.cost-set-panel > summary::before {
+  content: '▸ ';
+  color: var(--h-muted);
+}
+.cost-set-panel[open] > summary::before {
+  content: '▾ ';
+}
+.cost-set-body {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+.cost-set-body h4 {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+.cost-set-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(260px, 2fr);
+  gap: 18px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .cost-set-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.cost-set-forms,
+.cost-set-preview {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.cost-set-preview {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.cost-set-preview[aria-busy='true'] {
+  opacity: 0.7;
+}
+.cost-set-table .input {
+  width: 100%;
+}
+.cost-set-table td:first-child .input {
+  min-width: 26ch; /* a center name of about 24 characters shows in full */
+}
+@media (max-width: 640px) {
+  .cost-set-table td:first-child .input {
+    min-width: 0;
+  }
+}
+.cost-set-rules {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.cost-set-rule {
+  display: grid;
+  grid-template-columns: auto minmax(0, 2fr) minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+.cost-set-rule .cost-set-warn {
+  grid-column: 2 / -1;
+  color: var(--warn-ink);
+  font-size: 12px;
+}
+.cost-set-num {
+  color: var(--h-muted);
+  font-size: 12px;
+}
+.cost-set-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.cost-set-save {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.cost-set-save > div {
+  flex-basis: 100%;
+}
+.cost-set-dirty {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  color: var(--warn-ink);
+  font-size: 12.5px;
+}
+.cost-set-source {
+  display: grid;
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.cost-set-source:last-of-type {
+  border-bottom: 0;
+}
+.cost-set-source-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.cost-set-body label {
+  display: grid;
+  gap: 4px;
+  font-size: 12.5px;
+  color: var(--h-muted);
+}
+.cost-set-body .cost-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--h-text);
+}
+.cost-set-unassigned {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.cost-set-unassigned li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  font-size: 12.5px;
+}
+.cost-set-unassigned li span:first-child,
+.cost-set-moves td:first-child {
+  overflow-wrap: anywhere;
+}
+.cost-set-test code,
+.cost-set-today {
+  color: var(--h-cyan);
+}
+.cost-set-summary {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+.cost-set-confirm {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--warn-border);
+  border-radius: 12px;
+}
+.cost-set-body [aria-invalid='true'] {
+  border-color: var(--warn-ink);
+  box-shadow: 0 0 0 1px var(--warn-ink);
+}
