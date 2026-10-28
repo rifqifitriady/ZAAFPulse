@@ -67,6 +67,8 @@ test('demo gateway: seeding fills keys, history, knowledge and brain files in a 
     });
     await demoGw.seed(gateway, { dataDir });
     assert.equal(gateway.keys.list().filter((k) => k.revokedAt).length, 1);
+    const ids = gateway.keys.list().map((k) => k.id);
+    assert.ok(ids.includes('key_demo0acme01') && ids.includes('key_demo0lab001'), 'the demo cost settings keys');
     assert.ok(gateway.usage.recent(2000).length > 500);
     assert.equal(gateway.knowledge.list().length, 3);
     assert.ok(

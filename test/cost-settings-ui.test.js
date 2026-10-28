@@ -337,6 +337,42 @@ test('save: typing while the Save runs keeps the draft; an untouched draft goes'
   assert.equal(U.costSetAnyDirty(), true);
 });
 
+test('save: a panel without a draft sends nothing, keeps gen, and says so', async () => {
+  resetState();
+  const elsewhere = { ...SAVED, currency: null }; // config.json changed by hand since the page loaded
+  const calls = fakeServer({
+    'GET /api/cost/settings': { status: 200, json: ANSWER({ settings: elsewhere }) },
+    'POST /api/cost/settings': { status: 200, json: { settings: elsewhere } },
+  });
+  await U.costSetSave('rules');
+  assert.deepEqual(
+    calls.map((c) => c.method),
+    ['GET'],
+    'no POST',
+  );
+  assert.equal(U.COST_SET.gen, 0);
+  assert.equal(U.COST_SET.msg.rules.text, 'Nothing to save.');
+  assert.equal(U.COST_SET.busy.rules, false);
+});
+
+test('save: a new center whose id went out is fixed even when the draft is kept', async () => {
+  resetState();
+  fakeServer({
+    'GET /api/cost/settings': { status: 200, json: ANSWER() },
+    'POST /api/cost/settings': () => {
+      U.costSetEdit('rules', (d) => (d.folderRules[0].glob = 'typed/**')); // typing during the Save keeps the draft
+      return { status: 200, json: { settings: SAVED } };
+    },
+  });
+  U.costSetEdit('rules', (d) =>
+    d.centers.push({ id: 'newco', name: 'Newco', isNew: true, idEdited: false, prevId: '' }),
+  );
+  await U.costSetSave('rules');
+  const c = U.COST_SET.drafts.rules.centers.find((x) => x.id === 'newco');
+  assert.ok(c, 'the draft is kept');
+  assert.equal(c.isNew, false, 'its id is fixed');
+});
+
 test('save: two panels saved at once go one after another, the second carrying the first result', async () => {
   resetState();
   let server = clone(SAVED);
