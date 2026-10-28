@@ -64,7 +64,7 @@ test('burn-down: actual line, forecast, band only past the third day, budget lin
   assert.equal(count(svg, /cost-pinned/g), 0);
   const early = C.costBurnSvg(V.overview({ rows: rows.slice(0, 2), today: '2026-10-02' }), fmt);
   assert.equal(count(early, /class="cost-band"/g), 0);
-  assert.match(early, /early in the month/);
+  assert.match(early, /no band yet/);
 });
 
 test('burn-down: a budget over twice the band top is pinned at the top edge and keeps the curve readable', () => {
