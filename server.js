@@ -677,11 +677,12 @@ const monitors = createMonitors({
   retired: RETIRED_RULES,
   home: os.homedir(),
   // cost_anomaly: today so far and yesterday from the ledger as billed, each against the 4 weeks before it (the demo
-  // ledger in demo mode, where nothing is sent).
+  // ledger in demo mode, where nothing is sent), its known days from the ledger's first day as the budgets and the
+  // Overview count them.
   costAnomaly: (t) => {
     const today = costDayOf(t);
     const r = cost.budgetRows({ from: costAddDays(today, -ANOMALY_HISTORY_DAYS), to: today });
-    return recentDays(r.rows, { today, unread: r.unread });
+    return recentDays(r.rows, { today, unread: r.unread, since: cost.firstDay() });
   },
 });
 // The routes: rules, channels, alerts and agent control. Demo serves a seeded store of its own (mixed states, five
