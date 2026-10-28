@@ -655,6 +655,60 @@ async function costMountPage(sub, quiet) {
 
 /* ---------- Overview ---------- */
 
+// The burn-down's caption names how the forecast was made (lib/cost/forecast.js).
+const COST_FORECAST_CAPTION = {
+  weekday: 'Forecast: weekday pattern of the last 4 weeks',
+  mean: 'Forecast: daily mean (little history yet)',
+};
+const costForecastCaption = (method) =>
+  Object.hasOwn(COST_FORECAST_CAPTION, method || '') ? COST_FORECAST_CAPTION[method] : 'No forecast yet';
+
+// A day's spend against its usual amount, in USD as the rule measures it: "$18.40, usually $6.10 (3.0×)".
+function costAnomalyFigures(m) {
+  const times = m.expectedUSD > 0 ? ` (${(m.spentUSD / m.expectedUSD).toFixed(1)}×)` : '';
+  return `${costMoney(m.spentUSD, 'USD')}, usually ${costMoney(m.expectedUSD, 'USD')}${times}`;
+}
+// One driver as text: "claude-opus-5-5 · +$9.20 (75 %)", "Key: Acme client · +$5.10 (41 %)".
+function costDriverText(d, ctx) {
+  const name =
+    d.dim === 'keyId'
+      ? `Key: ${d.label || costName('keyId', d.value, ctx)}`
+      : d.dim === 'center'
+        ? costName('center', d.value, ctx)
+        : String(d.label || d.value);
+  const share = Number.isFinite(d.share) ? ` (${Math.round(d.share * 100)} %)` : '';
+  return `${name} · +${costMoney(d.extraUSD, 'USD')}${share}`;
+}
+// The Anomalies card: today so far and yesterday, each with its figures, its state and, when it is an anomaly, up to 3
+// drivers. Every figure and name is text (esc).
+const COST_ANOMALY_DAYS = [
+  ['today', 'Today (so far)'],
+  ['yesterday', 'Yesterday'],
+];
+function costAnomalyRow(label, m, ctx) {
+  if (!m)
+    return `<div class="cost-anom tone-none"><div class="cost-anom-head"><b>${esc(label)}</b><span class="cost-chip">Not enough history</span></div></div>`;
+  const drivers =
+    m.anomaly && m.drivers.length
+      ? `<ul class="cost-anom-drivers">${m.drivers.map((d) => `<li>${esc(costDriverText(d, ctx))}</li>`).join('')}</ul>`
+      : '';
+  return `<div class="cost-anom tone-${m.anomaly ? 'bad' : 'ok'}"><div class="cost-anom-head"><b>${esc(label)}</b><span class="cost-chip${m.anomaly ? ' warn' : ''}">${m.anomaly ? 'Anomaly' : 'Normal'}</span></div>
+    <p class="cost-anom-fig">${esc(costAnomalyFigures(m))}</p>${drivers}</div>`;
+}
+function costAnomaliesHtml(o, ctx) {
+  const link = '<p class="cost-note"><a href="#settings/monitors">Change the sensitivity in Monitors</a></p>';
+  if (!o.anomalies)
+    return `<p class="cost-note warn">The ledger history could not be read: no anomalies for now.</p>${link}`;
+  const rows = COST_ANOMALY_DAYS.map(([k, label]) => costAnomalyRow(label, o.anomalies[k], ctx)).join('');
+  return `<div class="cost-anoms">${rows}</div>${link}`;
+}
+// The card's meta line: the rule's parameters, as the server applied them.
+function costAnomalyMeta(p) {
+  const ratio = p && Number.isFinite(p.ratio) ? p.ratio : 2;
+  const min = p && Number.isFinite(p.minUSD) ? p.minUSD : 1;
+  return `over ${ratio}× the usual amount and at least ${costMoney(min, 'USD')} more · usage value in USD`;
+}
+
 function costOverviewHtml(o, ctx) {
   const fmt = ctx.fmt;
   const paid = ctx.measure === 'billed';
@@ -663,7 +717,7 @@ function costOverviewHtml(o, ctx) {
   const why = String(o.budgetsError || '');
   const noBudgets = why ? `<p class="cost-note warn">${esc(why.charAt(0).toUpperCase() + why.slice(1) + '.')}</p>` : '';
   const forecastSub = o.forecast.early
-    ? 'early in the month: no band yet'
+    ? 'no forecast yet: the mean so far'
     : `${fmt(o.forecast.low)} – ${fmt(o.forecast.high)}`;
   const risk = o.budgetsError
     ? metricTile({ label: 'Budgets at risk', value: '—', sub: 'budgets could not be read', color: COST_C.muted })
@@ -705,13 +759,14 @@ function costOverviewHtml(o, ctx) {
     noBudgets ||
     costRingsHtml(o.rings, o.moreBudgets) ||
     holoEmpty('No budgets yet. <a href="#cost/budgets">Add one</a>.');
-  const burnMeta = `day ${o.month.day} of ${o.month.days}${o.forecast.early ? ' · early in the month' : ' · band: 25th–75th percentile days'}`;
+  const burnMeta = `day ${o.month.day} of ${o.month.days} · ${costForecastCaption(o.forecastMethod)}${o.forecast.early ? '' : ' · band: 25th–75th percentile days'}`;
   return `<div class="live-metrics">${tiles.join('')}</div>
     ${panel('Burn-down', esc(burnMeta), costBurnSvg(o, fmt) + noBudgets + add)}
     <div class="live-grid">
-      ${panel('Daily spend and spikes', 'each day against the 7 days before it', costSpikeSvg(o.spikes, fmt))}
+      ${panel('Daily spend and spikes', 'usage value, each day against the same weekday of the 4 weeks before it', costSpikeSvg(o.spikes, fmt))}
       ${panel('Budgets', o.budgetsError ? '' : esc(`${o.atRisk.count} at risk`), rings)}
-    </div>`;
+    </div>
+    ${panel('Anomalies', esc(costAnomalyMeta(o.anomalyParams)), costAnomaliesHtml(o, ctx))}`;
 }
 
 /* ---------- Breakdown ---------- */
@@ -1375,6 +1430,11 @@ if (typeof module !== 'undefined')
     costPaintBudgets,
     costContext,
     costOverviewHtml,
+    costForecastCaption,
+    costAnomalyFigures,
+    costDriverText,
+    costAnomaliesHtml,
+    costAnomalyMeta,
     costValueHtml,
     COST,
     costUnmount,
