@@ -180,6 +180,7 @@ const COST_SET = {
     running: false,
   },
   restateReq: 0,
+  saving: null, // the chain of Saves in flight
   history: null, // GET /api/cost/restates → restates
   historyError: null,
   historyReq: 0,
@@ -331,11 +332,16 @@ async function costSetLoad(quiet) {
 }
 
 // A Save: the saved settings are read again first, so a change made elsewhere since the page loaded is kept.
-async function costSetSave(panel) {
-  if (COST_SET.busy[panel] || costSetLocked(COST_SET.answer)) return;
-  const draft = costSetDraftOf(panel);
+// Saves run one after another: each one's read of the settings follows the previous one's write.
+function costSetSave(panel) {
+  if (COST_SET.busy[panel] || costSetLocked(COST_SET.answer)) return Promise.resolve();
   COST_SET.busy[panel] = true;
   costSetPaintPanel(panel);
+  const run = (COST_SET.saving || Promise.resolve()).then(() => costSetSaveRun(panel));
+  COST_SET.saving = run.catch(() => {});
+  return run;
+}
+async function costSetSaveRun(panel) {
   let saved = false;
   try {
     const fresh = await costGet('/api/cost/settings');
@@ -345,11 +351,15 @@ async function costSetSave(panel) {
       COST_SET.msg[panel] = { tone: 'warn', text: fresh.error, reasons: fresh.reasons || [] };
       return;
     }
-    const res = await costPost('/api/cost/settings', costSetBody(panel, fresh.settings, draft, fresh.sources));
+    const sent = JSON.stringify(costSetBody(panel, fresh.settings, costSetDraftOf(panel), fresh.sources));
+    const res = await costPost('/api/cost/settings', JSON.parse(sent));
     const j = res.json || {};
     if (res.status === 200) {
       saved = true;
-      if (COST_SET.drafts[panel] === draft) delete COST_SET.drafts[panel];
+      // Typing while the Save ran changes the draft in place: it goes only if it still says what was sent.
+      const now = COST_SET.drafts[panel];
+      if (!now || JSON.stringify(costSetBody(panel, fresh.settings, now, fresh.sources)) === sent)
+        delete COST_SET.drafts[panel];
       COST_SET.marks[panel] = [];
       COST_SET.gen++;
       COST_SET.msg[panel] =
@@ -393,7 +403,6 @@ function costSetUnmount() {
   COST_SET.restateReq++;
   COST_SET.historyReq++;
   COST_SET.restate.running = false;
-  for (const p of COST_SET_FORMS) COST_SET.busy[p] = false;
 }
 
 Object.assign(COST_SET_ACTIONS, {
@@ -448,8 +457,9 @@ function costSetInstallEvents() {
     (e) => {
       const d = e.target;
       if (!d.matches || !d.matches('#cost-app [data-cost-set-panel]')) return;
+      const was = COST_SET.open[d.dataset.costSetPanel];
       COST_SET.open[d.dataset.costSetPanel] = d.open;
-      if (d.open) for (const h of COST_SET_ON_OPEN) h(d.dataset.costSetPanel);
+      if (d.open && !was) for (const h of COST_SET_ON_OPEN) h(d.dataset.costSetPanel);
     },
     true,
   );
