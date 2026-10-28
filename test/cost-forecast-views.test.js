@@ -171,16 +171,16 @@ test('overview: anomalies for today and yesterday, drivers labelled with the key
 });
 
 // The API with a fake ledger: the month and the history are cut from one list of rows.
-function api({ rows = PATTERN, failHistory = false, anomalyParams } = {}) {
+function api({ rows = PATTERN, failHistory = false, anomalyParams, historyUnread = [], fee = () => 0 } = {}) {
   const asked = [];
   const cost = {
     budgetRows: ({ from, to }) => {
       asked.push(`${from}|${to}`);
       if (failHistory && to < '2026-10-01') throw new Error('unreadable');
       const out = rows.filter((r) => r.day >= from && r.day <= to);
-      return { rows: out, unread: [], billingError: null, historyLost: false };
+      return { rows: out, unread: to < '2026-10-01' ? historyUnread : [], billingError: null, historyLost: false };
     },
-    planFeeFor: () => 0,
+    planFeeFor: fee,
   };
   const budgets = createBudgetService({
     getSettings: () => ({
@@ -234,4 +234,59 @@ test('GET /api/cost/budgets: each view gains forecastUSD and runsOut', async () 
   assert.equal(r.status, 200);
   const team = r.body.budgets.find((b) => b.id === 'team');
   assert.deepEqual([team.forecastUSD, team.runsOut, team.projected], [112, '2026-10-31', true]);
+});
+
+test('overview: a month that did not read is unknown, never a run of zero days', () => {
+  const history = PATTERN.filter((r) => r.day < '2026-10-01');
+  const o = V.overview({ rows: [], history, today: '2026-10-22', unread: ['2026-10'] });
+  // Thursday the 22nd to Saturday the 31st at the weekday pattern: 1 + 1 + 10 + 10 + 5 + 10 = 37.
+  assert.equal(o.forecastMethod, 'weekday');
+  assert.equal(o.forecast.projected, 37, 'zero days from the unread month would make it 9.25');
+  assert.equal(o.anomalies.yesterday, null, 'a day of an unread month has no figure');
+});
+
+test('overview: the currency converts day by day, the forecast too', () => {
+  const rateOf = (d) => (d < '2026-10-25' ? 10 : 20);
+  const o = V.overview({ ...split(PATTERN), today: '2026-10-22', rateOf, currency: 'XYZ' });
+  // 75.5 spent at 10 = 755; the 22nd to the 24th add 0.5 + 1 + 10 USD at 10; the 25th to the 31st add 25 USD at 20.
+  assert.equal(o.forecast.projected, 1370, 'not 1120, the whole month at the first rate');
+});
+
+test('overview: spikes and the top model use the usage value whatever the measure', () => {
+  const history = daysBetween('2026-09-02', '2026-09-30').map((d) => row(d, { listUSD: 0.2, billedUSD: 7 }));
+  const rows = [
+    row('2026-10-01', { listUSD: 0.5, billedUSD: 9 }),
+    row('2026-10-02', { listUSD: 1, billedUSD: 0.1, model: 'claude-opus-5-5' }),
+    row('2026-10-02', { listUSD: 2, billedUSD: 0, model: 'claude-sonnet-5-5' }),
+    row('2026-10-03', { listUSD: 1, billedUSD: 5 }),
+  ];
+  const at = (measure) => V.overview({ rows, history, today: '2026-10-03', measure }).spikes;
+  assert.deepEqual(at('billed'), at('list'));
+  assert.deepEqual(
+    at('billed').map((s) => [s.day, s.spend, s.baseline, s.spike, s.topModel]),
+    [
+      ['2026-10-01', 0.5, 0.2, false, 'deepseek-chat'],
+      ['2026-10-02', 3, 0.2, true, 'claude-sonnet-5-5'],
+      ['2026-10-03', 1, 0.2, false, 'deepseek-chat'],
+    ],
+  );
+});
+
+test('overview: a day whose 4 weeks before it did not read has no baseline and is no spike', () => {
+  const rows = [row('2026-10-01', { listUSD: 50 }), row('2026-10-02', { listUSD: 50 })];
+  const history = daysBetween('2026-09-02', '2026-09-30').map((d) => row(d, { listUSD: 0.2 }));
+  const o = V.overview({ rows, history, today: '2026-10-02', unread: ['2026-09'] });
+  assert.ok(o.spikes.every((s) => s.baseline === null && s.spike === false));
+});
+
+test('GET /api/cost/view: the history’s unread months, the plan fees and the key names reach the Overview', async () => {
+  const unread = await api({ historyUnread: ['2026-09'] }).get('/api/cost/view', 'page=overview');
+  assert.deepEqual(unread.body.unread, ['2026-09']);
+  const fee = (source, day) => (source === 'claude' && day > '2026-10-22' ? 3 : 0);
+  const paid = await api({ fee }).get('/api/cost/view', 'page=overview&measure=billed');
+  // 75.5 + today's missing 0.5 + 9 more days at 1 or 10 (36) = 112, and 9 days × 3 for the plan.
+  assert.equal(paid.body.forecast.projected, 139);
+  const rows = [...PATTERN, row('2026-10-21', { keyId: 'key_b', listUSD: 6, billedUSD: 6 })];
+  const r = await api({ rows }).get('/api/cost/view', 'page=overview');
+  assert.equal(r.body.anomalies.yesterday.drivers.find((d) => d.dim === 'keyId').label, 'Acme client');
 });
