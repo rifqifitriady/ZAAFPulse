@@ -395,9 +395,11 @@ and the budgets never disagree.
 
 - **The model.** The mean spend of each weekday over the last 4 weeks of finished days (today is not one), in the
   chosen measure, plan fees left out. A day before the ledger's first row (in the whole ledger, so the Overview, the
-  budgets and the rule count the same days) is unknown, not zero, and so is a day of a month that did not read (it is
-  never taken as zero); a known day without spend is a zero. With 7 or more known days each weekday has its own mean (a weekday without a known day takes the overall mean). With 3 to 6 the forecast is
-  the plain daily mean. With fewer there is none.
+  rule and a global budget count the same days; a scoped budget starts at its scope's first row, so a center that
+  began last week is not forecast from weeks of zeros) is unknown, not zero, and so is a day of a month that did not
+  read (it is never taken as zero); a known day without spend is a zero. With 7 or more known days each weekday has
+  its own mean (a weekday without a known day takes the overall mean). With 3 to 6 the forecast is the plain daily
+  mean. With fewer there is none.
 - **The line.** Today is never forecast below what it has spent already; each later day adds its weekday's mean, but
   never less than 0 (credits can make a weekday's mean negative). Under "Paid" each day to come also adds its plan
   fees exactly, at the billing in force now. The band is the 25th to 75th percentile of how far the known days fell

@@ -41,7 +41,7 @@ runsOut(line, amount) -> 'YYYY-MM-DD' | null
 **`dailyModel`**
 - **Input.** `rows` are ledger rows already reduced to one measure: `{ day, usd }`, one per row or per day. Plan rows (`kind: 'plan'`) are left out by the caller.
 - **Window.** The finished days in `[today − 7·weeks, today − 1]`.
-- **Known days.** A day counts only on or after the ledger's first day (`cost.firstDay()`, its earliest usage row, passed as `since` by every reader so their read windows never disagree; without it, the first row passed in): before the ledger began is unknown, not zero. A day inside the known span with no row is a real zero.
+- **Known days.** A day counts only on or after the ledger's first day (`cost.firstDay()`, its earliest usage row, passed as `since` by the Monitors rule, the Overview and a global budget so their read windows never disagree; a scoped budget, and a reader without it, start at the first row passed in): before the ledger began is unknown, not zero. A day inside the known span with no row is a real zero.
 - **Method.**
   - With 7 or more known days: `method: 'weekday'`. `byWeekday[w]` is the mean of the known days of weekday `w`. A weekday with no known day takes `mean`.
   - With 3 to 6 known days: `method: 'mean'`, and every `byWeekday[w]` is `mean`.

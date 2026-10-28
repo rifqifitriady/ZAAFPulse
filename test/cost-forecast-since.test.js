@@ -214,3 +214,23 @@ test('under Paid, the known days start after the last assumed day even when the 
   const after = B.evaluateBudget(paid, { rows: month, history: cut(LEDGER, '2026-10-12', '2026-10-27'), now: NOW });
   assert.equal(v.forecastUSD, after.forecastUSD);
 });
+
+test('a scoped budget’s known days start at its own first row: a young center is not diluted by the ledger’s age', () => {
+  // The center began on Friday 23 October at $10 a day; the ledger is weeks older.
+  const young = [...LEDGER, ...daysBetween('2026-10-23', '2026-10-27').map((d) => ({ ...row(d, 10), center: 'acme' }))];
+  const acme = { ...budget, id: 'acme', scope: { dim: 'center', value: 'acme' }, amount: 80 };
+  const month = cut(young, '2026-10-01', TODAY);
+  const history = cut(young, '2026-09-30', '2026-10-27');
+  const v = B.evaluateBudget(acme, { rows: month, history, now: NOW, since: FIRST });
+  // $50 spent, then $10 for today and each of the 3 days left: $80 on the 30th (equal), past it on the 31st.
+  assert.deepEqual([v.forecastUSD, v.projected, v.runsOut], [90, true, '2026-10-31']);
+  assert.deepEqual(
+    B.evaluateBudget(acme, { rows: month, history, now: NOW }).forecastUSD,
+    90,
+    'the same without since',
+  );
+  // The global budget still counts from the ledger's first day, as the Overview does.
+  const g = B.evaluateBudget(budget, { rows: month, history, now: NOW, since: FIRST });
+  const o = V.overview({ history: cut(young, '2026-09-02', '2026-09-30'), rows: month, today: TODAY, since: FIRST });
+  assert.ok(Math.abs(g.forecastUSD - o.forecast.projected) < 1e-4);
+});
