@@ -185,3 +185,24 @@ test('cost view: Overview and Breakdown add no recommendations and no 30-day rea
   }
   assert.equal(s.reads.filter((x) => x.from === FROM30 && x.to === TODAY).length, 0);
 });
+
+test('demo: the support-tickets experiment backs one recommendation and leaves both kinds of gap', async () => {
+  const { datasetsDemo } = require('../lib/demo');
+  const seed = datasetsDemo(NOW);
+  const r = (await setup({ experiments: () => seed.experiments }).get('page=value')).body.recommendations;
+  assert.equal(r.basis.experiments, 2, 'the stopped pagination run does not count');
+  assert.deepEqual(
+    r.items.map((i) => [i.model, i.candidate, i.costRatio, i.experiment.id, i.experiment.datasetName, i.onPlan]),
+    [[OPUS, SONNET, 0.6, 'exp_00000000000000a0', 'Support tickets', true]],
+  );
+  assert.deepEqual(
+    r.gaps.map((g) => [g.model, g.reason]),
+    [
+      [SONNET, 'no_cheaper_match'],
+      ['gpt-6.1-sol', 'no_experiment'],
+      ['deepseek-chat', 'no_experiment'],
+    ],
+  );
+  const support = seed.datasets.find((d) => d.slug === 'support-tickets');
+  assert.equal(support.examples.length, 24);
+});

@@ -273,6 +273,16 @@ test('cost view over HTTP: every demo page answers, Value with a scatter from th
     assert.equal(v.status, 200);
     const models = v.json.scatter.dots.map((d) => d.model);
     for (const m of ['claude-opus-5-5', 'claude-sonnet-5-5', 'gpt-6.1-sol']) assert.ok(models.includes(m), m);
+    // Cost Control 4b: the demo's support-tickets experiment, read through server.js's experiments provider.
+    const rec = v.json.recommendations;
+    assert.deepEqual(
+      rec.items.map((i) => [i.model, i.candidate, i.experiment.id]),
+      [['claude-opus-5-5', 'claude-sonnet-5-5', 'exp_00000000000000a0']],
+    );
+    assert.deepEqual(
+      rec.gaps.map((g) => g.reason),
+      ['no_cheaper_match', 'no_experiment', 'no_experiment'],
+    );
     for (const body of c.bodies) assert.doesNotMatch(body, PATHS);
   } finally {
     await s.stop();
@@ -313,6 +323,8 @@ test('cost view over HTTP: the dashboard sign-in only, never a gateway key', asy
     const r = await c.call('/api/cost/view?page=value');
     assert.equal(r.status, 200);
     assert.deepEqual(r.json.scatter, { dots: [], noToolCalls: [] }, 'an empty ledger');
+    const rec = r.json.recommendations;
+    assert.deepEqual([rec.items, rec.gaps, rec.basis.experiments], [[], [], 0], 'no spend and no experiment');
     assert.equal((await c.call('/api/cost/view?page=nope')).status, 400);
     for (const body of [...c.bodies, ...bearer.bodies]) assert.doesNotMatch(body, PATHS);
   } finally {
