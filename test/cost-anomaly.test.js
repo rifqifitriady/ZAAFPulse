@@ -93,6 +93,19 @@ test('isAnomaly: over ratio × expected and at least minUSD over it; an expected
   assert.deepEqual(A.anomalyParams(null), { ratio: 2, minUSD: 1 });
 });
 
+test('measureDay: a negative expected amount (credits) is the zero case', () => {
+  const model = { method: 'mean', byWeekday: Array(7).fill(-2), days: ['2026-10-26'] };
+  const rows = [{ day: '2026-10-27', kind: 'chat', model: 'm', listUSD: 1.5 }];
+  const m = A.measureDay(rows, { model, day: '2026-10-27' });
+  assert.equal(m.expectedUSD, 0);
+  assert.equal(A.isAnomaly(m), true);
+  const { RULES, evaluate } = require('../lib/monitors/rules');
+  const rule = RULES.find((r) => r.id === 'cost_anomaly');
+  const snap = { costAnomaly: { yesterday: m, today: null } };
+  const r = evaluate(rule, {}, snap, new Date(2026, 9, 28, 15).getTime())[0];
+  assert.deepEqual([r.state, r.value, r.threshold, r.usual], ['triggered', 1.5, 1, 0], 'not no_data');
+});
+
 test('anomalyLevel: the spend a day must pass, max(ratio × expected, expected + minUSD); minUSD when expected is 0', () => {
   const m = (expectedUSD) => ({ spentUSD: 0, expectedUSD });
   assert.equal(A.anomalyLevel(m(6.1)), 12.2, 'the ratio decides');
