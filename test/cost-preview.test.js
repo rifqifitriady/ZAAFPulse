@@ -168,7 +168,12 @@ test('settingsPreview: "<project>/**" matches the project it was made from, and 
     assert.ok(re.test(`${project}/sub`), `${project}/sub`);
     assert.ok(!re.test(`${project}-other`), `${project}-other`);
     const draft = S({ centers: CENTERS, folderRules: [{ glob: `${project}/**`, center: 'lab' }] });
-    const p = P.settingsPreview({ saved: S({}), draft, rows: [{ project, listUSD: 1 }], compileOpts: { nocase: false } });
+    const p = P.settingsPreview({
+      saved: S({}),
+      draft,
+      rows: [{ project, listUSD: 1 }],
+      compileOpts: { nocase: false },
+    });
     assert.deepEqual(p.unassigned, [], project);
     assert.equal(p.rules[0].status, 'ok', project);
   }
