@@ -1003,6 +1003,16 @@ const costCardButton = (id, attr) => () => {
   const card = [...document.querySelectorAll('#cost-app [data-cost-card]')].find((el) => el.dataset.costCard === id);
   return card ? card.querySelector(`[${attr}]`) : null;
 };
+// A budget's forecast line (lib/cost/budgets.js forecastUSD and runsOut): the day it runs out at this pace, or that it
+// stays under its amount, with the forecast in the budget's currency; nothing without a forecast or once used up.
+const costShortDay = (day) => `${Number(day.slice(8))} ${COST_MONTH[Number(day.slice(5, 7)) - 1]}`;
+function costForecastLine(b) {
+  if (!b || b.state === 'no_data' || b.state === 'exceeded') return '';
+  if (costIsDay(b.runsOut)) return `Runs out ~${costShortDay(b.runsOut)} at this pace`;
+  if (typeof b.forecastUSD !== 'number' || !Number.isFinite(b.forecastUSD)) return '';
+  const rate = b.amountUSD > 0 ? b.amount / b.amountUSD : 1;
+  return `Stays under the amount this period (forecast ${costMoney(b.forecastUSD * rate, b.currency)})`;
+}
 function costBudgetCardHtml(b, ctx, locked) {
   const tone = costTone(b.state);
   const chips = [
@@ -1018,6 +1028,8 @@ function costBudgetCardHtml(b, ctx, locked) {
     b.state === 'no_data'
       ? `<p class="cost-card-reason">${esc(b.reason || 'No data')}</p>`
       : `<p class="cost-card-spent"><b>${esc(costMoney(b.spent, b.currency))}</b> of ${esc(costMoney(b.amount, b.currency))}</p>`;
+  const line = costForecastLine(b);
+  const forecast = line ? `<p class="cost-card-forecast">${esc(line)}</p>` : '';
   const msg = COST.cardMsg[b.id] ? `<p class="cost-card-reason" role="alert">${esc(COST.cardMsg[b.id])}</p>` : '';
   const actions =
     COST.confirm === b.id
@@ -1025,7 +1037,7 @@ function costBudgetCardHtml(b, ctx, locked) {
       : `<button type="button" class="btn ghost" data-cost-edit="${esc(b.id)}" ${locked ? 'disabled' : ''}>Edit</button><button type="button" class="btn ghost danger" data-cost-delete="${esc(b.id)}" ${locked ? 'disabled' : ''}>Delete</button>`;
   return `<article class="holo cost-card tone-${tone}" data-cost-card="${esc(b.id)}">
     <div class="cost-card-ring">${costRingSvg(b.percent, tone, 84)}</div>
-    <div class="cost-card-main"><h3>${esc(b.name)}</h3><p>${esc(costScopeLabel(b.scope, ctx))}</p><p>${esc(costPeriodLabel(b))}</p>${figures}<div class="cost-chips">${chips}</div>${msg}</div>
+    <div class="cost-card-main"><h3>${esc(b.name)}</h3><p>${esc(costScopeLabel(b.scope, ctx))}</p><p>${esc(costPeriodLabel(b))}</p>${figures}${forecast}<div class="cost-chips">${chips}</div>${msg}</div>
     <div class="cost-card-actions">${actions}</div></article>`;
 }
 
@@ -1423,6 +1435,7 @@ if (typeof module !== 'undefined')
     costBudgetBanners,
     costTableRows,
     costBudgetCardHtml,
+    costForecastLine,
     costFormHtml,
     costMountBudgets,
     costRefresh,

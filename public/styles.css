@@ -9744,3 +9744,7 @@ label.mon-cand.on {
   font-size: 12.5px;
   overflow-wrap: anywhere;
 }
+
+.cost-card .cost-card-forecast {
+  color: var(--h-text);
+}

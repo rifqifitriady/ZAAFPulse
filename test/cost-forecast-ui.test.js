@@ -113,3 +113,113 @@ test('rings: a runs-out date in the caption and the tooltip; none when the forec
   assert.doesNotMatch(html, /<img/);
   assert.doesNotMatch(C.costRingsHtml([ring({ runsOut: null, projected: false })], 0), /runs out/);
 });
+
+/* ---------- Budgets, the bell and the Monitors card ---------- */
+
+const M = require('../public/monitorsview');
+const budgetView = (over = {}) => ({
+  id: 'team',
+  name: 'Team',
+  scope: 'global',
+  period: 'month',
+  amount: 500,
+  currency: 'USD',
+  measure: 'list',
+  thresholds: [50, 80],
+  projection: true,
+  enforce: 'none',
+  legacy: null,
+  from: '2026-11-01',
+  to: '2026-11-30',
+  state: 'warn_50',
+  projected: false,
+  spent: 260,
+  amountUSD: 500,
+  percent: 52,
+  forecastUSD: 412,
+  runsOut: null,
+  reason: null,
+  ...over,
+});
+
+test('a budget card: the runs-out date, or that it stays under with the forecast in its currency, or nothing', () => {
+  assert.equal(
+    U.costForecastLine(budgetView({ runsOut: '2026-11-21', forecastUSD: 640 })),
+    'Runs out ~21 Nov at this pace',
+  );
+  assert.equal(U.costForecastLine(budgetView()), 'Stays under the amount this period (forecast $412.00)');
+  assert.equal(
+    U.costForecastLine(budgetView({ currency: 'IDR', amount: 1650000, amountUSD: 100, forecastUSD: 50 })),
+    'Stays under the amount this period (forecast IDR 825,000)',
+  );
+  for (const over of [{ forecastUSD: null }, { state: 'exceeded', forecastUSD: 700 }, { state: 'no_data' }])
+    assert.equal(U.costForecastLine(budgetView(over)), '', JSON.stringify(over));
+  const card = U.costBudgetCardHtml(
+    budgetView({ name: EVIL, runsOut: '2026-11-21' }),
+    { centers: {}, keys: {} },
+    false,
+  );
+  assert.match(card, /<p class="cost-card-forecast">Runs out ~21 Nov at this pace<\/p>/);
+  assert.doesNotMatch(card, /<img/);
+  assert.doesNotMatch(U.costBudgetCardHtml(budgetView({ forecastUSD: null }), {}, false), /cost-card-forecast/);
+});
+
+test('the bell: a cost anomaly reads its day, spend and usual amount, and links to the Overview', () => {
+  const a = (over) => ({
+    id: 'a1',
+    ts: null,
+    rule: 'cost_anomaly',
+    ruleTitle: 'Cost anomaly',
+    instance: 'x',
+    sessionKey: null,
+    title: 'Wed 28 Oct (so far)',
+    value: 18.4,
+    threshold: 12.2,
+    usual: 6.1,
+    state: 'triggered',
+    previous: null,
+    ...over,
+  });
+  const l = M.alertLine(a(), []);
+  assert.equal(l.text, 'Cost anomaly · Wed 28 Oct (so far): $18.40, usual $6.10');
+  assert.deepEqual([l.change, l.tone, l.costHref, l.session], ['Triggered', 'bad', '#cost', null]);
+  const row = M.monAlertRow(l, false);
+  assert.match(row, /<a class="mon-session" href="#cost">Open in Cost Control →<\/a>/);
+  assert.match(row, /<div class="mon-measure">Wed 28 Oct \(so far\): \$18\.40, usual \$6\.10<\/div>/);
+  const ok = M.alertLine(a({ state: 'ok', previous: 'triggered', title: 'Tue 27 Oct', value: 3, usual: 2 }), []);
+  assert.equal(ok.text, 'Cost anomaly · Resolved · Tue 27 Oct: $3.00, usual $2.00');
+  assert.equal(M.alertLine(a({ usual: null }), []).text, 'Cost anomaly · Wed 28 Oct (so far): $18.40');
+  assert.doesNotMatch(M.monAlertRow(M.alertLine(a({ title: EVIL }), []), false), /<img/);
+});
+
+test('the Monitors card: the two parameters, and each day today first', () => {
+  const rule = {
+    id: 'cost_anomaly',
+    title: 'Cost anomaly',
+    describe: "Today's or yesterday's spend is well above what the same weekday usually costs.",
+    kind: 'aggregate',
+    enabled: true,
+    state: 'triggered',
+    params: { ratio: 2, minUSD: 1 },
+    defaults: { ratio: 2, minUSD: 1 },
+    autoPause: false,
+    mayAutoPause: false,
+    instances: [
+      { title: 'Tue 27 Oct', state: 'ok', value: 3, threshold: 4 },
+      { title: 'Wed 28 Oct (so far)', state: 'triggered', value: 18.4, threshold: 12.2 },
+      { title: null, state: 'no_data', value: null, threshold: null },
+    ],
+  };
+  const html = M.monRuleCard(rule, { pause: false });
+  assert.match(html, /Times the usual amount<input[^>]*data-mon-param="ratio"/);
+  assert.match(html, /Minimum rise \(USD\)<input[^>]*data-mon-param="minUSD"/);
+  assert.equal(
+    M.monRuleNow(rule),
+    'Wed 28 Oct (so far): $18.40 spent against an anomaly level of $12.20 · Tue 27 Oct: $3.00 spent against an anomaly level of $4.00',
+  );
+  const young = {
+    ...rule,
+    instances: [{ title: 'Wed 28 Oct (so far)', state: 'no_data', value: null, threshold: null }],
+  };
+  assert.equal(M.monRuleNow(young), 'Wed 28 Oct (so far): not enough history');
+});
