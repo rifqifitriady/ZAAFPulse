@@ -126,3 +126,33 @@ test('runsOut: the first day past the amount; equal is not past; amounts that ar
   assert.equal(F.runsOut([], 5), null);
   assert.equal(F.runsOut(null, 5), null);
 });
+
+test('dailyModel: the band always contains the forecast line, even for spiky usage', () => {
+  // Mean 2: ratios 0, 0, 0, 0 and 5, so the 75th percentile alone would be 0.
+  const m = F.dailyModel(series('2026-10-25', [0, 0, 0, 0, 10]), { today: '2026-10-30' });
+  assert.equal(m.method, 'mean');
+  assert.ok(m.low <= 1 && 1 <= m.high, `${m.low}-${m.high}`);
+  for (const p of F.project(m, { today: '2026-10-30', spentSoFar: 5, to: '2026-11-05' }))
+    assert.ok(p.low <= p.cum && p.cum <= p.high, p.day);
+});
+
+test('project: a negative weekday expectation counts as 0, so the band never flips', () => {
+  const m = { byWeekday: Array(7).fill(-2), low: 0.5, high: 2 };
+  const line = F.project(m, { today: '2026-10-29', spentSoFar: 10, to: '2026-10-31' });
+  assert.deepEqual(
+    line.map((p) => [p.cum, p.low, p.high]),
+    [
+      [10, 10, 10],
+      [10, 10, 10],
+      [10, 10, 10],
+    ],
+  );
+});
+
+test('dailyModel: the thresholds are exactly 7 known days for weekday, 3 for mean, and 3 ratios for a band', () => {
+  assert.equal(F.dailyModel(series('2026-10-22', [1, 2, 3, 4, 5, 6, 7]), { today: '2026-10-29' }).method, 'weekday');
+  assert.equal(F.dailyModel(series('2026-10-23', [1, 2, 3, 4, 5, 6]), { today: '2026-10-29' }).method, 'mean');
+  // Seven known days, only two with an expectation above 0: two ratios, so the band is the line itself.
+  const two = F.dailyModel(series('2026-10-22', [0, 0, 0, 0, 0, 5, 5]), { today: '2026-10-29' });
+  assert.deepEqual([two.low, two.high], [1, 1]);
+});
