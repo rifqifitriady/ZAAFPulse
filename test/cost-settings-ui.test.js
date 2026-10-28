@@ -547,11 +547,13 @@ test('preview: moves with names, "and N more", Unassigned with Create rule, the 
   assert.match(failed, /a ledger month could not be read<\/p><button[^>]*data-cost-set-act="retry-preview">Retry/);
   assert.equal(U.costSetTestHtml(ST({ preview: ANSWERED(), testPath: '' })), '');
   assert.equal(
-    U.costSetTestHtml(ST({ preview: ANSWERED(), testPath: '~/work/acme/web' })),
+    U.costSetTestHtml(ST({ preview: { ...ANSWERED(), path: '~/work/acme/web' }, testPath: '~/work/acme/web' })),
     '<p>Acme · rule #1 <code>~/work/acme/**</code></p>',
   );
   assert.equal(
-    U.costSetTestHtml(ST({ preview: ANSWERED({ test: { center: 'unassigned', rule: null } }), testPath: '~/x' })),
+    U.costSetTestHtml(
+      ST({ preview: { ...ANSWERED({ test: { center: 'unassigned', rule: null } }), path: '~/x' }, testPath: '~/x' }),
+    ),
     '<p>Unassigned, no rule matches</p>',
   );
 });
@@ -584,8 +586,63 @@ test('rule warnings: none and shadowed beside their rule, only for the draft the
   );
 });
 
-test('preview requests: the draft and test path are sent; an older answer never replaces a newer one', async () => {
+test('a typed new id passes through a saved center id without taking its keys, and clearing it keeps references', () => {
   resetState();
+  U.COST_SET_ACTIONS['add-center']();
+  const d = U.COST_SET.drafts.rules;
+  const field = { hasAttribute: () => false };
+  const c = d.centers[2];
+  c.name = 'x';
+  U.costSetRulesInput(field, 'rules', 'centers.2.name'); // id x, references to it follow
+  d.keyCenters.key_web = 'x';
+  d.folderRules.push({ glob: '~/x/**', center: 'x' });
+  for (const id of ['a', 'ac', 'acm', 'acme', 'acme-', 'acme-w', 'acme-web']) {
+    c.id = id;
+    U.costSetRulesInput(field, 'rules', 'centers.2.id');
+  }
+  assert.equal(d.keyCenters.key_ci, 'lab');
+  assert.equal(d.folderRules[0].center, 'acme', 'the saved center keeps its rule');
+  assert.equal(d.keyCenters.key_web, 'acme-web');
+  assert.equal(d.folderRules[1].center, 'acme-web');
+  c.id = '';
+  U.costSetRulesInput(field, 'rules', 'centers.2.id');
+  assert.equal(d.keyCenters.key_web, 'acme-web', 'an emptied id does not blank references');
+  c.id = 'ops';
+  U.costSetRulesInput(field, 'rules', 'centers.2.id');
+  assert.deepEqual([d.keyCenters.key_web, d.folderRules[1].center], ['ops', 'ops']);
+  clearTimeout(U.COST_SET.previewTimer);
+});
+
+test('after Up/Down to the first or last place the keyboard goes to the button still enabled', () => {
+  assert.deepEqual(U.costSetMoveFocus('rule-up', 0, 3), [
+    ['data-cost-set-act', 'rule-down'],
+    ['data-i', '0'],
+  ]);
+  assert.deepEqual(U.costSetMoveFocus('rule-up', 1, 3), [
+    ['data-cost-set-act', 'rule-up'],
+    ['data-i', '1'],
+  ]);
+  assert.deepEqual(U.costSetMoveFocus('rule-down', 2, 3), [
+    ['data-cost-set-act', 'rule-up'],
+    ['data-i', '2'],
+  ]);
+  assert.deepEqual(U.costSetMoveFocus('rule-down', 1, 3), [
+    ['data-cost-set-act', 'rule-down'],
+    ['data-i', '1'],
+  ]);
+});
+
+test('the test path result is shown only for the path it was asked for', () => {
+  clearTimeout(U.COST_SET.previewTimer);
+  U.COST_SET.previewTimer = null;
+  const p = { ...ANSWERED(), path: '~/work/acme/web' };
+  assert.equal(U.costSetTestHtml(ST({ preview: p, testPath: '~/work/acme/we' })), '');
+});
+
+test('preview requests: the draft and test path are sent; an older answer never replaces a newer one', async (t) => {
+  resetState();
+  const realFetch = global.fetch;
+  t.after(() => (global.fetch = realFetch));
   const pending = [];
   global.fetch = (url, opts) =>
     new Promise((res) =>
