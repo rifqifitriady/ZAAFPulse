@@ -858,7 +858,7 @@ test('monitors over HTTP: demo data, demo actions, validation', async () => {
     assert.equal(list.json.channels.sending, false, 'demo sends nothing');
 
     const alerts = (await c.call('/api/alerts')).json.alerts;
-    assert.equal(alerts.length, 7); // five monitor alerts and two budget alerts (lib/demo.js monitorsDemo)
+    assert.equal(alerts.length, 8); // five monitor alerts, two budget alerts and a cost anomaly (lib/demo.js)
     const pause = alerts.find((a) => a.action === 'pause');
     assert.equal(pause.ok, true);
     assert.ok(pause.sessionKey, 'the demo session has a trace key');
