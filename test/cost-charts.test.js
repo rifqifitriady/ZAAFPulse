@@ -85,7 +85,8 @@ test('burn-down: a budget over twice the band top is pinned at the top edge and 
 });
 
 test('burn-down: right-skewed spend keeps the forecast end inside the scale and a budget under it in scale', () => {
-  // Six known days at a mean of 2.5, five of them at 0.4 of it: the band's top ratio (0.4) is raised to 1, so the band ends at the forecast's end.
+  // Six known days at a mean of 2.5, five of them at 0.4 of it: the band's top ratio (0.4) is raised to 1,
+  // so the band ends at the forecast's end.
   const rows = [1, 1, 1, 1, 1, 10, 1].map((v, i) => row({ day: `2026-10-0${i + 1}`, listUSD: v }));
   const budgets = [{ id: 'b', name: 'B', scope: 'global', period: 'month', amount: 120, currency: 'USD' }];
   const o = V.overview({ rows, today: '2026-10-07', budgets });
@@ -109,6 +110,14 @@ test('chart roles: the flow is a labelled group, image charts are labelled image
   const o = V.overview({ rows: [row()], today: '2026-10-02' });
   assert.match(C.costBurnSvg(o, fmt), /role="img" aria-label="Burn-down"/);
   assert.match(C.costSpikeSvg(o.spikes, fmt), /role="img" aria-label="Daily spend"/);
+});
+
+test('burn-down: the axis reaches a forecast end above the band top, however it came about', () => {
+  const rows = [1, 2, 3, 4, 10].map((v, i) => row({ day: `2026-10-0${i + 1}`, listUSD: v }));
+  const o = V.overview({ rows, today: '2026-10-05' });
+  const skewed = { ...o, forecast: { ...o.forecast, projected: 400, low: 60, high: 100 } };
+  const top = (svg) => Number([...svg.matchAll(/>\$(\d+)\.00</g)].map((m) => m[1]).sort((a, b) => b - a)[0]);
+  assert.ok(top(C.costBurnSvg(skewed, fmt)) >= 400, 'the scale covers the projected total, not just the band');
 });
 
 test('spike line: one marker per spike, its tooltip with the baseline and the top model', () => {
