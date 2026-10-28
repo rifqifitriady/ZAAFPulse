@@ -144,3 +144,81 @@ test('the budget service reads the history window once a day, cached as a period
   const w = s.evaluate().find((x) => x.id === 'team');
   assert.deepEqual([w.spentUSD, w.forecastUSD, w.runsOut, w.projected], [75.5, null, null, false]);
 });
+
+test('forecast: false skips the model and the history; the linear pace decides', () => {
+  const v = B.evaluateBudget(budget({ amount: 105 }), { rows: ROWS, history: ROWS, now: NOW, forecast: false });
+  assert.deepEqual([v.forecastUSD, v.runsOut, v.projected], [null, null, true]);
+});
+
+test('the gateway guard never reads the history window nor asks for a plan fee', () => {
+  const { createGuard } = require('../lib/cost/guard');
+  const calls = [];
+  let fees = 0;
+  const cost = {
+    budgetRows: ({ from, to }) => {
+      calls.push(`${from}|${to}`);
+      return { rows: ROWS, unread: [], billingError: null };
+    },
+    planFeeFor: () => {
+      fees++;
+      return 0;
+    },
+  };
+  const service = createBudgetService({
+    getSettings: () => ({ budgets: [budget({ amount: 70, enforce: 'block' })] }),
+    cost,
+    now: () => NOW,
+    nocase: false,
+  });
+  const r = createGuard({ service }).check({ keyId: 'key_a' });
+  assert.ok(r && r.budget === 'team', 'the exceeded budget still blocks');
+  assert.deepEqual(calls, ['2026-10-01|2026-10-31'], 'the period only');
+  assert.equal(fees, 0);
+});
+
+test('under Paid, days billed as assumed are left out of the model', () => {
+  // Every history day up to 3 October lost its billing: metered 50 a day, which the plan did not charge.
+  const rows = ROWS.map((r) => (r.day <= '2026-10-03' ? { ...r, billedUSD: 50, billingAssumed: true } : r));
+  const paid = (history) =>
+    B.evaluateBudget(budget({ measure: 'billed', amount: 1000 }), { rows: ROWS, history, now: NOW });
+  assert.equal(paid(rows).forecastUSD, paid(ROWS).forecastUSD, 'the model rests on 4 October onward');
+  const list = B.evaluateBudget(budget({ amount: 1000 }), { rows: ROWS, history: rows, now: NOW });
+  assert.equal(list.forecastUSD, 112, 'usage value does not depend on billing');
+});
+
+test('a display-currency budget: forecastUSD and runsOut against amount / rate', () => {
+  const currency = { code: 'IDR', rates: [{ from: '2026-01-01', perUSD: 16000 }] };
+  const v = evalAt(budget({ currency: 'IDR', amount: 110 * 16000 }), { currency });
+  assert.deepEqual([v.amountUSD, v.forecastUSD, v.runsOut, v.projected], [110, 112, '2026-10-31', true]);
+  const under = evalAt(budget({ currency: 'IDR', amount: 120 * 16000 }), { currency });
+  assert.deepEqual([under.forecastUSD, under.runsOut, under.projected], [112, null, false]);
+});
+
+test('cost.planFeeFor: 0 while metered, the plan fee spread over the month or the year', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { createCost } = require('../lib/cost');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-cost-planfee-'));
+  const cost = createCost({
+    dir: path.join(dir, 'cost'),
+    gatewayLog: path.join(dir, 'gateway-usage.jsonl'),
+    getPricing: () => ({}),
+    getSettings: () => ({}),
+    home: path.join(path.parse(process.cwd()).root, 'Users', 'owner'),
+    now: () => NOW,
+    nocase: false,
+  });
+  try {
+    cost.update();
+    const over = (source, billing) =>
+      cost.addBillingOverride({ source, from: '2026-10-01', to: '2026-10-31', billing });
+    over('claude', { mode: 'plan', plan: 'Max', feeUSD: 310, period: 'month' });
+    over('codex', { mode: 'plan', plan: 'Pro', feeUSD: 3650, period: 'year' });
+    assert.equal(cost.planFeeFor('claude', '2026-10-23'), 10, '310 over 31 days');
+    assert.ok(Math.abs(cost.planFeeFor('codex', '2026-10-23') - 10) < 1e-9, '3650 over 365 days');
+    assert.equal(cost.planFeeFor('gateway', '2026-10-23'), 0, 'metered');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
