@@ -655,6 +655,65 @@ async function costMountPage(sub, quiet) {
 
 /* ---------- Overview ---------- */
 
+// The burn-down's caption names how the forecast was made (lib/cost/forecast.js).
+const COST_FORECAST_CAPTION = {
+  weekday: 'Forecast: weekday pattern of the last 4 weeks',
+  mean: 'Forecast: daily mean (little history yet)',
+};
+const costForecastCaption = (method) =>
+  Object.hasOwn(COST_FORECAST_CAPTION, method || '') ? COST_FORECAST_CAPTION[method] : 'No forecast yet';
+
+// A day's spend against its usual amount, in USD as the rule measures it: "$18.40, usually $6.10 (3.0×)".
+function costAnomalyFigures(m) {
+  const times = m.expectedUSD > 0 ? ` (${(m.spentUSD / m.expectedUSD).toFixed(1)}×)` : '';
+  return `${costMoney(m.spentUSD, 'USD')}, usually ${costMoney(m.expectedUSD, 'USD')}${times}`;
+}
+// One driver as text: "claude-opus-5-5 · +$9.20 (75 %)", "Key: Acme client · +$5.10 (41 %)".
+function costDriverText(d, ctx) {
+  const name =
+    d.dim === 'keyId'
+      ? `Key: ${d.label || costName('keyId', d.value, ctx)}`
+      : d.dim === 'center'
+        ? costName('center', d.value, ctx)
+        : String(d.label || d.value);
+  const share = Number.isFinite(d.share) ? ` (${Math.round(d.share * 100)} %)` : '';
+  return `${name} · +${costMoney(d.extraUSD, 'USD')}${share}`;
+}
+// The Anomalies card: today so far and yesterday, each with its figures, its state and, when it is an anomaly, up to 3
+// drivers. Every figure and name is text (esc).
+const COST_ANOMALY_DAYS = [
+  ['today', 'Today (so far)'],
+  ['yesterday', 'Yesterday'],
+];
+function costAnomalyRow(label, m, ctx) {
+  if (!m)
+    return `<div class="cost-anom tone-none"><div class="cost-anom-head"><b>${esc(label)}</b><span class="cost-chip">Not enough history</span></div></div>`;
+  const drivers =
+    m.anomaly && m.drivers.length
+      ? `<ul class="cost-anom-drivers">${m.drivers.map((d) => `<li>${esc(costDriverText(d, ctx))}</li>`).join('')}</ul>`
+      : '';
+  return `<div class="cost-anom tone-${m.anomaly ? 'bad' : 'ok'}"><div class="cost-anom-head"><b>${esc(label)}</b><span class="cost-chip${m.anomaly ? ' warn' : ''}">${m.anomaly ? 'Anomaly' : 'Normal'}</span></div>
+    <p class="cost-anom-fig">${esc(costAnomalyFigures(m))}</p>${drivers}</div>`;
+}
+function costAnomaliesHtml(o, ctx) {
+  const link = '<p class="cost-note"><a href="#settings/monitors">Change the sensitivity in Monitors</a></p>';
+  if (!o.anomalies)
+    return `<p class="cost-note warn">The ledger history could not be read: no anomalies for now.</p>${link}`;
+  const rows = COST_ANOMALY_DAYS.map(([k, label]) => costAnomalyRow(label, o.anomalies[k], ctx)).join('');
+  return `<div class="cost-anoms">${rows}</div>${link}`;
+}
+// The card's meta line: the rule's parameters, as the server applied them (the ratio to 2 decimals).
+function costAnomalyMeta(p) {
+  const ratio = p && Number.isFinite(p.ratio) ? Math.round(p.ratio * 100) / 100 : 2;
+  const min = p && Number.isFinite(p.minUSD) ? p.minUSD : 1;
+  return `over ${ratio}× the usual amount and at least ${costMoney(min, 'USD')} more · usage value in USD`;
+}
+
+// Whether the forecast has a band to speak of: none without a model (early), and none when it is the line itself (fewer
+// than 3 usable days, or every day as expected), so the burn-down never claims a percentile band it does not draw.
+const costBandShown = (f) =>
+  !!f && !f.early && Array.isArray(f.line) && f.line.some((p) => p && Number(p.high) > Number(p.low));
+
 function costOverviewHtml(o, ctx) {
   const fmt = ctx.fmt;
   const paid = ctx.measure === 'billed';
@@ -663,7 +722,7 @@ function costOverviewHtml(o, ctx) {
   const why = String(o.budgetsError || '');
   const noBudgets = why ? `<p class="cost-note warn">${esc(why.charAt(0).toUpperCase() + why.slice(1) + '.')}</p>` : '';
   const forecastSub = o.forecast.early
-    ? 'early in the month: no band yet'
+    ? 'no forecast yet: the mean so far'
     : `${fmt(o.forecast.low)} – ${fmt(o.forecast.high)}`;
   const risk = o.budgetsError
     ? metricTile({ label: 'Budgets at risk', value: '—', sub: 'budgets could not be read', color: COST_C.muted })
@@ -705,13 +764,14 @@ function costOverviewHtml(o, ctx) {
     noBudgets ||
     costRingsHtml(o.rings, o.moreBudgets) ||
     holoEmpty('No budgets yet. <a href="#cost/budgets">Add one</a>.');
-  const burnMeta = `day ${o.month.day} of ${o.month.days}${o.forecast.early ? ' · early in the month' : ' · band: 25th–75th percentile days'}`;
+  const burnMeta = `day ${o.month.day} of ${o.month.days} · ${costForecastCaption(o.forecastMethod)}${costBandShown(o.forecast) ? ' · band: 25th–75th percentile days' : ''}`;
   return `<div class="live-metrics">${tiles.join('')}</div>
     ${panel('Burn-down', esc(burnMeta), costBurnSvg(o, fmt) + noBudgets + add)}
     <div class="live-grid">
-      ${panel('Daily spend and spikes', 'each day against the 7 days before it', costSpikeSvg(o.spikes, fmt))}
+      ${panel('Daily spend and spikes', 'usage value, each day against the same weekday of the 4 weeks before it', costSpikeSvg(o.spikes, fmt))}
       ${panel('Budgets', o.budgetsError ? '' : esc(`${o.atRisk.count} at risk`), rings)}
-    </div>`;
+    </div>
+    ${panel('Anomalies', esc(costAnomalyMeta(o.anomalyParams)), costAnomaliesHtml(o, ctx))}`;
 }
 
 /* ---------- Breakdown ---------- */
@@ -948,6 +1008,16 @@ const costCardButton = (id, attr) => () => {
   const card = [...document.querySelectorAll('#cost-app [data-cost-card]')].find((el) => el.dataset.costCard === id);
   return card ? card.querySelector(`[${attr}]`) : null;
 };
+// A budget's forecast line (lib/cost/budgets.js forecastUSD and runsOut): the day it runs out at this pace, or that it
+// stays under its amount, with the forecast in the budget's currency; nothing without a forecast or once used up.
+const costShortDay = (day) => `${Number(day.slice(8))} ${COST_MONTH[Number(day.slice(5, 7)) - 1]}`;
+function costForecastLine(b) {
+  if (!b || b.state === 'no_data' || b.state === 'exceeded') return '';
+  if (costIsDay(b.runsOut)) return `Runs out ~${costShortDay(b.runsOut)} at this pace`;
+  if (typeof b.forecastUSD !== 'number' || !Number.isFinite(b.forecastUSD)) return '';
+  const rate = b.amountUSD > 0 ? b.amount / b.amountUSD : 1;
+  return `Stays under the amount this period (forecast ${costMoney(b.forecastUSD * rate, b.currency)})`;
+}
 function costBudgetCardHtml(b, ctx, locked) {
   const tone = costTone(b.state);
   const chips = [
@@ -963,6 +1033,8 @@ function costBudgetCardHtml(b, ctx, locked) {
     b.state === 'no_data'
       ? `<p class="cost-card-reason">${esc(b.reason || 'No data')}</p>`
       : `<p class="cost-card-spent"><b>${esc(costMoney(b.spent, b.currency))}</b> of ${esc(costMoney(b.amount, b.currency))}</p>`;
+  const line = costForecastLine(b);
+  const forecast = line ? `<p class="cost-card-forecast">${esc(line)}</p>` : '';
   const msg = COST.cardMsg[b.id] ? `<p class="cost-card-reason" role="alert">${esc(COST.cardMsg[b.id])}</p>` : '';
   const actions =
     COST.confirm === b.id
@@ -970,7 +1042,7 @@ function costBudgetCardHtml(b, ctx, locked) {
       : `<button type="button" class="btn ghost" data-cost-edit="${esc(b.id)}" ${locked ? 'disabled' : ''}>Edit</button><button type="button" class="btn ghost danger" data-cost-delete="${esc(b.id)}" ${locked ? 'disabled' : ''}>Delete</button>`;
   return `<article class="holo cost-card tone-${tone}" data-cost-card="${esc(b.id)}">
     <div class="cost-card-ring">${costRingSvg(b.percent, tone, 84)}</div>
-    <div class="cost-card-main"><h3>${esc(b.name)}</h3><p>${esc(costScopeLabel(b.scope, ctx))}</p><p>${esc(costPeriodLabel(b))}</p>${figures}<div class="cost-chips">${chips}</div>${msg}</div>
+    <div class="cost-card-main"><h3>${esc(b.name)}</h3><p>${esc(costScopeLabel(b.scope, ctx))}</p><p>${esc(costPeriodLabel(b))}</p>${figures}${forecast}<div class="cost-chips">${chips}</div>${msg}</div>
     <div class="cost-card-actions">${actions}</div></article>`;
 }
 
@@ -1368,6 +1440,7 @@ if (typeof module !== 'undefined')
     costBudgetBanners,
     costTableRows,
     costBudgetCardHtml,
+    costForecastLine,
     costFormHtml,
     costMountBudgets,
     costRefresh,
@@ -1375,6 +1448,12 @@ if (typeof module !== 'undefined')
     costPaintBudgets,
     costContext,
     costOverviewHtml,
+    costForecastCaption,
+    costAnomalyFigures,
+    costDriverText,
+    costAnomaliesHtml,
+    costAnomalyMeta,
+    costBandShown,
     costValueHtml,
     COST,
     costUnmount,

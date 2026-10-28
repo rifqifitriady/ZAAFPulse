@@ -131,7 +131,7 @@ function costBurnSvg(o, fmt) {
     );
   for (const p of f.line.slice(1))
     out.push(
-      `<rect x="${costF(x(p.day) - step / 2)}" y="${m.t}" width="${costF(step)}" height="${ih}" fill="transparent" data-tip="${costTip([costDayLabel(p.day), `forecast ${fmt(p.cum)}`, f.early ? 'early in the month' : `${fmt(p.low)} – ${fmt(p.high)}`])}"/>`,
+      `<rect x="${costF(x(p.day) - step / 2)}" y="${m.t}" width="${costF(step)}" height="${ih}" fill="transparent" data-tip="${costTip([costDayLabel(p.day), `forecast ${fmt(p.cum)}`, f.early ? 'no band yet' : `${fmt(p.low)} – ${fmt(p.high)}`])}"/>`,
     );
   for (let i = 1; i <= days; i += Math.ceil(days / 8))
     out.push(
@@ -202,13 +202,16 @@ function costRingSvg(percent, tone, size = 64) {
     <text x="35" y="39" text-anchor="middle">${none ? '—' : `${Math.round(percent)}%`}</text></svg>`;
 }
 
-// The Overview's compact rings, riskiest first (the server orders them), each linking to its card in Budgets.
+// The Overview's compact rings, riskiest first (the server orders them), each linking to its card in Budgets. A ring
+// whose forecast passes its amount within the period says when ("runs out ~21 Nov").
 function costRingsHtml(rings, more) {
   if (!rings.length) return '';
   const items = rings.map((b) => {
     const href = `#cost/budgets?focus=${encodeURIComponent(b.id)}`;
     const state = b.tone === 'none' ? 'no data' : b.projected ? 'projected over' : b.state.replace('_', ' ');
-    return `<a class="cost-ring tone-${esc(b.tone)}" href="${esc(href)}" data-tip="${costTip([b.name, state])}">${costRingSvg(b.percent, b.tone, 58)}<span>${esc(b.name)}</span></a>`;
+    const out = typeof b.runsOut === 'string' ? `runs out ~${costDayLabel(b.runsOut)}` : '';
+    const caption = out ? `<small class="cost-ring-out">${esc(out)}</small>` : '';
+    return `<a class="cost-ring tone-${esc(b.tone)}" href="${esc(href)}" data-tip="${costTip([b.name, state, out])}">${costRingSvg(b.percent, b.tone, 58)}<span>${esc(b.name)}</span>${caption}</a>`;
   });
   if (more > 0) items.push(`<a class="cost-ring cost-more" href="#cost/budgets">+ ${more} more</a>`);
   return `<div class="cost-rings">${items.join('')}</div>`;

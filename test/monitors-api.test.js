@@ -196,7 +196,7 @@ test('monitor api: rule list shape, opaque instances and rule states', async () 
   s.state.apply('daily_cost', [{ instance: 'all', sessionId: null, state: 'ok', value: 2, threshold: 10 }]);
   const r = await s.call('/api/monitors');
   assert.equal(r.status, 200);
-  assert.equal(r.body.rules.length, 8);
+  assert.equal(r.body.rules.length, 9);
   const keys = 'id title describe kind enabled params defaults autoPause mayAutoPause state snoozedUntil instances';
   for (const rule of r.body.rules) assert.deepEqual(Object.keys(rule).sort(), keys.split(' ').sort());
   const burn = r.body.rules.find((x) => x.id === 'cost_burn');
@@ -858,7 +858,7 @@ test('monitors over HTTP: demo data, demo actions, validation', async () => {
     assert.equal(list.json.channels.sending, false, 'demo sends nothing');
 
     const alerts = (await c.call('/api/alerts')).json.alerts;
-    assert.equal(alerts.length, 7); // five monitor alerts and two budget alerts (lib/demo.js monitorsDemo)
+    assert.equal(alerts.length, 8); // five monitor alerts, two budget alerts and a cost anomaly (lib/demo.js)
     const pause = alerts.find((a) => a.action === 'pause');
     assert.equal(pause.ok, true);
     assert.ok(pause.sessionKey, 'the demo session has a trace key');
