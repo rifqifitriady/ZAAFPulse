@@ -945,7 +945,70 @@ function costValueHtml(v, ctx) {
       ${unit('perRequest', 'Per request', COST_C.cyan, 'spend per request')}
       ${unit('perMillionTokens', 'Per million tokens', COST_C.violet, 'all token kinds')}
       ${unit('perThousandToolCalls', 'Per 1,000 successful tool calls', COST_C.pink, 'Claude Code and Codex only')}
-    </div>`;
+    </div>
+    ${panel('Recommendations', 'cheaper models that did about as well in your experiments · usage value in USD', costRecommendationsHtml(v.recommendations))}`;
+}
+
+/* ---------- Value: cheaper-model recommendations (Cost Control 4b) ---------- */
+
+const COST_REC_COPY = {
+  failed: 'Recommendations could not be computed right now',
+  noSpend: 'No model spend in the last 30 days',
+  noExperiments: 'Run an experiment in Datasets to compare models on your own examples',
+  gapsTitle: 'No evidence yet',
+  runOne: 'Run an experiment in Datasets',
+  foot: "Estimates from your own experiments and the last 30 days' use. Nothing is switched for you.",
+  plan: 'Some of this use was covered by a plan: switching there saves usage value, not money paid.',
+};
+const COST_GAP_REASON = { no_experiment: 'No experiment yet', no_cheaper_match: 'No cheaper model did as well' };
+// A share as "31 %", the way the card writes it.
+const costPercent = (x) => `${Math.round((Number(x) || 0) * 100)} %`;
+// An estimate in USD: whole dollars from $10 ("about $42"), cents below.
+const costAbout = (v) => (Math.abs(v) >= 10 ? `$${Math.round(v).toLocaleString('en')}` : costMoney(v, 'USD'));
+// Where a recommendation's experiment opens: its run on the Datasets Experiments tab (public/datasetview.js dsRunOf).
+const costExperimentHref = (id) =>
+  typeof id === 'string' && id ? `#datasets/experiments?run=${encodeURIComponent(id)}` : '#datasets/experiments';
+// A recommendation's lines as plain text: the saving, the evidence and the experiments that agree.
+function costRecTexts(r) {
+  const n = Number(r.alsoBackedBy) || 0;
+  const x = r.experiment || {};
+  const rows = r.rowsA === r.rowsB ? `${r.rowsB} rows each` : `${r.rowsB} and ${r.rowsA} rows`;
+  const day = Number.isFinite(x.endedAt) ? `, ${costShortDay(costDayOf(new Date(x.endedAt)))}` : '';
+  return {
+    saving: `about ${costAbout(r.savingUSD)} a month at the last 30 days' use (cost per example ${costPercent(r.costRatio)} of today's)`,
+    rates: `Pass rate ${costPercent(r.rateB)} vs ${costPercent(r.rateA)}`,
+    dataset: String(x.datasetName || x.dataset || 'an experiment'),
+    detail: `${rows}${day}`,
+    more: n > 0 ? `+${n} more experiment${n === 1 ? ' agrees' : 's agree'}` : '',
+  };
+}
+function costRecHtml(r) {
+  const t = costRecTexts(r);
+  const local = r.local ? ' <span class="cost-chip">local</span>' : '';
+  const more = t.more ? ` <small class="muted">${esc(t.more)}</small>` : '';
+  return `<li class="cost-rec"><p class="cost-rec-main"><b>${esc(r.model)} → ${esc(r.candidate)}</b>: ${esc(t.saving)}${local}</p>
+    <p class="cost-rec-ev"><a href="${esc(costExperimentHref(r.experiment && r.experiment.id))}">${esc(t.rates)} on <i>${esc(t.dataset)}</i> (${esc(t.detail)})</a>${more}</p></li>`;
+}
+function costGapHtml(g) {
+  const reason = Object.hasOwn(COST_GAP_REASON, g.reason || '')
+    ? COST_GAP_REASON[g.reason]
+    : COST_GAP_REASON.no_experiment;
+  return `<li class="cost-gap"><b>${esc(g.model)}</b> · ${esc(costMoney(g.spendUSD, 'USD'))} in the last 30 days · ${esc(reason)} · <a href="#datasets">${esc(COST_REC_COPY.runOne)}</a></li>`;
+}
+// The Recommendations card: a row per recommendation, the models with no evidence yet, and the footnote. The answer's
+// `recommendations` is null when it could not be computed.
+function costRecommendationsHtml(rec) {
+  if (!rec || !Array.isArray(rec.items) || !Array.isArray(rec.gaps))
+    return `<p class="cost-note warn">${esc(COST_REC_COPY.failed)}</p>`;
+  if (!rec.items.length && !rec.gaps.length) return holoEmpty(esc(COST_REC_COPY.noSpend));
+  const none =
+    rec.basis && rec.basis.experiments === 0 ? `<p class="cost-note">${esc(COST_REC_COPY.noExperiments)}</p>` : '';
+  const items = rec.items.length ? `<ul class="cost-recs">${rec.items.map(costRecHtml).join('')}</ul>` : '';
+  const gaps = rec.gaps.length
+    ? `<h4 class="cost-rec-sub">${esc(COST_REC_COPY.gapsTitle)}</h4><ul class="cost-gaps">${rec.gaps.map(costGapHtml).join('')}</ul>`
+    : '';
+  const plan = rec.items.some((r) => r.onPlan) ? ` ${esc(COST_REC_COPY.plan)}` : '';
+  return `${none}${items}${gaps}<p class="cost-note">${esc(COST_REC_COPY.foot)}${plan}</p>`;
 }
 
 /* ---------- Budgets ---------- */
@@ -1455,6 +1518,11 @@ if (typeof module !== 'undefined')
     costAnomalyMeta,
     costBandShown,
     costValueHtml,
+    costPercent,
+    costAbout,
+    costExperimentHref,
+    costRecTexts,
+    costRecommendationsHtml,
     COST,
     costUnmount,
     costQuietWait,
