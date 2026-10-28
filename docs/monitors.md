@@ -30,7 +30,8 @@ Notes:
   30-minute reminder, and the whole-day check of a day that already alerted on its partial check sends nothing. After a
   snooze, an `ok` seen before it does not shorten the resolution hold. A day before yesterday leaves the card and the
   counts without a resolution. It reports `no_data` until the ledger has 3 known days. The alert carries the day's
-  spend (value), `ratio` × its usual amount (threshold) and the usual amount (shown in the bell; the webhook keeps its
+  spend (value), the level it had to pass (threshold: the larger of `ratio` × its usual amount and the usual amount
+  plus `minUSD`; `minUSD` when the usual amount is $0) and the usual amount (shown in the bell; the webhook keeps its
   seven fields). The models, projects, centers and keys behind it are shown on the Cost Control Overview only, never
   in the bell, the desktop notification or the webhook.
 - `eval_pass_rate` looks at the worst evaluator that has at least `minSamples` results. Evaluators with fewer are ignored.

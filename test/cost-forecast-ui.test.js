@@ -80,7 +80,8 @@ test('the Overview: caption, spike meta and an Anomalies card with today and yes
     today: '2026-10-22',
   });
   const html = U.costOverviewHtml(o, CTX);
-  assert.match(html, /day 22 of 31 · Forecast: weekday pattern of the last 4 weeks · band: 25th–75th percentile days/);
+  // One unusual day among 28: the 25th and 75th percentile days are as expected, so the band is the line itself.
+  assert.match(html, /day 22 of 31 · Forecast: weekday pattern of the last 4 weeks</);
   assert.match(html, /usage value, each day against the same weekday of the 4 weeks before it/);
   assert.match(html, /over 2× the usual amount and at least \$1\.00 more · usage value in USD/);
   assert.match(html, /<b>Yesterday<\/b><span class="cost-chip warn">Anomaly<\/span>/);
@@ -95,6 +96,55 @@ test('the Overview: caption, spike meta and an Anomalies card with today and yes
   assert.equal((young.match(/Not enough history/g) || []).length, 2);
   const lost = U.costOverviewHtml({ ...o, anomalies: null }, CTX);
   assert.match(lost, /The ledger history could not be read: no anomalies for now\./);
+});
+
+test('the burn-down meta claims a percentile band only when the band has a width', () => {
+  // Every day 1: each known day is as expected, so the band is the line itself.
+  const flat = daysBetween('2026-09-02', '2026-10-22').map((d) => row(d));
+  const o = V.overview({
+    rows: flat.filter((r) => r.day >= '2026-10-01'),
+    history: flat.filter((r) => r.day < '2026-10-01'),
+    today: '2026-10-22',
+  });
+  assert.deepEqual([o.forecastMethod, o.forecast.early, o.forecast.low, o.forecast.high], ['weekday', false, 31, 31]);
+  assert.equal(U.costBandShown(o.forecast), false);
+  const html = U.costOverviewHtml(o, CTX);
+  assert.match(html, /day 22 of 31 · Forecast: weekday pattern of the last 4 weeks</);
+  assert.doesNotMatch(html, /percentile/);
+  // Fewer than 3 usable day ratios: the band is the line too.
+  const three = [1, 1, 1].map((v, i) => row(`2026-10-0${i + 1}`, { listUSD: v }));
+  const few = V.overview({ rows: three, today: '2026-10-04' });
+  assert.equal(few.forecastMethod, 'mean');
+  assert.equal(U.costBandShown(few.forecast), false);
+  assert.equal(U.costBandShown({ early: true, line: [{ low: null, high: null }] }), false);
+  // Days of the same weekday alternate 1 and 2: a band with a width, and the meta names it.
+  const varied = daysBetween('2026-09-02', '2026-10-22').map((d, i) => row(d, { listUSD: 1 + (i % 2) }));
+  const wide = V.overview({
+    rows: varied.filter((r) => r.day >= '2026-10-01'),
+    history: varied.filter((r) => r.day < '2026-10-01'),
+    today: '2026-10-22',
+  });
+  assert.ok(wide.forecast.low < wide.forecast.high);
+  assert.match(U.costOverviewHtml(wide, CTX), /weekday pattern of the last 4 weeks · band: 25th–75th percentile days</);
+  assert.equal(
+    U.costBandShown({
+      early: false,
+      line: [
+        { low: 1, high: 1 },
+        { low: 1.5, high: 2.5 },
+      ],
+    }),
+    true,
+  );
+});
+
+test('the Anomalies meta rounds the ratio to 2 decimals', () => {
+  assert.equal(
+    U.costAnomalyMeta({ ratio: 2.123456, minUSD: 1 }),
+    'over 2.12× the usual amount and at least $1.00 more · usage value in USD',
+  );
+  assert.match(U.costAnomalyMeta({ ratio: 3, minUSD: 0.5 }), /^over 3× the usual amount and at least \$0\.50 more/);
+  assert.match(U.costAnomalyMeta(null), /^over 2× /);
 });
 
 test('rings: a runs-out date in the caption and the tooltip; none when the forecast stays under', () => {

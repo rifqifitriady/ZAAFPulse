@@ -93,6 +93,17 @@ test('isAnomaly: over ratio × expected and at least minUSD over it; an expected
   assert.deepEqual(A.anomalyParams(null), { ratio: 2, minUSD: 1 });
 });
 
+test('anomalyLevel: the spend a day must pass, max(ratio × expected, expected + minUSD); minUSD when expected is 0', () => {
+  const m = (expectedUSD) => ({ spentUSD: 0, expectedUSD });
+  assert.equal(A.anomalyLevel(m(6.1)), 12.2, 'the ratio decides');
+  assert.equal(A.anomalyLevel(m(0.5)), 1.5, 'minUSD decides');
+  assert.equal(A.anomalyLevel(m(0)), 1, 'nothing usual: minUSD');
+  assert.equal(A.anomalyLevel(m(-2)), 1, 'credits count as nothing usual');
+  assert.equal(A.anomalyLevel(m(2), { ratio: 3, minUSD: 0.5 }), 6);
+  assert.equal(A.anomalyLevel(m(0), { ratio: 3, minUSD: 0.5 }), 0.5);
+  assert.equal(A.anomalyLevel(null), null);
+});
+
 test('recentDays: yesterday whole and today so far, each against the 4 weeks before it; plan fees left out', () => {
   const rows = [
     ...usual('2026-09-29', '2026-10-27'),

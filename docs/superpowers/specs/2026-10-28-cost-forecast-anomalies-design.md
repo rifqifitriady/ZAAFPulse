@@ -125,7 +125,7 @@ isAnomaly(m, { ratio = 2, minUSD = 1 }) -> boolean
 - **Instances: one per day.** The instance id is the day (`YYYY-MM-DD`). Two days are reported: yesterday, and today.
   - **State:** `triggered` when `isAnomaly(m, p)` holds, else `ok`. A null `m` gives `no_data`.
   - **Value:** `spentUSD`, rounded to the cent.
-  - **Threshold:** `ratio × expectedUSD`, rounded to the cent.
+  - **Threshold:** the effective anomaly level the spend must pass, `anomalyLevel(m, p)`: `max(ratio × expectedUSD, expectedUSD + minUSD)`, or `minUSD` when `expectedUSD` is 0 or less; rounded to the cent. The card's "against an anomaly level of" shows it, so an `ok` day never reads as above its level.
   - **Title:** the day, with "so far" for today. For example `Wed 28 Oct (so far)` or `Tue 27 Oct`.
 - **One alert per day.** On the 28th, the partial check of the 28th may trigger instance `2026-10-28`. On the 29th, the same day is checked whole, as yesterday, under the same instance. So it stays triggered without a second alert, or it triggers then if the rise only shows on the whole day.
   - A day stops being reported after it was yesterday. The engine drops instances that are no longer reported, the way it drops the instances of sessions that ended.

@@ -702,12 +702,17 @@ function costAnomaliesHtml(o, ctx) {
   const rows = COST_ANOMALY_DAYS.map(([k, label]) => costAnomalyRow(label, o.anomalies[k], ctx)).join('');
   return `<div class="cost-anoms">${rows}</div>${link}`;
 }
-// The card's meta line: the rule's parameters, as the server applied them.
+// The card's meta line: the rule's parameters, as the server applied them (the ratio to 2 decimals).
 function costAnomalyMeta(p) {
-  const ratio = p && Number.isFinite(p.ratio) ? p.ratio : 2;
+  const ratio = p && Number.isFinite(p.ratio) ? Math.round(p.ratio * 100) / 100 : 2;
   const min = p && Number.isFinite(p.minUSD) ? p.minUSD : 1;
   return `over ${ratio}× the usual amount and at least ${costMoney(min, 'USD')} more · usage value in USD`;
 }
+
+// Whether the forecast has a band to speak of: none without a model (early), and none when it is the line itself (fewer
+// than 3 usable days, or every day as expected), so the burn-down never claims a percentile band it does not draw.
+const costBandShown = (f) =>
+  !!f && !f.early && Array.isArray(f.line) && f.line.some((p) => p && Number(p.high) > Number(p.low));
 
 function costOverviewHtml(o, ctx) {
   const fmt = ctx.fmt;
@@ -759,7 +764,7 @@ function costOverviewHtml(o, ctx) {
     noBudgets ||
     costRingsHtml(o.rings, o.moreBudgets) ||
     holoEmpty('No budgets yet. <a href="#cost/budgets">Add one</a>.');
-  const burnMeta = `day ${o.month.day} of ${o.month.days} · ${costForecastCaption(o.forecastMethod)}${o.forecast.early ? '' : ' · band: 25th–75th percentile days'}`;
+  const burnMeta = `day ${o.month.day} of ${o.month.days} · ${costForecastCaption(o.forecastMethod)}${costBandShown(o.forecast) ? ' · band: 25th–75th percentile days' : ''}`;
   return `<div class="live-metrics">${tiles.join('')}</div>
     ${panel('Burn-down', esc(burnMeta), costBurnSvg(o, fmt) + noBudgets + add)}
     <div class="live-grid">
@@ -1448,6 +1453,7 @@ if (typeof module !== 'undefined')
     costDriverText,
     costAnomaliesHtml,
     costAnomalyMeta,
+    costBandShown,
     costValueHtml,
     COST,
     costUnmount,

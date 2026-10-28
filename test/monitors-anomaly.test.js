@@ -66,6 +66,12 @@ test('the rule: one instance per day, titled, in USD to the cent; no_data withou
   assert.ok(evaluate(RULE, {}, snap, T28).every((r) => r.sessionId === null && !('drivers' in r)));
   assert.equal(evaluate(RULE, { ratio: 4 }, snap, T28)[1].state, 'ok', 'the owner’s ratio');
   assert.equal(evaluate(RULE, { ratio: 0, minUSD: -1 }, snap, T28)[1].threshold, 12.2, 'not positive: defaults');
+  // The threshold is the level the spend must pass: with a small usual amount minUSD sets it, with none minUSD alone.
+  const small = { costAnomaly: { yesterday: fig('2026-10-27', 0.5, 0), today: fig('2026-10-28', 0.9, 0.3, true) } };
+  assert.deepEqual(evaluate(RULE, {}, small, T28).map(brief), [
+    ['2026-10-27', 'ok', 0.5, 1, 'Tue 27 Oct', 0],
+    ['2026-10-28', 'ok', 0.9, 1.3, 'Wed 28 Oct (so far)', 0.3],
+  ]);
   const gaps = { costAnomaly: { yesterday: null, today: fig('2026-10-27', 18, 6) } };
   assert.deepEqual(evaluate(RULE, {}, gaps, T28).map(brief), [
     ['2026-10-27', 'no_data', null, null, 'Tue 27 Oct', undefined],
