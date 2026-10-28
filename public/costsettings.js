@@ -541,7 +541,8 @@ function costSetPreviewCurrent(st) {
     st.drafts.rules || costSetFromSaved('rules', st.answer.settings, st.answer.sources),
     st.answer.sources,
   );
-  return JSON.stringify(now.folderRules) === JSON.stringify(p.sent.folderRules);
+  const pick = (x) => JSON.stringify([x.centers, x.keyCenters, x.folderRules]);
+  return pick(now) === pick(p.sent);
 }
 /** The warning beside rule i: "Matches nothing in the last 30 days" or "Never used: rule #k above takes every path it
  *  matches", from a preview of the draft on screen. */
@@ -614,8 +615,8 @@ function costSetRulesHtml(st) {
     <p class="cost-note">Globs: <code>*</code> stays in one folder, <code>**</code> crosses folders, a trailing <code>/**</code> also matches the folder itself; start with <code>~</code>, <code>/</code> or a drive letter.</p>
     ${rules ? `<ol class="cost-set-rules">${rules}</ol>` : '<p class="cost-note">No folder rules yet.</p>'}
     <div><button type="button" class="btn ghost" data-cost-set-act="add-rule" ${fullRules || noCenter ? `disabled title="${fullRules ? `At most ${COST_SET_LIMITS.folderRules} folder rules` : 'Add a cost center first'}"` : ''}>Add</button></div>
-  </div><aside class="cost-set-preview" aria-label="Preview">
-    <div data-cost-set-preview-body aria-busy="false">${costSetPreviewHtml(st)}</div>
+  </div><aside class="cost-set-preview" aria-label="Preview" aria-busy="false">
+    <div data-cost-set-preview-body>${costSetPreviewHtml(st)}</div>
     <div class="cost-set-test"><label>Test a path<input class="input" data-cost-set-test value="${esc(st.testPath)}" maxlength="1000" placeholder="~/Github/acme/web" autocomplete="off" spellcheck="false"></label><div data-cost-set-test-out role="status">${costSetTestHtml(st)}</div></div>
   </aside></div>`;
 }
@@ -656,7 +657,8 @@ function costSetPreviewHtml(st) {
 function costSetTestHtml(st) {
   const p = st.preview;
   const t = p && p.answer && p.answer.test;
-  if (!String(st.testPath || '').trim() || !t) return '';
+  const typed = String(st.testPath || '').trim();
+  if (!typed || !t || p.path !== typed) return ''; // the result belongs to the path it was asked for
   if (t.rule == null) return '<p>Unassigned, no rule matches</p>';
   const r = (p.sent.folderRules || [])[t.rule] || {};
   return `<p>${esc(costSetCenterName(t.center, p.sent.centers))} · rule #${t.rule + 1} <code>${esc(r.glob)}</code></p>`;
@@ -675,14 +677,15 @@ async function costSetRunPreview() {
   if (path) body.testPath = path;
   const my = ++COST_SET.previewReq;
   const host = document.querySelector('#cost-app [data-cost-set-preview-body]');
-  if (host) host.setAttribute('aria-busy', 'true');
+  const aside = document.querySelector('#cost-app .cost-set-preview');
+  if (aside) aside.setAttribute('aria-busy', 'true');
   let next;
   try {
     const r = await costPost('/api/cost/settings/preview', body);
     const j = r.json || {};
     next =
       r.status === 200
-        ? { sent: body.settings, answer: j }
+        ? { sent: body.settings, answer: j, path: body.testPath || '' }
         : r.status === 400 && Array.isArray(j.reasons)
           ? { sent: body.settings, reasons: j.reasons }
           : { error: j.error || `request failed (${r.status})` };
@@ -698,8 +701,9 @@ function costSetPaintPreview() {
   const host = document.querySelector('#cost-app [data-cost-set-preview-body]');
   if (host) {
     host.innerHTML = costSetPreviewHtml(COST_SET);
-    host.setAttribute('aria-busy', 'false');
   }
+  const aside = document.querySelector('#cost-app .cost-set-preview');
+  if (aside) aside.setAttribute('aria-busy', 'false');
   const out = document.querySelector('#cost-app [data-cost-set-test-out]');
   if (out) out.innerHTML = costSetTestHtml(COST_SET);
   for (const el of document.querySelectorAll('#cost-app [data-cost-set-warn]'))
@@ -711,6 +715,16 @@ function costSetRulesEdit(fn, focus) {
   costSetEdit('rules', fn);
   costSetPaintPanel('rules', focus);
   costSetSchedulePreview();
+}
+/** Where the keyboard goes after a rule moved to index `to` of `len`: its own button, or the other direction's when
+ *  the move left that one disabled (first or last place). */
+function costSetMoveFocus(act, to, len) {
+  const end = act === 'rule-up' ? to === 0 : to === len - 1;
+  const use = end ? (act === 'rule-up' ? 'rule-down' : 'rule-up') : act;
+  return [
+    ['data-cost-set-act', use],
+    ['data-i', String(to)],
+  ];
 }
 const costSetAt = (b) => Number(b.dataset.i);
 Object.assign(COST_SET_ACTIONS, {
@@ -744,10 +758,7 @@ Object.assign(COST_SET_ACTIONS, {
     if (i < 1) return;
     costSetRulesEdit(
       (x) => x.folderRules.splice(i - 1, 0, ...x.folderRules.splice(i, 1)),
-      [
-        ['data-cost-set-act', 'rule-up'],
-        ['data-i', String(i - 1)],
-      ],
+      costSetMoveFocus('rule-up', i - 1, costSetDraftOf('rules').folderRules.length),
     );
   },
   'rule-down': (b) => {
@@ -755,10 +766,7 @@ Object.assign(COST_SET_ACTIONS, {
     if (i >= costSetDraftOf('rules').folderRules.length - 1) return;
     costSetRulesEdit(
       (x) => x.folderRules.splice(i + 1, 0, ...x.folderRules.splice(i, 1)),
-      [
-        ['data-cost-set-act', 'rule-down'],
-        ['data-i', String(i + 1)],
-      ],
+      costSetMoveFocus('rule-down', i + 1, costSetDraftOf('rules').folderRules.length),
     );
   },
   'del-rule': (b) => costSetRulesEdit((x) => x.folderRules.splice(costSetAt(b), 1)),
@@ -803,11 +811,16 @@ function costSetRulesInput(t, panel, path) {
       );
       if (el) el.value = c.id;
     }
-    if (was && was !== c.id) {
-      for (const [k, v] of Object.entries(d.keyCenters)) if (v === was) d.keyCenters[k] = c.id;
-      for (const r of d.folderRules) if (r.center === was) r.center = c.id;
+    // Follow only a reference this center made: not another center's id passed on the way, not an emptied field. While
+    // the id equals another center's, the references stay where they were and follow once it is its own again.
+    const other = (id) => d.centers.some((x) => x !== c && x.id === id);
+    if (c.id && !other(c.id)) {
+      if (was && was !== c.id && !other(was)) {
+        for (const [k, v] of Object.entries(d.keyCenters)) if (v === was) d.keyCenters[k] = c.id;
+        for (const r of d.folderRules) if (r.center === was) r.center = c.id;
+      }
+      c.prevId = c.id;
     }
-    c.prevId = c.id;
   }
   costSetSchedulePreview();
 }
@@ -850,4 +863,5 @@ if (typeof module !== 'undefined')
     costSetTestHtml,
     costSetRunPreview,
     costSetRulesInput,
+    costSetMoveFocus,
   };
