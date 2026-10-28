@@ -90,7 +90,7 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 <td valign="top">
 
 **Monitors & alerts**<br>
-<sub>Six rules on cost, quality and agent behaviour, plus your budgets, with alerts in the top bar, a desktop notification or a webhook. Pause, resume or stop the agent behind a session, or let a cost or loop rule pause it (off by default). Snooze a rule for an hour or a day.</sub>
+<sub>Seven rules on cost, quality and agent behaviour, including cost anomalies, plus your budgets, with alerts in the top bar, a desktop notification or a webhook. Pause, resume or stop the agent behind a session, or let a cost or loop rule pause it (off by default). Snooze a rule for an hour or a day.</sub>
 
 </td>
 </tr>
@@ -683,7 +683,7 @@ Shapes, limits, privacy, the API and CI recipes: **[docs/datasets.md](docs/datas
 
 Monitors watch your usage, cost and quality inside the dashboard server and tell you when something looks wrong. The bell in the top bar lists recent alerts, and **Settings → Monitors** has the rules and the channels.
 
-- **Six rules:** cost burn (per session, per 10 minutes), tool loop, agent stuck, accuracy drop, evaluator pass rate and unsafe content, plus your cost budgets. Each rule can be switched on or off, has its own limits, and can be snoozed for an hour or a day. A rule with missing input reports *no data* and never triggers.
+- **Seven rules:** cost burn (per session, per 10 minutes), tool loop, agent stuck, accuracy drop, evaluator pass rate, unsafe content and cost anomaly (today's or yesterday's spend well above what the same weekday usually costs), plus your cost budgets. Each rule can be switched on or off, has its own limits, and can be snoozed for an hour or a day. A rule with missing input reports *no data* and never triggers.
 - **Channels:** a desktop notification (on by default) and an optional webhook whose URL and headers go to the OS secret store. Neither carries transcript text. Demo mode sends nothing.
 - **Agent control:** pause (`SIGSTOP`), resume or stop the Claude Code or Codex process behind a session from the Trace explorer, the Live monitor or AI Office. Before every signal the process table is read again and the pid and start time must match; every action is written to `.data/agent-audit.jsonl`.
 - **Auto-pause** for cost burn and tool loop is off by default; a budget pauses only when you set it to. A paused agent is never resumed or stopped automatically.

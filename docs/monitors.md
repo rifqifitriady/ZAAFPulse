@@ -189,7 +189,7 @@ All routes are behind the dashboard sign-in. They are never open to gateway API 
 | `POST /api/monitors/<rule>` | change one rule: `enabled`, `params`, `autoPause`, or `snooze` (`"1h"`, `"1d"`, `null`; add `instance` for one session) |
 | `POST /api/monitors/channels` | set the desktop channel and the webhook URL and headers (stored as secret references) |
 | `POST /api/monitors/test` | send a sample to `desktop` or `webhook` |
-| `GET /api/alerts` | recent alerts, with `since` (ms) and `limit` (1 to 500) |
+| `GET /api/alerts` | recent alerts, with `since` (ms) and `limit` (1 to 500); a `cost_anomaly` row also has `usual`, the day's usual amount in USD (or `null`) |
 | `GET /api/agents/candidates?key=` | the processes that could be behind a session |
 | `POST /api/agents/pause` · `resume` · `stop` | act on `{ pid, startTime }`; `stop` needs `confirm: true`. Errors: 400, 403, 409, 501, 502 |
 
