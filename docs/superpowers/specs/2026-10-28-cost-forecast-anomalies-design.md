@@ -46,11 +46,11 @@ runsOut(line, amount) -> 'YYYY-MM-DD' | null
   - With 7 or more known days: `method: 'weekday'`. `byWeekday[w]` is the mean of the known days of weekday `w`. A weekday with no known day takes `mean`.
   - With 3 to 6 known days: `method: 'mean'`, and every `byWeekday[w]` is `mean`.
   - With fewer than 3 known days: `null`.
-- **Band.** For each known day the ratio `actual / expected` is taken, where expected is that weekday's value from the same model. Days whose expected value is 0 are skipped. `low` and `high` are the 25th and 75th percentiles of those ratios, clamped to `[0, 10]`. With fewer than 3 ratios, both are 1.
+- **Band.** For each known day the ratio `actual / expected` is taken, where expected is that weekday's value from the same model. Days whose expected value is 0 are skipped. `low` and `high` are the 25th and 75th percentiles of those ratios, clamped to `[0, 10]`, then widened so the band always contains the line: `low = min(low, 1)`, `high = max(high, 1)`. With fewer than 3 ratios, both are 1.
 
 **`project`**
 - **Today.** Today's value is `max(todaySoFar, expected(today))`, so the line never forecasts less than what is already spent.
-- **Each later day** adds `expected(day)`.
+- **Each later day** adds `max(0, expected(day))`, so a weekday that credits made negative never flips the band.
 - **Plan fees.** Each day also adds `planPerDay(day)`: the exact fee of a plan for that day, used by the Paid measure only. It adds the same amount to `cum`, `low` and `high`.
 - **Band.** `low` and `high` scale the usage part only, with the model's `low` and `high`.
 - **Rounding.** `cum` starts at `spentSoFar`, the period's spend up to yesterday plus today so far. It is rounded to 8 decimals.

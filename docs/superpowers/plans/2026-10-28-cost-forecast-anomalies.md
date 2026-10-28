@@ -91,12 +91,12 @@ on the files it changes, the only lines Prettier would change are ones that alre
 days of a month named in `unread` are unknown; `'folder'` or `'corrections'` in `unread` gives `null`. ≥ 7 known days:
 `method: 'weekday'`, `byWeekday[w]` the mean of the known days of weekday `w` (Monday 0), the overall mean where a
 weekday has none. 3–6: `method: 'mean'`, every weekday the mean. < 3: `null`. Band: per known day `actual / expected`
-(expected 0 skipped); `low`/`high` the 25th/75th percentile (linear interpolation), clamped to `[0, 10]`; 1 and 1 with
-fewer than 3 ratios. The model also carries `known` (count) and `days` (the known days, sorted).
+(expected 0 skipped); `low`/`high` the 25th/75th percentile (linear interpolation), clamped to `[0, 10]`, then `low = min(low, 1)`,
+`high = max(high, 1)` so the band contains the line; 1 and 1 with fewer than 3 ratios. The model also carries `known` (count) and `days` (the known days, sorted).
 
 **F2. Projection.** `project(model, { today, spentSoFar, todaySoFar, to, planPerDay })` from `today` to `to`. Today:
 `cum = spentSoFar + max(0, e − todaySoFar)`, `low`/`high` the same with `e·low` / `e·high`. Each later day adds
-`e` (`e·low`, `e·high`) plus `planPerDay(day)` unscaled. `spentSoFar` holds today's plan fee already (the reader bills
+`e = max(0, byWeekday)` (`e·low`, `e·high`) plus `planPerDay(day)` unscaled. `spentSoFar` holds today's plan fee already (the reader bills
 it), so `planPerDay` is asked from tomorrow on. Each point rounded to 8 decimals. `project(null, …) = []`.
 
 **F3. Runs out.** The first `day` whose `cum > amount`; equal is not past. `null` for no such day, an empty line or an
