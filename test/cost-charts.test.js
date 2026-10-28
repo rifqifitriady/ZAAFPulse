@@ -56,7 +56,11 @@ test('burn-down: actual line, forecast, band only past the third day, budget lin
   assert.match(svg, /&lt;img src=x onerror=alert\(1\)&gt; · \$100\.00/);
   assert.doesNotMatch(svg, /<img/);
   assert.match(svg, /class="cost-today"/);
-  assert.match(svg, />\$150\.00</, 'the scale follows the band top (124 × 1.1, rounded up), the budget fits under it');
+  assert.match(
+    svg,
+    />\$150\.00</,
+    'the scale follows the band top (104.5 × 1.1, rounded up), the budget fits under it',
+  );
   assert.equal(count(svg, /cost-pinned/g), 0);
   const early = C.costBurnSvg(V.overview({ rows: rows.slice(0, 2), today: '2026-10-02' }), fmt);
   assert.equal(count(early, /class="cost-band"/g), 0);
@@ -67,24 +71,25 @@ test('burn-down: a budget over twice the band top is pinned at the top edge and 
   const rows = [1, 2, 3, 4, 10].map((v, i) => row({ day: `2026-10-0${i + 1}`, listUSD: v }));
   const budgets = [
     { id: 'big', name: 'Big', scope: 'global', period: 'month', amount: 1000, currency: 'USD' },
-    { id: 'near', name: 'Near', scope: 'global', period: 'month', amount: 240, currency: 'USD' },
+    { id: 'near', name: 'Near', scope: 'global', period: 'month', amount: 200, currency: 'USD' },
   ];
   const svg = C.costBurnSvg(V.overview({ rows, today: '2026-10-05', budgets }), fmt);
   assert.equal(count(svg, /class="cost-fade cost-pinned"/g), 1);
   assert.match(svg, />↑ Budget \$1000\.00</);
   assert.match(svg, /data-tip="Monthly budget · Big · \$1000\.00 · above this scale"/);
-  assert.match(svg, />Near · \$240\.00</, '240 is within twice the band top (124): drawn as a line');
-  assert.match(svg, />\$300\.00</, 'the axis tops at the nearer budget × 1.1, not at 1,000');
+  assert.match(svg, />Near · \$200\.00</, '200 is within twice the band top (104.5): drawn as a line');
+  assert.match(svg, />\$250\.00</, 'the axis tops at the nearer budget × 1.1, not at 1,000');
   const early = C.costBurnSvg(V.overview({ rows: rows.slice(0, 2), today: '2026-10-02', budgets }), fmt);
   // Without a band the forecast's end (1.5 × 31 = 46.5) sets the reach: both budgets are over twice it.
   assert.equal(count(early, /class="cost-fade cost-pinned"/g), 2);
 });
 
 test('burn-down: right-skewed spend keeps the forecast end inside the scale and a budget under it in scale', () => {
-  const rows = [1, 1, 1, 1, 20].map((v, i) => row({ day: `2026-10-0${i + 1}`, listUSD: v }));
+  // Six known days at a mean of 2.5, five of them at 0.4 of it: the band's top ratio (0.4) is raised to 1, so the band ends at the forecast's end.
+  const rows = [1, 1, 1, 1, 1, 10, 1].map((v, i) => row({ day: `2026-10-0${i + 1}`, listUSD: v }));
   const budgets = [{ id: 'b', name: 'B', scope: 'global', period: 'month', amount: 120, currency: 'USD' }];
-  const o = V.overview({ rows, today: '2026-10-05', budgets });
-  assert.ok(o.forecast.projected > o.forecast.high, 'projected is above the band top');
+  const o = V.overview({ rows, today: '2026-10-07', budgets });
+  assert.ok(o.forecast.projected <= o.forecast.high, 'the band never ends under the forecast');
   const svg = C.costBurnSvg(o, fmt);
   assert.equal(count(svg, /cost-pinned/g), 0, 'the $120 budget is drawn as a line');
   assert.match(svg, />B · \$120\.00</);
@@ -107,12 +112,14 @@ test('chart roles: the flow is a labelled group, image charts are labelled image
 });
 
 test('spike line: one marker per spike, its tooltip with the baseline and the top model', () => {
-  const before = ['24', '25', '26', '27', '28', '29', '30'].map((d) => row({ day: `2026-09-${d}`, listUSD: 0.2 }));
+  const history = Array.from({ length: 29 }, (_, i) =>
+    row({ day: `2026-09-${String(i + 2).padStart(2, '0')}`, listUSD: 0.2 }),
+  );
   const rows = [row({ listUSD: 0.5 }), row({ day: '2026-10-02', listUSD: 3, model: EVIL })];
-  const o = V.overview({ rows, before, today: '2026-10-02' });
+  const o = V.overview({ rows, history, today: '2026-10-02' });
   const svg = C.costSpikeSvg(o.spikes, fmt);
   assert.equal(count(svg, /class="cost-spike"/g), 1);
-  assert.match(svg, /data-tip="2 Oct · \$3\.00 · baseline \$0\.24 · spike · top model &lt;img/);
+  assert.match(svg, /data-tip="2 Oct · \$3\.00 · baseline \$0\.20 · spike · top model &lt;img/);
   assert.doesNotMatch(svg, /<img/);
   // A ledger that starts on the 1st: no baseline yet, so no dashed segment and no marker.
   const young = C.costSpikeSvg(V.overview({ rows: [row({ listUSD: 9 })], today: '2026-10-02' }).spikes, fmt);

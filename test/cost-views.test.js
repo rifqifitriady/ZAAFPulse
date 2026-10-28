@@ -51,7 +51,7 @@ const budget = (over = {}) => ({
 // Five days of October: 1, 2, 3, 4 and 10 USD of usage value, each billed at half, and a plan fee of 3 on the 1st.
 const FIVE = [1, 2, 3, 4, 10].map((v, i) => row({ day: `2026-10-0${i + 1}`, listUSD: v, billedUSD: v / 2 }));
 
-test('overview: month to date in both measures, the forecast at the mean day and the band from the quartiles', () => {
+test('overview: month to date in both measures, the forecast at the mean of the known days and its band', () => {
   const o = V.overview({ rows: [...FIVE, planRow('2026-10-01', 3)], today: '2026-10-05' });
   assert.deepEqual(o.month, { from: '2026-10-01', to: '2026-10-31', today: '2026-10-05', day: 5, days: 31 });
   assert.deepEqual(o.spent, { list: 20, billed: 13 }, 'a plan fee is paid, never usage value');
@@ -66,12 +66,14 @@ test('overview: month to date in both measures, the forecast at the mean day and
       ['2026-10-05', 10, 20],
     ],
   );
-  // Mean 4 a day for the 26 days left; the 25th and 75th percentile days are 2 and 4.
-  assert.deepEqual([o.forecast.perDay, o.forecast.projected, o.forecast.low, o.forecast.high], [4, 124, 72, 124]);
+  // Four known days before today, mean 2.5, for the 26 days left; the day ratios 0.4 to 1.6 give a band of 0.7 to 1.3.
+  // Today's 10 is past its 2.5 already, so today adds nothing.
+  assert.deepEqual([o.forecast.perDay, o.forecast.projected, o.forecast.low, o.forecast.high], [2.5, 85, 65.5, 104.5]);
   assert.equal(o.forecast.early, false);
+  assert.equal(o.forecastMethod, 'mean');
   assert.equal(o.forecast.line.length, 27, 'today and each day left');
   assert.deepEqual(o.forecast.line[0], { day: '2026-10-05', cum: 20, low: 20, high: 20 });
-  assert.deepEqual(o.forecast.line[26], { day: '2026-10-31', cum: 124, low: 72, high: 124 });
+  assert.deepEqual(o.forecast.line[26], { day: '2026-10-31', cum: 85, low: 65.5, high: 104.5 });
   const paid = V.overview({ rows: [...FIVE, planRow('2026-10-01', 3)], today: '2026-10-05', measure: 'billed' });
   assert.equal(paid.total, 13);
   assert.equal(paid.daily[0].spend, 3.5, 'the plan fee is on its day');
@@ -120,15 +122,17 @@ test('overview: budget lines are the global monthly budgets in the chosen curren
   assert.deepEqual(V.overview({ rows: FIVE, today: '2026-10-05' }).budgetLines, []);
 });
 
-test('overview: a spike is over twice its 7-day baseline and at least $1 over it, the days before the 1st included', () => {
-  const before = ['24', '25', '26', '27', '28', '29', '30'].map((d) => row({ day: `2026-09-${d}`, listUSD: 0.2 }));
+test('overview: a spike is an anomaly against its weekday, the days before the 1st included', () => {
+  const history = Array.from({ length: 29 }, (_, i) =>
+    row({ day: `2026-09-${String(i + 2).padStart(2, '0')}`, listUSD: 0.2 }),
+  );
   const rows = [
-    row({ day: '2026-10-01', listUSD: 0.5 }), // 2.5 × its baseline, but only $0.30 over it
+    row({ day: '2026-10-01', listUSD: 0.5 }), // 2.5 × its usual 0.2, but only $0.30 over it
     row({ day: '2026-10-02', listUSD: 1, model: 'claude-opus-5-5' }),
     row({ day: '2026-10-02', listUSD: 2, model: 'claude-sonnet-5-5' }),
     row({ day: '2026-10-03', listUSD: 1 }),
   ];
-  const o = V.overview({ rows, before, today: '2026-10-03', rateOf: () => 10, currency: 'XYZ' });
+  const o = V.overview({ rows, history, today: '2026-10-03', rateOf: () => 10, currency: 'XYZ' });
   assert.deepEqual(
     o.spikes.map((s) => [s.day, s.spike]),
     [
@@ -140,7 +144,7 @@ test('overview: a spike is over twice its 7-day baseline and at least $1 over it
   const s = o.spikes[1];
   assert.equal(s.topModel, 'claude-sonnet-5-5');
   assert.equal(s.spend, 30, 'shown in the chosen currency');
-  assert.equal(s.baseline, 2.4286, 'the mean of the 7 days before, rounded once');
+  assert.equal(s.baseline, 2, "the Fridays' usual 0.2, converted");
   assert.equal(o.spikes[0].baseline, 2);
 });
 
@@ -159,7 +163,7 @@ test('overview: a ledger that starts mid-month has no baseline before 3 known da
   assert.deepEqual([by['2026-10-13'].baseline, by['2026-10-13'].spike], [4, false], 'the mean of 3 known days');
   assert.deepEqual([by['2026-10-14'].baseline, by['2026-10-14'].spike], [3.25, true]);
   assert.equal(by['2026-10-15'].baseline, 6.6, 'five known days, the days before the first row left out');
-  assert.equal(V.BASELINE_MIN, 3);
+  assert.equal(require('../lib/cost/forecast').MIN_KNOWN, 3);
   assert.ok(V.overview({ rows: [], today: '2026-10-15' }).spikes.every((s) => s.baseline === null && !s.spike));
 });
 
