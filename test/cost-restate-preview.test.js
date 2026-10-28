@@ -137,3 +137,166 @@ test('peek: the latest version while the prices hash the same, else null with a 
   const none = createPriceVersions().peek(PRICE_A);
   assert.deepEqual([none.version, none.next], [null, 1], 'before the first version');
 });
+
+/* ---------- Task 2: cost.restatePreview and cost.corrections ---------- */
+
+const { createCost } = require('../lib/cost');
+const HOME = path.join(path.parse(process.cwd()).root, 'Users', 'owner');
+const at = (d, h = 12) => new Date(2026, 9, d, h).getTime();
+const MAX = { mode: 'plan', plan: 'Max', feeUSD: 310, period: 'month' };
+// One Sonnet response in ~/work/acme: 1,000 in and 100 out (0.003 at PRICE_A, 0.006 at PRICE_B).
+const ev = (ts, key) => [ts, 'claude', 's1', 'claude-sonnet-5-5', 1000, 100, 0, 0, 0, 0, key, null];
+const sessions = {
+  s1: {
+    tool: 'claude',
+    project: path.join(HOME, 'work', 'acme'),
+    tools: {},
+    skills: {},
+    agents: {},
+    prompts: 0,
+    subagentFiles: 0,
+  },
+};
+const logFile = (name, events) => ({
+  file: `/logs/${name}.jsonl`,
+  source: 'claude',
+  size: events.length,
+  mtimeMs: 1,
+  result: { events, sessions },
+});
+function rig() {
+  const dir = tmp();
+  const st = { entries: [], pricing: PRICE_A, settings: undefined, t: at(21) };
+  const costDir = path.join(dir, 'cost');
+  const make = () =>
+    createCost({
+      dir: costDir,
+      entries: () => st.entries,
+      getPricing: () => st.pricing,
+      getSettings: () => st.settings,
+      home: HOME,
+      now: () => st.t,
+      nocase: false,
+    });
+  return { st, costDir, make, cost: make() };
+}
+// Two closed days of usage, then new prices, the Acme rule and a plan saved without a pass since.
+function changedSince() {
+  const r = rig();
+  r.st.entries.push(logFile('a', [ev(at(20), 'm1'), ev(at(21), 'm2')]));
+  r.cost.update();
+  r.st.t = at(22);
+  r.cost.update();
+  r.st.pricing = PRICE_B;
+  r.st.settings = { ...ACME, billing: { claude: MAX } };
+  return r;
+}
+
+test('restatePreview: what the following restate records, with nothing written meanwhile', () => {
+  const r = changedSince();
+  const disk = snapshot(r.costDir);
+  const p = r.cost.restatePreview({ from: '2026-10-20', to: '2026-10-21' });
+  assert.deepEqual(snapshot(r.costDir), disk, 'no billing set-up, no price version, no correction');
+  assert.equal(r.cost.status().ledger.corrections, 0);
+  assert.equal(r.cost.versions().versions.length, 1);
+  assert.deepEqual([p.from, p.to, p.total, p.rows.length], ['2026-10-20', '2026-10-21', 2, 2]);
+  assert.deepEqual(p.versionsBefore, [1]);
+  assert.deepEqual([p.version, p.newPrices], [null, true], 'the new prices are not a version yet');
+  assert.ok(p.rows.every((x) => x.after.priceVersion === 2 && x.after.center === 'acme'));
+  assert.deepEqual(
+    p.billing.find((b) => b.source === 'claude'),
+    { source: 'claude', ...MAX },
+  );
+  assert.deepEqual(
+    p.billing.map((b) => b.source),
+    ['claude', 'codex', 'gateway', 'judge', 'replay', 'collab'],
+  );
+  const c = r.cost.restate({ from: '2026-10-20', to: '2026-10-21', reason: 'Acme and new prices' });
+  assert.deepEqual(c.rows, p.rows, 'the preview rows are the rows the restate records');
+  assert.deepEqual(c.billing, p.billing);
+  const again = r.cost.restatePreview({ from: '2026-10-20', to: '2026-10-21' });
+  assert.deepEqual([again.rows, again.version, again.newPrices, again.total], [[], 2, false, 2]);
+});
+
+test('restatePreview: the refusals of restate(), without a reason', () => {
+  const r = changedSince();
+  for (const [from, to] of [
+    ['2026-10-21', '2026-10-22'], // today
+    ['2026-10-21', '2026-10-20'], // reversed
+    ['2026-10-32', '2026-10-20'], // not a day
+    [undefined, '2026-10-20'],
+  ])
+    assert.throws(() => r.cost.restatePreview({ from, to }), { status: 400 }, `${from} ${to}`);
+  r.st.settings = { billing: { claude: { mode: 'plan' } } }; // a hand edit that does not validate
+  assert.throws(() => r.cost.restatePreview({ from: '2026-10-20', to: '2026-10-20' }), {
+    status: 409,
+    message: /invalid.*fix them before a restate/,
+  });
+  r.st.settings = ACME;
+  const month = path.join(r.costDir, 'ledger-2026-10.jsonl');
+  const byMode = process.platform !== 'win32' && !(process.getuid && process.getuid() === 0);
+  const text = fs.readFileSync(month, 'utf8');
+  if (byMode) fs.chmodSync(month, 0o000);
+  else {
+    fs.rmSync(month);
+    fs.mkdirSync(month);
+  }
+  try {
+    const c = r.make(); // a restart: October does not read
+    assert.throws(() => c.restatePreview({ from: '2026-10-20', to: '2026-10-20' }), { code: 'LEDGER_MONTH_UNREAD' });
+  } finally {
+    if (byMode) fs.chmodSync(month, 0o600);
+    else {
+      fs.rmSync(month, { recursive: true });
+      fs.writeFileSync(month, text);
+    }
+  }
+  assert.equal(r.make().restatePreview({ from: '2026-10-20', to: '2026-10-20' }).rows.length, 1, 'readable again');
+});
+
+test('corrections: newest first without their rows, at most 100; unread is LEDGER_CORRECTIONS_UNREAD', () => {
+  const r = changedSince();
+  r.cost.restate({ from: '2026-10-20', to: '2026-10-20', reason: 'first' });
+  r.cost.restate({ from: '2026-10-20', to: '2026-10-21', reason: 'second' });
+  const list = r.cost.corrections();
+  assert.deepEqual(
+    list.map((c) => [c.reason, c.from, c.to, c.rows, c.priceVersion]),
+    [
+      ['second', '2026-10-20', '2026-10-21', 1, 2],
+      ['first', '2026-10-20', '2026-10-20', 1, 2],
+    ],
+  );
+  assert.equal(list[0].ts, at(22));
+  assert.deepEqual(
+    list[0].billing.find((b) => b.source === 'claude'),
+    { source: 'claude', ...MAX },
+  );
+
+  const mem = createCost({ getPricing: () => PRICE_A, now: () => at(22) });
+  for (let i = 0; i < 101; i++) mem.restate({ from: '2026-10-20', to: '2026-10-20', reason: `r${i}` });
+  const capped = mem.corrections();
+  assert.equal(capped.length, 100);
+  assert.deepEqual([capped[0].reason, capped[99].reason], ['r100', 'r1']);
+
+  const file = path.join(r.costDir, 'corrections.jsonl');
+  const byMode = process.platform !== 'win32' && !(process.getuid && process.getuid() === 0);
+  const text = fs.readFileSync(file, 'utf8');
+  if (byMode) fs.chmodSync(file, 0o000);
+  else {
+    fs.rmSync(file);
+    fs.mkdirSync(file);
+  }
+  try {
+    assert.throws(() => r.make().corrections(), {
+      code: 'LEDGER_CORRECTIONS_UNREAD',
+      message: 'the ledger corrections could not be read',
+    });
+  } finally {
+    if (byMode) fs.chmodSync(file, 0o600);
+    else {
+      fs.rmSync(file, { recursive: true });
+      fs.writeFileSync(file, text);
+    }
+  }
+  assert.equal(r.make().corrections().length, 2, 'readable again');
+});
