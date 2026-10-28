@@ -828,6 +828,130 @@ COST_SET_ON_INPUT.push(costSetRulesInput);
 COST_SET_BODIES.rules = costSetRulesHtml;
 COST_SET_ON_LOAD.push(() => costSetSchedulePreview(0));
 
+/* ---------- panels: billing and display currency ---------- */
+
+const COST_SET_PLAN_NOTE =
+  'The plan fee is spread over the days of its period and counted as paid. Usage on this source counts as usage value only.';
+const COST_SET_RATE_NOTE =
+  'Rates convert at read time: a change here also changes how past days read in this currency. USD amounts never change.';
+
+function costSetBillingHtml(st) {
+  const a = st.answer || {};
+  const sources = a.sources || Object.keys(COST_SOURCES);
+  const d = st.drafts.billing || costSetFromSaved('billing', a.settings, sources);
+  const f = (path) => costSetField('billing', path, st);
+  return sources
+    .map((src) => {
+      const b = d.billing[src] || { mode: 'metered', plan: '', feeUSD: '', period: 'month' };
+      const label = COST_SOURCES[src] || src;
+      const seg = ['metered', 'plan']
+        .map(
+          (m) =>
+            `<button type="button" data-cost-set-act="mode" data-src="${esc(src)}" data-mode="${m}" aria-pressed="${b.mode === m}">${m === 'plan' ? 'Plan' : 'Metered'}</button>`,
+        )
+        .join('');
+      const plan =
+        b.mode === 'plan'
+          ? `<div class="cost-row"><label>Plan name<input class="input" ${f(`billing.${src}.plan`)} maxlength="60" value="${esc(b.plan)}" autocomplete="off"></label><label>Fee in USD<input class="input" ${f(`billing.${src}.feeUSD`)} type="number" min="0" max="1000000" step="any" value="${esc(b.feeUSD)}"></label><label>Period<select class="input" ${f(`billing.${src}.period`)}><option value="month" ${b.period === 'month' ? 'selected' : ''}>Month</option><option value="year" ${b.period === 'year' ? 'selected' : ''}>Year</option></select></label></div><p class="cost-note">${esc(COST_SET_PLAN_NOTE)}</p>`
+          : '';
+      return `<div class="cost-set-source"><div class="cost-set-source-head"><b>${esc(label)}</b><div class="segmented" role="group" aria-label="${esc('Billing of ' + label)}">${seg}</div></div>${plan}</div>`;
+    })
+    .join('');
+}
+
+/** Today's rate (R8): the latest valid rate whose start is on or before `today`, as rateFor picks it, or null. */
+function costSetRateToday(rates, today) {
+  let hit = null;
+  for (const r of rates || []) {
+    const v = costSetNum(r.perUSD);
+    if (!costIsDay(r.from) || !(Number.isFinite(v) && v > 0) || r.from > today) continue;
+    if (!hit || r.from >= hit.from) hit = { from: r.from, perUSD: v };
+  }
+  return hit;
+}
+/** "Today: 1 USD = 16,250 IDR (rate from 2026-10-01)", or that no rate applies yet. */
+function costSetRateLine(code, hit) {
+  if (!hit) return 'Today: no rate starts on or before today.';
+  const cur =
+    String(code || '')
+      .trim()
+      .toUpperCase() || 'units';
+  // Plain text, escaped where it is drawn.
+  return (
+    'Today: 1 USD = ' +
+    hit.perUSD.toLocaleString('en', { maximumFractionDigits: 4 }) +
+    ' ' +
+    cur +
+    ' (rate from ' +
+    hit.from +
+    ')'
+  );
+}
+
+function costSetCurrencyHtml(st) {
+  const a = st.answer || {};
+  const c = (st.drafts.currency || costSetFromSaved('currency', a.settings, a.sources)).currency;
+  const f = (path) => costSetField('currency', path, st);
+  const today = st.today || costToday();
+  const seg = [
+    ['off', 'USD only'],
+    ['on', 'USD + display currency'],
+  ]
+    .map(
+      ([v, text]) =>
+        `<button type="button" data-cost-set-act="cur-on" data-on="${v}" aria-pressed="${c.on === v}">${text}</button>`,
+    )
+    .join('');
+  if (c.on !== 'on') return `<div class="segmented" role="group" aria-label="Currency">${seg}</div>`;
+  const rows = c.rates
+    .map(
+      (r, i) =>
+        `<tr><td><input class="input" type="date" ${f(`currency.rates.${i}.from`)} value="${esc(r.from)}" aria-label="Start date of rate ${i + 1}"></td><td><input class="input" type="number" min="0" step="any" ${f(`currency.rates.${i}.perUSD`)} value="${esc(r.perUSD)}" aria-label="Units per 1 USD of rate ${i + 1}"></td><td><button type="button" class="btn ghost danger" data-cost-set-act="del-rate" data-i="${i}">Delete</button></td></tr>`,
+    )
+    .join('');
+  const full = c.rates.length >= COST_SET_LIMITS.rates;
+  return `<div class="segmented" role="group" aria-label="Currency">${seg}</div>
+    <label>Code<input class="input" ${f('currency.code')} maxlength="3" value="${esc(c.code)}" placeholder="IDR" autocomplete="off"></label>
+    <table class="cost-table cost-set-table"><thead><tr><th>Start date</th><th>Units per 1 USD</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="3">No rates yet.</td></tr>'}</tbody></table>
+    <div><button type="button" class="btn ghost" data-cost-set-act="add-rate" ${full ? `disabled title="At most ${COST_SET_LIMITS.rates} rates"` : ''}>Add</button></div>
+    <p class="cost-set-today" data-cost-set-rate>${esc(costSetRateLine(c.code, costSetRateToday(c.rates, today)))}</p>
+    <p class="cost-note">${esc(COST_SET_RATE_NOTE)}</p>`;
+}
+
+Object.assign(COST_SET_ACTIONS, {
+  mode: (b) => {
+    const src = b.dataset.src;
+    costSetEdit('billing', (d) => {
+      d.billing[src] = { ...(d.billing[src] || { plan: '', feeUSD: '', period: 'month' }), mode: b.dataset.mode };
+    });
+    costSetPaintPanel('billing');
+  },
+  'cur-on': (b) => {
+    costSetEdit('currency', (d) => (d.currency.on = b.dataset.on === 'on' ? 'on' : 'off'));
+    costSetPaintPanel('currency');
+  },
+  'add-rate': () => {
+    const d = costSetDraftOf('currency');
+    if (d.currency.rates.length >= COST_SET_LIMITS.rates) return;
+    const i = d.currency.rates.length;
+    costSetEdit('currency', (x) => x.currency.rates.push({ from: costToday(), perUSD: '' }));
+    costSetPaintPanel('currency', [['data-cost-set-field', `currency:currency.rates.${i}.perUSD`]]);
+  },
+  'del-rate': (b) => {
+    costSetEdit('currency', (x) => x.currency.rates.splice(Number(b.dataset.i), 1));
+    costSetPaintPanel('currency');
+  },
+});
+// Today's rate follows the rates and the code as they are typed.
+COST_SET_ON_INPUT.push((t, panel) => {
+  if (panel !== 'currency') return;
+  const el = document.querySelector('#cost-app [data-cost-set-rate]');
+  const c = costSetDraftOf('currency').currency;
+  if (el) el.textContent = costSetRateLine(c.code, costSetRateToday(c.rates, costToday()));
+});
+COST_SET_BODIES.billing = costSetBillingHtml;
+COST_SET_BODIES.currency = costSetCurrencyHtml;
+
 if (typeof module !== 'undefined')
   module.exports = {
     COST_SET,
@@ -863,5 +987,9 @@ if (typeof module !== 'undefined')
     costSetTestHtml,
     costSetRunPreview,
     costSetRulesInput,
+    costSetBillingHtml,
+    costSetRateToday,
+    costSetRateLine,
+    costSetCurrencyHtml,
     costSetMoveFocus,
   };

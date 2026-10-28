@@ -666,3 +666,113 @@ test('preview requests: the draft and test path are sent; an older answer never 
   await third;
   assert.equal(U.COST_SET.preview.answer.tag, 'newer');
 });
+
+/* ---------- Task 7: billing and display currency ---------- */
+
+test('billing: one row per source, Metered or Plan; a plan shows its three fields and the line on what it means', () => {
+  const html = U.costSetBillingHtml(ST());
+  for (const label of ['Claude Code', 'Codex', 'Gateway', 'Judge', 'Replay', 'Collaboration'])
+    assert.match(html, new RegExp(`<b>${label}</b>`));
+  assert.match(html, /data-src="claude" data-mode="plan" aria-pressed="true">Plan/);
+  assert.match(html, /data-src="codex" data-mode="metered" aria-pressed="true">Metered/);
+  assert.match(html, /data-cost-set-field="billing:billing\.claude\.plan" maxlength="60" value="Max"/);
+  assert.match(
+    html,
+    /data-cost-set-field="billing:billing\.claude\.feeUSD" type="number" min="0" max="1000000" step="any" value="200"/,
+  );
+  assert.match(html, /<option value="month" selected>Month<\/option><option value="year" >Year<\/option>/);
+  assert.equal(
+    (
+      html.match(
+        /The plan fee is spread over the days of its period and counted as paid\. Usage on this source counts as usage value only\./g,
+      ) || []
+    ).length,
+    1,
+    'only under a plan',
+  );
+  assert.doesNotMatch(html, /billing\.codex\.plan/, 'a metered source has no plan fields');
+  const evil = U.costSetFromSaved('billing', SAVED, SOURCES);
+  evil.billing.claude.plan = EVIL;
+  assert.doesNotMatch(U.costSetBillingHtml(ST({ drafts: { billing: evil } })), /<img/);
+});
+
+test('billing: the switch keeps a typed plan; a source missing from the saved billing shows as Metered', () => {
+  resetState();
+  U.COST_SET.answer = ANSWER({ settings: { ...SAVED, billing: {} } });
+  U.COST_SET_ACTIONS.mode({ dataset: { src: 'codex', mode: 'plan' } });
+  U.COST_SET.drafts.billing.billing.codex.plan = 'Pro';
+  U.COST_SET_ACTIONS.mode({ dataset: { src: 'codex', mode: 'metered' } });
+  U.COST_SET_ACTIONS.mode({ dataset: { src: 'codex', mode: 'plan' } });
+  assert.deepEqual(U.COST_SET.drafts.billing.billing.codex, { mode: 'plan', plan: 'Pro', feeUSD: '', period: 'month' });
+  assert.match(
+    U.costSetBillingHtml(ST({ answer: ANSWER({ settings: { ...SAVED, billing: {} } }) })),
+    /data-src="claude" data-mode="metered" aria-pressed="true"/,
+  );
+});
+
+test("today's rate: the rule of rateFor, from the draft's valid rows; the line and the note", () => {
+  const rates = [
+    { from: '2026-10-01', perUSD: '16250' },
+    { from: '2026-10-20', perUSD: '16420' },
+    { from: '2026-11-01', perUSD: '17000' }, // not yet
+    { from: '2026-10-25', perUSD: '' }, // not a rate yet
+    { from: '2026-10-26', perUSD: '0' },
+  ];
+  const hit = U.costSetRateToday(rates, '2026-10-28');
+  assert.deepEqual(hit, { from: '2026-10-20', perUSD: 16420 });
+  const valid = rates.filter((r) => Number(r.perUSD) > 0).map((r) => ({ from: r.from, perUSD: Number(r.perUSD) }));
+  for (const day of [
+    '2026-09-30',
+    '2026-10-01',
+    '2026-10-19',
+    '2026-10-20',
+    '2026-10-31',
+    '2026-11-01',
+    '2027-01-01',
+  ]) {
+    const mine = U.costSetRateToday(rates, day);
+    assert.equal(mine ? mine.perUSD : null, R.rateFor({ rates: valid }, day), day);
+  }
+  assert.equal(
+    U.costSetRateLine('idr', { from: '2026-10-01', perUSD: 16250 }),
+    'Today: 1 USD = 16,250 IDR (rate from 2026-10-01)',
+  );
+  assert.equal(U.costSetRateLine('IDR', null), 'Today: no rate starts on or before today.');
+  const html = U.costSetCurrencyHtml(ST());
+  assert.match(html, /data-on="on" aria-pressed="true">USD \+ display currency/);
+  assert.match(html, /Today: 1 USD = 16,250 IDR \(rate from 2026-10-01\)/);
+  assert.match(
+    html,
+    /Rates convert at read time: a change here also changes how past days read in this currency\. USD amounts never change\./,
+  );
+  assert.match(html, /data-cost-set-field="currency:currency\.rates\.0\.perUSD" value="16250"/);
+});
+
+test('currency: USD only hides the code and rates; Add appends a rate from today, Delete removes it; 1000 at most', () => {
+  const off = U.costSetCurrencyHtml(ST({ answer: ANSWER({ settings: { ...SAVED, currency: null } }) }));
+  assert.match(off, /data-on="off" aria-pressed="true">USD only/);
+  assert.doesNotMatch(off, /currency\.code|Today:/);
+  resetState();
+  global.costToday = () => '2026-10-28';
+  try {
+    U.COST_SET_ACTIONS['add-rate']();
+    assert.deepEqual(U.COST_SET.drafts.currency.currency.rates[1], { from: '2026-10-28', perUSD: '' });
+    U.COST_SET_ACTIONS['del-rate']({ dataset: { i: '0' } });
+    assert.deepEqual(U.COST_SET.drafts.currency.currency.rates, [{ from: '2026-10-28', perUSD: '' }]);
+    U.COST_SET_ACTIONS['cur-on']({ dataset: { on: 'off' } });
+    assert.equal(U.costSetBody('currency', SAVED, U.COST_SET.drafts.currency, SOURCES).currency, null);
+  } finally {
+    global.costToday = V.costToday;
+  }
+  const many = {
+    currency: {
+      on: 'on',
+      code: 'IDR',
+      rates: Array.from({ length: 1000 }, (_, i) => ({ from: '2026-10-01', perUSD: String(i + 1) })),
+    },
+  };
+  assert.match(
+    U.costSetCurrencyHtml(ST({ drafts: { currency: many } })),
+    /data-cost-set-act="add-rate" disabled title="At most 1000 rates"/,
+  );
+});
