@@ -119,3 +119,33 @@ test('recentDays: yesterday whole and today so far, each against the 4 weeks bef
   assert.deepEqual(A.recentDays(young, { today: '2026-10-28' }), { today: null, yesterday: null });
   assert.equal(A.HISTORY_DAYS, 29);
 });
+
+test('measureDay: no drivers when spent and expected are equal once rounded', () => {
+  const history = daysBetween('2026-09-30', '2026-10-27').map((d) => row(d, { model: 'a', listUSD: 0.3 }));
+  const model = modelFor(history, '2026-10-28');
+  const m = A.measureDay(
+    [row('2026-10-28', { model: 'a', listUSD: 0.1 }), row('2026-10-28', { model: 'b', listUSD: 0.2 })],
+    { model, day: '2026-10-28', history },
+  );
+  assert.deepEqual([m.spentUSD, m.expectedUSD, m.drivers], [0.3, 0.3, []]);
+});
+
+test('measureDay: a weekday with no known day uses all known days; days outside the model stay out of the baseline', () => {
+  // A weekday model (as an unread month can leave) whose known days hold no Wednesday; the 50 on Wednesday the 21st
+  // is not a known day, so it must not enter the baseline.
+  const days = ['2026-10-19', '2026-10-20', '2026-10-22', '2026-10-23', '2026-10-24', '2026-10-25'];
+  const history = [
+    ...days.map((d) => row(d, { model: 'a', listUSD: 1 })),
+    row('2026-10-21', { model: 'a', listUSD: 50 }),
+  ];
+  const model = { method: 'weekday', known: 6, byWeekday: Array(7).fill(1), mean: 1, low: 1, high: 1, days };
+  const m = A.measureDay(
+    [row('2026-10-28', { model: 'a', listUSD: 3 }), row('2026-10-28', { model: 'z', listUSD: 2 })],
+    { model, day: '2026-10-28', history },
+  );
+  assert.deepEqual(brief(m), [
+    ['project', '~/a', 4, 1],
+    ['center', 'platform', 4, 1],
+    ['model', 'a', 2, 0.5],
+  ]);
+});
