@@ -402,9 +402,11 @@ and the budgets never disagree.
   never less than 0 (credits can make a weekday's mean negative). Under "Paid" each day to come also adds its plan
   fees exactly, at the billing in force now. The band is the 25th to 75th percentile of how far the known days fell
   from their weekday's mean, applied to usage only; it always contains the line itself (its low edge is at most the
-  line, its high edge at least the line), and with fewer than 3 usable days there is no band. The burn-down's caption
+  line, its high edge at least the line). With fewer than 3 usable days the band is the line itself (no width), as it
+  is when the 25th and 75th percentile days were as expected; the burn-down then names no band. The burn-down's caption
   names the method: "Forecast: weekday pattern of the last 4 weeks", "Forecast: daily mean (little history yet)" or
-  "No forecast yet" (the line is then the mean of the month's days so far, without a band).
+  "No forecast yet" (the line is then the mean of the month's days so far, without a band), followed by "band: 25th–75th
+  percentile days" only when the band has a width.
 - **Budgets.** From 25 % of its period a budget is `projected` when the forecast at the period's end passes its
   amount; without a forecast, when its pace so far would. A day budget forecasts today only. `runsOut` is the first day
   the forecast passes the amount, shown only inside the period and not once the budget is used up. Under "Paid" a day
