@@ -63,6 +63,9 @@ const costSetNum = (v) => {
   return t === '' ? null : Number(t);
 };
 
+// The order a Save sends rates in (stable): the draft is sorted the same way so the server's indices match its rows.
+const costSetByFrom = (a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : 0);
+
 /** The POST body of a panel's Save (R4): the saved settings with only that panel's fields replaced. */
 function costSetBody(panel, saved, draft, sources) {
   const s = saved || {};
@@ -104,9 +107,7 @@ function costSetBody(panel, saved, draft, sources) {
             code: String(c.code ?? '')
               .trim()
               .toUpperCase(),
-            rates: c.rates
-              .map((r) => ({ from: r.from, perUSD: costSetNum(r.perUSD) }))
-              .sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : 0)),
+            rates: c.rates.map((r) => ({ from: r.from, perUSD: costSetNum(r.perUSD) })).sort(costSetByFrom),
           }
         : null,
   };
@@ -351,7 +352,12 @@ async function costSetSaveRun(panel) {
       COST_SET.msg[panel] = { tone: 'warn', text: fresh.error, reasons: fresh.reasons || [] };
       return;
     }
-    const sent = JSON.stringify(costSetBody(panel, fresh.settings, costSetDraftOf(panel), fresh.sources));
+    const draft = costSetDraftOf(panel);
+    if (panel === 'currency' && COST_SET.drafts.currency && draft.currency.on === 'on') {
+      draft.currency.rates.sort(costSetByFrom);
+      costSetPaintPanel(panel);
+    }
+    const sent = JSON.stringify(costSetBody(panel, fresh.settings, draft, fresh.sources));
     const res = await costPost('/api/cost/settings', JSON.parse(sent));
     const j = res.json || {};
     if (res.status === 200) {
@@ -939,6 +945,7 @@ Object.assign(COST_SET_ACTIONS, {
   },
   'del-rate': (b) => {
     costSetEdit('currency', (x) => x.currency.rates.splice(Number(b.dataset.i), 1));
+    COST_SET.marks.currency = []; // the marks name rows by index: they would shift onto the next row
     costSetPaintPanel('currency');
   },
 });
@@ -987,6 +994,7 @@ if (typeof module !== 'undefined')
     costSetTestHtml,
     costSetRunPreview,
     costSetRulesInput,
+    costSetByFrom,
     costSetBillingHtml,
     costSetRateToday,
     costSetRateLine,

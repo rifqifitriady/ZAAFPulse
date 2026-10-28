@@ -776,3 +776,56 @@ test('currency: USD only hides the code and rates; Add appends a rate from today
     /data-cost-set-act="add-rate" disabled title="At most 1000 rates"/,
   );
 });
+
+test('currency save: rates are sorted in the draft first, so a 400 names the right row; Delete clears the marks', async (t) => {
+  resetState();
+  const realFetch = global.fetch;
+  const realToday = global.costToday;
+  t.after(() => {
+    global.fetch = realFetch;
+    global.costToday = realToday;
+  });
+  global.costToday = () => '2026-10-28';
+  const saved = {
+    ...SAVED,
+    currency: {
+      code: 'IDR',
+      rates: [
+        { from: '2026-10-01', perUSD: 16250 },
+        { from: '2026-11-01', perUSD: 17000 },
+      ],
+    },
+  };
+  U.COST_SET.answer = ANSWER({ settings: saved });
+  fakeServer({
+    'GET /api/cost/settings': { status: 200, json: ANSWER({ settings: saved }) },
+    'POST /api/cost/settings': {
+      status: 400,
+      json: { error: 'Invalid', reasons: ['currency.rates[1].perUSD: must be above 0'] },
+    },
+  });
+  U.COST_SET_ACTIONS['add-rate']();
+  assert.equal(U.COST_SET.drafts.currency.currency.rates[2].from, '2026-10-28', 'appended at the end');
+  await U.costSetSave('currency');
+  const rows = U.COST_SET.drafts.currency.currency.rates;
+  assert.deepEqual(
+    rows.map((r) => r.from),
+    ['2026-10-01', '2026-10-28', '2026-11-01'],
+  );
+  assert.deepEqual(U.COST_SET.marks.currency, ['currency.rates.1.perUSD']);
+  assert.equal(rows[1].perUSD, '', 'the marked row is the one with the empty fee');
+  U.COST_SET_ACTIONS['del-rate']({ dataset: { i: '1' } });
+  assert.deepEqual(U.COST_SET.marks.currency, []);
+});
+
+test('the rateFor parity also holds for rows typed out of date order', () => {
+  const rates = [
+    { from: '2026-10-20', perUSD: '16420' },
+    { from: '2026-10-01', perUSD: '16250' },
+  ];
+  const sorted = rates.map((r) => ({ from: r.from, perUSD: Number(r.perUSD) })).sort(U.costSetByFrom);
+  for (const day of ['2026-09-30', '2026-10-01', '2026-10-19', '2026-10-20', '2026-12-01']) {
+    const mine = U.costSetRateToday(rates, day);
+    assert.equal(mine ? mine.perUSD : null, R.rateFor({ rates: sorted }, day), day);
+  }
+});
