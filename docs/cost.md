@@ -313,7 +313,7 @@ path.
 
 ## Cost Control menu
 
-The sidebar's **Cost Control** (after Quality & safety) has four pages. Each reads the ledger as billed, with the
+The sidebar's **Cost Control** (after Quality & safety) has five pages. Each reads the ledger as billed, with the
 corrections and billing applied, and shows only numbers, names, `~` folders and model names.
 
 | Page | Question | What it shows |
@@ -322,6 +322,7 @@ corrections and billing applied, and shows only numbers, names, `~` folders and 
 | Breakdown (`#cost/breakdown`) | Where does the money go? | Source, provider, model and cost center as a flow (top 6 per column, the rest as Other; plan fees as "Plan fee"); projects by cost center as an isometric treemap (footprint by spend, block height by spend per request); a calendar of the range; a table grouped by up to four dimensions, read from `/api/cost/ledger` |
 | Value (`#cost/value`) | Is it worth it? | Usage value of each plan's days against its fee, with the multiplier; a waterfall from "without cache" through cache and plan savings to what was paid; local models (requests and tokens, not priced); spend per request against tool-call accuracy per model; spend per request, per million tokens and per 1,000 successful tool calls, per day |
 | Budgets (`#cost/budgets`) | Set the limits | One card per budget with its ring, scope, period, spent of amount and chips; add, edit and delete in a drawer (the rules are in [Budgets](#budgets)) |
+| Settings (`#cost/settings`) | Who pays for what? | Cost centers, gateway keys and folder rules with a preview of what moves, billing per source, the display currency, and restate with a preview and its history (see [Settings page](#settings-page)) |
 
 **Controls.** One bar on every page but Budgets: the range (7 days, 30 days, this month, last month or two dates, at
 most 400 days), the currency (USD, or the display currency once it has a rate) and the measure (usage value or paid).
@@ -384,6 +385,49 @@ draws the rest.
 - A new budget saved with an id that another browser tab just created replaces that budget. There is no create-only
   mode yet.
 
+### Settings page
+
+**Settings** (`#cost/settings`) edits the `cost` section of `config.json` without opening the file. It has four
+panels; each of the first three has its own **Save**, which reads the saved settings again and sends them with only
+that panel's fields replaced, so a mistake in one panel never holds back another. Saves of different panels run one
+after another. Typing while a Save runs is kept as a draft: only a draft that still says what was sent is cleared.
+Unsaved changes are kept per panel while the browser tab is open (leave the page and come back: they are still there,
+with **Discard**), and closing the tab with unsaved changes asks first. The page has no range, currency or measure
+control and does not refresh by itself.
+
+| Panel | What it edits |
+|---|---|
+| Cost centers & rules | `centers` (a new center's id is made from its name and is fixed after the first Save; Delete is off while a key or rule uses the center), `keyCenters` (one row per gateway key: a center, or "Folder rules decide"), `folderRules` (in order, moved with Up and Down; the first match wins) |
+| Billing | `billing`: Metered or a plan (name, fee in USD, month or year) per source; every source is written out |
+| Display currency | `currency`: USD only, or a code with dated rates; the rates are sorted by start date when the panel is saved; today's rate is shown as `rateFor` picks it |
+| Restate | a [restate](#restate) of a past range, after a preview |
+
+**New center ids.** While a new center's id is made from its name, or typed by hand, the keys and rules that chose
+that center follow the id as it is typed. They stay where they were while the id equals another center's id, and
+follow once it is its own again.
+
+**Preview of the rules.** About 400 ms after an edit, the page asks the server what the draft would do over the last
+30 days, with the server's own validation and glob matcher: the projects and keys that change center, the rules that
+match nothing or that an earlier rule always takes, the projects still Unassigned (each with **Create rule**, which
+adds `<project>/**`), and where a typed path goes. A draft that does not validate shows the reasons a Save would give.
+
+**Changes apply from today.** After a Save of the rules or the billing, new costs follow them; past days keep theirs
+until restated. The note after the Save opens the Restate panel with the first of yesterday's month to yesterday (on the 1st of a month, the whole previous month). Rates are
+not frozen per day: a rate change also changes how past days read in the display currency (USD never changes).
+
+**Restate panel.** **Preview** shows how many ledger rows change, the usage value before and after, the center moves,
+the price versions (or "today's prices, not yet recorded as a version") and the billing set over the range. **Run
+restate** then needs a reason and the box "I understand this correction cannot be undone". It stays off while a Save
+is in flight, and it needs a fresh preview of the same range made after the last Save: a range edit or a Save since
+the preview asks for a new one. Leaving the page while a restate runs clears the preview, the reason and the box (the
+correction may have been recorded) and the history loads again on the next visit. The panel lists past restates,
+newest first (at most 100).
+
+**When the settings do not read** (`config.json` does not parse, or its `cost` section does not validate) the page
+shows the error and the reasons, and every Save and the restate are off: the values shown are the defaults that stand
+in for the invalid ones. The previews still work on the drafts. A Save refused because budgets depend on the change
+lists them with a link to Budgets.
+
 ## Fail closed
 
 The ledger never guesses over data it could not read.
@@ -430,7 +474,8 @@ These routes need the dashboard sign-in. A gateway API key, MCP or A2A is never 
 |---|---|
 | `GET /api/cost/ledger?from&to&groupBy&currency` | rows grouped by 1–4 of `day`, `source`, `provider`, `model`, `project`, `center`, `keyId`, `agent`, `kind`; at most 400 days; `to` defaults to today, `from` to the first of its month |
 | `GET /api/cost/status` | the collectors, the price version, unpriced and backfilled counts, settings, billing and ledger health |
-| `GET /api/cost/settings` | `{ settings, error, sources, unassigned, keys: [{ id, name }] }` |
+| `GET /api/cost/settings` | `{ settings, error, reasons, sources, unassigned, keys: [{ id, name }] }`; `reasons` lists why the saved section does not validate (at most 50), else `[]` |
+| `POST /api/cost/settings/preview` | body `{ settings, testPath? }` (`testPath` a string of at most 1000 characters, a path written with `~` or in full). 200 `{ from, to, unread, moves: [{ project, keyId, keyName, listUSD, from, to }], more, rules: [{ index, status: ok \| none \| shadowed, by }], unassigned: [{ project, listUSD }], test: { center, rule } \| null }` over the last 30 days, the settings in force against the draft; nothing is saved. 400 for an unknown field, a `testPath` that is not a string or is over 1000 characters, or `{ error, reasons }` for a draft that does not validate; 503 with a `code` while the ledger does not read |
 | `GET /api/cost/view?page&from&to&currency&measure` | what one Cost Control page draws. `page` is `overview` (always the current month), `breakdown` or `value`; `from`/`to` default to the last 30 days, at most 400; `measure` is `list` (default) or `billed`; Value ignores `measure` and answers `measure: null`. The answer is `{ page, from, to, currency, measure, unread, missingRate, billing: { error, historyLost } }` beside the page's data, plus `budgetsError` on Overview and `accuracyError` on Value (a fixed phrase, or null). 400 for an unknown page, a bad measure or date, a range over 400 days or a currency without rates; 503 with a `code` while the ledger does not read |
 | `POST /api/cost/settings` | 200 `{ settings }` (normalized; today's rows are re-attributed at once), or 400 `{ error, reasons }` |
 | `GET /api/cost/budgets` | the budgets in force, their state, list warnings, guard problems and kept-file status |
@@ -438,6 +483,8 @@ These routes need the dashboard sign-in. A gateway API key, MCP or A2A is never 
 | `POST /api/cost/budgets/<id>/delete` | delete a saved or legacy budget |
 | `GET /api/cost/prices/versions` | `{ current, versions: [{ id, from, at, hash, changed, changedCount }] }` |
 | `POST /api/cost/restate` | 200 `{ correction, overrides }` |
+| `POST /api/cost/restate/preview` | body `{ from, to }`; what a restate would do, written nowhere: 200 `{ from, to, changed, total, beforeUSD, afterUSD, moves: [{ from, to, listUSD }], versionsBefore, version, newPrices, billing }` (`version` null and `newPrices` true while today's prices are not a version yet). The 400, 409 and 503 of `POST /api/cost/restate`, without `reason` and `confirm` |
+| `GET /api/cost/restates` | `{ restates: [{ ts, from, to, reason, priceVersion, rows, billing }] }`, newest first, at most 100; `rows` counts the rows that changed. 503 while the corrections do not read |
 
 **Ledger answer:** `{ from, to, groupBy, currency, rows, totals, missingRate, corrections, unread, billing: { error, historyLost } }`. Each row has `requests`, `tokens` (`in`, `out`, `cacheRead`, `cacheWrite5m`, `cacheWrite1h`), `webSearches`, `listUSD`, `billedUSD` and the flags `unpriced`, `estimated`, `backfilled`, `billingAssumed` (true when any row in the group is). With `currency` (the configured code) rows and totals also carry `list` and `billed`.
 
@@ -460,7 +507,7 @@ Errors: 400 for bad input, 409 for a restate while the saved settings are invali
 
 ## Demo mode
 
-The demo shows a synthetic ledger held in memory: three cost centers, Claude Code on a plan, an IDR rate, two price versions, backfilled days, an unpriced model and a free local judge. No files are written and the pass never runs; settings and restate work in memory. The Cost Control pages draw from it too; the demo's quality signals carry per-model tool results, so Value shows a scatter.
+The demo shows a synthetic ledger held in memory: three cost centers, Claude Code on a plan, an IDR rate, two price versions, backfilled days, an unpriced model and a free local judge. No files are written and the pass never runs; settings and restate work in memory. The Settings page previews from the demo ledger and settings; its restate history starts empty and a restate is kept in memory. The Cost Control pages draw from it too; the demo's quality signals carry per-model tool results, so Value shows a scatter.
 
 ## Known limits
 

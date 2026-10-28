@@ -591,6 +591,7 @@ const SUBPAGES = {
     ['breakdown', 'Breakdown'],
     ['value', 'Value'],
     ['budgets', 'Budgets'],
+    ['settings', 'Settings'],
   ],
   squad: [
     ['', 'Office'],
