@@ -89,6 +89,26 @@ For fixed rules, `state` and `previous` are `ok`, `triggered`, `no_data` or `sno
 `warn_<n>` or `exceeded` state. `sessionId` is the raw session id for live rules, and `null` for aggregate rules and
 budgets.
 
+The **weekly cost digest** (off by default; [Cost Control](cost.md#weekly-digest)) is the one other body the webhook
+gets, once a week, through the same queue, retries and timeouts:
+
+```json
+{
+  "type": "cost_digest",
+  "week": { "from": "2026-10-19", "to": "2026-10-25" },
+  "totals": { "listUSD": 412.3, "billedUSD": 236.5 },
+  "change": { "listUSD": 44.1, "percent": 12 },
+  "centers": [{ "id": "acme", "name": "Client: Acme", "listUSD": 210.4 }],
+  "models": [{ "model": "claude-opus-5-5", "listUSD": 180.2 }],
+  "budgets": [{ "id": "team", "name": "Team", "state": "warn_80", "projected": true, "percent": 84.2 }],
+  "anomalies": [{ "day": "2026-10-21", "spentUSD": 32, "expectedUSD": 9.5 }],
+  "recommendation": { "model": "claude-opus-5-5", "candidate": "claude-sonnet-5-5", "savingUSD": 42.4 }
+}
+```
+
+Numbers and center, model and budget names only: no project folder (a name that looks like a path is dropped), no text,
+and anomalies without their drivers. The desktop gets one line. Demo mode never sends it.
+
 The URL and the headers (for a token) are secrets. Paste them in **Settings → Monitors**: they go to the OS secret store, and `config.json` keeps only a reference, as described in [Storing a secret](integrations.md#storing-a-secret):
 
 ```json
