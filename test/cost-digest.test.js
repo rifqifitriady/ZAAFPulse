@@ -175,3 +175,112 @@ test('channels: the digest goes to the desktop as one line and to the webhook as
   const failed = await down.digest(FIG());
   assert.deepEqual([failed.ok, failed.tried, failed.errors.length], [false, 2, 2]);
 });
+
+test('figures: an unread ledger folder fails the digest', () => {
+  assert.throws(() => FIG({ unread: ['folder'] }), /the ledger could not read folder/);
+});
+
+test('last week around a daylight-saving weekend: Monday to Sunday, six days apart', () => {
+  for (const [y, m, d] of [
+    [2026, 2, 29], // clocks forward in Europe
+    [2026, 9, 25], // clocks back in Europe
+    [2026, 10, 1], // clocks back in the US
+    [2026, 2, 8], // clocks forward in the US
+  ]) {
+    for (let i = 0; i < 14; i++) {
+      const dt = new Date(y, m, d + i, 12);
+      const today = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+      const w = R.lastWeek(today);
+      const from = new Date(`${w.from}T12:00:00Z`);
+      assert.equal(from.getUTCDay(), 1, `${today}: from is a Monday`);
+      assert.equal(new Date(`${w.to}T12:00:00Z`).getUTCDay(), 0, `${today}: to is a Sunday`);
+      assert.equal(w.to, addDays(w.from, 6));
+      assert.ok(w.to < today && addDays(w.to, 7) >= today, `${today}: the week just before the current one`);
+    }
+  }
+});
+
+test('the digest body: a null list item, control characters, surrogate pairs and paths', () => {
+  const body = digestBody({
+    ...FIG(),
+    centers: [
+      null,
+      'x',
+      { id: 'a', name: 'A\u0085B\u2028C\u2029D', listUSD: 1 },
+      { id: 'p', name: '/Users/me/app', listUSD: 2 },
+    ],
+    models: [
+      { model: `${'a'.repeat(79)}\u{1F600}tail`, listUSD: 1 },
+      { model: 'C:\\work\\app', listUSD: 1 },
+      { model: 'c:/w', listUSD: 1 },
+    ],
+    budgets: [undefined, { id: 'b', name: '~/proj', state: 'ok' }],
+    anomalies: [null],
+  });
+  assert.deepEqual(body.centers, [
+    { id: 'a', name: 'A B C D', listUSD: 1 },
+    { id: 'p', name: null, listUSD: 2 },
+  ]);
+  assert.equal(body.models[0].model, `${'a'.repeat(79)}\u{1F600}`, 'cut by code point, pair kept whole');
+  assert.deepEqual([body.models[1].model, body.models[2].model], [null, null]);
+  assert.equal(body.budgets.length, 1);
+  assert.equal(body.budgets[0].name, null);
+  assert.deepEqual(body.anomalies, []);
+  assert.doesNotMatch(JSON.stringify(body), /Users|work|~/);
+});
+
+test('channels: desktop ok and webhook refused is a partial success; a bad figure sends nothing', async () => {
+  const r = recorder();
+  let fetches = 0;
+  const ch = make({
+    settings: { desktop: true, webhook: { url: { env: 'HOOK' } } },
+    spawn: r.spawn,
+    fetchImpl: async () => (fetches++, { ok: false, status: 500 }),
+  });
+  const out = await ch.digest(FIG());
+  assert.deepEqual([out.desktop, out.webhook, out.ok, out.tried], [true, false, true, 2]);
+  assert.equal(fetches, 4, 'the first try and three retries');
+  assert.equal(r.calls.length, 1);
+
+  const calls = r.calls.length;
+  const bad = await ch.digest({
+    ...FIG(),
+    centers: [null],
+    totals: {
+      get listUSD() {
+        throw new Error('boom');
+      },
+    },
+  });
+  assert.equal(bad.ok, false);
+  assert.equal(r.calls.length, calls, 'no desktop notice was started');
+  assert.equal(fetches, 4);
+});
+
+test('channels: a busy desktop is reported busy and does not log the alerts hint', async () => {
+  const children = [];
+  const logs = [];
+  const spawn = () => {
+    const child = new EventEmitter();
+    child.kill = () => {};
+    children.push(child);
+    return child;
+  };
+  const ch = createChannels({
+    spawn,
+    fetchImpl: async () => ({ ok: true, status: 200 }),
+    secrets: secretsFor({}),
+    settings: () => ({ desktop: true, webhook: null }),
+    platform: 'darwin',
+    sleep: () => Promise.resolve(),
+    log: (m) => logs.push(m),
+  });
+  const a = ch.digest(FIG());
+  const b = ch.digest(FIG());
+  const c = await ch.digest(FIG());
+  assert.deepEqual(c.errors, ['desktop: busy']);
+  assert.equal(c.ok, false);
+  assert.deepEqual(logs, []);
+  for (const child of children) child.emit('close', 0);
+  await Promise.all([a, b]);
+});
