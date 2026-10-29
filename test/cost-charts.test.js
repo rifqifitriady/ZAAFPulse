@@ -298,3 +298,26 @@ test('axis labels: the left margin fits the longest tick label in any currency',
   );
   assert.match(small, /<text x="54" y="[\d.]+" text-anchor="end">\$3\.00</);
 });
+
+test('burn-down: a band as wide as the line is not drawn, and its tooltip has no range', () => {
+  const flat = [2, 2, 2, 2, 2].map((v, i) => row({ day: `2026-10-0${i + 1}`, listUSD: v }));
+  const o = V.overview({ rows: flat, today: '2026-10-05' });
+  assert.ok(
+    o.forecast.line.every((p) => p.low === p.high),
+    'every day as expected: no spread',
+  );
+  const svg = C.costBurnSvg(o, fmt);
+  assert.equal(count(svg, /class="cost-band"/g), 0, 'the line only');
+  assert.equal(count(svg, /class="cost-fade"/g) > 0, true);
+  const tips = svg.match(/data-tip="[^"]*forecast[^"]*"/g) || [];
+  assert.ok(tips.length > 0);
+  assert.ok(
+    tips.every((t) => !t.includes('–')),
+    'no range in the tooltip',
+  );
+  // A band that is real keeps its polygon and its range.
+  const rows = [1, 2, 3, 4, 10].map((v, i) => row({ day: `2026-10-0${i + 1}`, listUSD: v }));
+  const wide = C.costBurnSvg(V.overview({ rows, today: '2026-10-05' }), fmt);
+  assert.equal(count(wide, /class="cost-band"/g), 1);
+  assert.match(wide, /forecast[^"]*–/);
+});
