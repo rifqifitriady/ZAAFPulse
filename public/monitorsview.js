@@ -38,10 +38,16 @@ const MON_PARAMS = {
   ratio: { label: 'Times the usual amount', step: '0.1', min: 1, exclusiveMin: true, max: 100 }, // cost_anomaly
   minUSD: { label: 'Minimum rise (USD)', step: '0.5', min: 0, exclusiveMin: true, max: 1e6 }, // cost_anomaly
 };
-// The bounds of lib/monitors/api.js PARAM_RANGE, in the unit the input shows, in words.
+// The bounds of lib/monitors/api.js PARAM_RANGE, in the unit the input shows, in words. A spec without bounds reads
+// as monParamValue checks it: from 0, with no top.
 const monParamRule = (spec) => {
-  const [lo, hi] = [spec.min, spec.max].map((v) => v.toLocaleString('en'));
-  return `${spec.int ? 'a whole number ' : ''}${spec.exclusiveMin ? `above ${lo}, up to ${hi}` : `from ${lo} to ${hi}`}`;
+  const [lo, hi] = [spec.min ?? 0, spec.max].map((v) => (Number.isFinite(v) ? v.toLocaleString('en') : ''));
+  const range = spec.exclusiveMin
+    ? `above ${lo}${hi ? `, up to ${hi}` : ''}`
+    : hi
+      ? `from ${lo} to ${hi}`
+      : `${lo} or more`;
+  return `${spec.int ? 'a whole number ' : ''}${range}`;
 };
 const MON_SECRETS_DOC = 'https://github.com/rifqifitriady/ZAAFPulse/blob/main/docs/integrations.md#storing-a-secret';
 const MON_KEY_RE = /^[A-Za-z0-9_.:-]{1,200}$/;

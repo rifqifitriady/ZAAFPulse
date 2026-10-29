@@ -427,6 +427,12 @@ test('monParamValue: the rule parameters keep the server bounds', () => {
   assert.deepEqual(monParamValue('limitUSD', '0'), { value: 0 });
 });
 
+test('monParamValue: a parameter with no bounds in MON_PARAMS still says what it takes', () => {
+  assert.equal(monParamValue('notAParam', '-1').error, 'notAParam: 0 or more, or leave it empty for the default');
+  assert.equal(monParamValue('notAParam', 'abc').error, 'notAParam: 0 or more, or leave it empty for the default');
+  assert.deepEqual(monParamValue('notAParam', '3'), { value: 3 });
+});
+
 test('monRuleCard: the number inputs carry the bounds', () => {
   const html = monRuleCard(
     {
