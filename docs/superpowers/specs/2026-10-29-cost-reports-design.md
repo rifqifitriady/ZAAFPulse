@@ -54,7 +54,7 @@ This is the last Cost Control sub-project. It gets the cost data **out** of the 
 - **Export CSV**, which downloads the report's tables as one CSV in sections, each table with its header row.
 
 **Server**
-- `GET /api/cost/report?month=YYYY-MM&center=<id|all|unassigned>&currency=`
+- `GET /api/cost/report?month=YYYY-MM&center=<id|__all|unassigned>&currency=`
 - It returns `report.js`'s showback.
 - 400 for a bad month or an unknown center; 503 with a code when the ledger cannot be read.
 

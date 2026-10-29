@@ -109,7 +109,7 @@ test('showback: one center in both measures, by source, model, key and project; 
   assert.deepEqual(r.daily[2], { day: '2026-09-03', listUSD: 3, billedUSD: 1 });
   assert.equal(r.budgets, null, 'a past month');
 
-  const all = R.showback({ rows: ROWS, month: '2026-09', today: '2026-10-29', center: 'all', centers: CENTERS });
+  const all = R.showback({ rows: ROWS, month: '2026-09', today: '2026-10-29', center: '__all', centers: CENTERS });
   assert.equal(all.center.name, 'All centers');
   assert.equal(all.totals.listUSD, 7.5);
   assert.equal(all.totals.billedUSD, 12, 'the plan fee is paid by all centers');
@@ -186,7 +186,7 @@ test('showback: the budgets of the center (every one for all), and the notes', (
     [['acme', 'warn_80', 84.5]],
   );
   assert.ok(!('enforce' in r.budgets[0]));
-  const all = R.showback({ rows, month: '2026-10', today: '2026-10-29', center: 'all', budgets });
+  const all = R.showback({ rows, month: '2026-10', today: '2026-10-29', center: '__all', budgets });
   assert.equal(all.budgets.length, 3);
   assert.deepEqual(r.notes, {
     unread: ['corrections'],

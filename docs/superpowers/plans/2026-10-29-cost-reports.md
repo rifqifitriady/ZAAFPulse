@@ -102,7 +102,7 @@ is quoted with quotes doubled; numbers are never prefixed, counts as integers, a
 (totals = column sums of the rows kept). Headers: `Content-Disposition: attachment; filename="zaafpulse-cost-<from>-<to>.<csv|json>"`,
 `Content-Type` `text/csv; charset=utf-8` or `application/json`, `Cache-Control: no-store` (as every answer).
 
-**R1. Report.** `GET /api/cost/report?month=YYYY-MM&center=<id|all|unassigned>&currency=`. `month` optional:
+**R1. Report.** `GET /api/cost/report?month=YYYY-MM&center=<id|__all|unassigned>&currency=`. `month` optional:
 default last month when the ledger's first day (`cost.firstDay()`) is on or before last month's 1st, else this
 month. 400 `month: YYYY-MM`, 400 `month: this month or earlier`, 400 `unknown center` (not `all`, `unassigned` or a
 saved center id), currency as `checkCurrency`. Rows: `cost.budgetRows({ from, to })` of the month (to today in the
@@ -1009,7 +1009,7 @@ test('showback: one center in both measures, by source, model, key and project; 
   assert.deepEqual(r.daily[2], { day: '2026-09-03', listUSD: 3, billedUSD: 1 });
   assert.equal(r.budgets, null, 'a past month');
 
-  const all = R.showback({ rows: ROWS, month: '2026-09', today: '2026-10-29', center: 'all', centers: CENTERS });
+  const all = R.showback({ rows: ROWS, month: '2026-09', today: '2026-10-29', center: '__all', centers: CENTERS });
   assert.equal(all.center.name, 'All centers');
   assert.equal(all.totals.listUSD, 7.5);
   assert.equal(all.totals.billedUSD, 12, 'the plan fee is paid by all centers');
@@ -1086,7 +1086,7 @@ test('showback: the budgets of the center (every one for all), and the notes', (
     [['acme', 'warn_80', 84.5]],
   );
   assert.ok(!('enforce' in r.budgets[0]));
-  const all = R.showback({ rows, month: '2026-10', today: '2026-10-29', center: 'all', budgets });
+  const all = R.showback({ rows, month: '2026-10', today: '2026-10-29', center: '__all', budgets });
   assert.equal(all.budgets.length, 3);
   assert.deepEqual(r.notes, {
     unread: ['corrections'],
@@ -1181,7 +1181,7 @@ test('report: this month by default while the ledger lacks part of last month; a
   const b = r.body;
   assert.deepEqual(
     [b.month, b.from, b.to, b.center, b.currency],
-    ['2026-10', '2026-10-01', TODAY, { id: 'all', name: 'All centers' }, 'USD'],
+    ['2026-10', '2026-10-01', TODAY, { id: '__all', name: 'All centers' }, 'USD'],
   );
   assert.deepEqual(b.months, ['2026-10', '2026-09']);
   assert.equal(b.generatedAt, NOW);
@@ -1413,7 +1413,7 @@ function tableOf(rows, field, rateOf, nameOf) {
 }
 
 /**
- * One cost center's month: `center` is a center id, 'all' or 'unassigned'. `rows` are cost.budgetRows of the month
+ * One cost center's month: `center` is a center id, '__all' or 'unassigned'. `rows` are cost.budgetRows of the month
  * (plan rows included: they belong to All centers only, as a plan fee has no center). `budgets` are the evaluated
  * views (null for a past month: their state is the current period's), `corrections` the restates (null when they did
  * not read), `unread` and `billingError` what the read left out. `keyNames` maps a key id to its name.
@@ -1422,7 +1422,7 @@ function showback({
   rows = [],
   month,
   today,
-  center = 'all',
+  center = '__all',
   centers = [],
   keyNames = new Map(),
   budgets = null,
@@ -1435,13 +1435,13 @@ function showback({
 }) {
   const { from, to } = monthRange(month, today);
   const named = centers.find((c) => c.id === center);
-  const name = center === 'all' ? 'All centers' : center === UNASSIGNED ? 'Unassigned' : named ? named.name : center;
+  const name = center === '__all' ? 'All centers' : center === UNASSIGNED ? 'Unassigned' : named ? named.name : center;
   const mine = (rows || []).filter(
     (r) =>
       r &&
       r.day >= from &&
       r.day <= to &&
-      (center === 'all' || (r.kind !== 'plan' && (r.center || UNASSIGNED) === center)),
+      (center === '__all' || (r.kind !== 'plan' && (r.center || UNASSIGNED) === center)),
   );
   const totals = sums(rateOf);
   const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -1459,7 +1459,7 @@ function showback({
   }
   const keyName = (k) => (k === PLAN || k === NONE ? null : keyNames.get(k) || k);
   const inScope = (b) =>
-    center === 'all' || (b.scope && b.scope !== 'global' && b.scope.dim === 'center' && b.scope.value === center);
+    center === '__all' || (b.scope && b.scope !== 'global' && b.scope.dim === 'center' && b.scope.value === center);
   return {
     month,
     from,
@@ -1548,8 +1548,8 @@ right before `  function keys() {` add
     const month = q.get('month') || R.defaultMonth(today, first);
     if (!MONTH.test(month)) throw fail(400, 'month: YYYY-MM');
     if (month > monthOf(today)) throw fail(400, 'month: this month or earlier');
-    const center = q.get('center') || 'all';
-    if (center !== 'all' && center !== UNASSIGNED && !s.centers.some((c) => c.id === center))
+    const center = q.get('center') || '__all';
+    if (center !== '__all' && center !== UNASSIGNED && !s.centers.some((c) => c.id === center))
       throw fail(400, 'unknown center');
     const currency = checkCurrency(q);
     const { from, to } = R.monthRange(month, today);
@@ -1731,7 +1731,7 @@ test('the choice: from the hash, back to it, and to the report query', () => {
     cur: 'IDR',
   });
   assert.deepEqual(U.costRepParse('month=2026-13&center=../x&cur=idr'), {});
-  assert.equal(U.costRepHash({ month: '2026-09', center: 'all', cur: 'USD' }), '#cost/reports?month=2026-09');
+  assert.equal(U.costRepHash({ month: '2026-09', center: '__all', cur: 'USD' }), '#cost/reports?month=2026-09');
   assert.equal(
     U.costRepHash({ month: '2026-09', center: 'acme', cur: 'IDR' }),
     '#cost/reports?month=2026-09&center=acme&cur=IDR',
@@ -1790,7 +1790,7 @@ test('the controls: month, center with All and Unassigned, Print and Export CSV,
     html,
     /<option value="2026-10" selected>October 2026<\/option><option value="2026-09" >September 2026<\/option>/,
   );
-  assert.match(html, /<option value="all" >All centers<\/option><option value="acme" selected>Client: Acme<\/option>/);
+  assert.match(html, /<option value="__all" >All centers<\/option><option value="acme" selected>Client: Acme<\/option>/);
   assert.match(html, /<option value="unassigned" >Unassigned<\/option>/);
   assert.match(html, /data-cost-rep-cur="IDR" aria-pressed="false"/);
   assert.match(html, /<button type="button" class="btn ghost" data-cost-rep-print>Print<\/button>/);
@@ -1861,7 +1861,7 @@ test('the page loads the report the hash names, in a currency it has rates for, 
     assert.match(els['#cost-bar'].innerHTML, /data-cost-rep-month/);
     assert.match(els['#cost-body'].innerHTML, /class="cost-report"/);
     assert.equal(U.COST_REP.ctx.cur, 'IDR');
-    U.costRepGo({ center: 'all' });
+    U.costRepGo({ center: '__all' });
     assert.equal(global.location.hash, '#cost/reports?month=2026-10&cur=IDR', 'All centers is the default');
     global.location = { hash: '#cost/reports?cur=EUR' };
     urls.length = 0;
@@ -1992,7 +1992,7 @@ function costRepParse(query) {
 function costRepHash(c) {
   const q = new URLSearchParams();
   if (c.month) q.set('month', c.month);
-  if (c.center && c.center !== 'all') q.set('center', c.center);
+  if (c.center && c.center !== '__all') q.set('center', c.center);
   if (c.cur && c.cur !== 'USD') q.set('cur', c.cur);
   const s = q.toString();
   return `#cost/reports${s ? `?${s}` : ''}`;
@@ -2081,7 +2081,7 @@ function costRepControlsHtml(r, ctx) {
   const months = (r.months || [r.month])
     .map((m) => `<option value="${esc(m)}" ${m === r.month ? 'selected' : ''}>${esc(costRepMonthName(m))}</option>`)
     .join('');
-  const centers = [['all', 'All centers'], ...Object.entries(ctx.centers || {}), ['unassigned', 'Unassigned']]
+  const centers = [['__all', 'All centers'], ...Object.entries(ctx.centers || {}), ['unassigned', 'Unassigned']]
     .map(([id, name]) => `<option value="${esc(id)}" ${id === r.center.id ? 'selected' : ''}>${esc(name)}</option>`)
     .join('');
   const cur =
@@ -2221,7 +2221,7 @@ function costRepGo(next) {
   const r = COST_REP.report;
   const c = {
     month: r ? r.month : undefined,
-    center: r ? r.center.id : 'all',
+    center: r ? r.center.id : '__all',
     cur: COST_REP.ctx ? COST_REP.ctx.cur : 'USD',
   };
   location.hash = costRepHash({ ...c, ...next });
