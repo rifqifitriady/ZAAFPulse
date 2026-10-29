@@ -62,13 +62,13 @@ test('the page is wired: sub-page, sidebar entry, script after costview.js, copy
   const html = read('index.html');
   assert.match(
     html,
-    /<a class="nav-sub" href="#cost\/budgets"[^\n]*\n\s*<a class="nav-sub" href="#cost\/settings" data-route="cost\/settings">Settings<\/a>/,
+    /<a class="nav-sub" href="#cost\/reports"[^\n]*\n\s*<a class="nav-sub" href="#cost\/settings" data-route="cost\/settings">Settings<\/a>/,
   );
   const at = html.indexOf('<script src="costsettings.js"></script>');
   assert.ok(
     at > html.indexOf('<script src="costview.js"></script>') && at < html.indexOf('<script src="app.js"></script>'),
   );
-  assert.match(read('iso.js'), /\['budgets', 'Budgets'\],\s*\['settings', 'Settings'\],\s*\],/);
+  assert.match(read('iso.js'), /\['reports', 'Reports'\],\s*\['settings', 'Settings'\],\s*\],/);
   assert.deepEqual(V.COST_SUBS[V.COST_SUBS.length - 1], ['settings', 'Settings']);
   assert.match(
     read('costview.js'),
@@ -182,8 +182,8 @@ test('while the settings do not read: the banner with its reasons, every Save di
   assert.match(html, /class="cost-banner warn"/);
   assert.match(html, /<li>&lt;img src=x onerror=alert\(1\)&gt;<\/li>/);
   assert.doesNotMatch(html, /<img/);
-  assert.equal((html.match(/data-cost-set-panel="/g) || []).length, 4);
-  for (const p of ['rules', 'billing', 'currency']) {
+  assert.equal((html.match(/data-cost-set-panel="/g) || []).length, 5);
+  for (const p of ['rules', 'billing', 'currency', 'digest']) {
     const save = U.costSetSaveHtml(p, locked);
     assert.match(save, /data-cost-set-act="save"[^>]*disabled/, p);
     assert.match(save, /Fix config\.json first/);
@@ -435,11 +435,12 @@ test('center id from a name: lower-case, suffixed when taken, never unassigned o
   assert.equal(U.costSetCenterId('Acme', ['acme', 'acme-2']), 'acme-3');
   assert.equal(U.costSetCenterId('Unassigned'), 'unassigned-2');
   assert.equal(U.costSetCenterId('Constructor'), 'constructor-2');
+  assert.equal(U.costSetCenterId('All'), 'all-2');
   assert.equal(U.costSetCenterId('  ***  '), 'center');
   const long = 'x'.repeat(45);
   assert.equal(U.costSetCenterId(long).length, 40);
   assert.equal(U.costSetCenterId(long, [U.costSetCenterId(long)]), 'x'.repeat(38) + '-2');
-  for (const name of ['Client: Acme', 'Unassigned', '', long, '__proto__', 'a'.repeat(80)]) {
+  for (const name of ['Client: Acme', 'Unassigned', 'All', '', long, '__proto__', 'a'.repeat(80)]) {
     const id = U.costSetCenterId(name, ['a'.repeat(40)]);
     assert.ok(R.validate({ centers: [{ id, name: 'N' }] }).ok, `${name} → ${id}`);
   }
@@ -1073,8 +1074,8 @@ test('costsettings.js builds no markup from server or owner text without esc() (
   for (const [, name] of src.matchAll(/^(?:const|let|var|class|function|async function)\s+([A-Za-z_$][\w$]*)/gm))
     assert.match(name, /^(?:cost|COST)/, `${name}: starts with cost`);
   // Loads in Node without a DOM (this file required it above) and every panel has a body.
-  assert.deepEqual(Object.keys(U.COST_SET_BODIES).sort(), ['billing', 'currency', 'restate', 'rules']);
-  for (const p of ['rules', 'billing', 'currency', 'restate'])
+  assert.deepEqual(Object.keys(U.COST_SET_BODIES).sort(), ['billing', 'currency', 'digest', 'restate', 'rules']);
+  for (const p of ['rules', 'billing', 'currency', 'digest', 'restate'])
     assert.ok(U.costSetPageHtml(ST()).includes(`data-cost-set-body="${p}"`));
 });
 

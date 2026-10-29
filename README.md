@@ -524,7 +524,7 @@ Or use **Endpoint → MCP server** in the dashboard: it shows where the server i
 
 | Type | Platforms | Tools |
 |---|---|---|
-| `acc` (always on) | this dashboard | `usage_summary`, `quality`, `live_apps`, `trace_sessions` (session metadata only, no text; titles only from stdio and never over the gateway `/mcp`), `evals` (pass rates and the latest failures as ids and labels, read-only, no explanations), `integrations_status` |
+| `acc` (always on) | this dashboard | `usage_summary`, `quality`, `live_apps`, `trace_sessions` (session metadata only, no text; titles only from stdio and never over the gateway `/mcp`), `evals` (pass rates and the latest failures as ids and labels, read-only, no explanations), `integrations_status`, and on the stdio server only (never gateway /mcp) `cost` (spend over a range, grouped) and `budgets` (state, forecast, runs-out day), read-only |
 | `dynatrace` | Dynatrace SaaS and Managed | problems, entities, metrics, logs, security problems, DQL (SaaS) |
 | `arize` | Arize Phoenix and Arize AX | projects, spans, traces, datasets, experiments, monitors (AX) |
 | `n8n` | n8n | workflows, executions; run allowlisted webhooks and (de)activate workflows when writes are on |

@@ -146,7 +146,14 @@ test('cost api: the ledger checks its query and converts with the configured cur
 test('cost api: settings are read with defaults, validated on save (415, 400 with reasons), and stored normalized', async () => {
   const s = setup();
   const got = await s.call('GET', '/api/cost/settings');
-  assert.deepEqual(got.body.settings, { centers: [], keyCenters: {}, folderRules: [], billing: {}, currency: null });
+  assert.deepEqual(got.body.settings, {
+    centers: [],
+    keyCenters: {},
+    folderRules: [],
+    billing: {},
+    currency: null,
+    digest: { enabled: false },
+  });
   assert.deepEqual(got.body.keys, [{ id: 'key_a', name: 'Acme app' }]);
   assert.equal(got.body.unassigned, 'unassigned');
   assert.equal((await s.call('POST', '/api/cost/settings', { body: {}, type: 'text/plain' })).status, 415);

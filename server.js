@@ -11,6 +11,7 @@ const path = require('path');
 const os = require('os');
 const { Indexer } = require('./lib/indexer');
 const { summarize } = require('./lib/aggregate');
+const { responseHeaders } = require('./lib/response-headers');
 const { DEFAULT_PRICING, SNAPSHOT_META } = require('./lib/pricing');
 const processes = require('./lib/processes');
 const { getVault } = require('./lib/vault');
@@ -58,6 +59,7 @@ const { createBudgetService } = require('./lib/cost/budget-service');
 const { createGuard } = require('./lib/cost/guard');
 const { recentDays, HISTORY_DAYS: ANOMALY_HISTORY_DAYS } = require('./lib/cost/anomaly');
 const { dayOf: costDayOf, addDays: costAddDays } = require('./lib/cost/days');
+const { createDigest, digestSource } = require('./lib/cost/digest');
 const { isRef } = require('./lib/secrets');
 const { createPriceSync } = require('./lib/price-sync');
 const { createOpenRouter } = require('./lib/openrouter');
@@ -816,12 +818,32 @@ const monitorTick = () =>
     .catch(() => console.error('monitors: the aggregate pass failed'));
 // The aggregate pass has to run on the refreshed index: each call waits for the refresh to end (lib/monitors).
 const monitorTickAfterIndex = createAfterRefresh({ indexing: () => indexer.state.indexing, run: monitorTick });
+// The weekly cost digest (Cost Control 5): after a ledger pass, last week's figures once, through the Monitors
+// channels (never in demo mode; the channels are off with ZAAFPULSE_NOTIFY=off). Off unless config.json
+// "cost.digest.enabled".
+const costDigest = createDigest({
+  file: DEMO ? null : path.join(DIR, '.data', 'cost', 'digest.json'),
+  getSettings: costSettings,
+  demo: DEMO,
+  log: (m) => console.error(m),
+  send: (d) => monitorChannels.digest(d),
+  figures: digestSource({
+    cost,
+    getSettings: costSettings,
+    budgets: () => costBudgets.evaluate(),
+    anomalyParams: () => monitorApiState.settings('cost_anomaly').params,
+    recommendations: () => costApi.recommendations(),
+    home: os.homedir(),
+  }),
+});
 // The cost ledger pass reads the refreshed index too; the budget service drops the gateway calls it read, then the
-// budgets are evaluated (alerts, pause). A failure never breaks a refresh.
+// budgets are evaluated (alerts, pause), then the digest is checked (not awaited: a webhook may take a while). A
+// failure never breaks a refresh.
 const costTick = () =>
   Promise.resolve()
     .then(() => costBudgets.pass(() => cost.update()))
     .then(() => monitors.tickBudgets())
+    .then(() => void costDigest.check().catch(() => console.error('cost: the weekly digest check failed')))
     .catch(() => console.error('cost: the ledger pass failed'));
 const costTickAfterIndex = createAfterRefresh({ indexing: () => indexer.state.indexing, run: costTick });
 
@@ -989,8 +1011,9 @@ const SECURITY_HEADERS = {
   'Cross-Origin-Resource-Policy': 'same-origin',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), usb=(), payment=()',
 };
-function send(res, status, body, type = 'application/json') {
-  res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', ...SECURITY_HEADERS });
+// `headers` may add a download's Content-Disposition only (lib/response-headers.js).
+function send(res, status, body, type = 'application/json', headers = {}) {
+  res.writeHead(status, responseHeaders(type, headers, SECURITY_HEADERS));
   res.end(type === 'application/json' ? JSON.stringify(body) : body);
 }
 
@@ -1306,7 +1329,8 @@ const handler = async (req, res) => {
       });
       if (hit) return send(res, hit.status, hit.body);
     }
-    // The cost ledger: rows, status, settings, price versions and restate, behind the same sign-in. No path out.
+    // The cost ledger: rows, status, settings, price versions and restate, behind the same sign-in. No path out. An
+    // export is a download: its own type and Content-Disposition.
     {
       const hit = await costApi.route({
         method: req.method,
@@ -1315,7 +1339,7 @@ const handler = async (req, res) => {
         contentType: req.headers['content-type'],
         readBody: () => readBody(req),
       });
-      if (hit) return send(res, hit.status, hit.body);
+      if (hit) return send(res, hit.status, hit.body, hit.type || 'application/json', hit.headers);
     }
     if (url.pathname === '/api/logs') {
       return send(res, 200, DEMO ? reqlogs.demoLogs() : reqlogs.logs());

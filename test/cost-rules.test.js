@@ -70,6 +70,7 @@ test('validate: a full valid section is normalized', () => {
     folderRules: [{ glob: '~/work/acme/**', center: 'acme' }, { glob: '~/lab/**', center: 'lab' }],
     billing: { claude: { mode: 'plan', plan: 'Max', feeUSD: 200, period: 'month' }, codex: { mode: 'metered' } },
     currency: { code: 'IDR', rates: [{ from: '2026-10-01', perUSD: 16000 }, { from: '2026-10-22', perUSD: 16500 }] },
+    digest: { enabled: false },
   });
   assert.deepEqual(R.validate({}).value, R.defaults());
 });
@@ -172,4 +173,9 @@ test('validate: names that clash with object internals are rejected', () => {
   const k = R.validate(JSON.parse('{"centers":[{"id":"a","name":"A"}],"keyCenters":{"__proto__":"a"}}'));
   assert.equal(k.ok, false);
   assert.ok(k.errors.includes('keyCenters: bad key id __proto__'), k.errors.join('\n'));
+});
+
+test('a cost center may be called all: the report spells every center __all, which no id can be', () => {
+  assert.ok(R.validate({ centers: [{ id: 'all', name: 'Everything' }] }).ok);
+  assert.equal(R.validate({ centers: [{ id: '__all', name: 'x' }] }).ok, false);
 });
