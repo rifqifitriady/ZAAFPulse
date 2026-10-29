@@ -115,6 +115,30 @@ test('reader: spend and budgets from the files, and nothing written (the folder 
   fs.rmSync(data, { recursive: true, force: true });
 });
 
+test('reader: a lost billing history is said in acc_cost and nothing is written', () => {
+  const { data, dir } = dataFolder();
+  fs.rmSync(path.join(dir, 'billing.json'));
+  fs.rmSync(path.join(dir, 'billing.json.bak'));
+  const before = snapshot(data);
+  const s = readerOf(data).spend({ range: '7' });
+  assert.deepEqual(s.billing, { error: null, historyLost: true });
+  const ok = dataFolder();
+  fs.writeFileSync(path.join(ok.dir, 'billing.json'), JSON.stringify({ version: 1, entries: [], overrides: [] }));
+  assert.deepEqual(readerOf(ok.data).spend({}).billing, { error: null, historyLost: false });
+  assert.deepEqual(snapshot(data), before, 'nothing created, renamed or changed');
+  fs.rmSync(data, { recursive: true, force: true });
+  fs.rmSync(ok.data, { recursive: true, force: true });
+});
+
+test('reader: an empty or whitespace config.json reads as no settings, as in the server', () => {
+  const { data } = dataFolder();
+  fs.writeFileSync(path.join(data, 'config.json'), ' \n ');
+  assert.equal(readerOf(data).budgets().error, null);
+  fs.writeFileSync(path.join(data, 'config.json'), '{');
+  assert.notEqual(readerOf(data).budgets().error, null);
+  fs.rmSync(data, { recursive: true, force: true });
+});
+
 test('reader: the ranges, the top 50 then Other, the groupBy rules and a ledger folder that does not read', () => {
   assert.deepEqual(rangeDays('30', TODAY), { from: '2026-09-23', to: TODAY });
   assert.deepEqual(rangeDays('90', TODAY).from, '2026-07-25');
@@ -150,10 +174,10 @@ test('registry: the cost tools only with a cost reader, as mcp.js builds it; nev
   assert.ok(!server.includes('acc_cost') && !server.includes('acc_budgets'));
   // server.js builds its registry's local data without a cost reader.
   const src = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
-  const call = src.slice(
-    src.indexOf('const local = createLocal({'),
-    src.indexOf('const registry = createIntegrations('),
-  );
+  const a = src.indexOf('const local = createLocal({');
+  const b = src.indexOf('const registry = createIntegrations(');
+  assert.ok(a >= 0 && b > a, 'server.js anchors found, in order');
+  const call = src.slice(a, b);
   assert.ok(call.length > 0 && !/\bcost\b/.test(call), call);
   const reg = createIntegrations({
     config: {},
