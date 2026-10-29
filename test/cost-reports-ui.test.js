@@ -301,6 +301,7 @@ test('fix round 1: unrated day, unread line, one-day period, file name for All c
     idr,
   );
   assert.ok(!/\$5\.00/.test(html), 'no USD amount in an IDR chart');
+  assert.match(html, /data-tip="[^"]*—/, 'the unrated day shows a dash');
   const withUnread = U.costRepCsv(REPORT, CTX);
   assert.ok(withUnread.endsWith('\r\n# unread: 2026-09\r\n'), withUnread.slice(-40));
   assert.ok(!U.costRepCsv({ ...REPORT, notes: { unread: [] } }, CTX).includes('# unread'));
@@ -344,6 +345,57 @@ test('fix round 1: a refused report shows its error and keeps the controls; the 
     assert.ok(urls.includes('/api/cost/report?month=2026-01&center=gone&currency=IDR'), urls.join(' '));
     assert.match(els['#cost-body'].innerHTML, /unknown center/);
     assert.match(els['#cost-bar'].innerHTML, /data-cost-rep-center/);
+    assert.match(els['#cost-bar'].innerHTML, /<option value="" selected>Latest<\/option>/);
+    assert.match(els['#cost-bar'].innerHTML, /<option value="" selected>Choose a center<\/option>/);
+  } finally {
+    Object.assign(global, saved);
+    if (saved.localStorage === undefined) delete global.localStorage;
+  }
+});
+
+test('fix round 2: the USD button saves the choice, so a stored IDR does not come back', async () => {
+  const saved = {
+    $: global.$,
+    state: global.state,
+    location: global.location,
+    fetch: global.fetch,
+    document: global.document,
+    localStorage: global.localStorage,
+  };
+  const els = {
+    '#cost-body': { isConnected: true, innerHTML: '' },
+    '#cost-bar': { innerHTML: '' },
+    '#cost-ribbon': { innerHTML: '' },
+  };
+  const urls = [];
+  let store = JSON.stringify({ range: '7d', cur: 'IDR' });
+  global.$ = (s) => els[s] || null;
+  global.state = { sub: 'reports' };
+  global.location = { hash: '#cost/reports?month=2026-10' };
+  global.document = { addEventListener() {} };
+  global.localStorage = { getItem: () => store, setItem: (k, v) => (store = v) };
+  const settings = {
+    settings: { centers: [], currency: { code: 'IDR', rates: [{ from: '2026-01-01', perUSD: 16000 }] } },
+    keys: [],
+    sources: [],
+  };
+  global.fetch = async (url) => {
+    urls.push(url);
+    const json = url.startsWith('/api/cost/settings') ? settings : url.startsWith('/api/cost/status') ? {} : REPORT;
+    return { status: 200, json: async () => json };
+  };
+  try {
+    await U.costMountReports();
+    assert.ok(urls.some((u) => u.includes('currency=IDR')));
+    U.costRepGo({ cur: 'USD' });
+    assert.equal(JSON.parse(store).range, '7d', 'the other stored choices stay');
+    urls.length = 0;
+    await U.costMountReports();
+    assert.ok(
+      urls.some((u) => u.startsWith('/api/cost/report?month=2026-10')),
+      urls.join(' '),
+    );
+    assert.ok(!urls.some((u) => u.includes('currency=')), urls.join(' '));
   } finally {
     Object.assign(global, saved);
     if (saved.localStorage === undefined) delete global.localStorage;

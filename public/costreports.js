@@ -127,10 +127,15 @@ function costRepNotes(r) {
 
 /** The report page's control bar: month, center, currency, Print and Export CSV. Hidden when printed. */
 function costRepControlsHtml(r, ctx) {
-  const months = (r.months || [r.month])
+  const known = r.months || [r.month];
+  // A month or center the page cannot place (a stale bookmark) shows a choice with an empty value: the default.
+  const latest = known.includes(r.month) ? '' : '<option value="" selected>Latest</option>';
+  const months = known
     .map((m) => `<option value="${esc(m)}" ${m === r.month ? 'selected' : ''}>${esc(costRepMonthName(m))}</option>`)
     .join('');
-  const centers = [['__all', 'All centers'], ...Object.entries(ctx.centers || {}), ['unassigned', 'Unassigned']]
+  const ids = [['__all', 'All centers'], ...Object.entries(ctx.centers || {}), ['unassigned', 'Unassigned']];
+  const none = ids.some(([id]) => id === r.center.id) ? '' : '<option value="" selected>Choose a center</option>';
+  const centers = ids
     .map(([id, name]) => `<option value="${esc(id)}" ${id === r.center.id ? 'selected' : ''}>${esc(name)}</option>`)
     .join('');
   const cur =
@@ -142,7 +147,7 @@ function costRepControlsHtml(r, ctx) {
           )
           .join('')}</div>`
       : '';
-  return `<div class="cost-bar cost-rep-controls cost-noprint"><label>Month <select class="input" data-cost-rep-month>${months}</select></label><label>Center <select class="input" data-cost-rep-center>${centers}</select></label>${cur}<span class="cost-spacer"></span><button type="button" class="btn ghost" data-cost-rep-print>Print</button><button type="button" class="btn" data-cost-rep-csv>Export CSV</button></div>`;
+  return `<div class="cost-bar cost-rep-controls cost-noprint"><label>Month <select class="input" data-cost-rep-month>${latest}${months}</select></label><label>Center <select class="input" data-cost-rep-center>${none}${centers}</select></label>${cur}<span class="cost-spacer"></span><button type="button" class="btn ghost" data-cost-rep-print>Print</button><button type="button" class="btn" data-cost-rep-csv>Export CSV</button></div>`;
 }
 
 /** The report itself: what prints. */
@@ -239,7 +244,11 @@ async function costMountReports() {
     const base = costContext(settings);
     const c = costRepParse(costQueryOfHash());
     // The hash names the currency, else the cost controls' stored choice (as the other pages), else USD.
-    const cur = costParseControls(c.cur ? 'cur=' + c.cur : '', costStoreGet(), base.currencies).cur;
+    const cur = costParseControls(
+      new URLSearchParams(c.cur ? { cur: c.cur } : {}).toString(),
+      costStoreGet(),
+      base.currencies,
+    ).cur;
     const ctx = { ...base, cur, fmt: (v) => costMoney(v, cur) };
     COST_REP.choice = { month: c.month, center: c.center || '__all', cur };
     COST_REP.ctx = ctx;
@@ -282,6 +291,17 @@ function costRepDownload() {
 }
 // A changed control names the new choice in the hash; the router mounts the page again.
 function costRepGo(next) {
+  // The currency is also the cost pages' stored choice, so a fallback to it cannot undo this one.
+  if (next.cur) {
+    let o = {};
+    try {
+      const v = JSON.parse(costStoreGet());
+      if (v && typeof v === 'object' && !Array.isArray(v)) o = v;
+    } catch {
+      /* a broken stored value: start again */
+    }
+    costStoreSet({ ...o, cur: next.cur });
+  }
   const r = COST_REP.report;
   const k = COST_REP.choice || {};
   const c = {
