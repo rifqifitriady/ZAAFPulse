@@ -12,9 +12,10 @@ const COST_SET_PANELS = [
   ['rules', 'Cost centers & rules'],
   ['billing', 'Billing'],
   ['currency', 'Display currency'],
+  ['digest', 'Weekly digest'],
   ['restate', 'Restate'],
 ];
-const COST_SET_FORMS = ['rules', 'billing', 'currency']; // the panels with a draft and a Save
+const COST_SET_FORMS = ['rules', 'billing', 'currency', 'digest']; // the panels with a draft and a Save
 const COST_SET_LIMITS = { centers: 50, folderRules: 100, rates: 1000 }; // lib/cost/rules.js LIMITS
 const COST_SET_PREVIEW_MS = 400;
 const COST_SET_APPLIES = 'Saved. New costs follow these rules from today. To apply them to past days, use Restate.';
@@ -49,6 +50,7 @@ function costSetFromSaved(panel, settings, sources) {
         }),
       ),
     };
+  if (panel === 'digest') return { digest: { enabled: !!(s.digest && s.digest.enabled === true) } };
   const c = s.currency;
   return {
     currency: c
@@ -75,7 +77,9 @@ function costSetBody(panel, saved, draft, sources) {
     folderRules: s.folderRules || [],
     billing: s.billing || {},
     currency: s.currency ?? null,
+    digest: s.digest || { enabled: false },
   };
+  if (panel === 'digest') return { ...base, digest: { enabled: draft.digest.enabled === true } };
   if (panel === 'rules')
     return {
       ...base,
@@ -163,7 +167,7 @@ const COST_SET = {
   msg: {}, // panel -> { tone, text, reasons, restate, budgets } after a Save
   marks: {}, // panel -> the field paths a 400's reasons name
   busy: {}, // panel -> a Save in flight
-  open: { rules: true, billing: true, currency: true, restate: false },
+  open: { rules: true, billing: true, currency: true, digest: true, restate: false },
   gen: 0, // +1 after each Save that went through: a restate preview made before it is stale
   preview: null, // the settings preview: { key, sent, answer } | { key, sent, reasons } | { key, error }
   previewReq: 0,
@@ -192,7 +196,14 @@ const COST_SET = {
   hooked: false,
 };
 
-const COST_SET_EMPTY = Object.freeze({ centers: [], keyCenters: {}, folderRules: [], billing: {}, currency: null });
+const COST_SET_EMPTY = Object.freeze({
+  centers: [],
+  keyCenters: {},
+  folderRules: [],
+  billing: {},
+  currency: null,
+  digest: { enabled: false },
+});
 const costSetSaved = () => (COST_SET.answer && COST_SET.answer.settings) || COST_SET_EMPTY;
 const costSetSources = () => (COST_SET.answer && COST_SET.answer.sources) || Object.keys(COST_SOURCES);
 /** A panel's draft, or its saved values while it has none (a draft is stored only once the owner edits). */
@@ -384,7 +395,9 @@ async function costSetSaveRun(panel) {
       COST_SET.marks[panel] = [];
       COST_SET.gen++;
       COST_SET.msg[panel] =
-        panel === 'currency' ? { tone: 'ok', text: 'Saved.' } : { tone: 'ok', text: COST_SET_APPLIES, restate: true };
+        panel === 'currency' || panel === 'digest'
+          ? { tone: 'ok', text: 'Saved.' }
+          : { tone: 'ok', text: COST_SET_APPLIES, restate: true };
       return;
     }
     COST_SET.marks[panel] = res.status === 400 ? costSetReasonPaths(j.reasons) : [];
@@ -982,6 +995,35 @@ COST_SET_ON_INPUT.push((t, panel) => {
 COST_SET_BODIES.billing = costSetBillingHtml;
 COST_SET_BODIES.currency = costSetCurrencyHtml;
 
+/* ---------- panel: weekly digest ---------- */
+
+const COST_SET_DIGEST_NOTE =
+  'Every Monday, a summary of the week before (Monday to Sunday): usage value and paid, the change against the week before, the top 3 cost centers and models, the budgets used up or projected over, the anomalies and the top recommendation. It goes to the desktop notification and, when one is set, to the Monitors webhook. It holds numbers and names only: no project folders and no text.';
+
+function costSetDigestHtml(st) {
+  const a = st.answer || {};
+  const on = (st.drafts.digest || costSetFromSaved('digest', a.settings, a.sources)).digest.enabled === true;
+  const seg = [
+    ['off', 'Off'],
+    ['on', 'On'],
+  ]
+    .map(
+      ([v, text]) =>
+        `<button type="button" data-cost-set-act="digest-on" data-on="${v}" aria-pressed="${on === (v === 'on')}">${text}</button>`,
+    )
+    .join('');
+  return `<div class="segmented" role="group" aria-label="Weekly digest">${seg}</div>
+    <p class="cost-note">${esc(COST_SET_DIGEST_NOTE)}</p>
+    <p class="cost-note"><a href="#settings/monitors">Desktop and webhook: Settings → Monitors</a></p>`;
+}
+Object.assign(COST_SET_ACTIONS, {
+  'digest-on': (b) => {
+    costSetEdit('digest', (d) => (d.digest.enabled = b.dataset.on === 'on'));
+    costSetPaintPanel('digest');
+  },
+});
+COST_SET_BODIES.digest = costSetDigestHtml;
+
 /* ---------- panel: restate ---------- */
 
 const COST_SET_MAX_REASON = 200; // lib/cost/api.js MAX_REASON
@@ -1264,6 +1306,7 @@ if (typeof module !== 'undefined')
     costSetRateToday,
     costSetRateLine,
     costSetCurrencyHtml,
+    costSetDigestHtml,
     costSetMoveFocus,
     costSetRestateRange,
     costSetRestateCheck,
