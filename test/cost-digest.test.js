@@ -418,3 +418,37 @@ test("api: recommendations() for the digest is the Value page's answer, or null 
   });
   assert.equal(broken.recommendations(), null);
 });
+
+test('scheduler: a logged failure is scrubbed of paths', async () => {
+  const s = scheduler({
+    figures: () => {
+      throw new Error('ENOENT: no such file /Users/x/secret/.data/cost/2026-10.jsonl and ~/proj/a');
+    },
+  });
+  await s.d.check();
+  assert.equal(s.st.logs.length, 1);
+  assert.doesNotMatch(s.st.logs[0], /Users|secret|proj/);
+});
+
+test('figures source: the row range, since, and cost settings that do not read yet', () => {
+  const { digestSource } = require('../lib/cost/digest');
+  const week = { from: '2026-10-19', to: '2026-10-25' };
+  const calls = [];
+  const mk = (settings) =>
+    digestSource({
+      cost: {
+        budgetRows: (r) => (calls.push(r), { rows: [row('2026-10-20', { listUSD: 5 })], unread: [] }),
+        firstDay: () => '2026-09-01',
+      },
+      getSettings: () => settings,
+      budgets: () => [],
+      anomalyParams: () => null,
+      recommendations: () => null,
+    });
+  const f = mk({ centers: [{ id: 'acme', name: 'Acme' }] })(week);
+  assert.deepEqual(calls[0], { from: addDays(week.from, -R.DIGEST_HISTORY), to: week.to });
+  assert.equal(f.totals.listUSD, 5);
+  assert.equal(f.centers[0].name, 'Acme');
+  assert.throws(() => mk(false)(week), /the cost settings do not read yet/);
+  assert.throws(() => mk({ centers: 'x' })(week), /the cost settings do not read yet/);
+});

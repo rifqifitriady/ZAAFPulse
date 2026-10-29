@@ -59,9 +59,7 @@ const { createBudgetService } = require('./lib/cost/budget-service');
 const { createGuard } = require('./lib/cost/guard');
 const { recentDays, HISTORY_DAYS: ANOMALY_HISTORY_DAYS } = require('./lib/cost/anomaly');
 const { dayOf: costDayOf, addDays: costAddDays } = require('./lib/cost/days');
-const { createDigest } = require('./lib/cost/digest');
-const { digestFigures, DIGEST_HISTORY } = require('./lib/cost/report');
-const { settingsOf: costSettingsOf } = require('./lib/cost/rules');
+const { createDigest, digestSource } = require('./lib/cost/digest');
 const { isRef } = require('./lib/secrets');
 const { createPriceSync } = require('./lib/price-sync');
 const { createOpenRouter } = require('./lib/openrouter');
@@ -821,34 +819,22 @@ const monitorTick = () =>
 // The aggregate pass has to run on the refreshed index: each call waits for the refresh to end (lib/monitors).
 const monitorTickAfterIndex = createAfterRefresh({ indexing: () => indexer.state.indexing, run: monitorTick });
 // The weekly cost digest (Cost Control 5): after a ledger pass, last week's figures once, through the Monitors
-// channels (never in demo mode; the channels are off with ZAAFPULSE_NOTIFY=off). Off unless config.json "cost.digest".
+// channels (never in demo mode; the channels are off with ZAAFPULSE_NOTIFY=off). Off unless config.json
+// "cost.digest.enabled".
 const costDigest = createDigest({
   file: DEMO ? null : path.join(DIR, '.data', 'cost', 'digest.json'),
   getSettings: costSettings,
   demo: DEMO,
   log: (m) => console.error(m),
   send: (d) => monitorChannels.digest(d),
-  figures: (week) => {
-    const quiet = (fn, fallback) => {
-      try {
-        return fn();
-      } catch {
-        return fallback;
-      }
-    };
-    const r = cost.budgetRows({ from: costAddDays(week.from, -DIGEST_HISTORY), to: week.to });
-    const rec = costApi.recommendations();
-    return digestFigures({
-      rows: r.rows,
-      unread: r.unread,
-      week,
-      since: cost.firstDay(),
-      centers: costSettingsOf(costSettings(), { home: os.homedir() }).value.centers,
-      budgets: quiet(() => costBudgets.evaluate(), []),
-      anomalyParams: quiet(() => monitorApiState.settings('cost_anomaly').params, null),
-      recommendation: rec && rec.items && rec.items[0] ? rec.items[0] : null,
-    });
-  },
+  figures: digestSource({
+    cost,
+    getSettings: costSettings,
+    budgets: () => costBudgets.evaluate(),
+    anomalyParams: () => monitorApiState.settings('cost_anomaly').params,
+    recommendations: () => costApi.recommendations(),
+    home: os.homedir(),
+  }),
 });
 // The cost ledger pass reads the refreshed index too; the budget service drops the gateway calls it read, then the
 // budgets are evaluated (alerts, pause), then the digest is checked (not awaited: a webhook may take a while). A
