@@ -229,7 +229,7 @@ test('the digest body: a null list item, control characters, surrogate pairs and
     [null, '~beta'],
   );
   assert.deepEqual(body.anomalies, []);
-  assert.doesNotMatch(JSON.stringify(body), /Users|work|~/);
+  assert.doesNotMatch(JSON.stringify(body), /Users|work|~\//);
 });
 
 test('channels: desktop ok and webhook refused is a partial success; a bad figure sends nothing', async () => {
