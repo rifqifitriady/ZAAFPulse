@@ -220,3 +220,42 @@ test('showback: the display currency per day, null once a day has no rate', () =
   });
   assert.deepEqual([acme.totals.list, acme.tables.source[0].list], [null, null], 'the 3rd has no rate');
 });
+
+test('showback: a key budget counts for the center the key belongs to, and for all', () => {
+  const b = (id, scope) => ({ id, name: id, scope, state: 'ok' });
+  const budgets = [
+    b('mine', { dim: 'key', value: 'key_a' }),
+    b('other', { dim: 'key', value: 'key_z' }),
+    b('lab', { dim: 'center', value: 'lab' }),
+  ];
+  const run = (center, keyCenters) =>
+    R.showback({
+      rows: [],
+      month: '2026-10',
+      today: '2026-10-29',
+      center,
+      centers: CENTERS,
+      budgets,
+      keyCenters,
+    }).budgets.map((x) => x.id);
+  assert.deepEqual(run('acme', { key_a: 'acme', key_z: 'lab' }), ['mine']);
+  assert.deepEqual(run('lab', { key_a: 'acme', key_z: 'lab' }), ['other', 'lab']);
+  assert.deepEqual(run('acme', undefined), [], 'no key map: no key budget');
+  assert.deepEqual(run('acme', { key_a: 'acme', toString: 'lab' }), ['mine']);
+  assert.deepEqual(run('__all', {}), ['mine', 'other', 'lab']);
+});
+
+test('showback: an absolute project folder prints as ..., its last segment; ~ folders and sentinels stay', () => {
+  const rows = [
+    row('2026-09-03', { project: '/Volumes/Work/acme', listUSD: 9 }),
+    row('2026-09-03', { project: '~/acme-web', listUSD: 5 }),
+    row('2026-09-03', { project: 'C:\\Work\\beta\\', listUSD: 3 }),
+    row('2026-09-03', { project: null, listUSD: 1 }),
+  ];
+  const r = R.showback({ rows, month: '2026-09', today: '2026-10-29', center: 'acme', centers: CENTERS });
+  assert.deepEqual(
+    r.tables.project.map((x) => x.key),
+    ['\u2026/acme', '~/acme-web', '\u2026/beta', '__none'],
+  );
+  assert.equal(r.tables.project[0].listUSD, 9);
+});

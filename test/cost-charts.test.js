@@ -137,6 +137,17 @@ test('spike line: one marker per spike, its tooltip with the baseline and the to
   assert.equal(count(young, /class="cost-spike"/g), 0);
 });
 
+test('spike line: baselineText false leaves the baseline wording out of the tooltips', () => {
+  const spikes = [
+    { day: '2026-10-01', spend: 2, baseline: null, spike: false, topModel: null },
+    { day: '2026-10-02', spend: 3, baseline: 1, spike: false, topModel: 'm' },
+  ];
+  const plain = C.costSpikeSvg(spikes, fmt, { baselineText: false });
+  assert.doesNotMatch(plain, /baseline/);
+  assert.match(plain, /data-tip="1 Oct · \$2\.00"/);
+  assert.match(C.costSpikeSvg(spikes, fmt), /no baseline yet/);
+});
+
 test('rings: percent capped on the ring with a pink overflow arc; no data dashed; linked to the card', () => {
   const over = C.costRingSvg(125, 'exceeded');
   assert.match(over, />125%</);
