@@ -14,6 +14,7 @@ const {
   dsSlugOf,
   dsRoute,
   dsRunOf,
+  dsTakeRunLink,
   dsModelOptions,
   dsRunBody,
   dsResultCells,
@@ -859,4 +860,20 @@ test('the Playground decisions: dsPgSendPlan and dsPgOnError (D-T7-8)', () => {
   );
   assert.equal(refused.dropPreview, true);
   assert.deepEqual(dsPgOnError(s, Object.assign(new Error('bad model'), { status: 400 })), { message: 'bad model' });
+});
+
+test('dsTakeRunLink: a linked run opens once, a gone one says so, and the hash drops its ?run=', () => {
+  const calls = [];
+  const hist = { replaceState: (...a) => calls.push(a) };
+  const runs = [{ id: 'exp_00000000000000a0' }];
+  const loc = { hash: '#datasets/experiments?run=exp_00000000000000a0' };
+  assert.deepEqual(dsTakeRunLink(runs, loc, hist), { run: runs[0] });
+  assert.deepEqual(calls, [[null, '', '#datasets/experiments']]);
+  // the hash is rewritten by replaceState, so a second paint sees none
+  loc.hash = '#datasets/experiments';
+  assert.equal(dsTakeRunLink(runs, loc, hist), null);
+  assert.equal(calls.length, 1);
+  const gone = { hash: '#datasets/experiments?run=exp_00000000000000b1' };
+  assert.deepEqual(dsTakeRunLink(runs, gone, hist), { gone: true });
+  assert.equal(calls.length, 2);
 });

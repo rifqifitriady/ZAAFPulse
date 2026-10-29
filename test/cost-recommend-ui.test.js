@@ -64,6 +64,7 @@ test('a recommendation row: the saving, the cost per example, the pass rates, th
   assert.equal(U.costRecTexts(rec({ alsoBackedBy: 3 })).more, '+3 more experiments agree');
   assert.equal(U.costAbout(1234.5), '$1,235');
   assert.equal(U.costPercent(0), '0 %');
+  for (const v of [null, undefined, NaN, 'x']) assert.equal(U.costPercent(v), '—', String(v));
 });
 
 test('the experiment link opens its run in Datasets; without an id, the Experiments tab', () => {

@@ -1000,7 +1000,7 @@ const COST_REC_COPY = {
 };
 const COST_GAP_REASON = { no_experiment: 'No experiment yet', no_cheaper_match: 'No cheaper model did as well' };
 // A share as "31 %", the way the card writes it.
-const costPercent = (x) => `${Math.round((Number(x) || 0) * 100)} %`;
+const costPercent = (x) => (x == null || !Number.isFinite(Number(x)) ? '—' : `${Math.round(Number(x) * 100)} %`);
 // An estimate in USD: whole dollars from $10 ("about $42"), cents below.
 const costAbout = (v) => (Math.abs(v) >= 10 ? `$${Math.round(v).toLocaleString('en')}` : costMoney(v, 'USD'));
 // Where a recommendation's experiment opens: its run on the Datasets Experiments tab (public/datasetview.js dsRunOf).
