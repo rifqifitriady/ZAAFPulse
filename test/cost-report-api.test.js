@@ -101,12 +101,14 @@ test('report: one center, Unassigned, a past month without budget states, and th
   for (const body of s.bodies) assert.doesNotMatch(body, PATHS);
 });
 
-test('report: 400 for a bad or future month, an unknown center or currency; 503 for a ledger that does not read', async () => {
+test('report: 400 for a bad month, unknown center or currency; 503 for a ledger that does not read', async () => {
   const s = setup();
   for (const [q, msg] of [
     ['month=2026-13', 'month: YYYY-MM'],
     ['month=26-10', 'month: YYYY-MM'],
     ['month=2026-11', 'month: this month or earlier'],
+    ['month=0000-01', 'month: not in the ledger'],
+    ['month=2026-07', 'month: not in the ledger'],
     ['center=nobody', 'unknown center'],
     ['currency=EUR', 'no rates for that currency; set it in the cost settings'],
   ]) {
@@ -141,4 +143,24 @@ test('report: 400 for a bad or future month, an unknown center or currency; 503 
   assert.deepEqual(p.body.notes.unread, ['2026-09', 'corrections']);
   assert.equal(p.body.notes.corrections, null);
   for (const body of [...s.bodies, ...down.bodies]) assert.doesNotMatch(body, PATHS);
+});
+
+test('report: budgetsError when the budgets of the current month do not evaluate', async () => {
+  const s = setup();
+  const d = costDemo(NOW);
+  const api = createCostApi({
+    cost: s.cost,
+    settings: { get: () => d.settings, save: () => {} },
+    home: HOME,
+    now: () => NOW,
+    budgets: {
+      evaluate: () => {
+        throw new Error('budgets broke');
+      },
+    },
+  });
+  const r = await api.route({ method: 'GET', path: '/api/cost/report', query: new URLSearchParams('') });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.budgetsError, 'budgets could not be read');
+  assert.deepEqual(r.body.budgets, []);
 });

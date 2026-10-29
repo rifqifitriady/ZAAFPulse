@@ -435,11 +435,12 @@ test('center id from a name: lower-case, suffixed when taken, never unassigned o
   assert.equal(U.costSetCenterId('Acme', ['acme', 'acme-2']), 'acme-3');
   assert.equal(U.costSetCenterId('Unassigned'), 'unassigned-2');
   assert.equal(U.costSetCenterId('Constructor'), 'constructor-2');
+  assert.equal(U.costSetCenterId('All'), 'all-2');
   assert.equal(U.costSetCenterId('  ***  '), 'center');
   const long = 'x'.repeat(45);
   assert.equal(U.costSetCenterId(long).length, 40);
   assert.equal(U.costSetCenterId(long, [U.costSetCenterId(long)]), 'x'.repeat(38) + '-2');
-  for (const name of ['Client: Acme', 'Unassigned', '', long, '__proto__', 'a'.repeat(80)]) {
+  for (const name of ['Client: Acme', 'Unassigned', 'All', '', long, '__proto__', 'a'.repeat(80)]) {
     const id = U.costSetCenterId(name, ['a'.repeat(40)]);
     assert.ok(R.validate({ centers: [{ id, name: 'N' }] }).ok, `${name} → ${id}`);
   }
