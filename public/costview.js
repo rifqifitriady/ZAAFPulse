@@ -865,6 +865,16 @@ function costTableRows(led, groupBy, { measure, cur, filter }) {
   for (const x of rows) x.share = total > 0 ? x.spend / total : null;
   return { rows, total };
 }
+/** The Breakdown table's Export CSV link (GET /api/cost/export): the page's range, currency and measure, and the
+ *  table's grouping as the ledger is asked for it (a filter's dimension included; the export holds every value). */
+function costExportHref(c, groupBy, today = costToday()) {
+  const r = costRangeDays(c, today);
+  const q = new URLSearchParams({ format: 'csv', from: r.from, to: r.to, groupBy: groupBy.join(',') });
+  q.set('measure', c.measure === 'billed' ? 'billed' : 'list');
+  if (c.cur && c.cur !== 'USD') q.set('currency', c.cur);
+  return `/api/cost/export?${q}`;
+}
+
 const COST_SORT_NUM = ['spend', 'share', 'requests', 'tokens', 'perRequest'];
 function costPaintTable() {
   const host = $('#cost-table');
@@ -910,7 +920,8 @@ function costPaintTable() {
         .join('')
     : `<tr><td colspan="${show.length + 5}">${esc('Nothing in this range.')}</td></tr>`;
   const heads = show.map((d) => head(`d:${d}`, COST_DIM_LABEL[d] || d, false)).join('');
-  host.innerHTML = `<div class="cost-table-bar"><span>Group by (up to 4):</span>${picks}${chip}${left}</div>
+  const exportLink = `<a class="btn ghost cost-export" href="${esc(costExportHref(COST.controls, plan.query))}" download>Export CSV</a>`;
+  host.innerHTML = `<div class="cost-table-bar"><span>Group by (up to 4):</span>${picks}${chip}${left}${exportLink}</div>
     <div class="table-wrap"><table class="cost-table"><thead><tr>${heads}${head('spend', 'Spend', true)}${head('share', 'Share', true)}${head('requests', 'Requests', true)}${head('tokens', 'Tokens', true)}${head('perRequest', 'Per request', true)}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
@@ -1535,6 +1546,7 @@ if (typeof module !== 'undefined')
     costQuietWait,
     costLoadTable,
     costTablePlan,
+    costExportHref,
     costPaintTable,
     costFilterTo,
   };

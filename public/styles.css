@@ -9883,3 +9883,8 @@ label.mon-cand.on {
     height: auto;
   }
 }
+
+/* The Breakdown table's Export CSV link sits at the end of its bar. */
+.cost-table-bar .cost-export {
+  margin-left: auto;
+}
