@@ -269,3 +269,106 @@ test('currency save: rates already in order are not repainted; rates out of orde
   assert.equal(unsorted - sorted, 1, 'one more paint when the order changed');
   assert.equal(sorted, 1, 'only the busy paint of the Save itself');
 });
+
+/* ---------- fix round 1 ---------- */
+
+const MAYBE = 'The restate may still be running; check the history before trying again';
+const armRestate = () =>
+  Object.assign(U.COST_SET.restate, {
+    from: '2026-10-01',
+    to: '2026-10-27',
+    reason: 'why',
+    ack: true,
+    preview: { changed: 1, basis: '0123456789abcdef' },
+    of: { from: '2026-10-01', to: '2026-10-27', gen: U.COST_SET.gen },
+    running: false,
+    loading: false,
+    error: null,
+    done: null,
+  });
+
+test('restate: Run gets a long time limit; a timeout says it may still be running and reloads the history', async (t) => {
+  resetState();
+  const realTimeout = AbortSignal.timeout;
+  t.after(() => (AbortSignal.timeout = realTimeout));
+  const asked = [];
+  AbortSignal.timeout = (ms) => {
+    asked.push(ms);
+    return realTimeout.call(AbortSignal, 20);
+  };
+  const calls = [];
+  global.fetch = (url, opts = {}) => {
+    calls.push(`${opts.method || 'GET'} ${url}`);
+    if (url === '/api/cost/restates') return Promise.resolve({ status: 200, json: async () => ({ restates: [] }) });
+    return new Promise(() => {}); // the restate never answers
+  };
+  const r = armRestate();
+  U.COST_SET.history = [{}];
+  await U.costSetRunRestate();
+  await new Promise((res) => setImmediate(res));
+  assert.ok(asked[0] >= 5 * 60 * 1000, `the restate's time limit is long: ${asked[0]}`);
+  assert.equal(r.error, MAYBE);
+  assert.deepEqual([r.preview, r.of, r.ack, r.running], [null, null, false, false], 'Run is not armed again');
+  assert.ok(calls.includes('GET /api/cost/restates'), 'the history reloads');
+  // A network failure says the same.
+  armRestate();
+  global.fetch = (url) =>
+    url === '/api/cost/restates'
+      ? Promise.resolve({ status: 200, json: async () => ({ restates: [] }) })
+      : Promise.reject(new TypeError('Failed to fetch'));
+  await U.costSetRunRestate();
+  assert.equal(U.COST_SET.restate.error, MAYBE);
+});
+
+test('save: typing during a Save keeps the draft on what was saved; its next Save posts without a warning', async () => {
+  resetState();
+  let server = JSON.parse(JSON.stringify(SAVED));
+  let typed = false;
+  const calls = fakeServer({
+    'GET /api/cost/settings': () => ({ status: 200, json: ANSWER({ settings: server }) }),
+    'POST /api/cost/settings': () => {
+      server = calls[calls.length - 1].body; // the server keeps what it was sent
+      if (!typed) {
+        typed = true;
+        U.costSetEdit('rules', (d) => (d.centers[0].name = 'Typed meanwhile'));
+      }
+      return { status: 200, json: { settings: server } };
+    },
+  });
+  U.costSetEdit('rules', (d) => (d.centers[0].name = 'Sent'));
+  await U.costSetSave('rules');
+  assert.equal(U.COST_SET.drafts.rules.centers[0].name, 'Typed meanwhile', 'the draft is kept');
+  await U.costSetSave('rules');
+  assert.notEqual(U.COST_SET.msg.rules.text, OUTSIDE);
+  const posts = calls.filter((c) => c.method === 'POST');
+  assert.equal(posts.length, 2, 'the second Save posts');
+  assert.equal(posts[1].body.centers[0].name, 'Typed meanwhile');
+});
+
+test('a Save queued while another hangs runs once the first times out', async (t) => {
+  resetState();
+  const realTimeout = AbortSignal.timeout;
+  t.after(() => (AbortSignal.timeout = realTimeout));
+  AbortSignal.timeout = () => realTimeout.call(AbortSignal, 20);
+  let first = true;
+  const calls = [];
+  global.fetch = (url, opts = {}) => {
+    calls.push(opts.method || 'GET');
+    if (first) {
+      first = false;
+      return new Promise(() => {}); // the first Save's read hangs
+    }
+    const json = opts.method === 'POST' ? { settings: SAVED } : ANSWER();
+    return Promise.resolve({ status: 200, json: async () => json });
+  };
+  U.costSetEdit('rules', (d) => (d.centers[0].name = 'X'));
+  U.costSetEdit('billing', (d) => (d.billing.codex = { mode: 'plan', plan: 'Pro', feeUSD: '20', period: 'month' }));
+  const a = U.costSetSave('rules');
+  const b = U.costSetSave('billing');
+  assert.equal(U.COST_SET.savesPending, 2);
+  await Promise.all([a, b]);
+  assert.equal(U.COST_SET.msg.rules.text, SLOW);
+  assert.equal(U.COST_SET.msg.billing.tone, 'ok');
+  assert.deepEqual(calls, ['GET', 'GET', 'POST'], 'the queued Save read and posted after the first gave up');
+  assert.equal(U.COST_SET.savesPending, 0);
+});

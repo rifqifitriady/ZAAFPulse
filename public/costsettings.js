@@ -1072,6 +1072,9 @@ COST_SET_BODIES.digest = costSetDigestHtml;
 /* ---------- panel: restate ---------- */
 
 const COST_SET_MAX_REASON = 200; // lib/cost/api.js MAX_REASON
+// A restate cannot be undone: its request waits long, and when no answer comes it is not offered again.
+const COST_SET_RESTATE_MS = 5 * 60 * 1000;
+const COST_SET_RESTATE_UNKNOWN = 'The restate may still be running; check the history before trying again';
 const COST_SET_RESTATE_TEXT =
   "Restate recomputes a past range with today's prices, rules and billing, and records the result as a correction. It cannot be undone. Today is never restated: it follows the current settings already.";
 
@@ -1217,7 +1220,7 @@ async function costSetRunRestate() {
     const body = { from: r.of.from, to: r.of.to, reason: r.reason.trim(), confirm: true };
     // The server refuses (409) when the settings or prices changed since this preview, here or elsewhere.
     if (r.preview.basis) body.basis = r.preview.basis;
-    const res = await costPost('/api/cost/restate', body);
+    const res = await costPost('/api/cost/restate', body, { timeoutMs: COST_SET_RESTATE_MS });
     if (my !== COST_SET.restateReq) return;
     if (res.status === 200) {
       const n = res.json.correction.rows.length;
@@ -1233,9 +1236,12 @@ async function costSetRunRestate() {
       r.error = (res.json && res.json.error) || `Could not restate (${res.status})`;
       if (res.status === 409) r.of = { ...r.of, stale: true }; // preview again
     }
-  } catch (e) {
+  } catch {
+    // No answer (a time limit, the network): the restate may have been recorded, so Run is not armed again and the
+    // history says whether it was.
     if (my !== COST_SET.restateReq) return;
-    r.error = e.message;
+    Object.assign(r, { error: COST_SET_RESTATE_UNKNOWN, preview: null, of: null, reason: '', ack: false });
+    costSetLoadHistory();
   }
   r.running = false;
   costSetPaintPanel('restate', [['data-cost-set-act', 'restate-preview']]);

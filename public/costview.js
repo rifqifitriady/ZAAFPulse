@@ -454,8 +454,14 @@ async function costGet(path) {
   if (r.status !== 200) throw new Error((r.json && r.json.error) || `request failed (${r.status})`);
   return r.json;
 }
-const costPost = (path, body) =>
-  costCall(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+// `opts` adds to the request's options (e.g. a longer `timeoutMs`).
+const costPost = (path, body, opts) =>
+  costCall(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    ...opts,
+  });
 
 // Numbers count up on an animated load (render(true)), at once with reduced motion or on a quiet refresh.
 function costCountUp(root, fmt) {
