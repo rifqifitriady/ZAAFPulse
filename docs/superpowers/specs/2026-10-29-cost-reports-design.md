@@ -46,7 +46,7 @@ This is the last Cost Control sub-project. It gets the cost data **out** of the 
 - **Totals:** usage value and paid, with requests and tokens.
 - **Tables:** spend by source, by model, by key (key names) and by project (`~` folders). Each table holds up to 20 rows, then "Other".
 - **Daily spend:** a small bar chart of the month.
-- **Budgets:** those whose scope is this center, or every budget for All centers. Each shows its state and percentage, as on the Budgets page, for this month only when the month is the current one.
+- **Budgets:** those whose scope is this center, or every budget for All centers. Each shows its state and percentage, as on the Budgets page, for this month only when the month is the current one. A past month says "Budget states are shown for the current month only."; when no budget service runs it says "Budgets are not available."; a list that did not read says "Budgets could not be read."
 - **Notes:** months that did not read, and days whose billing was assumed. Corrections (restates) in the period are listed with their reason.
 
 **Actions**

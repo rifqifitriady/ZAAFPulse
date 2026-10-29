@@ -293,3 +293,59 @@ test('costreports.js builds no markup from server or owner text without esc(), a
   for (const [name] of src.matchAll(/^(?:const|let|function|async function)\s+([A-Za-z_$][\w$]*)/gm))
     assert.match(name.split(/\s+/).pop(), /^(?:costRep|COST_REP)|^costMountReports$/, `${name}: starts with costRep`);
 });
+
+test('fix round 1: unrated day, unread line, one-day period, file name for All centers', () => {
+  const idr = { ...CTX, cur: 'IDR', fmt: (v) => V.costMoney(v, 'IDR') };
+  const html = U.costRepHtml(
+    { ...REPORT, daily: [{ day: '2026-10-01', ...money(5, 5), list: null, billed: null }] },
+    idr,
+  );
+  assert.ok(!/\$5\.00/.test(html), 'no USD amount in an IDR chart');
+  const withUnread = U.costRepCsv(REPORT, CTX);
+  assert.ok(withUnread.endsWith('\r\n# unread: 2026-09\r\n'), withUnread.slice(-40));
+  assert.ok(!U.costRepCsv({ ...REPORT, notes: { unread: [] } }, CTX).includes('# unread'));
+  assert.equal(U.costRepPeriod({ ...REPORT, to: '2026-10-01', generatedAt: null }), '1 October 2026');
+  assert.equal(U.costRepCsvName({ ...REPORT, center: { id: '__all' } }), 'zaafpulse-report-all-2026-10.csv');
+});
+
+test('fix round 1: a refused report shows its error and keeps the controls; the stored currency is the fallback', async () => {
+  const saved = {
+    $: global.$,
+    state: global.state,
+    location: global.location,
+    fetch: global.fetch,
+    document: global.document,
+    localStorage: global.localStorage,
+  };
+  const els = {
+    '#cost-body': { isConnected: true, innerHTML: '' },
+    '#cost-bar': { innerHTML: '' },
+    '#cost-ribbon': { innerHTML: '' },
+  };
+  const urls = [];
+  global.$ = (s) => els[s] || null;
+  global.state = { sub: 'reports' };
+  global.location = { hash: '#cost/reports?month=2026-01&center=gone' };
+  global.document = { addEventListener() {} };
+  global.localStorage = { getItem: () => JSON.stringify({ cur: 'IDR' }) };
+  const settings = {
+    settings: { centers: [], currency: { code: 'IDR', rates: [{ from: '2026-01-01', perUSD: 16000 }] } },
+    keys: [],
+    sources: [],
+  };
+  global.fetch = async (url) => {
+    urls.push(url);
+    if (url.startsWith('/api/cost/settings')) return { status: 200, json: async () => settings };
+    if (url.startsWith('/api/cost/status')) return { status: 200, json: async () => ({}) };
+    return { status: 400, json: async () => ({ error: 'unknown center' }) };
+  };
+  try {
+    await U.costMountReports();
+    assert.ok(urls.includes('/api/cost/report?month=2026-01&center=gone&currency=IDR'), urls.join(' '));
+    assert.match(els['#cost-body'].innerHTML, /unknown center/);
+    assert.match(els['#cost-bar'].innerHTML, /data-cost-rep-center/);
+  } finally {
+    Object.assign(global, saved);
+    if (saved.localStorage === undefined) delete global.localStorage;
+  }
+});
