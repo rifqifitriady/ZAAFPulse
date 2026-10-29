@@ -145,8 +145,8 @@ function costBurnSvg(o, fmt) {
 }
 
 // Daily spend as bars against each day's 7-day baseline; a spike is a pink marker with its day, spend, baseline and
-// the day's top model.
-function costSpikeSvg(spikes, fmt) {
+// the day's top model. `baselineText: false` (the Reports page) leaves the baseline wording out of the tooltip.
+function costSpikeSvg(spikes, fmt, { baselineText = true } = {}) {
   const W = 640;
   const H = 170;
   const m = { t: 12, r: 10, b: 22, l: 60 };
@@ -166,7 +166,7 @@ function costSpikeSvg(spikes, fmt) {
     const tip = costTip([
       costDayLabel(s.day),
       fmt(s.spend),
-      s.baseline == null ? 'no baseline yet' : `baseline ${fmt(s.baseline)}`,
+      baselineText ? (s.baseline == null ? 'no baseline yet' : `baseline ${fmt(s.baseline)}`) : '',
       s.spike ? 'spike' : '',
       s.topModel ? 'top model ' + s.topModel : '', // costTip escapes the whole line
     ]);

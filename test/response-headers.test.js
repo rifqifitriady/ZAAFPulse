@@ -25,3 +25,16 @@ test('response headers: a route adds Content-Disposition only; type, no-store an
     'Cache-Control': 'no-store',
   });
 });
+
+test('response headers: Content-Disposition in two casings goes out once, under its canonical name', () => {
+  const h = responseHeaders(
+    'text/csv',
+    { 'content-disposition': 'attachment; filename="a.csv"', 'CONTENT-DISPOSITION': 'attachment; filename="b.csv"' },
+    {},
+  );
+  assert.deepEqual(
+    Object.keys(h).filter((k) => k.toLowerCase() === 'content-disposition'),
+    ['Content-Disposition'],
+  );
+  assert.equal(h['Content-Disposition'], 'attachment; filename="b.csv"');
+});
