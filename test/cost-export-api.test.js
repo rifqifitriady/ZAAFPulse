@@ -128,3 +128,21 @@ test('export: over 100,000 rows is a 413; a ledger that does not read is a 503 w
     '2026-09',
   ]);
 });
+
+test('export: the header row and the cells use one column list, the ledger answer', async () => {
+  const s = setup({
+    cost: {
+      ledger: () => ({
+        groupBy: ['model'],
+        currency: 'USD',
+        rows: [{ model: 'm', requests: 1, tokens: {}, listUSD: 1, billedUSD: 1 }],
+        unread: [],
+      }),
+    },
+  });
+  const r = await s.get('from=2026-10-01&to=2026-10-02&groupBy=day&currency=IDR');
+  const [head, line] = r.body.split('\r\n');
+  assert.equal(head, 'model,requests,inputTokens,outputTokens,cacheReadTokens,cacheWriteTokens,listUSD,billedUSD');
+  assert.equal(line.split(',').length, head.split(',').length);
+  assert.equal(line.split(',')[0], 'm');
+});

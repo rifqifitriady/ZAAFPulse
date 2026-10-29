@@ -11,6 +11,7 @@ const path = require('path');
 const os = require('os');
 const { Indexer } = require('./lib/indexer');
 const { summarize } = require('./lib/aggregate');
+const { responseHeaders } = require('./lib/response-headers');
 const { DEFAULT_PRICING, SNAPSHOT_META } = require('./lib/pricing');
 const processes = require('./lib/processes');
 const { getVault } = require('./lib/vault');
@@ -989,9 +990,9 @@ const SECURITY_HEADERS = {
   'Cross-Origin-Resource-Policy': 'same-origin',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), usb=(), payment=()',
 };
-// `headers` adds to an answer (a download's Content-Disposition); it never replaces a security header.
+// `headers` may add a download's Content-Disposition only (lib/response-headers.js).
 function send(res, status, body, type = 'application/json', headers = {}) {
-  res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', ...headers, ...SECURITY_HEADERS });
+  res.writeHead(status, responseHeaders(type, headers, SECURITY_HEADERS));
   res.end(type === 'application/json' ? JSON.stringify(body) : body);
 }
 
