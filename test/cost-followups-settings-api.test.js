@@ -141,3 +141,24 @@ test('settings preview: a move a key decides is by key, one the folder rules dec
     ],
   );
 });
+
+test('restate: new prices previewed, then recorded as a version by a pass, still match the preview basis', async () => {
+  const s = setup();
+  s.st.pricing = PRICE_B;
+  const p = (await s.post('/api/cost/restate/preview', RANGE)).body;
+  assert.equal(p.newPrices, true);
+  s.cost.update(); // the pass records PRICE_B as the version the preview named as next
+  assert.equal(s.cost.versions().versions.length, 2);
+  const ok = await run(s, { basis: p.basis });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal(corrections(s), 1);
+});
+
+test('restate: a basis that is not a string is a 400 and writes nothing', async () => {
+  const s = setup();
+  for (const basis of [null, 12, {}, ['a']]) {
+    const r = await run(s, { basis });
+    assert.deepEqual([r.status, r.body], [400, { error: 'basis: a string' }], JSON.stringify(basis));
+  }
+  assert.equal(corrections(s), 0);
+});
