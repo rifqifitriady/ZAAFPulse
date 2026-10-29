@@ -451,15 +451,14 @@ setting you change yourself.
   $42 a month at the last 30 days' use". It is an estimate. The 30 days are always the last 30, whatever range the
   page shows. Where the model ran under a plan the saving is usage value, not money paid, and the footnote says so.
 - **The choice.** For each model the largest saving wins, then the higher pass rate, then the newest run; the other
-  runs that agree are counted ("+2 more experiments agree"). At most 5 recommendations, largest saving first. Each
+  qualifying runs and candidates are counted ("+2 more experiments agree"). At most 5 recommendations, largest saving first. Each
   links to its run in Datasets (`#datasets/experiments?run=<id>`).
 - **No evidence yet.** The 3 models with the most spend over the 30 days and no recommendation, each with its spend
   and a link to Datasets: "No experiment yet" (no finished run compared it with another model on enough rows) or "No
   cheaper model did as well". When no experiment counted at all, the card also says "Run an experiment in Datasets to
   compare models on your own examples" above them. With no model spend in the 30 days it says "No model spend in the
   last 30 days".
-- **When it cannot be computed.** The answer is `recommendations: null` when the experiments cannot be read, when the
-  30 days of spend cannot be read, and when any month of those 30 days is unread (the spend would be understated
+- **When it cannot be computed.** The answer is `recommendations: null` when the 30 days of spend cannot be read, and when any month of those 30 days is unread (the spend would be understated
   while the card looked complete). The card then says "Recommendations could not be computed right now" and the rest
   of the page draws.
 
