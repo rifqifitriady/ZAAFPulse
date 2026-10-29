@@ -99,12 +99,24 @@ function costBurnSvg(o, fmt) {
   const x = (day) => m.l + ((Number(day.slice(8, 10)) - 1) / Math.max(1, days - 1)) * iw;
   const y = (v) => m.t + ih - (Math.min(v, max) / max) * ih;
   const out = [costAxis(W, m, ih, max, fmt)];
-  if (!f.early) {
-    const top = f.line.map((p) => [x(p.day), y(p.high)]);
-    const bottom = f.line.map((p) => [x(p.day), y(p.low)]).reverse();
-    out.push(
-      `<path class="cost-band" d="${costPath([...top, ...bottom])}Z" fill="${COST_C.violet}" fill-opacity=".16"/>`,
-    );
+  // The band is drawn only where it has a width (to the cent); a stretch as wide as the line gets no polygon.
+  const wide = (p) => !f.early && p.low != null && p.high != null && fmt(p.low) !== fmt(p.high);
+  for (let i = 0; i < f.line.length;) {
+    if (!wide(f.line[i])) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j + 1 < f.line.length && wide(f.line[j + 1])) j++;
+    const run = f.line.slice(i, j + 1);
+    if (run.length > 1) {
+      const top = run.map((p) => [x(p.day), y(p.high)]);
+      const bottom = run.map((p) => [x(p.day), y(p.low)]).reverse();
+      out.push(
+        `<path class="cost-band" d="${costPath([...top, ...bottom])}Z" fill="${COST_C.violet}" fill-opacity=".16"/>`,
+      );
+    }
+    i = j + 1;
   }
   out.push(
     `<path class="cost-line" pathLength="1" d="${costPath(o.daily.map((d) => [x(d.day), y(d.cum)]))}" fill="none" stroke="${COST_C.cyan}" stroke-width="2.4" style="filter:drop-shadow(0 0 4px ${COST_C.cyan})"/>`,
@@ -131,7 +143,7 @@ function costBurnSvg(o, fmt) {
     );
   for (const p of f.line.slice(1))
     out.push(
-      `<rect x="${costF(x(p.day) - step / 2)}" y="${m.t}" width="${costF(step)}" height="${ih}" fill="transparent" data-tip="${costTip([costDayLabel(p.day), `forecast ${fmt(p.cum)}`, f.early ? 'no band yet' : `${fmt(p.low)} – ${fmt(p.high)}`])}"/>`,
+      `<rect x="${costF(x(p.day) - step / 2)}" y="${m.t}" width="${costF(step)}" height="${ih}" fill="transparent" data-tip="${costTip([costDayLabel(p.day), `forecast ${fmt(p.cum)}`, f.early ? 'no band yet' : wide(p) ? `${fmt(p.low)} – ${fmt(p.high)}` : null])}"/>`,
     );
   for (let i = 1; i <= days; i += Math.ceil(days / 8))
     out.push(

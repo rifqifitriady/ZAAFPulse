@@ -252,6 +252,10 @@ test('routes: the two parameters are bounded; an alert carries its usual amount,
   const rules = (await call('/api/monitors')).body.rules;
   const card = rules.find((r) => r.id === 'cost_anomaly');
   assert.deepEqual([card.params, card.state, card.instances.length], [{ ratio: 2, minUSD: 1 }, 'triggered', 2]);
+  assert.ok(
+    card.instances.every((i) => /^\d{4}-\d{2}-\d{2}$/.test(i.instance)),
+    'a day names the instance',
+  );
   assert.equal((await call('/api/monitors/cost_anomaly', 'POST', { params: { ratio: 3, minUSD: 0.5 } })).status, 200);
   assert.deepEqual(state.settings('cost_anomaly').params, { ratio: 3, minUSD: 0.5 });
   for (const params of [{ ratio: 1 }, { ratio: 0.5 }, { minUSD: 0 }, { ratio: 101 }])
