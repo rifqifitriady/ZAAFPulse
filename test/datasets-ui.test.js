@@ -14,7 +14,7 @@ const {
   dsSlugOf,
   dsRoute,
   dsRunOf,
-  dsTakeRunLink,
+  dsLinkedRun,
   dsModelOptions,
   dsRunBody,
   dsResultCells,
@@ -42,6 +42,7 @@ const {
   dsWrapFocus,
   dsPgSendPlan,
   dsPgOnError,
+  dsPaintExperiments,
 } = require('../public/datasetview');
 
 const SRC = path.join(__dirname, '..', 'public', 'datasetview.js');
@@ -503,11 +504,22 @@ test('the external preview: any change to the form drops it, and Send never post
 // A tiny stand-in for `document`: nodes record their children and text, and innerHTML is refused.
 function fakeDoc() {
   const el = (tag) => {
-    const node = { tag, children: [], className: '', attrs: {}, textContent: '', classList: { add() {}, toggle() {} } };
+    const node = {
+      tag,
+      children: [],
+      className: '',
+      attrs: {},
+      dataset: {},
+      on: {},
+      textContent: '',
+      classList: { add() {}, toggle() {} },
+    };
     node.append = (...c) => node.children.push(...c);
     node.replaceChildren = (...c) => (node.children = c);
     node.setAttribute = (k, v) => (node.attrs[k] = String(v));
-    node.addEventListener = () => {};
+    node.addEventListener = (type, fn) => (node.on[type] = node.on[type] || []).push(fn);
+    node.querySelectorAll = (sel) =>
+      walkAll(node).filter((n) => n && typeof n === 'object' && n.className.split(' ').includes(sel.slice(1)));
     Object.defineProperty(node, 'innerHTML', {
       set() {
         throw new Error('innerHTML used for content');
@@ -862,18 +874,85 @@ test('the Playground decisions: dsPgSendPlan and dsPgOnError (D-T7-8)', () => {
   assert.deepEqual(dsPgOnError(s, Object.assign(new Error('bad model'), { status: 400 })), { message: 'bad model' });
 });
 
-test('dsTakeRunLink: a linked run opens once, a gone one says so, and the hash drops its ?run=', () => {
-  const calls = [];
-  const hist = { replaceState: (...a) => calls.push(a) };
-  const runs = [{ id: 'exp_00000000000000a0' }];
-  const loc = { hash: '#datasets/experiments?run=exp_00000000000000a0' };
-  assert.deepEqual(dsTakeRunLink(runs, loc, hist), { run: runs[0] });
-  assert.deepEqual(calls, [[null, '', '#datasets/experiments']]);
-  // the hash is rewritten by replaceState, so a second paint sees none
-  loc.hash = '#datasets/experiments';
-  assert.equal(dsTakeRunLink(runs, loc, hist), null);
-  assert.equal(calls.length, 1);
-  const gone = { hash: '#datasets/experiments?run=exp_00000000000000b1' };
-  assert.deepEqual(dsTakeRunLink(runs, gone, hist), { gone: true });
-  assert.equal(calls.length, 2);
+test('dsLinkedRun: every paint of a link visit opens the named run, until the owner picks another', () => {
+  const runs = [{ id: 'exp_00000000000000a0' }, { id: 'exp_00000000000000a1' }];
+  const hash = '#datasets/experiments?run=exp_00000000000000a0';
+  assert.equal(dsLinkedRun(runs, '#datasets/experiments', null, 0), null, 'no link');
+  assert.deepEqual(dsLinkedRun(runs, hash, null, 0), { run: runs[0] });
+  assert.deepEqual(dsLinkedRun(runs, hash, null, 0), { run: runs[0] }, 'a second paint opens it again');
+  const gone = '#datasets/experiments?run=exp_00000000000000b1';
+  assert.deepEqual(dsLinkedRun(runs, gone, null, 0), { gone: true });
+  assert.deepEqual(dsLinkedRun(runs, gone, null, 0), { gone: true }, 'and says so again');
+  // The owner opened another run in this visit: a repaint keeps that pick.
+  const picked = { hash, visit: 0, id: 'exp_00000000000000a1' };
+  assert.deepEqual(dsLinkedRun(runs, hash, picked, 0), { run: runs[1] });
+  // A pick from another hash or an earlier visit of the same hash is not this visit's.
+  assert.deepEqual(dsLinkedRun(runs, hash, { ...picked, hash: '#datasets/experiments' }, 0), { run: runs[0] });
+  assert.deepEqual(dsLinkedRun(runs, hash, picked, 1), { run: runs[0] }, 'the link followed again');
+  // A pick that is no longer listed opens nothing, and the named run is not forced back.
+  assert.equal(dsLinkedRun(runs, hash, { ...picked, id: 'exp_00000000000000c2' }, 0), null);
 });
+
+// The Experiments tab painted into a fake body, as mountDatasets does; returns the run ids it fetched to open.
+function withExperimentsPage(hash, fn) {
+  const saved = {};
+  for (const k of ['document', 'api', '$', 'location', 'history']) saved[k] = global[k];
+  const fetched = [];
+  global.document = fakeDoc();
+  global.$ = () => ({ hidden: false });
+  global.location = { hash };
+  // A browser's replaceState rewrites the hash without a hashchange.
+  global.history = { replaceState: (a, b, url) => (global.location.hash = url) };
+  const runs = [
+    { id: 'exp_00000000000000a0', dataset: 'auth', datasetName: 'Auth', status: 'done', startedAt: 2 },
+    { id: 'exp_00000000000000a1', dataset: 'auth', datasetName: 'Auth', status: 'done', startedAt: 1 },
+  ];
+  global.api = async (path) => {
+    if (path === '/api/experiments') return { experiments: runs, evaluators: [] };
+    if (path === '/api/datasets') return { datasets: [], content: true };
+    const m = /^\/api\/experiments\/(exp_[0-9a-f]{16})$/.exec(path);
+    if (m) fetched.push(m[1]);
+    return { examples: [] };
+  };
+  const paint = async () => {
+    const body = global.document.createElement('div');
+    await dsPaintExperiments(body, () => true);
+    return body;
+  };
+  return Promise.resolve(fn({ paint, fetched })).finally(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete global[k];
+      else global[k] = v;
+    }
+  });
+}
+
+test('a fresh load paints Experiments twice: the second body opens the linked run too', () =>
+  withExperimentsPage('#datasets/experiments?run=exp_00000000000000a0', async ({ paint, fetched }) => {
+    await paint(); // the first body, thrown away by the second render
+    fetched.length = 0;
+    await paint();
+    assert.deepEqual(fetched, ['exp_00000000000000a0']);
+  }));
+
+test('a linked run that is gone says so on the second paint too', () =>
+  withExperimentsPage('#datasets/experiments?run=exp_00000000000000b1', async ({ paint, fetched }) => {
+    await paint();
+    const body = await paint();
+    assert.ok(textOf(body).includes('That experiment is no longer kept (only the latest 100 are)'));
+    assert.deepEqual(fetched, []);
+  }));
+
+test('after the owner opens another run, a repaint keeps that pick and does not reopen the linked one', () =>
+  withExperimentsPage('#datasets/experiments?run=exp_00000000000000a0', async ({ paint, fetched }) => {
+    const body = await paint();
+    const rows = walkAll(body).filter((n) => n && n.tag === 'tr' && n.dataset.id);
+    const row = rows.find((n) => n.dataset.id === 'exp_00000000000000a1');
+    const btn = walkAll(row).find((n) => n && n.tag === 'button');
+    assert.ok(btn, 'the other run has its open button');
+    btn.on.click.forEach((f) => f());
+    assert.deepEqual(fetched, ['exp_00000000000000a0', 'exp_00000000000000a1']);
+    fetched.length = 0;
+    await paint(); // a theme or range repaint
+    assert.deepEqual(fetched, ['exp_00000000000000a1']);
+  }));

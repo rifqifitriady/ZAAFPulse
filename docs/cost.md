@@ -456,8 +456,8 @@ setting you change yourself.
   page shows. Where the model ran under a plan the saving is usage value, not money paid, and the footnote says so.
 - **The choice.** For each model the largest saving wins, then the higher pass rate, then the newest run; the other
   qualifying runs and candidates are counted ("+2 more experiments agree"). At most 5 recommendations, largest saving first. Each
-  links to its run in Datasets (`#datasets/experiments?run=<id>`). The link opens that run once and the hash drops
-  `?run=`, so a later repaint opens nothing; a run no longer kept shows "That experiment is no longer kept (only the
+  links to its run in Datasets (`#datasets/experiments?run=<id>`). The link opens the named run when the page loads, and
+  the hash keeps `?run=`; once you open another run on that visit, a repaint keeps your pick. A run no longer kept shows "That experiment is no longer kept (only the
   latest 100 are)". A rate the experiment lacks reads as a dash.
 - **No evidence yet.** The 3 models with the most spend over the 30 days and no recommendation, each with its spend
   and a link to Datasets: "No experiment yet" (no finished run compared it with another model on enough rows) or "No
@@ -483,7 +483,7 @@ once, under that canonical name; the type, `Cache-Control: no-store` and the sec
 **Reports.** `#cost/reports` shows one cost center's month for a client, chosen with a month (this month back to the
 ledger's first month; by default last month, or this month while the ledger does not hold all of last month), a
 center (All centers, Unassigned, or a center) and the display currency, which is the same choice the other cost pages
-keep. A center's figures are its usage; plan fees have no center and show under All centers only. A center's report lists the budgets scoped to the center and those scoped to one of its keys. An absolute project folder (one outside the home folder) shows in the report as `…/<last segment>`, and two folders with the same last segment share a label; the ledger and the other pages keep the full folder. The daily chart's tooltips carry no baseline wording. Budgets show their
+keep. A center's figures are its usage; plan fees have no center and show under All centers only. A center's report lists the budgets scoped to the center and those scoped to keys mapped to the center in the cost settings (`cost.keyCenters`); a budget on a key with no center there is not listed under Unassigned. An absolute project folder (one outside the home folder) shows in the report as `…/<last segment>`, and two folders with the same last segment share a label; the ledger and the other pages keep the full folder. The daily chart's tooltips carry no baseline wording. Budgets show their
 state for the current month only: a past month says "Budget states are shown for the current month only.", a budget
 list that does not read says "Budgets could not be read.", and a server without budgets says "Budgets are not
 available." **Print** uses the browser's print (the print style hides the sidebar and the controls and fits A4 and
