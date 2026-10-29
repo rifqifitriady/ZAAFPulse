@@ -4,6 +4,7 @@
 // one of the two never lists the same tools under a second name. It exposes the dashboard's own data plus every
 // integration configured in config.json. stdout carries protocol messages only; logs go to stderr.
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { createServer } = require('./lib/mcp/protocol');
 const { createIntegrations } = require('./lib/integrations');
@@ -36,9 +37,9 @@ otel.init({ getConfig: () => config, secrets, version, log });
 // The cost tools read the server's cost data read-only; they are on this stdio server only, never on gateway /mcp.
 const cost = createCostReader({
   dir: path.join(DIR, '.data', 'cost'),
-  configFile: CONFIG_FILE,
+  configFile: path.join(DIR, 'config.json'), // the file the server enforces, not ACC_CONFIG
   keysFile: path.join(DIR, '.data', 'keys.json'),
-  home: require('os').homedir(),
+  home: os.homedir(),
 });
 const local = createLocal({ cacheDir: CACHE_DIR, config, dataDir: DIR, cost });
 const integrations = createIntegrations({
