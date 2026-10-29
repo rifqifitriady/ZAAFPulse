@@ -99,6 +99,14 @@ test('demo over HTTP: the export downloads as CSV and as JSON, no-store, with th
     const bad = await get(s.base, '/api/cost/export?format=xlsx');
     assert.equal(bad.status, 400);
     assert.equal(bad.headers.get('content-disposition'), null, 'an error is not a download');
+    const rep = await get(s.base, '/api/cost/report?center=client-acme');
+    assert.equal(rep.status, 200);
+    assert.equal(rep.headers.get('content-type'), 'application/json');
+    const report = await rep.json();
+    assert.deepEqual(report.center, { id: 'client-acme', name: 'Client: Acme' });
+    assert.ok(report.totals.listUSD > 0 && report.tables.model.length > 0);
+    assert.doesNotMatch(JSON.stringify(report), PATHS);
+    assert.equal((await get(s.base, '/api/cost/report?center=nobody')).status, 400);
   } finally {
     await s.stop();
   }
@@ -120,7 +128,7 @@ test('over HTTP: the export and the report answer the dashboard sign-in only, ne
   fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ pricingSync: { enabled: false } }));
   const s = await startServer({ ZAAFPULSE_AUTH: '1', ZAAFPULSE_ADMIN_PASSWORD: PASSWORD }, { data });
   try {
-    const routes = ['/api/cost/export', '/api/cost/export?format=json'];
+    const routes = ['/api/cost/export', '/api/cost/export?format=json', '/api/cost/report'];
     for (const p of routes) {
       assert.equal((await get(s.base, p)).status, 401, p);
       const bearer = { authorization: `Bearer ${secret}`, 'x-api-key': secret };
@@ -143,6 +151,9 @@ test('over HTTP: the export and the report answer the dashboard sign-in only, ne
       'day,requests,inputTokens,outputTokens,cacheReadTokens,cacheWriteTokens,listUSD,billedUSD\r\n',
       'an empty ledger: the header row only',
     );
+    const rep = await get(s.base, '/api/cost/report', { cookie });
+    assert.equal(rep.status, 200);
+    assert.equal((await rep.json()).totals.listUSD, 0);
   } finally {
     await s.stop();
   }
