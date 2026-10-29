@@ -418,19 +418,36 @@ function costName(col, key, ctx) {
   return String(key);
 }
 
+const COST_CALL_MS = 30000;
+const COST_SLOW = 'The request took too long; try again';
+// A request and its JSON answer. It gives up after 30 s (`timeoutMs`) unless the caller passes its own signal: a
+// request that never answers would otherwise hold its caller, and the Saves queued behind it, for good.
 async function costCall(path, opts) {
-  const r = await fetch(path, opts);
-  if (r.status === 401) {
-    location.href = '/login.html'; // server mode: the session ended
-    throw new Error('signed out');
-  }
-  let json = null;
+  const { timeoutMs = COST_CALL_MS, ...init } = opts || {};
+  const ask = async (o) => {
+    const r = await fetch(path, o);
+    if (r.status === 401) {
+      location.href = '/login.html'; // server mode: the session ended
+      throw new Error('signed out');
+    }
+    let json = null;
+    try {
+      json = await r.json();
+    } catch {
+      /* not JSON */
+    }
+    return { status: r.status, json };
+  };
+  if (init.signal) return ask(init);
+  const signal = AbortSignal.timeout(timeoutMs);
+  // Raced as well as passed on: the time limit holds even where the request does not follow the signal.
+  const late = new Promise((_, no) => signal.addEventListener('abort', () => no(new Error(COST_SLOW)), { once: true }));
   try {
-    json = await r.json();
-  } catch {
-    /* not JSON */
+    return await Promise.race([ask({ ...init, signal }), late]);
+  } catch (e) {
+    if (signal.aborted) throw new Error(COST_SLOW);
+    throw e;
   }
-  return { status: r.status, json };
 }
 async function costGet(path) {
   const r = await costCall(path);
@@ -1489,6 +1506,7 @@ if (typeof module !== 'undefined')
     COST_MONTH_LONG,
     COST_MAX_DAYS,
     costToday,
+    costCall,
     costGet,
     costPost,
     costSub,

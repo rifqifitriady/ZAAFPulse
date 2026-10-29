@@ -101,7 +101,7 @@ test('settings preview: a draft against the settings in force over the last 30 d
   assert.equal(r.status, 200);
   assert.deepEqual([r.body.from, r.body.to, r.body.unread], ['2026-09-23', '2026-10-22', []]);
   assert.deepEqual(r.body.moves, [
-    { project: null, keyId: 'key_a', keyName: 'Acme app', listUSD: 0.006, from: 'unassigned', to: 'acme' },
+    { project: null, keyId: 'key_a', keyName: 'Acme app', listUSD: 0.006, from: 'unassigned', to: 'acme', by: 'key' },
   ]);
   assert.equal(r.body.more, 0);
   assert.deepEqual(r.body.rules, [{ index: 0, status: 'none', by: null }]);

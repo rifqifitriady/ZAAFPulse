@@ -127,6 +127,22 @@ function costSetDirty(panel, saved, draft, sources) {
   );
 }
 
+// The fields each form panel saves (costSetBody replaces these, and keeps the rest as saved).
+const COST_SET_PANEL_FIELDS = {
+  rules: ['centers', 'keyCenters', 'folderRules'],
+  billing: ['billing'],
+  currency: ['currency'],
+  digest: ['digest'],
+};
+/** A panel's own fields in the saved settings, serialised as its Save would send them: what an outside change is
+ *  compared on. */
+function costSetFieldsOf(panel, saved, sources) {
+  const body = costSetBody(panel, saved, costSetFromSaved(panel, saved, sources), sources);
+  return JSON.stringify(COST_SET_PANEL_FIELDS[panel].map((k) => body[k]));
+}
+const COST_SET_OUTSIDE =
+  'These settings changed elsewhere since you started editing. Save again to replace them, or Discard to load them.';
+
 /** Sets one form value in a draft by its field path ("centers.2.name", "keyCenters.key_a", "billing.claude.plan").
  *  An empty key mapping is removed: "Folder rules decide". */
 function costSetAssign(draft, path, value) {
@@ -164,6 +180,7 @@ const COST_SET = {
   answer: null, // GET /api/cost/settings
   budgets: [], // GET /api/cost/budgets → budgets, for "Used by"
   drafts: {}, // panel -> its draft, kept for the life of the tab
+  bases: {}, // panel -> its saved fields when its draft began (costSetFieldsOf): a Save checks them for outside changes
   msg: {}, // panel -> { tone, text, reasons, restate, budgets } after a Save
   marks: {}, // panel -> the field paths a 400's reasons name
   busy: {}, // panel -> a Save in flight
@@ -213,7 +230,10 @@ const costSetAnyDirty = () =>
   COST_SET_FORMS.some((p) => costSetDirty(p, costSetSaved(), COST_SET.drafts[p], costSetSources()));
 // The draft of a panel, made from the saved values on its first edit, changed by `fn`.
 function costSetEdit(panel, fn) {
-  if (!COST_SET.drafts[panel]) COST_SET.drafts[panel] = costSetFromSaved(panel, costSetSaved(), costSetSources());
+  if (!COST_SET.drafts[panel]) {
+    COST_SET.drafts[panel] = costSetFromSaved(panel, costSetSaved(), costSetSources());
+    COST_SET.bases[panel] = costSetFieldsOf(panel, costSetSaved(), costSetSources());
+  }
   fn(COST_SET.drafts[panel]);
   return COST_SET.drafts[panel];
 }
@@ -373,10 +393,23 @@ async function costSetSaveRun(panel) {
       COST_SET.msg[panel] = { tone: 'ok', text: 'Nothing to save.' };
       return;
     }
+    // Changed elsewhere (another tab, a hand edit) since this draft began: last write would win, so the first Save
+    // only says so, and takes what is there now as the base: the next Save replaces it, Discard shows it.
+    const was = COST_SET.bases[panel];
+    const now = costSetFieldsOf(panel, fresh.settings, fresh.sources);
+    if (was !== undefined && was !== now) {
+      COST_SET.bases[panel] = now;
+      COST_SET.answer = fresh;
+      COST.settings = fresh;
+      COST_SET.msg[panel] = { tone: 'warn', text: COST_SET_OUTSIDE };
+      return;
+    }
     const draft = COST_SET.drafts[panel];
     if (panel === 'currency' && COST_SET.drafts.currency && draft.currency.on === 'on') {
+      const order = (rates) => JSON.stringify(rates.map((r) => r.from));
+      const before = order(draft.currency.rates);
       draft.currency.rates.sort(costSetByFrom);
-      costSetPaintPanel(panel);
+      if (order(draft.currency.rates) !== before) costSetPaintPanel(panel);
     }
     const sent = JSON.stringify(costSetBody(panel, fresh.settings, draft, fresh.sources));
     const res = await costPost('/api/cost/settings', JSON.parse(sent));
@@ -384,13 +417,18 @@ async function costSetSaveRun(panel) {
     if (res.status === 200) {
       saved = true;
       // Typing while the Save ran changes the draft in place: it goes only if it still says what was sent.
-      const now = COST_SET.drafts[panel];
-      if (!now || JSON.stringify(costSetBody(panel, fresh.settings, now, fresh.sources)) === sent)
+      const kept = COST_SET.drafts[panel];
+      if (!kept || JSON.stringify(costSetBody(panel, fresh.settings, kept, fresh.sources)) === sent) {
         delete COST_SET.drafts[panel];
-      else if (panel === 'rules') {
-        // A kept draft: its centers that went out are saved now, so their ids are fixed.
-        const sentIds = new Set(JSON.parse(sent).centers.map((c) => c.id));
-        for (const c of now.centers) if (c.isNew && sentIds.has(String(c.id ?? '').trim())) c.isNew = false;
+        delete COST_SET.bases[panel];
+      } else {
+        // A kept draft goes on from what was just saved, as the server keeps it.
+        COST_SET.bases[panel] = costSetFieldsOf(panel, j.settings || JSON.parse(sent), fresh.sources);
+        if (panel === 'rules') {
+          // Its centers that went out are saved now, so their ids are fixed.
+          const sentIds = new Set(JSON.parse(sent).centers.map((c) => c.id));
+          for (const c of kept.centers) if (c.isNew && sentIds.has(String(c.id ?? '').trim())) c.isNew = false;
+        }
       }
       COST_SET.marks[panel] = [];
       COST_SET.gen++;
@@ -453,6 +491,7 @@ Object.assign(COST_SET_ACTIONS, {
   discard: (b) => {
     const p = b.dataset.panel;
     delete COST_SET.drafts[p];
+    delete COST_SET.bases[p];
     COST_SET.marks[p] = [];
     COST_SET.msg[p] = null;
     costSetPaintPanel(p, [
@@ -675,11 +714,17 @@ function costSetPreviewHtml(st) {
   const a = p.answer;
   const saved = (st.answer && st.answer.settings) || {};
   const drafted = (p.sent && p.sent.centers) || [];
+  // A move a key decided reads as the key, with its project (if any) after it; otherwise as the project.
+  const what = (m) =>
+    m.by === 'key' || m.project == null
+      ? esc('Key: ' + (m.keyName || m.keyId)) +
+        (m.by === 'key' && m.project != null ? ` <span class="muted">${esc('(project ' + m.project + ')')}</span>` : '')
+      : esc(m.project);
   const moves = a.moves.length
     ? `<table class="cost-table cost-set-moves"><tbody>${a.moves
         .map(
           (m) =>
-            `<tr><td>${esc(m.project != null ? m.project : 'Key: ' + (m.keyName || m.keyId))}</td><td class="num">${esc(costMoney(m.listUSD))}</td><td>${esc(costSetCenterName(m.from, saved.centers) + ' → ' + costSetCenterName(m.to, drafted))}</td></tr>`,
+            `<tr><td>${what(m)}</td><td class="num">${esc(costMoney(m.listUSD))}</td><td>${esc(costSetCenterName(m.from, saved.centers) + ' → ' + costSetCenterName(m.to, drafted))}</td></tr>`,
         )
         .join('')}</tbody></table>${a.more ? `<p class="cost-note">and ${Number(a.more)} more</p>` : ''}`
     : '<p class="cost-note">No project or key changes center.</p>';
@@ -1043,11 +1088,12 @@ function costSetRestateCheck(from, to, today) {
   if (to >= today) return 'today follows the current prices and rules already; restate up to yesterday';
   return null;
 }
-/** A restate preview against the range on screen and the settings generation (R7). */
+/** A restate preview against the range on screen and the settings generation (R7); `of.stale` is set when the server
+ *  refused a run because the settings or prices changed since the preview (409). */
 function costSetPreviewState(r, gen) {
   if (!r || !r.preview || !r.of) return 'none';
   if (r.of.from !== r.from || r.of.to !== r.to) return 'stale-range';
-  if (r.of.gen !== gen) return 'stale-settings';
+  if (r.of.gen !== gen || r.of.stale) return 'stale-settings';
   return 'fresh';
 }
 /** Run restate: a fresh preview, a reason of 1-200 characters, the box checked, settings that read (R7). */
@@ -1168,12 +1214,10 @@ async function costSetRunRestate() {
   Object.assign(r, { running: true, error: null });
   costSetPaintPanel('restate');
   try {
-    const res = await costPost('/api/cost/restate', {
-      from: r.of.from,
-      to: r.of.to,
-      reason: r.reason.trim(),
-      confirm: true,
-    });
+    const body = { from: r.of.from, to: r.of.to, reason: r.reason.trim(), confirm: true };
+    // The server refuses (409) when the settings or prices changed since this preview, here or elsewhere.
+    if (r.preview.basis) body.basis = r.preview.basis;
+    const res = await costPost('/api/cost/restate', body);
     if (my !== COST_SET.restateReq) return;
     if (res.status === 200) {
       const n = res.json.correction.rows.length;
@@ -1185,7 +1229,10 @@ async function costSetRunRestate() {
         ack: false,
       });
       costSetLoadHistory();
-    } else r.error = (res.json && res.json.error) || `Could not restate (${res.status})`;
+    } else {
+      r.error = (res.json && res.json.error) || `Could not restate (${res.status})`;
+      if (res.status === 409) r.of = { ...r.of, stale: true }; // preview again
+    }
   } catch (e) {
     if (my !== COST_SET.restateReq) return;
     r.error = e.message;
@@ -1274,6 +1321,7 @@ if (typeof module !== 'undefined')
     COST_SET_ACTIONS,
     costSetFromSaved,
     costSetBody,
+    costSetFieldsOf,
     costSetDirty,
     costSetAssign,
     costSetReasonPaths,
