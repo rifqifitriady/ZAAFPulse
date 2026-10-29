@@ -9790,3 +9790,96 @@ label.mon-cand.on {
   font-size: 12.5px;
   overflow-wrap: anywhere;
 }
+
+/* Cost Control 5: the Reports page (public/costreports.js), and what it prints. */
+.cost-rep-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--h-muted);
+}
+.cost-report {
+  display: grid;
+  gap: 16px;
+}
+.cost-rep-head h2 {
+  margin: 0;
+  font-size: 20px;
+  color: var(--h-text);
+}
+.cost-rep-head p {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--h-muted);
+}
+.cost-rep-tables {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
+.cost-rep-section h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--h-muted);
+}
+.cost-rep-table td {
+  overflow-wrap: anywhere;
+}
+/* Print keeps the report only, in one column that fits A4 and Letter, black on white. */
+@media print {
+  @page {
+    margin: 12mm;
+  }
+  .sidebar,
+  .topbar,
+  .subtabs,
+  .hero,
+  .cost-noprint,
+  #cost-ribbon,
+  .drawer,
+  .drawer-backdrop,
+  .tooltip {
+    display: none !important;
+  }
+  html,
+  body,
+  .shell,
+  .main,
+  .content,
+  .cost-deck {
+    display: block !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: auto !important;
+    max-width: none !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+  .cost-report,
+  .cost-report * {
+    color: #000 !important;
+    text-shadow: none !important;
+    box-shadow: none !important;
+    filter: none !important;
+  }
+  .cost-report .metric,
+  .cost-report .cost-table th,
+  .cost-report .cost-table td {
+    background: #fff !important;
+    border-color: #999 !important;
+  }
+  .cost-rep-tables {
+    grid-template-columns: 1fr;
+  }
+  .cost-rep-section,
+  .cost-rep-table tr {
+    break-inside: avoid;
+  }
+  .cost-report svg {
+    max-width: 100%;
+    height: auto;
+  }
+}
