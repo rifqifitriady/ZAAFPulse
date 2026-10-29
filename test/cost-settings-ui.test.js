@@ -182,8 +182,8 @@ test('while the settings do not read: the banner with its reasons, every Save di
   assert.match(html, /class="cost-banner warn"/);
   assert.match(html, /<li>&lt;img src=x onerror=alert\(1\)&gt;<\/li>/);
   assert.doesNotMatch(html, /<img/);
-  assert.equal((html.match(/data-cost-set-panel="/g) || []).length, 4);
-  for (const p of ['rules', 'billing', 'currency']) {
+  assert.equal((html.match(/data-cost-set-panel="/g) || []).length, 5);
+  for (const p of ['rules', 'billing', 'currency', 'digest']) {
     const save = U.costSetSaveHtml(p, locked);
     assert.match(save, /data-cost-set-act="save"[^>]*disabled/, p);
     assert.match(save, /Fix config\.json first/);
@@ -1074,8 +1074,8 @@ test('costsettings.js builds no markup from server or owner text without esc() (
   for (const [, name] of src.matchAll(/^(?:const|let|var|class|function|async function)\s+([A-Za-z_$][\w$]*)/gm))
     assert.match(name, /^(?:cost|COST)/, `${name}: starts with cost`);
   // Loads in Node without a DOM (this file required it above) and every panel has a body.
-  assert.deepEqual(Object.keys(U.COST_SET_BODIES).sort(), ['billing', 'currency', 'restate', 'rules']);
-  for (const p of ['rules', 'billing', 'currency', 'restate'])
+  assert.deepEqual(Object.keys(U.COST_SET_BODIES).sort(), ['billing', 'currency', 'digest', 'restate', 'rules']);
+  for (const p of ['rules', 'billing', 'currency', 'digest', 'restate'])
     assert.ok(U.costSetPageHtml(ST()).includes(`data-cost-set-body="${p}"`));
 });
 
