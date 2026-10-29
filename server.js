@@ -989,8 +989,9 @@ const SECURITY_HEADERS = {
   'Cross-Origin-Resource-Policy': 'same-origin',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), usb=(), payment=()',
 };
-function send(res, status, body, type = 'application/json') {
-  res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', ...SECURITY_HEADERS });
+// `headers` adds to an answer (a download's Content-Disposition); it never replaces a security header.
+function send(res, status, body, type = 'application/json', headers = {}) {
+  res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', ...headers, ...SECURITY_HEADERS });
   res.end(type === 'application/json' ? JSON.stringify(body) : body);
 }
 
@@ -1306,7 +1307,8 @@ const handler = async (req, res) => {
       });
       if (hit) return send(res, hit.status, hit.body);
     }
-    // The cost ledger: rows, status, settings, price versions and restate, behind the same sign-in. No path out.
+    // The cost ledger: rows, status, settings, price versions and restate, behind the same sign-in. No path out. An
+    // export is a download: its own type and Content-Disposition.
     {
       const hit = await costApi.route({
         method: req.method,
@@ -1315,7 +1317,7 @@ const handler = async (req, res) => {
         contentType: req.headers['content-type'],
         readBody: () => readBody(req),
       });
-      if (hit) return send(res, hit.status, hit.body);
+      if (hit) return send(res, hit.status, hit.body, hit.type || 'application/json', hit.headers);
     }
     if (url.pathname === '/api/logs') {
       return send(res, 200, DEMO ? reqlogs.demoLogs() : reqlogs.logs());
