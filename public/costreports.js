@@ -14,7 +14,7 @@ const COST_REP_TABLES = [
   ['project', 'By project'],
 ];
 const COST_REP_STATE = { exceeded: 'Used up', ok: 'Under its levels', no_data: 'No data' };
-const COST_REP = { report: null, ctx: null, hooked: false };
+const COST_REP = { report: null, last: null, ctx: null, choice: null, hooked: false };
 
 /* ---------- pure helpers (exported) ---------- */
 
@@ -58,7 +58,8 @@ function costRepPeriod(r) {
   const when = at
     ? `${at.getDate()} ${COST_MONTH[at.getMonth()]} ${at.getFullYear()}, ${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
     : '';
-  return `${d(r.from)}–${d(r.to)} ${costRepMonthName(r.month)}${when ? ` · generated ${when}` : ''}`;
+  const span = r.from === r.to ? `${d(r.from)}` : `${d(r.from)}–${d(r.to)}`;
+  return `${span} ${costRepMonthName(r.month)}${when ? ` · generated ${when}` : ''}`;
 }
 /** A table row's name: Other with how many it holds, a plan fee, Unknown, a source's label, a key's name. */
 function costRepName(table, x) {
@@ -163,7 +164,7 @@ function costRepHtml(r, ctx) {
   const field = ctx.cur === 'USD' ? 'listUSD' : 'list';
   const days = (r.daily || []).map((d) => ({
     day: d.day,
-    spend: d[field] == null ? d.listUSD : d[field],
+    spend: d[field],
     baseline: null,
     spike: false,
     topModel: null,
@@ -212,10 +213,12 @@ function costRepCsv(r, ctx) {
   }
   out += '\r\n' + line(['Daily spend']) + line(['Day', ...heads]);
   for (const d of r.daily || []) out += line([d.day, ...money(d)]);
+  const unread = (r.notes && r.notes.unread) || [];
+  if (unread.length) out += `# unread: ${unread.join(', ')}\r\n`;
   return out;
 }
 /** "zaafpulse-report-client-acme-2026-10.csv": a center id and a month, so the name needs no escaping. */
-const costRepCsvName = (r) => `zaafpulse-report-${r.center.id}-${r.month}.csv`;
+const costRepCsvName = (r) => `zaafpulse-report-${r.center.id === '__all' ? 'all' : r.center.id}-${r.month}.csv`;
 
 /* ---------- the page ---------- */
 
@@ -235,13 +238,26 @@ async function costMountReports() {
     COST.settings = settings;
     const base = costContext(settings);
     const c = costRepParse(costQueryOfHash());
-    const cur = c.cur && base.currencies.includes(c.cur) ? c.cur : 'USD';
-    const r = await costGet(`/api/cost/report?${costRepQuery({ ...c, cur })}`);
-    if (!live()) return;
+    // The hash names the currency, else the cost controls' stored choice (as the other pages), else USD.
+    const cur = costParseControls(c.cur ? `cur=${c.cur}` : '', costStoreGet(), base.currencies).cur;
     const ctx = { ...base, cur, fmt: (v) => costMoney(v, cur) };
-    COST_REP.report = r;
+    COST_REP.choice = { month: c.month, center: c.center || '__all', cur };
     COST_REP.ctx = ctx;
+    COST_REP.report = null;
     $('#cost-ribbon').innerHTML = costRibbonHtml(status);
+    let r;
+    try {
+      r = await costGet(`/api/cost/report?${costRepQuery({ ...c, cur })}`);
+    } catch (e) {
+      if (!live()) return;
+      // A stale bookmark (a deleted center, an old month) keeps its controls, so the choice can change here.
+      const old = COST_REP.last;
+      const stub = { month: c.month, months: old ? old.months : [], center: { id: c.center || '__all' } };
+      $('#cost-bar').innerHTML = costRepControlsHtml(stub, ctx);
+      return costShowError(body, e.message, false);
+    }
+    if (!live()) return;
+    COST_REP.report = COST_REP.last = r;
     $('#cost-bar').innerHTML = costRepControlsHtml(r, ctx);
     body.innerHTML = costRepHtml(r, ctx);
   } catch (e) {
@@ -267,9 +283,10 @@ function costRepDownload() {
 // A changed control names the new choice in the hash; the router mounts the page again.
 function costRepGo(next) {
   const r = COST_REP.report;
+  const k = COST_REP.choice || {};
   const c = {
-    month: r ? r.month : undefined,
-    center: r ? r.center.id : '__all',
+    month: r ? r.month : k.month,
+    center: r ? r.center.id : k.center || '__all',
     cur: COST_REP.ctx ? COST_REP.ctx.cur : 'USD',
   };
   location.hash = costRepHash({ ...c, ...next });
