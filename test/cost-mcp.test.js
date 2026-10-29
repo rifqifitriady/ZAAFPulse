@@ -153,7 +153,10 @@ test('reader: the ranges, the top 50 then Other, the groupBy rules and a ledger 
     assert.throws(() => readerOf(data).spend({ groupBy: bad }), /groupBy: 1 or 2 of/, JSON.stringify(bad));
   assert.throws(() => readerOf(data).spend({ range: 'all' }), /range: one of/);
   const file = tmp();
-  fs.writeFileSync(path.join(file, '.data'), 'not a folder');
+  // The cost folder itself is a file: listing it fails (ENOTDIR) on every OS. A file in place of `.data` would not
+  // do: Windows reports the missing child as ENOENT, which reads as no ledger yet.
+  fs.mkdirSync(path.join(file, '.data'));
+  fs.writeFileSync(path.join(file, '.data', 'cost'), 'not a folder');
   assert.throws(
     () => readerOf(file).spend({}),
     (e) => e.message === 'the ledger folder could not be read',
