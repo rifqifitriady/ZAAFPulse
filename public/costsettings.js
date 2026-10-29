@@ -503,7 +503,7 @@ function costSetInstallEvents() {
 
 /* ---------- panel: cost centers & rules, with the server preview ---------- */
 
-const COST_SET_RESERVED_IDS = ['unassigned', '__proto__', 'constructor', 'prototype'];
+const COST_SET_RESERVED_IDS = ['unassigned', 'all', '__proto__', 'constructor', 'prototype'];
 
 /** A new center's id from its name (R5): lowercase a-z0-9 and dashes, at most 40, with -2, -3, … when taken. */
 function costSetCenterId(name, taken = []) {
