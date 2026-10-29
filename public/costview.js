@@ -10,6 +10,7 @@ const COST_SUBS = [
   ['breakdown', 'Breakdown'],
   ['value', 'Value'],
   ['budgets', 'Budgets'],
+  ['reports', 'Reports'],
   ['settings', 'Settings'],
 ];
 const COST_RANGES = {
@@ -464,6 +465,7 @@ function viewCost() {
     breakdown: 'Where the money goes: sources, providers, models, cost centers and projects.',
     value: 'What the money bought: plans against their fees, savings, and cost against quality.',
     budgets: 'Limits by day, week or month, with alerts and, where you choose, a block or a pause.',
+    reports: "One cost center's month for a client: totals, tables and budgets, to print or export.",
     settings: 'Cost centers and their rules, billing per source, the display currency, and restating past days.',
   }[sub];
   const title = (COST_SUBS.find(([s]) => s === sub) || COST_SUBS[0])[1];
@@ -517,6 +519,8 @@ function costRefresh(quiet) {
   if (!app) return;
   // Settings is all forms (public/costsettings.js): it reloads after each Save, never on the quiet cycle.
   if (costSub() === 'settings') return quiet ? undefined : costMountSettings();
+  // Reports is a document (public/costreports.js): it loads on a visit or a changed control, never on the quiet cycle.
+  if (costSub() === 'reports') return quiet ? undefined : costMountReports();
   if (quiet && (costQuietWait(document, app) || COST.form || COST.confirm)) return;
   if (costSub() === 'budgets') return costMountBudgets(quiet);
   return costMountPage(costSub(), quiet);
@@ -1470,11 +1474,14 @@ if (typeof module !== 'undefined')
   module.exports = {
     COST_SUBS,
     COST_SOURCES,
+    COST_MONTH,
+    COST_MONTH_LONG,
     COST_MAX_DAYS,
     costToday,
     costGet,
     costPost,
     costSub,
+    costQueryOfHash,
     costReasonsHtml,
     costRibbonHtml,
     costErrorHtml,

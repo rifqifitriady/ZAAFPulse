@@ -62,13 +62,13 @@ test('the page is wired: sub-page, sidebar entry, script after costview.js, copy
   const html = read('index.html');
   assert.match(
     html,
-    /<a class="nav-sub" href="#cost\/budgets"[^\n]*\n\s*<a class="nav-sub" href="#cost\/settings" data-route="cost\/settings">Settings<\/a>/,
+    /<a class="nav-sub" href="#cost\/reports"[^\n]*\n\s*<a class="nav-sub" href="#cost\/settings" data-route="cost\/settings">Settings<\/a>/,
   );
   const at = html.indexOf('<script src="costsettings.js"></script>');
   assert.ok(
     at > html.indexOf('<script src="costview.js"></script>') && at < html.indexOf('<script src="app.js"></script>'),
   );
-  assert.match(read('iso.js'), /\['budgets', 'Budgets'\],\s*\['settings', 'Settings'\],\s*\],/);
+  assert.match(read('iso.js'), /\['reports', 'Reports'\],\s*\['settings', 'Settings'\],\s*\],/);
   assert.deepEqual(V.COST_SUBS[V.COST_SUBS.length - 1], ['settings', 'Settings']);
   assert.match(
     read('costview.js'),
