@@ -288,3 +288,133 @@ test('channels: a busy desktop is reported busy and does not log the alerts hint
   for (const child of children) child.emit('close', 0);
   await Promise.all([a, b]);
 });
+
+/* ---------- the scheduler (lib/cost/digest.js) ---------- */
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { createDigest } = require('../lib/cost/digest');
+
+const at = (y, m, d, h = 9) => new Date(y, m, d, h).getTime();
+function scheduler({ enabled = true, result = { ok: true, tried: 1 }, figures, demo = false, file } = {}) {
+  const st = { t: at(2026, 9, 26), settings: { digest: { enabled } }, sends: [], logs: [], result };
+  const d = createDigest({
+    file,
+    getSettings: () => st.settings,
+    figures: figures || ((week) => ({ week })),
+    send: async (f) => (st.sends.push(f.week.from), typeof st.result === 'function' ? st.result() : st.result),
+    demo,
+    now: () => st.t,
+    log: (m) => st.logs.push(m),
+  });
+  return { d, st };
+}
+const tmpFile = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'zp-cost-digest-')), 'cost', 'digest.json');
+
+test('scheduler: once a week, also across a restart, and a missed Monday still sends that week', async () => {
+  const file = tmpFile();
+  const a = scheduler({ file });
+  assert.deepEqual(await a.d.check(), { sent: true, week: '2026-10-19' }, 'Monday 26 October');
+  assert.deepEqual(await a.d.check(), { sent: false });
+  a.st.t = at(2026, 9, 28);
+  await a.d.check();
+  assert.deepEqual(a.st.sends, ['2026-10-19']);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { lastWeek: '2026-10-19' });
+  const b = scheduler({ file }); // a restart later that week
+  b.st.t = at(2026, 9, 30);
+  await b.d.check();
+  assert.deepEqual(b.st.sends, [], 'the marker holds');
+  b.st.t = at(2026, 10, 4, 18); // the next Monday was missed: Wednesday 4 November
+  await b.d.check();
+  assert.deepEqual(b.st.sends, ['2026-10-26']);
+  fs.rmSync(path.dirname(path.dirname(file)), { recursive: true, force: true });
+});
+
+test('scheduler: nothing while disabled or in demo; a broken config.json keeps the last valid setting', async () => {
+  const off = scheduler({ enabled: false });
+  await off.d.check();
+  assert.deepEqual(off.st.sends, []);
+  const demo = scheduler({ demo: true });
+  await demo.d.check();
+  assert.deepEqual(demo.st.sends, [], 'demo mode never sends');
+  const on = scheduler();
+  on.st.settings = false; // config.json does not parse before any valid read: off
+  await on.d.check();
+  assert.deepEqual(on.st.sends, []);
+  on.st.settings = { digest: { enabled: true } };
+  on.st.result = { ok: false, tried: 1, errors: ['webhook: HTTP 500'] };
+  await on.d.check();
+  on.st.settings = { digest: { enabled: 'yes' } }; // invalid now: the last valid (on) stays
+  on.st.result = { ok: true, tried: 1 };
+  await on.d.check();
+  assert.deepEqual(on.st.sends, ['2026-10-19', '2026-10-19']);
+});
+
+test('scheduler: a failed send keeps the marker and is logged once; no channel on settles the week', async () => {
+  const file = tmpFile();
+  const s = scheduler({ file, result: { ok: false, tried: 2, errors: ['desktop: x', 'webhook: y'] } });
+  await s.d.check();
+  await s.d.check();
+  assert.deepEqual(s.st.sends, ['2026-10-19', '2026-10-19'], 'tried again on the next pass');
+  assert.equal(s.st.logs.length, 1);
+  assert.match(s.st.logs[0], /week of 2026-10-19 was not sent \(desktop: x; webhook: y\)/);
+  assert.equal(fs.existsSync(file), false, 'the marker did not move');
+  const bad = scheduler({
+    figures: () => {
+      throw new Error('the ledger could not read 2026-10');
+    },
+  });
+  await bad.d.check();
+  assert.deepEqual(bad.st.sends, []);
+  assert.match(bad.st.logs[0], /the ledger could not read 2026-10/);
+  const quiet = scheduler({ result: { ok: false, tried: 0, errors: [] } });
+  await quiet.d.check();
+  await quiet.d.check();
+  assert.deepEqual(quiet.st.sends, ['2026-10-19'], 'no channel on: the week is settled, not retried');
+  fs.rmSync(path.dirname(path.dirname(file)), { recursive: true, force: true });
+});
+
+test('scheduler: a rejected send does not settle the week; a broken marker file does not crash the pass', async () => {
+  const file = tmpFile();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, '{not json');
+  const s = scheduler({ file, result: () => Promise.reject(new Error('boom')) });
+  assert.deepEqual(await s.d.check(), { sent: false });
+  assert.deepEqual(await s.d.check(), { sent: false });
+  assert.deepEqual(s.st.sends, ['2026-10-19', '2026-10-19'], 'retried');
+  assert.equal(s.st.logs.length, 1);
+  s.st.result = { ok: true, tried: 1 };
+  assert.deepEqual(await s.d.check(), { sent: true, week: '2026-10-19' });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { lastWeek: '2026-10-19' });
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  fs.rmSync(path.dirname(path.dirname(file)), { recursive: true, force: true });
+});
+
+test('scheduler: one send at a time while a slow webhook is still trying', async () => {
+  let release;
+  const s = scheduler({ result: () => new Promise((r) => (release = r)) });
+  const first = s.d.check();
+  assert.deepEqual(await s.d.check(), { sent: false }, 'busy');
+  release({ ok: true, tried: 1 });
+  await first;
+  assert.deepEqual(s.st.sends, ['2026-10-19']);
+});
+
+test("api: recommendations() for the digest is the Value page's answer, or null when it cannot be computed", () => {
+  const { createCostApi } = require('../lib/cost/api');
+  const settings = { get: () => ({}), save: () => {} };
+  const now = () => at(2026, 9, 29);
+  const empty = createCostApi({ cost: { budgetRows: () => ({ rows: [], unread: [] }) }, settings, now });
+  assert.deepEqual(empty.recommendations().items, []);
+  const broken = createCostApi({
+    cost: {
+      budgetRows: () => {
+        throw new Error('the ledger folder could not be read');
+      },
+    },
+    settings,
+    now,
+  });
+  assert.equal(broken.recommendations(), null);
+});
