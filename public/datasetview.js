@@ -146,6 +146,18 @@ function dsRoute(hash) {
   return { tab, slug: tab === 'list' && slug && DS_SLUG.test(slug) ? slug : null };
 }
 
+// The run a Datasets hash opens: #datasets/experiments?run=<id>, as the Value page's Recommendations link to it
+// (Cost Control 4b). Null for any other hash or an id that is not an experiment id.
+const DS_EXP_ID = /^exp_[0-9a-f]{16}$/;
+function dsRunOf(hash) {
+  const [route, query = ''] = String(hash || '')
+    .replace(/^#/, '')
+    .split('?');
+  if (route.split('/')[1] !== 'experiments') return null;
+  const id = new URLSearchParams(query).get('run');
+  return id && DS_EXP_ID.test(id) ? id : null;
+}
+
 /* ---------- Playground Dataset mode and experiments: pure helpers ---------- */
 const DS_MAX_MODELS = 3;
 const DS_EVAL_DEFAULTS = ['reference_match', 'secret_leak', 'task_completion', 'relevance'];
@@ -1495,6 +1507,10 @@ async function dsPaintExperiments(body, live) {
     dsPanel('Experiments', `${runs.length} run${runs.length === 1 ? '' : 's'} · newest first`, running, tools, table),
     detail,
   );
+  // A link that names a run (the Value page's Recommendations) opens it, as a click on its row does.
+  const wanted = dsRunOf(location.hash);
+  const named = wanted && runs.find((x) => x.id === wanted);
+  if (named) open(named);
 }
 
 /* ---------- the Playground's Dataset mode (public/gatewayview.js) ---------- */
@@ -2578,6 +2594,7 @@ if (typeof module !== 'undefined')
     dsAddResult,
     dsSlugOf,
     dsRoute,
+    dsRunOf,
     dsModelOptions,
     dsRunBody,
     dsResultCells,
