@@ -157,6 +157,15 @@ function dsRunOf(hash) {
   const id = new URLSearchParams(query).get('run');
   return id && DS_EXP_ID.test(id) ? id : null;
 }
+// The run a link names, taken once: the hash drops its ?run= (replaceState fires no hashchange, so the router does
+// not remount) and a later repaint opens nothing. { run } when it is listed, { gone } when it is no longer kept.
+function dsTakeRunLink(runs, loc = location, hist = history) {
+  const wanted = dsRunOf(loc.hash);
+  if (!wanted) return null;
+  hist.replaceState(null, '', '#datasets/experiments');
+  const run = runs.find((x) => x.id === wanted);
+  return run ? { run } : { gone: true };
+}
 
 /* ---------- Playground Dataset mode and experiments: pure helpers ---------- */
 const DS_MAX_MODELS = 3;
@@ -1503,14 +1512,24 @@ async function dsPaintExperiments(body, live) {
       );
   const tbody = table.querySelector ? table.querySelector('tbody') : null;
   const tools = runs.length > 1 ? dsEl('div', { class: 'ds-inline ds-cmp-bar' }, compare, hint) : null;
+  // A link that names a run (the Value page's Recommendations) opens it once, as a click on its row does.
+  const link = dsTakeRunLink(runs);
+  const gone =
+    link && link.gone
+      ? dsEl('p', { class: 'ds-msg', role: 'status' }, 'That experiment is no longer kept (only the latest 100 are)')
+      : null;
   body.replaceChildren(
-    dsPanel('Experiments', `${runs.length} run${runs.length === 1 ? '' : 's'} · newest first`, running, tools, table),
+    dsPanel(
+      'Experiments',
+      `${runs.length} run${runs.length === 1 ? '' : 's'} · newest first`,
+      running,
+      gone,
+      tools,
+      table,
+    ),
     detail,
   );
-  // A link that names a run (the Value page's Recommendations) opens it, as a click on its row does.
-  const wanted = dsRunOf(location.hash);
-  const named = wanted && runs.find((x) => x.id === wanted);
-  if (named) open(named);
+  if (link && link.run) open(link.run);
 }
 
 /* ---------- the Playground's Dataset mode (public/gatewayview.js) ---------- */
@@ -2595,6 +2614,7 @@ if (typeof module !== 'undefined')
     dsSlugOf,
     dsRoute,
     dsRunOf,
+    dsTakeRunLink,
     dsModelOptions,
     dsRunBody,
     dsResultCells,
