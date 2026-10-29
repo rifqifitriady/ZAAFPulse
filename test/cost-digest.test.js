@@ -214,7 +214,7 @@ test('the digest body: a null list item, control characters, surrogate pairs and
       { model: 'C:\\work\\app', listUSD: 1 },
       { model: 'c:/w', listUSD: 1 },
     ],
-    budgets: [undefined, { id: 'b', name: '~/proj', state: 'ok' }],
+    budgets: [undefined, { id: 'b', name: '~/proj', state: 'ok' }, { id: 'c', name: '~beta', state: 'ok' }],
     anomalies: [null],
   });
   assert.deepEqual(body.centers, [
@@ -223,8 +223,11 @@ test('the digest body: a null list item, control characters, surrogate pairs and
   ]);
   assert.equal(body.models[0].model, `${'a'.repeat(79)}\u{1F600}`, 'cut by code point, pair kept whole');
   assert.deepEqual([body.models[1].model, body.models[2].model], [null, null]);
-  assert.equal(body.budgets.length, 1);
-  assert.equal(body.budgets[0].name, null);
+  assert.equal(body.budgets.length, 2);
+  assert.deepEqual(
+    body.budgets.map((x) => x.name),
+    [null, '~beta'],
+  );
   assert.deepEqual(body.anomalies, []);
   assert.doesNotMatch(JSON.stringify(body), /Users|work|~/);
 });
@@ -253,6 +256,7 @@ test('channels: desktop ok and webhook refused is a partial success; a bad figur
     },
   });
   assert.equal(bad.ok, false);
+  assert.equal(bad.tried, 2, 'the channels that are on are counted even when nothing could be built');
   assert.equal(r.calls.length, calls, 'no desktop notice was started');
   assert.equal(fetches, 4);
 });
