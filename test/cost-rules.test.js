@@ -174,8 +174,7 @@ test('validate: names that clash with object internals are rejected', () => {
   assert.ok(k.errors.includes('keyCenters: bad key id __proto__'), k.errors.join('\n'));
 });
 
-test('a cost center id "all" is reserved: the report uses it for every center', () => {
-  const r = R.validate({ centers: [{ id: 'all', name: 'Everything' }] });
-  assert.equal(r.ok, false);
-  assert.ok(r.errors.includes('centers[0].id: "all" is reserved'), r.errors.join('\n'));
+test('a cost center may be called all: the report spells every center __all, which no id can be', () => {
+  assert.ok(R.validate({ centers: [{ id: 'all', name: 'Everything' }] }).ok);
+  assert.equal(R.validate({ centers: [{ id: '__all', name: 'x' }] }).ok, false);
 });

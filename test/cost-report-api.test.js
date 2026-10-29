@@ -54,7 +54,7 @@ test('report: this month by default while the ledger lacks part of last month; a
   const b = r.body;
   assert.deepEqual(
     [b.month, b.from, b.to, b.center, b.currency],
-    ['2026-10', '2026-10-01', TODAY, { id: 'all', name: 'All centers' }, 'USD'],
+    ['2026-10', '2026-10-01', TODAY, { id: '__all', name: 'All centers' }, 'USD'],
   );
   assert.deepEqual(b.months, ['2026-10', '2026-09']);
   assert.equal(b.generatedAt, NOW);
@@ -110,6 +110,7 @@ test('report: 400 for a bad month, unknown center or currency; 503 for a ledger 
     ['month=0000-01', 'month: not in the ledger'],
     ['month=2026-07', 'month: not in the ledger'],
     ['center=nobody', 'unknown center'],
+    ['center=all', 'unknown center'],
     ['currency=EUR', 'no rates for that currency; set it in the cost settings'],
   ]) {
     const r = await s.get(q);
@@ -163,4 +164,23 @@ test('report: budgetsError when the budgets of the current month do not evaluate
   assert.equal(r.status, 200);
   assert.equal(r.body.budgetsError, 'budgets could not be read');
   assert.deepEqual(r.body.budgets, []);
+});
+
+test('report: a center called all is reported on its own; a named past month with an unreadable folder is a 503', async () => {
+  const s = setup();
+  const d = costDemo(NOW);
+  const settings = { ...d.settings, centers: [...d.settings.centers, { id: 'all', name: 'Everything' }] };
+  const api = createCostApi({
+    cost: s.cost,
+    settings: { get: () => settings, save: () => {} },
+    home: HOME,
+    now: () => NOW,
+  });
+  const get = (q) => api.route({ method: 'GET', path: '/api/cost/report', query: new URLSearchParams(q) });
+  assert.deepEqual((await get('center=all')).body.center, { id: 'all', name: 'Everything' });
+  assert.deepEqual((await get('center=__all')).body.center, { id: '__all', name: 'All centers' });
+  const down = setup({
+    cost: { firstDay: () => null, corrections: () => [], budgetRows: () => ({ rows: [], unread: ['folder'] }) },
+  });
+  assert.equal((await down.get('month=2026-09')).status, 503);
 });
