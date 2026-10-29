@@ -239,7 +239,7 @@ async function costMountReports() {
     const base = costContext(settings);
     const c = costRepParse(costQueryOfHash());
     // The hash names the currency, else the cost controls' stored choice (as the other pages), else USD.
-    const cur = costParseControls(c.cur ? `cur=${c.cur}` : '', costStoreGet(), base.currencies).cur;
+    const cur = costParseControls(c.cur ? 'cur=' + c.cur : '', costStoreGet(), base.currencies).cur;
     const ctx = { ...base, cur, fmt: (v) => costMoney(v, cur) };
     COST_REP.choice = { month: c.month, center: c.center || '__all', cur };
     COST_REP.ctx = ctx;
