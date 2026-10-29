@@ -223,7 +223,8 @@ function costRepCsv(r, ctx) {
   return out;
 }
 /** "zaafpulse-report-client-acme-2026-10.csv": a center id and a month, so the name needs no escaping. */
-const costRepCsvName = (r) => `zaafpulse-report-${r.center.id === '__all' ? 'all' : r.center.id}-${r.month}.csv`;
+const costRepCsvName = (r) =>
+  `zaafpulse-report-${r.center.id === '__all' ? 'all_centers' : r.center.id}-${r.month}.csv`;
 
 /* ---------- the page ---------- */
 
@@ -263,6 +264,10 @@ async function costMountReports() {
       const old = COST_REP.last;
       const stub = { month: c.month, months: old ? old.months : [], center: { id: c.center || '__all' } };
       $('#cost-bar').innerHTML = costRepControlsHtml(stub, ctx);
+      // The stub shows "Latest" / "Choose a center" for what it cannot place: do not resend those stale values.
+      if (!stub.months.includes(stub.month)) COST_REP.choice.month = undefined;
+      const known = ['__all', 'unassigned', ...Object.keys(ctx.centers || {})];
+      if (!known.includes(stub.center.id)) COST_REP.choice.center = '__all';
       return costShowError(body, e.message, false);
     }
     if (!live()) return;

@@ -146,3 +146,15 @@ test('export: the header row and the cells use one column list, the ledger answe
   assert.equal(line.split(',').length, head.split(',').length);
   assert.equal(line.split(',')[0], 'm');
 });
+
+test('final fix: a ledger answering unread folder is a 503 with its code, not a header-only 200', async () => {
+  const down = setup({
+    cost: { ledger: (q) => ({ ...q, currency: 'USD', rows: [], totals: {}, unread: ['folder'] }) },
+  });
+  for (const format of ['csv', 'json']) {
+    const r = await down.get(`format=${format}&groupBy=model`);
+    assert.equal(r.status, 503, format);
+    assert.equal(r.body.code, 'LEDGER_MONTH_UNREAD');
+    assert.doesNotMatch(JSON.stringify(r.body), PATHS);
+  }
+});

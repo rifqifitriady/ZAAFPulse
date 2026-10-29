@@ -9882,6 +9882,17 @@ label.mon-cand.on {
     max-width: 100%;
     height: auto;
   }
+  :root {
+    color-scheme: light;
+  }
+  .cost-deck,
+  .holo-deck {
+    box-shadow: none !important;
+    border: 0 !important;
+  }
+  .cost-rep-tiles {
+    grid-template-columns: repeat(4, 1fr);
+  }
 }
 
 /* The Breakdown table's Export CSV link sits at the end of its bar. */

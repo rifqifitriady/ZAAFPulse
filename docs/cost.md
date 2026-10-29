@@ -499,8 +499,8 @@ name that looks like a path is dropped) or text.
 
 A week settles when a channel delivered it, or when no channel is on (desktop off, no webhook, `ZAAFPULSE_NOTIFY=off`),
 and `.data/cost/digest.json` remembers it, so a restart never sends twice. Otherwise the pass tries again next time:
-a send that reached no channel, figures that do not read, or cost settings that do not read yet are each logged once
-per week, without any path. The last digest setting that validated is kept in memory only: after a restart on a broken
+a send that reached no channel, figures that do not read, or cost settings that do not read yet: the first failure of a
+week is logged once (whatever its cause), without any path, and the week is retried. The last digest setting that validated is kept in memory only: after a restart on a broken
 `config.json` the digest is off until the file is fixed. Demo mode never sends.
 
 ### MCP tools

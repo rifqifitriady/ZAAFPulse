@@ -306,7 +306,7 @@ test('fix round 1: unrated day, unread line, one-day period, file name for All c
   assert.ok(withUnread.endsWith('\r\n# unread: 2026-09\r\n'), withUnread.slice(-40));
   assert.ok(!U.costRepCsv({ ...REPORT, notes: { unread: [] } }, CTX).includes('# unread'));
   assert.equal(U.costRepPeriod({ ...REPORT, to: '2026-10-01', generatedAt: null }), '1 October 2026');
-  assert.equal(U.costRepCsvName({ ...REPORT, center: { id: '__all' } }), 'zaafpulse-report-all-2026-10.csv');
+  assert.equal(U.costRepCsvName({ ...REPORT, center: { id: '__all' } }), 'zaafpulse-report-all_centers-2026-10.csv');
 });
 
 test('fix round 1: a refused report shows its error and keeps the controls; the stored currency is the fallback', async () => {
@@ -347,6 +347,9 @@ test('fix round 1: a refused report shows its error and keeps the controls; the 
     assert.match(els['#cost-bar'].innerHTML, /data-cost-rep-center/);
     assert.match(els['#cost-bar'].innerHTML, /<option value="" selected>Latest<\/option>/);
     assert.match(els['#cost-bar'].innerHTML, /<option value="" selected>Choose a center<\/option>/);
+    // The stub's empty choices are not resent: choosing a center keeps the stale month out of the hash.
+    U.costRepGo({ center: 'acme' });
+    assert.ok(!/month=/.test(global.location.hash), global.location.hash);
   } finally {
     Object.assign(global, saved);
     if (saved.localStorage === undefined) delete global.localStorage;
