@@ -10,6 +10,7 @@ const { createIntegrations } = require('./lib/integrations');
 const { createSecrets } = require('./lib/secrets');
 const { createAudit } = require('./lib/audit');
 const { createLocal } = require('./lib/local');
+const { createCostReader } = require('./lib/cost/reader');
 const otel = require('./lib/otel');
 const { version } = require('./package.json');
 
@@ -32,7 +33,14 @@ try {
 const secrets = createSecrets();
 // Tool-call spans, as in server.js: off unless config.json has "otel": { "enabled": true }. Its log goes to stderr.
 otel.init({ getConfig: () => config, secrets, version, log });
-const local = createLocal({ cacheDir: CACHE_DIR, config, dataDir: DIR });
+// The cost tools read the server's cost data read-only; they are on this stdio server only, never on gateway /mcp.
+const cost = createCostReader({
+  dir: path.join(DIR, '.data', 'cost'),
+  configFile: CONFIG_FILE,
+  keysFile: path.join(DIR, '.data', 'keys.json'),
+  home: require('os').homedir(),
+});
+const local = createLocal({ cacheDir: CACHE_DIR, config, dataDir: DIR, cost });
 const integrations = createIntegrations({
   config,
   secrets,
