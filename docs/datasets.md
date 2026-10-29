@@ -233,6 +233,9 @@ A finished run is one line in `.data/experiments.jsonl`:
   are dropped from the end last. The record then carries `trimmed: { textChars, droppedResults? }`.
 - **Compare.** Under **Datasets → Experiments**, tick two runs and press **Compare**. Rates are shown side by side
   for the evaluators and models they share. Two runs of different datasets are marked as not like for like.
+- **Link.** `#datasets/experiments?run=<id>` opens that run on the Experiments tab.
+- **Cost.** Finished runs of the last 90 days back the cheaper-model recommendations on **Cost Control → Value**
+  ([Recommendations](cost.md#recommendations)), which link to the run they rest on.
 
 ## The CI gate
 

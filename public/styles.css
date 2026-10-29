@@ -9748,3 +9748,45 @@ label.mon-cand.on {
 .cost-card .cost-card-forecast {
   color: var(--h-text);
 }
+
+/* Cost Control 4b: the Value page's Recommendations card. */
+.cost-recs,
+.cost-gaps {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+.cost-rec {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--h-edge);
+  border-radius: 12px;
+}
+.cost-rec-main,
+.cost-rec-ev {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.cost-rec-main {
+  color: var(--h-text);
+  font-size: 13px;
+}
+.cost-rec-ev {
+  color: var(--h-muted);
+  font-size: 12.5px;
+}
+.cost-rec-sub {
+  margin: 4px 0 8px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--h-muted);
+}
+.cost-gap {
+  color: var(--h-muted);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}

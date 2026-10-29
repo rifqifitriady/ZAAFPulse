@@ -322,7 +322,7 @@ corrections and billing applied, and shows only numbers, names, `~` folders and 
 |---|---|---|
 | Overview (`#cost`) | How much this month, and is it safe? | Month to date in both measures; the forecast by weekday with its band (see [Forecast and anomalies](#forecast-and-anomalies)); the global monthly budgets as lines; daily spend against the same weekday; today's and yesterday's anomalies with what drove them; budget rings, riskiest first, with the day each runs out |
 | Breakdown (`#cost/breakdown`) | Where does the money go? | Source, provider, model and cost center as a flow (top 6 per column, the rest as Other; plan fees as "Plan fee"); projects by cost center as an isometric treemap (footprint by spend, block height by spend per request); a calendar of the range; a table grouped by up to four dimensions, read from `/api/cost/ledger` |
-| Value (`#cost/value`) | Is it worth it? | Usage value of each plan's days against its fee, with the multiplier; a waterfall from "without cache" through cache and plan savings to what was paid; local models (requests and tokens, not priced); spend per request against tool-call accuracy per model; spend per request, per million tokens and per 1,000 successful tool calls, per day |
+| Value (`#cost/value`) | Is it worth it? | Usage value of each plan's days against its fee, with the multiplier; a waterfall from "without cache" through cache and plan savings to what was paid; local models (requests and tokens, not priced); spend per request against tool-call accuracy per model; spend per request, per million tokens and per 1,000 successful tool calls, per day; cheaper models your own Datasets experiments back, with the monthly saving (see [Recommendations](#recommendations)) |
 | Budgets (`#cost/budgets`) | Set the limits | One card per budget with its ring, scope, period, spent of amount and chips; add, edit and delete in a drawer (the rules are in [Budgets](#budgets)) |
 | Settings (`#cost/settings`) | Who pays for what? | Cost centers, gateway keys and folder rules with a preview of what moves, billing per source, the display currency, and restate with a preview and its history (see [Settings page](#settings-page)) |
 
@@ -432,6 +432,36 @@ and the budgets never disagree.
 - **When the history does not read.** The Overview answers `forecastMethod: null` and `anomalies: null` and draws the
   rest; the rule reports `no_data`.
 
+### Recommendations
+
+The Value page's **Recommendations** card names a model you pay for, a cheaper model that did about as well on your
+own examples, and what switching would save. Nothing is switched for you: routing a model elsewhere stays a gateway
+setting you change yourself.
+
+- **Evidence.** Only [Datasets experiments](datasets.md#scoring-and-experiments) count: the same examples replayed on
+  both models and scored by the same evaluators. A run counts when it finished (`status: "done"`; a run stopped by a
+  cap, a cancel or an error does not) and ended in the last 90 days (a run without a readable end time counts for
+  nothing). Model names are matched as the ledger's are, so `anthropic/claude-opus-5-5` in an experiment is
+  `claude-opus-5-5` in the ledger.
+- **As good.** Over the evaluators both models were scored by, the candidate's pass rate is at most 5 points below
+  the current model's, with at least 20 scored rows each.
+- **Cheaper.** The candidate's cost per example in the run is at most 80 % of the current model's (a local model
+  costs 0). A model that cost nothing in the run is never one to save on.
+- **The saving.** The current model's usage value over the last 30 days times (1 - the cost ratio), in USD: "about
+  $42 a month at the last 30 days' use". It is an estimate. The 30 days are always the last 30, whatever range the
+  page shows. Where the model ran under a plan the saving is usage value, not money paid, and the footnote says so.
+- **The choice.** For each model the largest saving wins, then the higher pass rate, then the newest run; the other
+  qualifying runs and candidates are counted ("+2 more experiments agree"). At most 5 recommendations, largest saving first. Each
+  links to its run in Datasets (`#datasets/experiments?run=<id>`).
+- **No evidence yet.** The 3 models with the most spend over the 30 days and no recommendation, each with its spend
+  and a link to Datasets: "No experiment yet" (no finished run compared it with another model on enough rows) or "No
+  cheaper model did as well". When no experiment counted at all, the card also says "Run an experiment in Datasets to
+  compare models on your own examples" above them. With no model spend in the 30 days it says "No model spend in the
+  last 30 days".
+- **When it cannot be computed.** The answer is `recommendations: null` when the 30 days of spend cannot be read, and when any month of those 30 days is unread (the spend would be understated
+  while the card looked complete). The card then says "Recommendations could not be computed right now" and the rest
+  of the page draws.
+
 ### Settings page
 
 **Settings** (`#cost/settings`) edits the `cost` section of `config.json` without opening the file. It has four
@@ -523,7 +553,7 @@ These routes need the dashboard sign-in. A gateway API key, MCP or A2A is never 
 | `GET /api/cost/status` | the collectors, the price version, unpriced and backfilled counts, settings, billing and ledger health |
 | `GET /api/cost/settings` | `{ settings, error, reasons, sources, unassigned, keys: [{ id, name }] }`; `reasons` lists why the saved section does not validate (at most 50), else `[]` |
 | `POST /api/cost/settings/preview` | body `{ settings, testPath? }` (`testPath` a string of at most 1000 characters, a path written with `~` or in full). 200 `{ from, to, unread, moves: [{ project, keyId, keyName, listUSD, from, to }], more, rules: [{ index, status: ok \| none \| shadowed, by }], unassigned: [{ project, listUSD }], test: { center, rule } \| null }` over the last 30 days, the settings in force against the draft; nothing is saved. 400 for an unknown field, a `testPath` that is not a string or is over 1000 characters, or `{ error, reasons }` for a draft that does not validate; 503 with a `code` while the ledger does not read |
-| `GET /api/cost/view?page&from&to&currency&measure` | what one Cost Control page draws. `page` is `overview` (always the current month), `breakdown` or `value`; `from`/`to` default to the last 30 days, at most 400; `measure` is `list` (default) or `billed`; Value ignores `measure` and answers `measure: null`. The answer is `{ page, from, to, currency, measure, unread, missingRate, billing: { error, historyLost } }` beside the page's data, plus `budgetsError` on Overview and `accuracyError` on Value (a fixed phrase, or null). The Overview also answers `forecastMethod` (`weekday`, `mean` or null), `anomalies: { today, yesterday }` (each `{ day, partial, spentUSD, expectedUSD, anomaly, drivers: [{ dim, value, label, extraUSD, share }] }` or null; `label` is a key's name for `keyId`; null when the history did not read), `anomalyParams: { ratio, minUSD }` (the saved parameters of the rule) and `runsOut` on each ring. 400 for an unknown page, a bad measure or date, a range over 400 days or a currency without rates; 503 with a `code` while the ledger does not read |
+| `GET /api/cost/view?page&from&to&currency&measure` | what one Cost Control page draws. `page` is `overview` (always the current month), `breakdown` or `value`; `from`/`to` default to the last 30 days, at most 400; `measure` is `list` (default) or `billed`; Value ignores `measure` and answers `measure: null`. The answer is `{ page, from, to, currency, measure, unread, missingRate, billing: { error, historyLost } }` beside the page's data, plus `budgetsError` on Overview and `accuracyError` on Value (a fixed phrase, or null). The Overview also answers `forecastMethod` (`weekday`, `mean` or null), `anomalies: { today, yesterday }` (each `{ day, partial, spentUSD, expectedUSD, anomaly, drivers: [{ dim, value, label, extraUSD, share }] }` or null; `label` is a key's name for `keyId`; null when the history did not read), `anomalyParams: { ratio, minUSD }` (the saved parameters of the rule) and `runsOut` on each ring. Value also answers `recommendations`: `{ items, gaps, basis: { experiments, from, to } }` over the last 30 days whatever the range, or null when it could not be computed (experiments or ledger unreadable, or any unread month in those 30 days); an item is `{ model, candidate, local, spendUSD, savingUSD, costRatio, rateA, rateB, rowsA, rowsB, experiment: { id, dataset, datasetName, endedAt }, alsoBackedBy, onPlan }` and a gap `{ model, spendUSD, reason }` (`no_experiment` or `no_cheaper_match`). 400 for an unknown page, a bad measure or date, a range over 400 days or a currency without rates; 503 with a `code` while the ledger does not read |
 | `POST /api/cost/settings` | 200 `{ settings }` (normalized; today's rows are re-attributed at once), or 400 `{ error, reasons }` |
 | `GET /api/cost/budgets` | the budgets in force, their state and forecast (`forecastUSD`, `runsOut`), list warnings, guard problems and kept-file status |
 | `POST /api/cost/budgets` | create or replace one budget; 400 for validation, 409 while a hand edit is invalid or pause is unavailable |
@@ -554,7 +584,7 @@ Errors: 400 for bad input, 409 for a restate while the saved settings are invali
 
 ## Demo mode
 
-The demo shows a synthetic ledger held in memory: three cost centers, Claude Code on a plan, an IDR rate, two price versions, backfilled days, an unpriced model and a free local judge. No files are written and the pass never runs; settings and restate work in memory. The Settings page previews from the demo ledger and settings; its restate history starts empty and a restate is kept in memory. The Cost Control pages draw from it too; the demo's quality signals carry per-model tool results, so Value shows a scatter. Yesterday has a spike (a busy Acme key and an Opus burst on `~/acme-web`), so the Overview shows an anomaly and the Monitors page and the bell show its `cost_anomaly` alert.
+The demo shows a synthetic ledger held in memory: three cost centers, Claude Code on a plan, an IDR rate, two price versions, backfilled days, an unpriced model and a free local judge. No files are written and the pass never runs; settings and restate work in memory. The Settings page previews from the demo ledger and settings; its restate history starts empty and a restate is kept in memory. The Cost Control pages draw from it too; the demo's quality signals carry per-model tool results, so Value shows a scatter. Yesterday has a spike (a busy Acme key and an Opus burst on `~/acme-web`), so the Overview shows an anomaly and the Monitors page and the bell show its `cost_anomaly` alert. A finished Datasets experiment on 24 support tickets backs one recommendation on Value (Opus to Sonnet), and leaves three more models under "No evidence yet": Sonnet ("No cheaper model did as well") and two others with no experiment.
 
 ## Known limits
 
