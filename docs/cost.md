@@ -110,6 +110,7 @@ The ledger is in USD. With a display currency, amounts are also converted with t
 | `folderRules` | up to 100, in order (the first match wins); `glob` as above (up to 300 characters, no `***`), `center` a known center |
 | `billing` | per source (`claude`, `codex`, `gateway`, `judge`, `replay`, `collab`): `{ "mode": "metered" }` or `{ "mode": "plan", "plan", "feeUSD" (0–1,000,000), "period": "month" \| "year" }` |
 | `currency` | `null`, or a three-letter `code` other than `USD` and up to 1000 `rates` `{ "from": day, "perUSD" }` with distinct days |
+| `digest` | `{ "enabled": true \| false }`, default `false`: the [weekly digest](#weekly-digest) |
 
 Settings are validated when saved, and a bad glob, center, billing or rate is refused with the reasons. If the saved section is invalid (a hand edit), the pass **waits**, as it does for a `config.json` that does not parse (below): its defaults would move today's rows to `unassigned`, and a day that closed meanwhile would keep them. It reads no log, records no billing and re-attributes no row, and a restate is refused (409). The status shows `settings.error`: `the cost settings in config.json are invalid, so the ledger pass waits until they are fixed`. The first pass after the fix reads what waited in the logs and attributes it with the fixed rules. Meanwhile no new spend reaches the ledger: budgets count only the gateway calls they recorded themselves, not local Claude Code or Codex use.
 
@@ -315,15 +316,16 @@ path.
 
 ## Cost Control menu
 
-The sidebar's **Cost Control** (after Quality & safety) has five pages. Each reads the ledger as billed, with the
+The sidebar's **Cost Control** (after Quality & safety) has six pages. Each reads the ledger as billed, with the
 corrections and billing applied, and shows only numbers, names, `~` folders and model names.
 
 | Page | Question | What it shows |
 |---|---|---|
 | Overview (`#cost`) | How much this month, and is it safe? | Month to date in both measures; the forecast by weekday with its band (see [Forecast and anomalies](#forecast-and-anomalies)); the global monthly budgets as lines; daily spend against the same weekday; today's and yesterday's anomalies with what drove them; budget rings, riskiest first, with the day each runs out |
-| Breakdown (`#cost/breakdown`) | Where does the money go? | Source, provider, model and cost center as a flow (top 6 per column, the rest as Other; plan fees as "Plan fee"); projects by cost center as an isometric treemap (footprint by spend, block height by spend per request); a calendar of the range; a table grouped by up to four dimensions, read from `/api/cost/ledger` |
+| Breakdown (`#cost/breakdown`) | Where does the money go? | Source, provider, model and cost center as a flow (top 6 per column, the rest as Other; plan fees as "Plan fee"); projects by cost center as an isometric treemap (footprint by spend, block height by spend per request); a calendar of the range; a table grouped by up to four dimensions, read from `/api/cost/ledger`; **Export CSV** downloads the table's range, grouping, currency and measure |
 | Value (`#cost/value`) | Is it worth it? | Usage value of each plan's days against its fee, with the multiplier; a waterfall from "without cache" through cache and plan savings to what was paid; local models (requests and tokens, not priced); spend per request against tool-call accuracy per model; spend per request, per million tokens and per 1,000 successful tool calls, per day; cheaper models your own Datasets experiments back, with the monthly saving (see [Recommendations](#recommendations)) |
 | Budgets (`#cost/budgets`) | Set the limits | One card per budget with its ring, scope, period, spent of amount and chips; add, edit and delete in a drawer (the rules are in [Budgets](#budgets)) |
+| Reports (`#cost/reports`) | What do I hand a client? | One cost center's month (or All centers, or Unassigned): usage value and paid with requests and tokens; spend by source, model, key and project (20 rows each, then Other); daily spend; the center's budgets (this month only); notes on unread months, assumed billing and restates. **Print** and **Export CSV** (see [Reports, export and digest](#reports-export-and-digest)) |
 | Settings (`#cost/settings`) | Who pays for what? | Cost centers, gateway keys and folder rules with a preview of what moves, billing per source, the display currency, and restate with a preview and its history (see [Settings page](#settings-page)) |
 
 **Controls.** One bar on every page but Budgets: the range (7 days, 30 days, this month, last month or two dates, at
@@ -462,10 +464,59 @@ setting you change yourself.
   while the card looked complete). The card then says "Recommendations could not be computed right now" and the rest
   of the page draws.
 
+### Reports, export and digest
+
+**Export.** `GET /api/cost/export` (and **Export CSV** on the Breakdown table) downloads the ledger grouping as CSV or
+JSON: the same range, `groupBy` and currency rules as `/api/cost/ledger`, and `measure` as the pages have it (under
+usage value the plan fee rows are left out). The columns are the dimensions the ledger answered with, then `requests`,
+`inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `listUSD`, `billedUSD`, and `list<CODE>`,
+`billed<CODE>` with a display currency. The CSV is RFC 4180 with CRLF; a text cell that starts with `=`, `+`, `-`, `@`,
+a tab or a CR gets a leading `'` so a spreadsheet does not run it as a formula; amounts have 8 decimals and no
+thousands separator. A month (or the corrections) that did not read adds a last line `# unread: 2026-09`. At most 400
+days and 100,000 rows (413 beyond). Only the file name (`Content-Disposition`) is taken from the route; the type,
+`Cache-Control: no-store` and the security headers are always the server's.
+
+**Reports.** `#cost/reports` shows one cost center's month for a client, chosen with a month (this month back to the
+ledger's first month; by default last month, or this month while the ledger does not hold all of last month), a
+center (All centers, Unassigned, or a center) and the display currency, which is the same choice the other cost pages
+keep. A center's figures are its usage; plan fees have no center and show under All centers only. Budgets show their
+state for the current month only: a past month says "Budget states are shown for the current month only.", a budget
+list that does not read says "Budgets could not be read.", and a server without budgets says "Budgets are not
+available." **Print** uses the browser's print (the print style hides the sidebar and the controls and fits A4 and
+Letter in one column); **Export CSV** downloads the report's tables as one CSV in sections, and ends with a
+`# unread:` line when months did not read. The page does not refresh by itself.
+
+### Weekly digest
+
+Off by default; turn it on in Settings → **Weekly digest** (`cost.digest.enabled`). After a ledger pass on Monday, or
+later that week if the server was off, ZAAFPulse sends last week's digest (Monday to Sunday) once: usage value and
+paid, the change in usage value against the week before, the top 3 cost centers and models, the budgets used up or
+projected over, the days the `cost_anomaly` rule finds anomalous with its saved parameters (without their drivers),
+and the top recommendation. It goes through the Monitors channels: one desktop line ("ZAAFPulse weekly cost: $412.30
+(+12 %), 1 budget at risk, 2 anomalies") and, when one is set, the webhook (its body is in
+[Monitors](monitors.md#channels)). It carries numbers and center, model and budget names; never project folders (a
+name that looks like a path is dropped) or text.
+
+A week settles when a channel delivered it, or when no channel is on (desktop off, no webhook, `ZAAFPULSE_NOTIFY=off`),
+and `.data/cost/digest.json` remembers it, so a restart never sends twice. Otherwise the pass tries again next time:
+a send that reached no channel, figures that do not read, or cost settings that do not read yet: the first failure of a
+week is logged once (whatever its cause), without any path, and the week is retried. The last digest setting that validated is kept in memory only: after a restart on a broken
+`config.json` the digest is off until the file is fixed. Demo mode never sends.
+
+### MCP tools
+
+The stdio MCP server (`node mcp.js`, see the README) has two read-only tools. They read the server's data folder and
+`config.json` without a ledger pass and without writing anything: `acc_cost` (spend over `7`, `30`, `90` days,
+`month` or `lastmonth`, grouped by 1–2 of `source`, `provider`, `model`, `project`, `center`, `keyId`; the top 50 rows
+by usage value, then Other; with `totals`, `unread` and `billing { error, historyLost }`, which says when paid amounts
+are assumed) and `acc_budgets` (the budgets with state, percent, spent, forecast and the day they run out; no
+enforcement or guard details). They return `~` project folders, as the dashboard does. They are **not** on the
+gateway's `/mcp` endpoint, which answers clients' API keys.
+
 ### Settings page
 
-**Settings** (`#cost/settings`) edits the `cost` section of `config.json` without opening the file. It has four
-panels; each of the first three has its own **Save**, which reads the saved settings again and sends them with only
+**Settings** (`#cost/settings`) edits the `cost` section of `config.json` without opening the file. It has five
+panels; each of the first four has its own **Save**, which reads the saved settings again and sends them with only
 that panel's fields replaced, so a mistake in one panel never holds back another. Saves of different panels run one
 after another. Typing while a Save runs is kept as a draft: only a draft that still says what was sent is cleared.
 Unsaved changes are kept per panel while the browser tab is open (leave the page and come back: they are still there,
@@ -477,6 +528,7 @@ control and does not refresh by itself.
 | Cost centers & rules | `centers` (a new center's id is made from its name and is fixed after the first Save; Delete is off while a key or rule uses the center), `keyCenters` (one row per gateway key: a center, or "Folder rules decide"), `folderRules` (in order, moved with Up and Down; the first match wins) |
 | Billing | `billing`: Metered or a plan (name, fee in USD, month or year) per source; every source is written out |
 | Display currency | `currency`: USD only, or a code with dated rates; the rates are sorted by start date when the panel is saved; today's rate is shown as `rateFor` picks it |
+| Weekly digest | `digest`: Off or On (see [Weekly digest](#weekly-digest)) |
 | Restate | a [restate](#restate) of a past range, after a preview |
 
 **New center ids.** While a new center's id is made from its name, or typed by hand, the keys and rules that chose
@@ -531,6 +583,7 @@ Everything is under `.data/cost/` (`ZAAFPULSE_DATA` decides where `.data` is). F
 | `cursors.json`, `cursors.json.bak` | how far the gateway and judge logs were read, and the ledger's first day; and its last good copy |
 | `judge-calls.jsonl` | judge calls that skip the gateway |
 | `budgets.last.json` | the last valid saved budget list and cost-setting context needed to keep it in force |
+| `digest.json` | `{ "lastWeek": "YYYY-MM-DD" }`: the Monday of the last weekly digest settled |
 | `prices/versions.json`, `prices/<id>.json` | the price versions and a full copy of each |
 
 ### Rebuilding the ledger
@@ -550,6 +603,8 @@ These routes need the dashboard sign-in. A gateway API key, MCP or A2A is never 
 | Route | Answer |
 |---|---|
 | `GET /api/cost/ledger?from&to&groupBy&currency` | rows grouped by 1–4 of `day`, `source`, `provider`, `model`, `project`, `center`, `keyId`, `agent`, `kind`; at most 400 days; `to` defaults to today, `from` to the first of its month |
+| `GET /api/cost/export?format&from&to&groupBy&currency&measure` | the ledger grouping as a download: `format` `csv` (default) or `json` (`{ from, to, groupBy, currency, measure, rows, totals, unread }`); `Content-Disposition: attachment; filename="zaafpulse-cost-<from>-<to>.<ext>"`. The ledger's 400s, plus `format` and `measure`; 413 over 100,000 rows; 503 with a `code` while the ledger does not read |
+| `GET /api/cost/report?month&center&currency` | one center's month: `{ month, from, to, center: { id, name }, currency, generatedAt, totals, tables: { source, model, key, project }, daily, budgets, notes: { unread, assumed, billingError, corrections }, months, budgetsError }`; `center` is an id, `unassigned`, or `__all` (default; a center may itself be named `all`); `budgets` is null for a past month. 400 for a bad or future month, a month older than the picker's oldest (`month: not in the ledger`, once the ledger has a first day), an unknown center or a currency without rates; 503 only while the ledger folder does not read |
 | `GET /api/cost/status` | the collectors, the price version, unpriced and backfilled counts, settings, billing and ledger health |
 | `GET /api/cost/settings` | `{ settings, error, reasons, sources, unassigned, keys: [{ id, name }] }`; `reasons` lists why the saved section does not validate (at most 50), else `[]` |
 | `POST /api/cost/settings/preview` | body `{ settings, testPath? }` (`testPath` a string of at most 1000 characters, a path written with `~` or in full). 200 `{ from, to, unread, moves: [{ project, keyId, keyName, listUSD, from, to }], more, rules: [{ index, status: ok \| none \| shadowed, by }], unassigned: [{ project, listUSD }], test: { center, rule } \| null }` over the last 30 days, the settings in force against the draft; nothing is saved. 400 for an unknown field, a `testPath` that is not a string or is over 1000 characters, or `{ error, reasons }` for a draft that does not validate; 503 with a `code` while the ledger does not read |
@@ -584,7 +639,7 @@ Errors: 400 for bad input, 409 for a restate while the saved settings are invali
 
 ## Demo mode
 
-The demo shows a synthetic ledger held in memory: three cost centers, Claude Code on a plan, an IDR rate, two price versions, backfilled days, an unpriced model and a free local judge. No files are written and the pass never runs; settings and restate work in memory. The Settings page previews from the demo ledger and settings; its restate history starts empty and a restate is kept in memory. The Cost Control pages draw from it too; the demo's quality signals carry per-model tool results, so Value shows a scatter. Yesterday has a spike (a busy Acme key and an Opus burst on `~/acme-web`), so the Overview shows an anomaly and the Monitors page and the bell show its `cost_anomaly` alert. A finished Datasets experiment on 24 support tickets backs one recommendation on Value (Opus to Sonnet), and leaves three more models under "No evidence yet": Sonnet ("No cheaper model did as well") and two others with no experiment.
+The demo shows a synthetic ledger held in memory: three cost centers, Claude Code on a plan, an IDR rate, two price versions, backfilled days, an unpriced model and a free local judge. No files are written and the pass never runs; settings and restate work in memory. The Settings page previews from the demo ledger and settings; its restate history starts empty and a restate is kept in memory. The Cost Control pages draw from it too; the demo's quality signals carry per-model tool results, so Value shows a scatter. Yesterday has a spike (a busy Acme key and an Opus burst on `~/acme-web`), so the Overview shows an anomaly and the Monitors page and the bell show its `cost_anomaly` alert. A finished Datasets experiment on 24 support tickets backs one recommendation on Value (Opus to Sonnet), and leaves three more models under "No evidence yet": Sonnet ("No cheaper model did as well") and two others with no experiment. The Reports page and the export read the demo ledger; the weekly digest never sends.
 
 ## Known limits
 
