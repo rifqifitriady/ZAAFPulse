@@ -99,24 +99,16 @@ function costBurnSvg(o, fmt) {
   const x = (day) => m.l + ((Number(day.slice(8, 10)) - 1) / Math.max(1, days - 1)) * iw;
   const y = (v) => m.t + ih - (Math.min(v, max) / max) * ih;
   const out = [costAxis(W, m, ih, max, fmt)];
-  // The band is drawn only where it has a width (to the cent); a stretch as wide as the line gets no polygon.
-  const wide = (p) => !f.early && p.low != null && p.high != null && fmt(p.low) !== fmt(p.high);
-  for (let i = 0; i < f.line.length;) {
-    if (!wide(f.line[i])) {
-      i++;
-      continue;
-    }
-    let j = i;
-    while (j + 1 < f.line.length && wide(f.line[j + 1])) j++;
-    const run = f.line.slice(i, j + 1);
-    if (run.length > 1) {
-      const top = run.map((p) => [x(p.day), y(p.high)]);
-      const bottom = run.map((p) => [x(p.day), y(p.low)]).reverse();
-      out.push(
-        `<path class="cost-band" d="${costPath([...top, ...bottom])}Z" fill="${COST_C.violet}" fill-opacity=".16"/>`,
-      );
-    }
-    i = j + 1;
+  // The band is one polygon over the whole forecast (a day as wide as the line is a pinch), drawn only when some day
+  // has a width to the cent; the width is decided in cents, never by the formatted label.
+  const wide = (p) =>
+    !f.early && p.low != null && p.high != null && Math.round(p.low * 100) !== Math.round(p.high * 100);
+  if (!f.early && f.line.some(wide)) {
+    const top = f.line.map((p) => [x(p.day), y(p.high)]);
+    const bottom = f.line.map((p) => [x(p.day), y(p.low)]).reverse();
+    out.push(
+      `<path class="cost-band" d="${costPath([...top, ...bottom])}Z" fill="${COST_C.violet}" fill-opacity=".16"/>`,
+    );
   }
   out.push(
     `<path class="cost-line" pathLength="1" d="${costPath(o.daily.map((d) => [x(d.day), y(d.cum)]))}" fill="none" stroke="${COST_C.cyan}" stroke-width="2.4" style="filter:drop-shadow(0 0 4px ${COST_C.cyan})"/>`,

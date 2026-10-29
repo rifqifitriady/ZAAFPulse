@@ -308,3 +308,16 @@ test('the rule card lists the day instances newest first whatever order the serv
     ['Wed 28 Oct (so far)', 'Tue 27 Oct', 'Mon 26 Oct'],
   );
 });
+
+test('the rule card puts a day instance without an id last', () => {
+  const out = M.monRuleNow({
+    id: 'cost_anomaly',
+    enabled: true,
+    kind: 'aggregate',
+    instances: [
+      { title: 'No id', state: 'ok', value: 1, threshold: 2 },
+      { instance: '2026-10-27', title: 'Tue 27 Oct', state: 'ok', value: 1, threshold: 2 },
+    ],
+  });
+  assert.ok(out.startsWith('Tue 27 Oct'));
+});

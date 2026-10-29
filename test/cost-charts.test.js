@@ -321,3 +321,28 @@ test('burn-down: a band as wide as the line is not drawn, and its tooltip has no
   assert.equal(count(wide, /class="cost-band"/g), 1);
   assert.match(wide, /forecast[^"]*–/);
 });
+
+test('burn-down: the band is one polygon from today, and its width is decided in cents, not by the compact label', () => {
+  const rows = [1, 2, 3, 4, 10].map((v, i) => row({ day: `2026-10-0${i + 1}`, listUSD: v }));
+  const o = V.overview({ rows, today: '2026-10-05' });
+  const svg = C.costBurnSvg(o, fmt);
+  const bandX = Number(svg.match(/class="cost-band" d="M([\d.]+),/)[1]);
+  const lineX = Number(svg.match(/class="cost-fade" d="M([\d.]+),/)[1]);
+  assert.equal(bandX, lineX, 'the band starts where the forecast line does');
+  const compact = (v) => (v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : String(Math.round(v)));
+  const big = {
+    ...o,
+    forecast: {
+      ...o.forecast,
+      line: o.forecast.line.map((p, i) => ({
+        ...p,
+        cum: 1590000,
+        low: i ? 1554000 : 1590000,
+        high: i ? 1626000 : 1590000,
+      })),
+    },
+  };
+  const out = C.costBurnSvg(big, (v) => compact(v));
+  assert.equal(count(out, /class="cost-band"/g), 1);
+  assert.match(out, /1554000 – 1626000|1\.6M – 1\.6M/);
+});

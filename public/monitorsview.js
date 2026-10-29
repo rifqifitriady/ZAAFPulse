@@ -39,8 +39,10 @@ const MON_PARAMS = {
   minUSD: { label: 'Minimum rise (USD)', step: '0.5', min: 0, exclusiveMin: true, max: 1e6 }, // cost_anomaly
 };
 // The bounds of lib/monitors/api.js PARAM_RANGE, in the unit the input shows, in words.
-const monParamRule = (spec) =>
-  `${spec.int ? 'a whole number ' : ''}${spec.exclusiveMin ? `above ${spec.min}, up to ${spec.max}` : `from ${spec.min} to ${spec.max}`}`;
+const monParamRule = (spec) => {
+  const [lo, hi] = [spec.min, spec.max].map((v) => v.toLocaleString('en'));
+  return `${spec.int ? 'a whole number ' : ''}${spec.exclusiveMin ? `above ${lo}, up to ${hi}` : `from ${lo} to ${hi}`}`;
+};
 const MON_SECRETS_DOC = 'https://github.com/rifqifitriady/ZAAFPulse/blob/main/docs/integrations.md#storing-a-secret';
 const MON_KEY_RE = /^[A-Za-z0-9_.:-]{1,200}$/;
 const MON_MAX_TITLE = 80;
@@ -293,7 +295,8 @@ function monParamValue(k, raw) {
   const spec = Object.hasOwn(MON_PARAMS, k) ? MON_PARAMS[k] : {};
   const inside =
     Number.isFinite(n) && (spec.exclusiveMin ? n > spec.min : n >= (spec.min ?? 0)) && n <= (spec.max ?? Infinity);
-  if (!inside || (spec.int && !Number.isInteger(n))) return { error: `${spec.label || k}: ${monParamRule(spec)}` };
+  if (!inside || (spec.int && !Number.isInteger(n)))
+    return { error: `${spec.label || k}: ${monParamRule(spec)}, or leave it empty for the default` };
   if (spec.pct) return { value: Math.round(n * 100) / 1e4 };
   return { value: n };
 }
@@ -972,7 +975,11 @@ function monRuleNow(r) {
   if (days.length)
     return days
       .slice()
-      .sort((x, y) => String(y.instance).localeCompare(String(x.instance)))
+      .sort((x, y) =>
+        (typeof y.instance === 'string' ? y.instance : '').localeCompare(
+          typeof x.instance === 'string' ? x.instance : '',
+        ),
+      )
       .map(
         (i) =>
           `${monText(i.title, 40)}: ${i.state === 'no_data' ? 'not enough history' : monMeasure(r.id, i.value, i.threshold) || monStateWord(i.state)}`,
