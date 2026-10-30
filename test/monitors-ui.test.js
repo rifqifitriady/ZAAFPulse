@@ -406,3 +406,55 @@ test('monAgentNote: control off without sign-in names ZAAFPULSE_AUTH=none', () =
     'Could not pause the agent: agent control is off without a dashboard sign-in',
   );
 });
+
+test('monParamValue: the rule parameters keep the server bounds', () => {
+  assert.equal(
+    monParamValue('ratio', '1').error,
+    'Times the usual amount: above 1, up to 100, or leave it empty for the default',
+  );
+  assert.deepEqual(monParamValue('ratio', '2'), { value: 2 });
+  assert.ok(monParamValue('ratio', '100.5').error);
+  assert.deepEqual(monParamValue('ratio', '100'), { value: 100 });
+  assert.equal(
+    monParamValue('minUSD', '0').error,
+    'Minimum rise (USD): above 0, up to 1,000,000, or leave it empty for the default',
+  );
+  assert.deepEqual(monParamValue('minUSD', '0.5'), { value: 0.5 });
+  assert.equal(
+    monParamValue('stuckMin', '0').error,
+    'Minutes without a log line: above 0, up to 1,440, or leave it empty for the default',
+  );
+  assert.deepEqual(monParamValue('limitUSD', '0'), { value: 0 });
+});
+
+test('monParamValue: a parameter with no bounds in MON_PARAMS still says what it takes', () => {
+  assert.equal(monParamValue('notAParam', '-1').error, 'notAParam: 0 or more, or leave it empty for the default');
+  assert.equal(monParamValue('notAParam', 'abc').error, 'notAParam: 0 or more, or leave it empty for the default');
+  assert.deepEqual(monParamValue('notAParam', '3'), { value: 3 });
+});
+
+test('monRuleCard: the number inputs carry the bounds', () => {
+  const html = monRuleCard(
+    {
+      id: 'cost_anomaly',
+      title: 'Cost anomaly',
+      enabled: true,
+      state: 'ok',
+      defaults: { ratio: 3, minUSD: 5 },
+      params: {},
+      instances: [],
+    },
+    {},
+  );
+  assert.match(
+    html,
+    /data-mon-param="ratio"[^>]*min="1"[^>]*max="100"|min="1"[^>]*max="100"[^>]*data-mon-param="ratio"/,
+  );
+  assert.match(html, /max="1000000"/);
+});
+
+test('monParamValue: bounds with separators and the hint to leave it empty', () => {
+  const e = monParamValue('minUSD', '2000000').error;
+  assert.match(e, /up to 1,000,000/);
+  assert.match(e, /or leave it empty for the default/);
+});

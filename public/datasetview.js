@@ -157,6 +157,20 @@ function dsRunOf(hash) {
   const id = new URLSearchParams(query).get('run');
   return id && DS_EXP_ID.test(id) ? id : null;
 }
+// The run a link names (the Value page's Recommendations) on this paint. The hash keeps its ?run=, and every paint
+// of the visit opens it, as a fresh load mounts the page twice; once the owner opens a run in the same visit (the
+// same hash, no hashchange since), a repaint keeps that pick instead. { run } when it is listed, { gone } when it is
+// no longer kept, null for no link or a pick no longer listed.
+function dsLinkedRun(runs, hash, picked, visit) {
+  const wanted = dsRunOf(hash);
+  if (!wanted) return null;
+  if (picked && picked.hash === hash && picked.visit === visit) {
+    const run = runs.find((x) => x.id === picked.id);
+    return run ? { run } : null;
+  }
+  const run = runs.find((x) => x.id === wanted);
+  return run ? { run } : { gone: true };
+}
 
 /* ---------- Playground Dataset mode and experiments: pure helpers ---------- */
 const DS_MAX_MODELS = 3;
@@ -461,7 +475,8 @@ function dsExportButton(slug, label, msg) {
 }
 
 /* ---------- the view ---------- */
-const dsState = { req: 0, content: true, evs: null, expEvs: null };
+// picked: the run the owner last opened on the Experiments tab, with the hash and visit it was opened in.
+const dsState = { req: 0, content: true, evs: null, expEvs: null, picked: null };
 const dsOn = (b, title) => {
   b.disabled = !dsState.content;
   b.title = dsState.content ? title || '' : DS_OFF;
@@ -1358,6 +1373,11 @@ async function dsPaintExperiments(body, live) {
       detail.replaceChildren(dsEl('div', { class: 'holo panel empty' }, `Could not read the run: ${e.message}`));
     }
   }
+  // A run the owner opens: a repaint of this visit keeps it, rather than the run a link named.
+  const pick = (row) => {
+    dsState.picked = { hash: location.hash, visit: dsHashVisits, id: row.id };
+    open(row);
+  };
 
   compare.addEventListener('click', () => {
     // The older run is A, so the change reads forward in time.
@@ -1469,7 +1489,7 @@ async function dsPaintExperiments(body, live) {
                 dsEl('b', null, row.datasetName || row.dataset),
                 dsEl('small', { class: 'block muted' }, `${row.examples || 0} example${row.examples === 1 ? '' : 's'}`),
               );
-              name.addEventListener('click', () => open(row));
+              name.addEventListener('click', () => pick(row));
               const tr = dsEl(
                 'tr',
                 { class: 'ds-exp-row' },
@@ -1487,7 +1507,7 @@ async function dsPaintExperiments(body, live) {
               tr.dataset.id = row.id;
               tr.addEventListener('click', (e) => {
                 if (e.target.closest('input, button, a')) return;
-                open(row);
+                pick(row);
               });
               return tr;
             }),
@@ -1503,14 +1523,24 @@ async function dsPaintExperiments(body, live) {
       );
   const tbody = table.querySelector ? table.querySelector('tbody') : null;
   const tools = runs.length > 1 ? dsEl('div', { class: 'ds-inline ds-cmp-bar' }, compare, hint) : null;
+  // A link that names a run (the Value page's Recommendations) opens it, as a click on its row does.
+  const link = dsLinkedRun(runs, location.hash, dsState.picked, dsHashVisits);
+  const gone =
+    link && link.gone
+      ? dsEl('p', { class: 'ds-msg', role: 'status' }, 'That experiment is no longer kept (only the latest 100 are)')
+      : null;
   body.replaceChildren(
-    dsPanel('Experiments', `${runs.length} run${runs.length === 1 ? '' : 's'} · newest first`, running, tools, table),
+    dsPanel(
+      'Experiments',
+      `${runs.length} run${runs.length === 1 ? '' : 's'} · newest first`,
+      running,
+      gone,
+      tools,
+      table,
+    ),
     detail,
   );
-  // A link that names a run (the Value page's Recommendations) opens it, as a click on its row does.
-  const wanted = dsRunOf(location.hash);
-  const named = wanted && runs.find((x) => x.id === wanted);
-  if (named) open(named);
+  if (link && link.run) open(link.run);
 }
 
 /* ---------- the Playground's Dataset mode (public/gatewayview.js) ---------- */
@@ -2595,6 +2625,7 @@ if (typeof module !== 'undefined')
     dsSlugOf,
     dsRoute,
     dsRunOf,
+    dsLinkedRun,
     dsModelOptions,
     dsRunBody,
     dsResultCells,
@@ -2622,4 +2653,5 @@ if (typeof module !== 'undefined')
     dsWrapFocus,
     dsPgSendPlan,
     dsPgOnError,
+    dsPaintExperiments,
   };

@@ -137,6 +137,17 @@ test('spike line: one marker per spike, its tooltip with the baseline and the to
   assert.equal(count(young, /class="cost-spike"/g), 0);
 });
 
+test('spike line: baselineText false leaves the baseline wording out of the tooltips', () => {
+  const spikes = [
+    { day: '2026-10-01', spend: 2, baseline: null, spike: false, topModel: null },
+    { day: '2026-10-02', spend: 3, baseline: 1, spike: false, topModel: 'm' },
+  ];
+  const plain = C.costSpikeSvg(spikes, fmt, { baselineText: false });
+  assert.doesNotMatch(plain, /baseline/);
+  assert.match(plain, /data-tip="1 Oct · \$2\.00"/);
+  assert.match(C.costSpikeSvg(spikes, fmt), /no baseline yet/);
+});
+
 test('rings: percent capped on the ring with a pink overflow arc; no data dashed; linked to the card', () => {
   const over = C.costRingSvg(125, 'exceeded');
   assert.match(over, />125%</);
@@ -297,4 +308,52 @@ test('axis labels: the left margin fits the longest tick label in any currency',
     fmt,
   );
   assert.match(small, /<text x="54" y="[\d.]+" text-anchor="end">\$3\.00</);
+});
+
+test('burn-down: a band as wide as the line is not drawn, and its tooltip has no range', () => {
+  const flat = [2, 2, 2, 2, 2].map((v, i) => row({ day: `2026-10-0${i + 1}`, listUSD: v }));
+  const o = V.overview({ rows: flat, today: '2026-10-05' });
+  assert.ok(
+    o.forecast.line.every((p) => p.low === p.high),
+    'every day as expected: no spread',
+  );
+  const svg = C.costBurnSvg(o, fmt);
+  assert.equal(count(svg, /class="cost-band"/g), 0, 'the line only');
+  assert.equal(count(svg, /class="cost-fade"/g) > 0, true);
+  const tips = svg.match(/data-tip="[^"]*forecast[^"]*"/g) || [];
+  assert.ok(tips.length > 0);
+  assert.ok(
+    tips.every((t) => !t.includes('–')),
+    'no range in the tooltip',
+  );
+  // A band that is real keeps its polygon and its range.
+  const rows = [1, 2, 3, 4, 10].map((v, i) => row({ day: `2026-10-0${i + 1}`, listUSD: v }));
+  const wide = C.costBurnSvg(V.overview({ rows, today: '2026-10-05' }), fmt);
+  assert.equal(count(wide, /class="cost-band"/g), 1);
+  assert.match(wide, /forecast[^"]*–/);
+});
+
+test('burn-down: the band is one polygon from today, and its width is decided in cents, not by the compact label', () => {
+  const rows = [1, 2, 3, 4, 10].map((v, i) => row({ day: `2026-10-0${i + 1}`, listUSD: v }));
+  const o = V.overview({ rows, today: '2026-10-05' });
+  const svg = C.costBurnSvg(o, fmt);
+  const bandX = Number(svg.match(/class="cost-band" d="M([\d.]+),/)[1]);
+  const lineX = Number(svg.match(/class="cost-fade" d="M([\d.]+),/)[1]);
+  assert.equal(bandX, lineX, 'the band starts where the forecast line does');
+  const compact = (v) => (v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : String(Math.round(v)));
+  const big = {
+    ...o,
+    forecast: {
+      ...o.forecast,
+      line: o.forecast.line.map((p, i) => ({
+        ...p,
+        cum: 1590000,
+        low: i ? 1554000 : 1590000,
+        high: i ? 1626000 : 1590000,
+      })),
+    },
+  };
+  const out = C.costBurnSvg(big, (v) => compact(v));
+  assert.equal(count(out, /class="cost-band"/g), 1);
+  assert.match(out, /1554000 – 1626000|1\.6M – 1\.6M/);
 });

@@ -131,6 +131,7 @@ test('the report: totals, four tables with Other, daily spend, budgets and notes
   assert.match(html, /<td>Plan fee<\/td>/);
   assert.match(html, /<td>Past 80 %, projected over<\/td>/);
   assert.match(html, /aria-label="Daily spend"/);
+  assert.doesNotMatch(html, /baseline/i, 'the report has no spike wording');
   assert.match(html, /September 2026 could not be read: figures leave it out\./);
   assert.match(html, /Billing was assumed as metered on 1 day\(s\): 2 Oct\./);
   assert.match(html, /Restated 2026-10-03 to 2026-10-04: &lt;img/);

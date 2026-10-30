@@ -83,7 +83,11 @@ test('report: one center, Unassigned, a past month without budget states, and th
     acme.tables.key.some((k) => k.name === 'Acme client'),
     'keys by their names',
   );
-  assert.deepEqual(acme.budgets, [], 'no budget is scoped to the Acme center');
+  assert.deepEqual(
+    acme.budgets.map((x) => x.id),
+    ['acme-gateway'],
+    "the budget of the center's key is in its report",
+  );
   const research = (await s.get('center=research')).body;
   assert.deepEqual(
     research.budgets.map((x) => x.id),
