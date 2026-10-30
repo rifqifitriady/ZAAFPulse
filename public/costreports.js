@@ -179,7 +179,7 @@ function costRepHtml(r, ctx) {
     <header class="cost-rep-head"><h2>${esc(costRepTitle(r))}</h2><p>${esc(costRepPeriod(r))}</p></header>
     <div class="grid kpis cost-rep-tiles">${tiles}</div>
     <div class="cost-rep-tables">${tables}</div>
-    <section class="cost-rep-section"><h3>Daily spend</h3>${costSpikeSvg(days, ctx.fmt)}</section>
+    <section class="cost-rep-section"><h3>Daily spend</h3>${costSpikeSvg(days, ctx.fmt, { baselineText: false })}</section>
     <section class="cost-rep-section"><h3>Budgets</h3>${costRepBudgetsHtml(r, ctx)}</section>
     ${notes.length ? `<section class="cost-rep-section"><h3>Notes</h3>${notes.map((x) => `<p class="cost-note">${esc(x)}</p>`).join('')}</section>` : ''}
   </article>`;

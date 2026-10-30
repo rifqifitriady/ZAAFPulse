@@ -255,8 +255,8 @@ test('the Monitors card: the two parameters, and each day today first', () => {
     autoPause: false,
     mayAutoPause: false,
     instances: [
-      { title: 'Tue 27 Oct', state: 'ok', value: 3, threshold: 4 },
-      { title: 'Wed 28 Oct (so far)', state: 'triggered', value: 18.4, threshold: 12.2 },
+      { instance: '2026-10-27', title: 'Tue 27 Oct', state: 'ok', value: 3, threshold: 4 },
+      { instance: '2026-10-28', title: 'Wed 28 Oct (so far)', state: 'triggered', value: 18.4, threshold: 12.2 },
       { title: null, state: 'no_data', value: null, threshold: null },
     ],
   };
@@ -272,4 +272,52 @@ test('the Monitors card: the two parameters, and each day today first', () => {
     instances: [{ title: 'Wed 28 Oct (so far)', state: 'no_data', value: null, threshold: null }],
   };
   assert.equal(M.monRuleNow(young), 'Wed 28 Oct (so far): not enough history');
+});
+
+test('the bell: a state named like an Object member is muted, with no function text', () => {
+  const l = M.alertLine(
+    {
+      id: 1,
+      ts: 1,
+      rule: 'cost_anomaly',
+      ruleTitle: 'Cost anomaly',
+      state: 'constructor',
+      title: 'Wed 28 Oct',
+      value: 3,
+    },
+    [],
+  );
+  assert.equal(l.tone, 'muted');
+  assert.doesNotMatch(l.text, /function|native code/);
+});
+
+test('the rule card lists the day instances newest first whatever order the server sent', () => {
+  const inst = (instance, title) => ({ instance, title, state: 'ok', value: 1, threshold: 2 });
+  const out = M.monRuleNow({
+    id: 'cost_anomaly',
+    enabled: true,
+    kind: 'cost',
+    instances: [
+      inst('2026-10-27', 'Tue 27 Oct'),
+      inst('2026-10-28', 'Wed 28 Oct (so far)'),
+      inst('2026-10-26', 'Mon 26 Oct'),
+    ],
+  });
+  assert.deepEqual(
+    out.split(' · ').map((s) => s.split(':')[0]),
+    ['Wed 28 Oct (so far)', 'Tue 27 Oct', 'Mon 26 Oct'],
+  );
+});
+
+test('the rule card puts a day instance without an id last', () => {
+  const out = M.monRuleNow({
+    id: 'cost_anomaly',
+    enabled: true,
+    kind: 'aggregate',
+    instances: [
+      { title: 'No id', state: 'ok', value: 1, threshold: 2 },
+      { instance: '2026-10-27', title: 'Tue 27 Oct', state: 'ok', value: 1, threshold: 2 },
+    ],
+  });
+  assert.ok(out.startsWith('Tue 27 Oct'));
 });

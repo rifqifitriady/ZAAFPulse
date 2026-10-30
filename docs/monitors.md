@@ -25,7 +25,8 @@ Notes:
 
 - Rules are either **live** (one instance per session: `cost_burn`, `tool_loop`, `agent_stuck`) or **aggregate** (one instance for everything).
 - `accuracy_drop` reports `no_data` unless today and the previous 7 days each rest on at least `minSamples` tool results (default 20, the same as `eval_pass_rate`). One fault among the morning's first ten results would otherwise be a ten-point drop.
-- `cost_anomaly` has one instance per day, named by its date: yesterday, checked whole, and today, checked so far
+- On the Monitors cards each parameter input carries the server's bounds; a value outside them reads "<label>: <rule>, or leave it empty for the default".
+- `cost_anomaly` has one instance per day, named by its date (its instance ids are the dates; other rules keep hashed ids), listed newest first: yesterday, checked whole, and today, checked so far
   ("Wed 28 Oct (so far)"). It is checked after each index refresh, from the ledger. A day alerts at most once: no
   30-minute reminder, and the whole-day check of a day that already alerted on its partial check sends nothing. After a
   snooze, an `ok` seen before it does not shorten the resolution hold. A day before yesterday leaves the card and the

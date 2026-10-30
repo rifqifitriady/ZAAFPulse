@@ -129,6 +129,7 @@ POST /api/cost/restate
 - **List cost and centers** change through one correction appended to `.data/cost/corrections.jsonl`, with the old and new amounts of each row. Stored rows are never rewritten; readers apply the corrections on top, so events that arrive later still count. Rows are daily sums, so each is re-priced from its average request: a row that mixes requests on both sides of a long-prompt tier is approximated.
 - **Billing** changes through one override per source for the range, with its current billing. This is also how days billed as `billingAssumed` are corrected.
 - The answer holds the correction and the overrides written.
+- **`basis`** (optional) is the one `POST /api/cost/restate/preview` answered. It identifies the settings (budgets and the digest do not count) and the prices the restate would use: the price version's id, or the id the next pass will give prices that are not a version yet, and the prices' hash. A pass that records the previewed prices in between therefore does not change it. When either changed since, the restate is refused with 409 and writes nothing; a `basis` that is not a string is a 400 (`basis: a string`).
 
 ## Budgets
 
@@ -406,7 +407,8 @@ and the budgets never disagree.
   never less than 0 (credits can make a weekday's mean negative). Under "Paid" each day to come also adds its plan
   fees exactly, at the billing in force now. The band is the 25th to 75th percentile of how far the known days fell
   from their weekday's mean, applied to usage only; it always contains the line itself (its low edge is at most the
-  line, its high edge at least the line). With fewer than 3 usable days the band is the line itself (no width), as it
+  line, its high edge at least the line). The burn-down draws it as one polygon from today, and only when some day has a
+  width to the cent (the width is decided in cents, not by the label). With fewer than 3 usable days the band is the line itself (no width), as it
   is when the 25th and 75th percentile days were as expected; the burn-down then names no band. The burn-down's caption
   names the method: "Forecast: weekday pattern of the last 4 weeks", "Forecast: daily mean (little history yet)" or
   "No forecast yet" (the line is then the mean of the month's days so far, without a band), followed by "band: 25th–75th
@@ -423,7 +425,7 @@ and the budgets never disagree.
   more: the parameters of the Monitors rule [`cost_anomaly`](monitors.md#rules), 2 and $1 by default (`ratio` above 1,
   up to 100; `minUSD` above 0, up to 1,000,000). A usual amount of $0 needs `minUSD`. The spike line marks each day
   of the month this way, with the saved parameters, and draws that usual amount as its baseline, so the chart and the
-  alerts agree; a month that did not read is not marked. The **Anomalies** card, a full-width panel after the charts
+  alerts agree; a month that did not read is not marked and has no baseline. The **Anomalies** card, a full-width panel after the charts
   and rings, shows today so far and yesterday whole: the spend against the usual amount ("$18.40, usually $6.10
   (3.0×)"), Anomaly, Normal or "Not enough history", and, for an anomaly, up to 3 values that rose the most across
   models, projects, cost centers and keys, each with its rise and its share of the day's rise. Its figures are in USD,
@@ -454,7 +456,9 @@ setting you change yourself.
   page shows. Where the model ran under a plan the saving is usage value, not money paid, and the footnote says so.
 - **The choice.** For each model the largest saving wins, then the higher pass rate, then the newest run; the other
   qualifying runs and candidates are counted ("+2 more experiments agree"). At most 5 recommendations, largest saving first. Each
-  links to its run in Datasets (`#datasets/experiments?run=<id>`).
+  links to its run in Datasets (`#datasets/experiments?run=<id>`). The link opens the named run when the page loads, and
+  the hash keeps `?run=`; once you open another run on that visit, a repaint keeps your pick. A run no longer kept shows "That experiment is no longer kept (only the
+  latest 100 are)". A rate the experiment lacks reads as a dash.
 - **No evidence yet.** The 3 models with the most spend over the 30 days and no recommendation, each with its spend
   and a link to Datasets: "No experiment yet" (no finished run compared it with another model on enough rows) or "No
   cheaper model did as well". When no experiment counted at all, the card also says "Run an experiment in Datasets to
@@ -473,13 +477,13 @@ usage value the plan fee rows are left out). The columns are the dimensions the 
 `billed<CODE>` with a display currency. The CSV is RFC 4180 with CRLF; a text cell that starts with `=`, `+`, `-`, `@`,
 a tab or a CR gets a leading `'` so a spreadsheet does not run it as a formula; amounts have 8 decimals and no
 thousands separator. A month (or the corrections) that did not read adds a last line `# unread: 2026-09`. At most 400
-days and 100,000 rows (413 beyond). Only the file name (`Content-Disposition`) is taken from the route; the type,
-`Cache-Control: no-store` and the security headers are always the server's.
+days and 100,000 rows (413 beyond). Only the file name (`Content-Disposition`) is taken from the route, and it is sent
+once, under that canonical name; the type, `Cache-Control: no-store` and the security headers are always the server's.
 
 **Reports.** `#cost/reports` shows one cost center's month for a client, chosen with a month (this month back to the
 ledger's first month; by default last month, or this month while the ledger does not hold all of last month), a
 center (All centers, Unassigned, or a center) and the display currency, which is the same choice the other cost pages
-keep. A center's figures are its usage; plan fees have no center and show under All centers only. Budgets show their
+keep. A center's figures are its usage; plan fees have no center and show under All centers only. A center's report lists the budgets scoped to the center and those scoped to keys mapped to the center in the cost settings (`cost.keyCenters`); a budget on a key with no center there is not listed under Unassigned. An absolute project folder (one outside the home folder) shows in the report as `…/<last segment>`, and two folders with the same last segment share a label; the ledger and the other pages keep the full folder. The daily chart's tooltips carry no baseline wording. Budgets show their
 state for the current month only: a past month says "Budget states are shown for the current month only.", a budget
 list that does not read says "Budgets could not be read.", and a server without budgets says "Budgets are not
 available." **Print** uses the browser's print (the print style hides the sidebar and the controls and fits A4 and
@@ -518,7 +522,7 @@ gateway's `/mcp` endpoint, which answers clients' API keys.
 **Settings** (`#cost/settings`) edits the `cost` section of `config.json` without opening the file. It has five
 panels; each of the first four has its own **Save**, which reads the saved settings again and sends them with only
 that panel's fields replaced, so a mistake in one panel never holds back another. Saves of different panels run one
-after another. Typing while a Save runs is kept as a draft: only a draft that still says what was sent is cleared.
+after another. If a panel's saved settings changed elsewhere since you began editing it, its Save warns "These settings changed elsewhere since you started editing. Save again to replace them, or Discard to load them."; a second Save replaces them. Every request from the cost pages gives up after 30 s with "The request took too long; try again" (the restate waits up to 5 minutes). Typing while a Save runs is kept as a draft: only a draft that still says what was sent is cleared.
 Unsaved changes are kept per panel while the browser tab is open (leave the page and come back: they are still there,
 with **Discard**), and closing the tab with unsaved changes asks first. The page has no range, currency or measure
 control and does not refresh by itself.
@@ -544,11 +548,11 @@ adds `<project>/**`), and where a typed path goes. A draft that does not validat
 until restated. The note after the Save opens the Restate panel with the first of yesterday's month to yesterday (on the 1st of a month, the whole previous month). Rates are
 not frozen per day: a rate change also changes how past days read in the display currency (USD never changes).
 
-**Restate panel.** **Preview** shows how many ledger rows change, the usage value before and after, the center moves,
+**Restate panel.** **Preview** shows how many ledger rows change, the usage value before and after, the center moves (a move decided by a gateway key reads "Key: <name>", with the project muted after it),
 the price versions (or "today's prices, not yet recorded as a version") and the billing set over the range. **Run
 restate** then needs a reason and the box "I understand this correction cannot be undone". It stays off while a Save
 is in flight, and it needs a fresh preview of the same range made after the last Save: a range edit or a Save since
-the preview asks for a new one. Leaving the page while a restate runs clears the preview, the reason and the box (the
+the preview asks for a new one, and so does any 409 from the server (the preview's `basis` no longer holds). If the restate gets no answer, the panel says "The restate may still be running; check the history before trying again" and does not offer Run restate again. Leaving the page while a restate runs clears the preview, the reason and the box (the
 correction may have been recorded) and the history loads again on the next visit. The panel lists past restates,
 newest first (at most 100).
 
@@ -569,7 +573,7 @@ The ledger never guesses over data it could not read.
 
 ## Project folders
 
-Project folders are stored and shown with the home folder as `~` and forward slashes (`~/work/acme`). A folder outside the home folder is shown in full (`/srv/app`, `D:/work/app`). The ledger holds numbers, model, provider, key and agent names and project folders only: never prompt, reply or tool text.
+Project folders are stored and shown with the home folder as `~` and forward slashes (`~/work/acme`). A folder outside the home folder is shown in full (`/srv/app`, `D:/work/app`); only the Reports page shortens it to `…/<last segment>`. The ledger holds numbers, model, provider, key and agent names and project folders only: never prompt, reply or tool text.
 
 ## Files
 
@@ -614,8 +618,8 @@ These routes need the dashboard sign-in. A gateway API key, MCP or A2A is never 
 | `POST /api/cost/budgets` | create or replace one budget; 400 for validation, 409 while a hand edit is invalid or pause is unavailable |
 | `POST /api/cost/budgets/<id>/delete` | delete a saved or legacy budget |
 | `GET /api/cost/prices/versions` | `{ current, versions: [{ id, from, at, hash, changed, changedCount }] }` |
-| `POST /api/cost/restate` | 200 `{ correction, overrides }` |
-| `POST /api/cost/restate/preview` | body `{ from, to }`; what a restate would do, written nowhere: 200 `{ from, to, changed, total, beforeUSD, afterUSD, moves: [{ from, to, listUSD }], versionsBefore, version, newPrices, billing }` (`version` null and `newPrices` true while today's prices are not a version yet). The 400, 409 and 503 of `POST /api/cost/restate`, without `reason` and `confirm` |
+| `POST /api/cost/restate` | body `{ from, to, reason, confirm, basis? }`; 200 `{ correction, overrides }`. 409 when `basis` no longer matches the settings and prices; 400 `basis: a string` for a non-string |
+| `POST /api/cost/restate/preview` | body `{ from, to }`; what a restate would do, written nowhere: 200 `{ from, to, changed, total, beforeUSD, afterUSD, moves: [{ from, to, listUSD }], versionsBefore, version, newPrices, billing }` (`version` null and `newPrices` true while today's prices are not a version yet) and `basis`, the identity to pass to the restate. The 400, 409 and 503 of `POST /api/cost/restate`, without `reason` and `confirm` |
 | `GET /api/cost/restates` | `{ restates: [{ ts, from, to, reason, priceVersion, rows, billing }] }`, newest first, at most 100; `rows` counts the rows that changed. 503 while the corrections do not read |
 
 **Ledger answer:** `{ from, to, groupBy, currency, rows, totals, missingRate, corrections, unread, billing: { error, historyLost } }`. Each row has `requests`, `tokens` (`in`, `out`, `cacheRead`, `cacheWrite5m`, `cacheWrite1h`), `webSearches`, `listUSD`, `billedUSD` and the flags `unpriced`, `estimated`, `backfilled`, `billingAssumed` (true when any row in the group is). With `currency` (the configured code) rows and totals also carry `list` and `billed`.

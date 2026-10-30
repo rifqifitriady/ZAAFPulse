@@ -418,27 +418,50 @@ function costName(col, key, ctx) {
   return String(key);
 }
 
+const COST_CALL_MS = 30000;
+const COST_SLOW = 'The request took too long; try again';
+// A request and its JSON answer. It gives up after 30 s (`timeoutMs`) unless the caller passes its own signal: a
+// request that never answers would otherwise hold its caller, and the Saves queued behind it, for good.
 async function costCall(path, opts) {
-  const r = await fetch(path, opts);
-  if (r.status === 401) {
-    location.href = '/login.html'; // server mode: the session ended
-    throw new Error('signed out');
-  }
-  let json = null;
+  const { timeoutMs = COST_CALL_MS, ...init } = opts || {};
+  const ask = async (o) => {
+    const r = await fetch(path, o);
+    if (r.status === 401) {
+      location.href = '/login.html'; // server mode: the session ended
+      throw new Error('signed out');
+    }
+    let json = null;
+    try {
+      json = await r.json();
+    } catch {
+      /* not JSON */
+    }
+    return { status: r.status, json };
+  };
+  if (init.signal) return ask(init);
+  const signal = AbortSignal.timeout(timeoutMs);
+  // Raced as well as passed on: the time limit holds even where the request does not follow the signal.
+  const late = new Promise((_, no) => signal.addEventListener('abort', () => no(new Error(COST_SLOW)), { once: true }));
   try {
-    json = await r.json();
-  } catch {
-    /* not JSON */
+    return await Promise.race([ask({ ...init, signal }), late]);
+  } catch (e) {
+    if (signal.aborted) throw new Error(COST_SLOW);
+    throw e;
   }
-  return { status: r.status, json };
 }
 async function costGet(path) {
   const r = await costCall(path);
   if (r.status !== 200) throw new Error((r.json && r.json.error) || `request failed (${r.status})`);
   return r.json;
 }
-const costPost = (path, body) =>
-  costCall(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+// `opts` adds to the request's options (e.g. a longer `timeoutMs`).
+const costPost = (path, body, opts) =>
+  costCall(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    ...opts,
+  });
 
 // Numbers count up on an animated load (render(true)), at once with reduced motion or on a quiet refresh.
 function costCountUp(root, fmt) {
@@ -977,7 +1000,7 @@ const COST_REC_COPY = {
 };
 const COST_GAP_REASON = { no_experiment: 'No experiment yet', no_cheaper_match: 'No cheaper model did as well' };
 // A share as "31 %", the way the card writes it.
-const costPercent = (x) => `${Math.round((Number(x) || 0) * 100)} %`;
+const costPercent = (x) => (x == null || !Number.isFinite(Number(x)) ? '—' : `${Math.round(Number(x) * 100)} %`);
 // An estimate in USD: whole dollars from $10 ("about $42"), cents below.
 const costAbout = (v) => (Math.abs(v) >= 10 ? `$${Math.round(v).toLocaleString('en')}` : costMoney(v, 'USD'));
 // Where a recommendation's experiment opens: its run on the Datasets Experiments tab (public/datasetview.js dsRunOf).
@@ -1489,6 +1512,7 @@ if (typeof module !== 'undefined')
     COST_MONTH_LONG,
     COST_MAX_DAYS,
     costToday,
+    costCall,
     costGet,
     costPost,
     costSub,

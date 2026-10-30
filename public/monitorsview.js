@@ -27,16 +27,27 @@ const MON_PAUSE_WHY = {
 };
 // How each parameter is asked for. minPassRate is a share (0–1) on the server and a percentage in the form.
 const MON_PARAMS = {
-  limitUSD: { label: 'Daily limit (USD)', step: '0.01', empty: 'budget ÷ 30' },
-  maxUSD: { label: 'Limit per 10 min (USD)', step: '0.01' },
-  maxCalls: { label: 'Tool calls in one turn', step: '1', int: true },
-  stuckMin: { label: 'Minutes without a log line', step: '1' },
-  dropPoints: { label: 'Allowed drop (points)', step: '0.5' },
-  minPassRate: { label: 'Minimum pass rate (%)', step: '1', pct: true },
-  minSamples: { label: 'Minimum samples', step: '1', int: true }, // evaluator checks, or tool results for accuracy
-  windowMin: { label: 'Window (minutes)', step: '1' },
-  ratio: { label: 'Times the usual amount', step: '0.1' }, // cost_anomaly
-  minUSD: { label: 'Minimum rise (USD)', step: '0.5' }, // cost_anomaly
+  limitUSD: { label: 'Daily limit (USD)', step: '0.01', min: 0, max: 1e6, empty: 'budget ÷ 30' },
+  maxUSD: { label: 'Limit per 10 min (USD)', step: '0.01', min: 0, max: 1e6 },
+  maxCalls: { label: 'Tool calls in one turn', step: '1', min: 1, max: 1e6, int: true },
+  stuckMin: { label: 'Minutes without a log line', step: '1', min: 0, exclusiveMin: true, max: 1440 },
+  dropPoints: { label: 'Allowed drop (points)', step: '0.5', min: 0, max: 100 },
+  minPassRate: { label: 'Minimum pass rate (%)', step: '1', min: 0, max: 100, pct: true },
+  minSamples: { label: 'Minimum samples', step: '1', min: 1, max: 1e6, int: true }, // evaluator checks, or tool results for accuracy
+  windowMin: { label: 'Window (minutes)', step: '1', min: 0, exclusiveMin: true, max: 1440 },
+  ratio: { label: 'Times the usual amount', step: '0.1', min: 1, exclusiveMin: true, max: 100 }, // cost_anomaly
+  minUSD: { label: 'Minimum rise (USD)', step: '0.5', min: 0, exclusiveMin: true, max: 1e6 }, // cost_anomaly
+};
+// The bounds of lib/monitors/api.js PARAM_RANGE, in the unit the input shows, in words. A spec without bounds reads
+// as monParamValue checks it: from 0, with no top.
+const monParamRule = (spec) => {
+  const [lo, hi] = [spec.min ?? 0, spec.max].map((v) => (Number.isFinite(v) ? v.toLocaleString('en') : ''));
+  const range = spec.exclusiveMin
+    ? `above ${lo}${hi ? `, up to ${hi}` : ''}`
+    : hi
+      ? `from ${lo} to ${hi}`
+      : `${lo} or more`;
+  return `${spec.int ? 'a whole number ' : ''}${range}`;
 };
 const MON_SECRETS_DOC = 'https://github.com/rifqifitriady/ZAAFPulse/blob/main/docs/integrations.md#storing-a-secret';
 const MON_KEY_RE = /^[A-Za-z0-9_.:-]{1,200}$/;
@@ -167,9 +178,23 @@ function alertLine(a, rules, agents) {
     const st = typeof a.state === 'string' ? a.state : '';
     const day = monText(a.title, MON_MAX_TITLE);
     const figures = monNum(a.value) ? `${monUSD(a.value)}${monNum(a.usual) ? `, usual ${monUSD(a.usual)}` : ''}` : '';
-    const change = st === 'triggered' ? 'Triggered' : st === 'ok' ? 'Resolved' : MON_STATE[st] || 'Changed';
+    const change =
+      st === 'triggered'
+        ? 'Triggered'
+        : st === 'ok'
+          ? 'Resolved'
+          : Object.hasOwn(MON_STATE, st)
+            ? MON_STATE[st]
+            : 'Changed';
     const measure = [day, figures].filter(Boolean).join(': ');
-    line = { ...base, kind: 'change', tone: st === 'triggered' ? 'bad' : 'good', change, measure, session: null };
+    line = {
+      ...base,
+      kind: 'change',
+      tone: st === 'triggered' ? 'bad' : st === 'ok' ? 'good' : 'muted',
+      change,
+      measure,
+      session: null,
+    };
     line.costHref = '#cost';
     line.text = [line.title, st === 'triggered' ? '' : change, measure].filter(Boolean).join(' · ');
     return line;
@@ -268,15 +293,17 @@ function monShow(k, v) {
 /** What the input of parameter `k` shows for the rule as saved: where a refused value goes back to. */
 const monParamShown = (rule, k) => monShow(k, rule && rule.params ? rule.params[k] : null);
 
-// A parameter as typed: empty is "back to the default" (null), anything else a number from 0 up.
+// A parameter as typed: empty is "back to the default" (null), anything else a number inside the server's bounds.
 function monParamValue(k, raw) {
   const s = String(raw == null ? '' : raw).trim();
   if (!s) return { value: null };
   const n = Number(s);
   const spec = Object.hasOwn(MON_PARAMS, k) ? MON_PARAMS[k] : {};
-  if (!Number.isFinite(n) || n < 0) return { error: 'Enter a number from 0 up, or leave it empty for the default' };
-  if (spec.int && !Number.isInteger(n)) return { error: 'Enter a whole number' };
-  if (spec.pct) return n > 100 ? { error: 'Enter a percentage up to 100' } : { value: Math.round(n * 100) / 1e4 };
+  const inside =
+    Number.isFinite(n) && (spec.exclusiveMin ? n > spec.min : n >= (spec.min ?? 0)) && n <= (spec.max ?? Infinity);
+  if (!inside || (spec.int && !Number.isInteger(n)))
+    return { error: `${spec.label || k}: ${monParamRule(spec)}, or leave it empty for the default` };
+  if (spec.pct) return { value: Math.round(n * 100) / 1e4 };
   return { value: n };
 }
 
@@ -944,6 +971,8 @@ function monitorsSettingsShell() {
     <div class="mon-channels" id="mon-channels"></div></section>`;
 }
 
+const monStateWord = (s) => (Object.hasOwn(MON_STATE, s) ? MON_STATE[s] : '');
+
 function monRuleNow(r) {
   if (!r.enabled) return 'Off. Turn it on to start checking.';
   const inst = Array.isArray(r.instances) ? r.instances : [];
@@ -952,17 +981,21 @@ function monRuleNow(r) {
   if (days.length)
     return days
       .slice()
-      .reverse()
+      .sort((x, y) =>
+        (typeof y.instance === 'string' ? y.instance : '').localeCompare(
+          typeof x.instance === 'string' ? x.instance : '',
+        ),
+      )
       .map(
         (i) =>
-          `${monText(i.title, 40)}: ${i.state === 'no_data' ? 'not enough history' : monMeasure(r.id, i.value, i.threshold) || MON_STATE[i.state] || ''}`,
+          `${monText(i.title, 40)}: ${i.state === 'no_data' ? 'not enough history' : monMeasure(r.id, i.value, i.threshold) || monStateWord(i.state)}`,
       )
       .join(' · ');
   if (r.kind !== 'live') {
     const i = inst[0];
     if (!i) return 'Not checked yet.';
     const m = monMeasure(r.id, i.value, i.threshold);
-    return i.state === 'no_data' ? `No data yet${m ? ` · ${m}` : ''}` : m || MON_STATE[i.state] || '';
+    return i.state === 'no_data' ? `No data yet${m ? ` · ${m}` : ''}` : m || monStateWord(i.state);
   }
   if (!inst.length) return 'No session to check right now.';
   const hot = inst.filter((i) => i.state === 'triggered');
@@ -988,7 +1021,7 @@ function monRuleCard(r, opts) {
       const spec = MON_PARAMS[k];
       const def = r.defaults ? r.defaults[k] : null;
       const ph = monShow(k, def) || spec.empty || '';
-      return `<label class="mon-param">${esc(spec.label)}<input class="input" type="number" min="0" step="${esc(spec.step)}" inputmode="decimal" data-mon-param="${esc(k)}" value="${esc(monParamShown(r, k))}" placeholder="${esc(ph)}" aria-label="${esc(r.title + ': ' + spec.label)}"></label>`;
+      return `<label class="mon-param">${esc(spec.label)}<input class="input" type="number" min="${esc(spec.min)}" max="${esc(spec.max)}" step="${esc(spec.step)}" inputmode="decimal" data-mon-param="${esc(k)}" value="${esc(monParamShown(r, k))}" placeholder="${esc(ph)}" aria-label="${esc(r.title + ': ' + spec.label)}"></label>`;
     })
     .join('');
   const unmeasured =

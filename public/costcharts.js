@@ -99,7 +99,11 @@ function costBurnSvg(o, fmt) {
   const x = (day) => m.l + ((Number(day.slice(8, 10)) - 1) / Math.max(1, days - 1)) * iw;
   const y = (v) => m.t + ih - (Math.min(v, max) / max) * ih;
   const out = [costAxis(W, m, ih, max, fmt)];
-  if (!f.early) {
+  // The band is one polygon over the whole forecast (a day as wide as the line is a pinch), drawn only when some day
+  // has a width to the cent; the width is decided in cents, never by the formatted label.
+  const wide = (p) =>
+    !f.early && p.low != null && p.high != null && Math.round(p.low * 100) !== Math.round(p.high * 100);
+  if (!f.early && f.line.some(wide)) {
     const top = f.line.map((p) => [x(p.day), y(p.high)]);
     const bottom = f.line.map((p) => [x(p.day), y(p.low)]).reverse();
     out.push(
@@ -131,7 +135,7 @@ function costBurnSvg(o, fmt) {
     );
   for (const p of f.line.slice(1))
     out.push(
-      `<rect x="${costF(x(p.day) - step / 2)}" y="${m.t}" width="${costF(step)}" height="${ih}" fill="transparent" data-tip="${costTip([costDayLabel(p.day), `forecast ${fmt(p.cum)}`, f.early ? 'no band yet' : `${fmt(p.low)} – ${fmt(p.high)}`])}"/>`,
+      `<rect x="${costF(x(p.day) - step / 2)}" y="${m.t}" width="${costF(step)}" height="${ih}" fill="transparent" data-tip="${costTip([costDayLabel(p.day), `forecast ${fmt(p.cum)}`, f.early ? 'no band yet' : wide(p) ? `${fmt(p.low)} – ${fmt(p.high)}` : null])}"/>`,
     );
   for (let i = 1; i <= days; i += Math.ceil(days / 8))
     out.push(
@@ -141,8 +145,8 @@ function costBurnSvg(o, fmt) {
 }
 
 // Daily spend as bars against each day's 7-day baseline; a spike is a pink marker with its day, spend, baseline and
-// the day's top model.
-function costSpikeSvg(spikes, fmt) {
+// the day's top model. `baselineText: false` (the Reports page) leaves the baseline wording out of the tooltip.
+function costSpikeSvg(spikes, fmt, { baselineText = true } = {}) {
   const W = 640;
   const H = 170;
   const m = { t: 12, r: 10, b: 22, l: 60 };
@@ -162,7 +166,7 @@ function costSpikeSvg(spikes, fmt) {
     const tip = costTip([
       costDayLabel(s.day),
       fmt(s.spend),
-      s.baseline == null ? 'no baseline yet' : `baseline ${fmt(s.baseline)}`,
+      baselineText ? (s.baseline == null ? 'no baseline yet' : `baseline ${fmt(s.baseline)}`) : '',
       s.spike ? 'spike' : '',
       s.topModel ? 'top model ' + s.topModel : '', // costTip escapes the whole line
     ]);

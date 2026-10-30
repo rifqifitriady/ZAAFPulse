@@ -300,3 +300,15 @@ test('overview: under Paid, days billed as assumed are left out of the model, as
   const list = V.overview({ ...split(lost), today: '2026-10-22' });
   assert.equal(list.forecast.projected, 112, 'usage value does not depend on billing');
 });
+
+test('overview: a day of a month that did not read has no baseline and is no spike', () => {
+  const s = split(PATTERN);
+  const read = V.overview({ ...s, today: '2026-10-22' });
+  assert.ok(
+    read.spikes.some((x) => x.baseline !== null),
+    'the month that read has baselines',
+  );
+  const o = V.overview({ ...s, today: '2026-10-22', unread: ['2026-10'] });
+  assert.ok(o.spikes.length > 0);
+  assert.ok(o.spikes.every((x) => x.baseline === null && x.spike === false));
+});
