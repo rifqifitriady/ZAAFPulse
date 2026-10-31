@@ -36,9 +36,15 @@ function costNiceMax(v) {
 }
 // "22 Oct" from YYYY-MM-DD, without a Date (no time zone can move it).
 const costDayLabel = (day) => `${Number(day.slice(8, 10))} ${COST_MONTHS[Number(day.slice(5, 7)) - 1] || ''}`;
-// A chart that scales to its panel; `fixed` keeps its drawn size (the calendar's cells stay square and small).
-const costSvg = (W, H, body, cls = '', fixed = false, label = '', role = 'img') =>
-  `<svg class="${fixed ? '' : 'hchart '}cost-chart${cls ? ` ${cls}` : ''}" viewBox="0 0 ${W} ${H}"${fixed ? ` width="${W}" height="${H}"` : ''} role="${role}" aria-label="${esc(label)}">${body}</svg>`;
+// A chart that scales to its panel; `fixed` keeps its drawn size (the calendar's cells stay square and small). `fit`
+// names the chart for the page, which redraws it at its panel's measured width (costFitCharts in public/costview.js).
+const costSvg = (W, H, body, cls = '', fixed = false, label = '', role = 'img', fit = '') =>
+  `<svg class="${fixed ? '' : 'hchart '}cost-chart${cls ? ` ${cls}` : ''}" viewBox="0 0 ${W} ${H}"${fixed ? ` width="${W}" height="${H}"` : ''}${fit ? ` data-cost-fit="${esc(fit)}"` : ''} role="${role}" aria-label="${esc(label)}">${body}</svg>`;
+// The drawing width: the panel's measured `width` when the page passed one, so the text keeps its CSS size (a 1100-wide
+// drawing scaled into a phone's panel shrinks 10.5 px labels to 3 px), never below `min`; else the default `base`.
+const costWidth = (width, base, min) => (width > 0 ? Math.max(min, Math.round(width)) : base);
+// How many x-axis labels fit `iw` px when each needs about `each` px, between 2 and `most`.
+const costTicks = (iw, each, most) => Math.max(2, Math.min(most, Math.floor(iw / each)));
 const costTip = (parts) => esc(parts.filter((x) => x !== '' && x != null).join(' · '));
 const costPctText = (x) => (x == null ? '—' : `${(x * 100).toFixed(x >= 0.995 || x < 0.1 ? 1 : 0)}%`);
 // A path through points; a null y breaks it (a gap, not zero).
@@ -81,9 +87,9 @@ function costAxis(W, m, ih, max, fmt) {
 // reach (the larger of the forecast's end and the band's top) is pinned at the top edge as "↑ Budget <amount>", so a
 // large budget never flattens the curve.
 const COST_BUDGET_FIT = 2;
-function costBurnSvg(o, fmt) {
-  const W = 1100; // a full-width panel: a wider drawing keeps its text at the panel's size
-  const H = 300;
+function costBurnSvg(o, fmt, { width } = {}) {
+  const W = costWidth(width, 1100, 280); // a full-width panel: a wider drawing keeps its text at the panel's size
+  const H = width > 0 ? Math.round(Math.min(300, Math.max(200, W * 0.3))) : 300;
   const m = { t: 14, r: 12, b: 24, l: 60 };
   const ih = H - m.t - m.b;
   const days = o.month.days;
@@ -123,7 +129,7 @@ function costBurnSvg(o, fmt) {
   pinned.forEach((l, i) => {
     const yy = m.t + 12 + i * 14;
     out.push(
-      `<g class="cost-fade cost-pinned" data-tip="${costTip(['Monthly budget', l.name, fmt(l.amount), 'above this scale'])}"><line x1="${W - m.r - 190}" x2="${W - m.r}" y1="${m.t}" y2="${m.t}" stroke="${COST_C.orange}" stroke-width="1.6" stroke-dasharray="4 4"/><text x="${W - m.r - 4}" y="${yy}" text-anchor="end" fill="${COST_C.orange}">${esc(`↑ Budget ${fmt(l.amount)}`)}</text></g>`,
+      `<g class="cost-fade cost-pinned" data-tip="${costTip(['Monthly budget', l.name, fmt(l.amount), 'above this scale'])}"><line x1="${costF(W - m.r - Math.min(190, iw / 2))}" x2="${W - m.r}" y1="${m.t}" y2="${m.t}" stroke="${COST_C.orange}" stroke-width="1.6" stroke-dasharray="4 4"/><text x="${W - m.r - 4}" y="${yy}" text-anchor="end" fill="${COST_C.orange}">${esc(`↑ Budget ${fmt(l.amount)}`)}</text></g>`,
     );
   });
   const today = x(o.month.today);
@@ -137,17 +143,17 @@ function costBurnSvg(o, fmt) {
     out.push(
       `<rect x="${costF(x(p.day) - step / 2)}" y="${m.t}" width="${costF(step)}" height="${ih}" fill="transparent" data-tip="${costTip([costDayLabel(p.day), `forecast ${fmt(p.cum)}`, f.early ? 'no band yet' : wide(p) ? `${fmt(p.low)} – ${fmt(p.high)}` : null])}"/>`,
     );
-  for (let i = 1; i <= days; i += Math.ceil(days / 8))
+  for (let i = 1; i <= days; i += Math.ceil(days / costTicks(iw, 36, 8)))
     out.push(
       `<text x="${costF(m.l + ((i - 1) / Math.max(1, days - 1)) * iw)}" y="${H - 6}" text-anchor="middle">${i}</text>`,
     );
-  return costSvg(W, H, out.join(''), 'cost-burn', false, 'Burn-down');
+  return costSvg(W, H, out.join(''), 'cost-burn', false, 'Burn-down', 'img', 'burn');
 }
 
 // Daily spend as bars against each day's 7-day baseline; a spike is a pink marker with its day, spend, baseline and
 // the day's top model. `baselineText: false` (the Reports page) leaves the baseline wording out of the tooltip.
-function costSpikeSvg(spikes, fmt, { baselineText = true } = {}) {
-  const W = 640;
+function costSpikeSvg(spikes, fmt, { baselineText = true, width } = {}) {
+  const W = costWidth(width, 640, 260);
   const H = 170;
   const m = { t: 12, r: 10, b: 22, l: 60 };
   const ih = H - m.t - m.b;
@@ -178,14 +184,14 @@ function costSpikeSvg(spikes, fmt, { baselineText = true } = {}) {
     // No baseline (fewer than 3 known days before): no dashed segment there.
     `<path class="cost-fade" d="${costPath(spikes.map((s, i) => [m.l + i * step + step / 2, s.baseline == null ? null : y(s.baseline)]))}" fill="none" stroke="${COST_C.orange}" stroke-width="1.4" stroke-dasharray="4 4"/>`,
   );
-  const k = Math.ceil(n / 8);
+  const k = Math.ceil(n / costTicks(iw, 52, 8));
   spikes.forEach((s, i) => {
     if (i % k === 0)
       out.push(
         `<text x="${costF(m.l + i * step + step / 2)}" y="${H - 6}" text-anchor="middle">${esc(costDayLabel(s.day))}</text>`,
       );
   });
-  return costSvg(W, H, out.join(''), 'cost-spikes', false, 'Daily spend');
+  return costSvg(W, H, out.join(''), 'cost-spikes', false, 'Daily spend', 'img', 'spikes');
 }
 
 // One budget ring: the percent (capped at 100 % on the ring, the overflow as a pink outer arc), dashed and muted
@@ -226,8 +232,8 @@ function costRingsHtml(rings, more) {
 // The flow: four columns of nodes, links as bands whose width is the spend. A node of a real ledger value is a button
 // for the table filter (data-cost-node="<column>:<key>"); Other, Unknown and Plan fee are not, and their tooltip says
 // "(not filterable)". `label(col, key)` names a node (center names, Other, Plan fee).
-function costFlowSvg(flow, { fmt, label }) {
-  const W = 900;
+function costFlowSvg(flow, { fmt, label, width }) {
+  const W = costWidth(width, 900, 600); // its labels need about 600 px: narrower, the page scrolls it (.cost-flow)
   const H = 320;
   const nodeW = 12;
   const gap = 8;
@@ -280,7 +286,7 @@ function costFlowSvg(flow, { fmt, label }) {
       `<g class="cost-node${filterable ? ' cost-click' : ''}"${filterable ? ` data-cost-node="${esc(n.id)}" role="button" tabindex="0" aria-label="${esc(`Filter the table to ${name}`)}"` : ''} data-tip="${costTip([name, fmt(n.value), costPctText(n.value / total) + (filterable ? '' : ' (not filterable)')])}"><rect class="cost-grow" x="${costF(p.x)}" y="${costF(p.y)}" width="${nodeW}" height="${costF(p.h)}" rx="2" fill="${color}" style="filter:drop-shadow(0 0 4px ${color})"/><text x="${costF(left ? p.x - 6 : p.x + nodeW + 6)}" y="${costF(p.y + p.h / 2 + 4)}" text-anchor="${left ? 'end' : 'start'}">${esc(name.length > 26 ? `${name.slice(0, 25)}…` : name)}</text></g>`,
     );
   }
-  return costSvg(W, H, out.join(''), 'cost-flow', false, 'Cost flow', 'group');
+  return costSvg(W, H, out.join(''), 'cost-flow', false, 'Cost flow', 'group', 'flow');
 }
 
 // Weeks as columns, Monday to Sunday as rows; the color step is the day's level (lib/cost/views.js calendarOf).
@@ -427,8 +433,16 @@ function costStepText(amount, fmt) {
 }
 
 // Without cache → cache savings (down) → plan savings (down, or up when a plan cost more) → paid.
-function costWaterfallSvg(w, fmt) {
-  const W = 640;
+// A step's name under its bar: on one line, or on two when the step is too narrow for it ("Plan cost" / "more").
+function costStepName(name, cx, H, step) {
+  const words = String(name).split(' ');
+  if (step >= name.length * COST_GLYPH + 12 || words.length < 2)
+    return `<text x="${costF(cx)}" y="${H - 12}" text-anchor="middle">${esc(name)}</text>`;
+  const half = Math.ceil(words.length / 2);
+  return `<text x="${costF(cx)}" y="${H - 18}" text-anchor="middle"><tspan x="${costF(cx)}">${esc(words.slice(0, half).join(' '))}</tspan><tspan x="${costF(cx)}" dy="12">${esc(words.slice(half).join(' '))}</tspan></text>`;
+}
+function costWaterfallSvg(w, fmt, { width } = {}) {
+  const W = costWidth(width, 640, 260);
   const H = 230;
   const m = { t: 22, r: 12, b: 34, l: 60 };
   const ih = H - m.t - m.b;
@@ -469,7 +483,7 @@ function costWaterfallSvg(w, fmt) {
     const h = Math.max(1, Math.abs(y(s.from) - y(s.to)));
     const amount = i === 0 || i === 3 ? s.to : s.to - s.from;
     out.push(
-      `<g data-tip="${costTip([s.name, fmt(amount), s.tip])}"><rect class="cost-grow" x="${costF(x)}" y="${costF(top)}" width="${costF(bw)}" height="${costF(h)}" rx="2" fill="${s.color}" fill-opacity=".85" style="filter:drop-shadow(0 0 4px ${s.color})"/><text x="${costF(x + bw / 2)}" y="${costF(top - 6)}" text-anchor="middle" class="cost-val">${esc(i === 0 || i === 3 ? fmt(amount) : costStepText(amount, fmt))}</text><text x="${costF(x + bw / 2)}" y="${H - 12}" text-anchor="middle">${esc(s.name)}</text></g>`,
+      `<g data-tip="${costTip([s.name, fmt(amount), s.tip])}"><rect class="cost-grow" x="${costF(x)}" y="${costF(top)}" width="${costF(bw)}" height="${costF(h)}" rx="2" fill="${s.color}" fill-opacity=".85" style="filter:drop-shadow(0 0 4px ${s.color})"/><text x="${costF(x + bw / 2)}" y="${costF(top - 6)}" text-anchor="middle" class="cost-val">${esc(i === 0 || i === 3 ? fmt(amount) : costStepText(amount, fmt))}</text>${costStepName(s.name, x + bw / 2, H, step)}</g>`,
     );
     if (i < steps.length - 1) {
       const next = m.l + (i + 1) * step + (step - bw) / 2;
@@ -478,7 +492,7 @@ function costWaterfallSvg(w, fmt) {
       );
     }
   });
-  return costSvg(W, H, out.join(''), 'cost-waterfall', false, 'Savings waterfall');
+  return costSvg(W, H, out.join(''), 'cost-waterfall', false, 'Savings waterfall', 'img', 'waterfall');
 }
 
 // Free local models: requests and tokens, never money.
@@ -494,15 +508,42 @@ function costLocalHtml(local, label = (s) => s) {
     <p class="cost-note">Not priced: these run on your own machine. A later version compares them with a cloud model.</p>`;
 }
 
+// Each dot's label baseline: beside its dot, moved down while it would cover another dot or a label placed before it
+// (two models of about the same price and accuracy). Labels are placed top to bottom; widths are estimated per glyph.
+function costScatterLabels(dots, x, y, maxReq, rightFrom) {
+  const radius = (d) => 4 + 14 * Math.sqrt(d.requests / maxReq);
+  const taken = dots.map((d) => {
+    const r = radius(d);
+    return { x0: x(d.perRequest) - r, x1: x(d.perRequest) + r, y0: y(d.accuracy) - r, y1: y(d.accuracy) + r };
+  });
+  const boxes = dots.map((d, i) => {
+    const r = radius(d);
+    const cx = x(d.perRequest);
+    const w = (String(d.model).length + (d.littleData ? 14 : 0)) * COST_GLYPH;
+    const x0 = cx > rightFrom ? cx - r - 4 - w : cx + r + 4;
+    return { i, x0, x1: x0 + w, base: y(d.accuracy) + 4 };
+  });
+  for (const b of [...boxes].sort((p, q) => p.base - q.base)) {
+    const own = taken[b.i];
+    const hit = () =>
+      taken.find((t) => t !== own && b.x0 < t.x1 && t.x0 < b.x1 && b.base - 10 < t.y1 && t.y0 < b.base + 2);
+    for (let t = hit(); t; t = hit()) b.base = t.y1 + 11; // the text's top just under what it would cover
+    taken.push({ x0: b.x0, x1: b.x1, y0: b.base - 10, y1: b.base + 2 });
+  }
+  const out = [];
+  for (const b of boxes) out[b.i] = b.base;
+  return out;
+}
+
 // One dot per model: spend per request across, tool-call accuracy up, size by requests; hollow with little data.
 // With `accuracyError` (the Value answer's fixed phrase) the accuracy could not be read: say so instead of a chart.
-function costScatterSvg(scatter, fmt, { accuracyError = null } = {}) {
+function costScatterSvg(scatter, fmt, { accuracyError = null, width } = {}) {
   if (accuracyError) return '<p class="cost-note">Tool-call accuracy could not be read.</p>';
   const dots = scatter.dots;
   if (!dots.length && !(scatter.noToolCalls || []).length)
     return '<p class="cost-note">No model had requests in this range.</p>';
-  const W = 1100;
-  const H = 320;
+  const W = costWidth(width, 1100, 280);
+  const H = width > 0 ? Math.round(Math.min(320, Math.max(220, W * 0.3))) : 320;
   const m = { t: 16, r: 20, b: 30, l: 56 };
   const iw = W - m.l - m.r;
   const ih = H - m.t - m.b;
@@ -512,6 +553,7 @@ function costScatterSvg(scatter, fmt, { accuracyError = null } = {}) {
   const pad = 22; // room above the 100% line for the biggest dot
   const y = (a) => m.t + pad + (ih - pad) - ((a - lowY) / Math.max(1e-9, 1 - lowY)) * (ih - pad);
   const maxReq = Math.max(1, ...dots.map((d) => d.requests));
+  const labelY = costScatterLabels(dots, x, y, maxReq, m.l + iw * 0.6);
   const out = [];
   for (let i = 0; i <= 4; i++) {
     const a = lowY + ((1 - lowY) * (4 - i)) / 4;
@@ -542,13 +584,13 @@ function costScatterSvg(scatter, fmt, { accuracyError = null } = {}) {
       pass,
     ]);
     out.push(
-      `<g class="cost-dot" data-tip="${tip}"><circle class="cost-pop" cx="${costF(x(d.perRequest))}" cy="${costF(y(d.accuracy))}" r="${costF(r)}" fill="${d.littleData ? 'none' : color}" fill-opacity=".55" stroke="${color}" stroke-width="2"${d.littleData ? ' stroke-dasharray="3 3"' : ''}/><text x="${costF(right ? x(d.perRequest) - r - 4 : x(d.perRequest) + r + 4)}" y="${costF(y(d.accuracy) + 4)}"${right ? ' text-anchor="end"' : ''}>${esc(d.model)}${d.littleData ? ' · little data' : ''}</text></g>`,
+      `<g class="cost-dot" data-tip="${tip}"><circle class="cost-pop" cx="${costF(x(d.perRequest))}" cy="${costF(y(d.accuracy))}" r="${costF(r)}" fill="${d.littleData ? 'none' : color}" fill-opacity=".55" stroke="${color}" stroke-width="2"${d.littleData ? ' stroke-dasharray="3 3"' : ''}/><text x="${costF(right ? x(d.perRequest) - r - 4 : x(d.perRequest) + r + 4)}" y="${costF(labelY[i])}"${right ? ' text-anchor="end"' : ''}>${esc(d.model)}${d.littleData ? ' · little data' : ''}</text></g>`,
     );
   });
   const none = (scatter.noToolCalls || []).length
     ? `<p class="cost-note">No tool calls to measure: ${scatter.noToolCalls.map((n) => esc(n.model)).join(', ')}</p>`
     : '';
-  return costSvg(W, H, out.join(''), 'cost-scatter', false, 'Cost vs quality') + none;
+  return costSvg(W, H, out.join(''), 'cost-scatter', false, 'Cost vs quality', 'img', 'scatter') + none;
 }
 
 // One unit-cost line over the range with its own scale; a day without its denominator is a gap.
@@ -557,8 +599,8 @@ const COST_UNIT_LABEL = {
   perMillionTokens: 'Unit cost per million tokens',
   perThousandToolCalls: 'Unit cost per 1,000 successful tool calls',
 };
-function costUnitSvg(unit, key, fmt, color) {
-  const W = 340;
+function costUnitSvg(unit, key, fmt, color, { width } = {}) {
+  const W = costWidth(width, 340, 200);
   const H = 170;
   const m = { t: 10, r: 8, b: 22, l: 56 };
   const ih = H - m.t - m.b;
@@ -579,12 +621,12 @@ function costUnitSvg(unit, key, fmt, color) {
       `<rect x="${costF(x(i) - iw / unit.length / 2)}" y="${m.t}" width="${costF(iw / unit.length)}" height="${ih}" fill="transparent" data-tip="${costTip([costDayLabel(unit[i].day), v == null ? 'no data' : fmt(v)])}"/>`,
     );
   });
-  const k = Math.ceil(unit.length / 6);
+  const k = Math.ceil(unit.length / costTicks(iw, 52, 6));
   unit.forEach((u, i) => {
     if (i % k === 0)
       out.push(`<text x="${costF(x(i))}" y="${H - 6}" text-anchor="middle">${esc(costDayLabel(u.day))}</text>`);
   });
-  return costSvg(W, H, out.join(''), 'cost-unit', false, COST_UNIT_LABEL[key] || 'Unit cost');
+  return costSvg(W, H, out.join(''), 'cost-unit', false, COST_UNIT_LABEL[key] || 'Unit cost', 'img', `unit:${key}`);
 }
 
 if (typeof module !== 'undefined')

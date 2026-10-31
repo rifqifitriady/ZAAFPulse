@@ -150,6 +150,12 @@ function costRepControlsHtml(r, ctx) {
   return `<div class="cost-bar cost-rep-controls cost-noprint"><label>Month <select class="input" data-cost-rep-month>${latest}${months}</select></label><label>Center <select class="input" data-cost-rep-center>${none}${centers}</select></label>${cur}<span class="cost-spacer"></span><button type="button" class="btn ghost" data-cost-rep-print>Print</button><button type="button" class="btn" data-cost-rep-csv>Export CSV</button></div>`;
 }
 
+/** The daily spend as the spike chart draws it: usage value per day, without baselines or spikes. */
+function costRepDays(r, ctx) {
+  const field = ctx.cur === 'USD' ? 'listUSD' : 'list';
+  return (r.daily || []).map((d) => ({ day: d.day, spend: d[field], baseline: null, spike: false, topModel: null }));
+}
+
 /** The report itself: what prints. */
 function costRepHtml(r, ctx) {
   const t = r.totals || {};
@@ -166,20 +172,12 @@ function costRepHtml(r, ctx) {
     }),
   ].join('');
   const tables = COST_REP_TABLES.map(([k, title]) => costRepTableHtml(r, k, title, ctx)).join('');
-  const field = ctx.cur === 'USD' ? 'listUSD' : 'list';
-  const days = (r.daily || []).map((d) => ({
-    day: d.day,
-    spend: d[field],
-    baseline: null,
-    spike: false,
-    topModel: null,
-  }));
   const notes = costRepNotes(r);
   return `<article class="cost-report" aria-label="${esc(costRepTitle(r))}">
     <header class="cost-rep-head"><h2>${esc(costRepTitle(r))}</h2><p>${esc(costRepPeriod(r))}</p></header>
     <div class="grid kpis cost-rep-tiles">${tiles}</div>
     <div class="cost-rep-tables">${tables}</div>
-    <section class="cost-rep-section"><h3>Daily spend</h3>${costSpikeSvg(days, ctx.fmt, { baselineText: false })}</section>
+    <section class="cost-rep-section"><h3>Daily spend</h3>${costSpikeSvg(costRepDays(r, ctx), ctx.fmt, { baselineText: false })}</section>
     <section class="cost-rep-section"><h3>Budgets</h3>${costRepBudgetsHtml(r, ctx)}</section>
     ${notes.length ? `<section class="cost-rep-section"><h3>Notes</h3>${notes.map((x) => `<p class="cost-note">${esc(x)}</p>`).join('')}</section>` : ''}
   </article>`;
@@ -274,6 +272,10 @@ async function costMountReports() {
     COST_REP.report = COST_REP.last = r;
     $('#cost-bar').innerHTML = costRepControlsHtml(r, ctx);
     body.innerHTML = costRepHtml(r, ctx);
+    COST.draws = {
+      spikes: (width) => costSpikeSvg(costRepDays(r, ctx), ctx.fmt, { baselineText: false, width }),
+    };
+    costFitCharts(body);
   } catch (e) {
     if (!live()) return;
     costShowError(body, e.message, false);

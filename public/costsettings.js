@@ -686,11 +686,11 @@ function costSetRulesHtml(st) {
   const noCenter = !d.centers.some((c) => c.id);
   return `<div class="cost-set-grid"><div class="cost-set-forms">
     <h4>Cost centers</h4>
-    <table class="cost-table cost-set-table"><thead><tr><th>Name</th><th>Id</th><th>Used by</th><th></th></tr></thead><tbody>${centers || '<tr><td colspan="4">No cost centers yet.</td></tr>'}</tbody></table>
+    <div class="cost-scroll-x"><table class="cost-table cost-set-table"><thead><tr><th>Name</th><th>Id</th><th>Used by</th><th></th></tr></thead><tbody>${centers || '<tr><td colspan="4">No cost centers yet.</td></tr>'}</tbody></table></div>
     <div><button type="button" class="btn ghost" data-cost-set-act="add-center" ${fullCenters ? `disabled title="At most ${COST_SET_LIMITS.centers} cost centers"` : ''}>Add</button></div>
     <h4>Gateway keys</h4>
     <p class="cost-note">A key's center always wins over folder rules.</p>
-    ${keyRows ? `<table class="cost-table cost-set-table"><tbody>${keyRows}</tbody></table>` : '<p class="cost-note">No gateway keys. Keys are managed on the Gateway page.</p>'}
+    ${keyRows ? `<div class="cost-scroll-x"><table class="cost-table cost-set-table"><tbody>${keyRows}</tbody></table></div>` : '<p class="cost-note">No gateway keys. Keys are managed on the Gateway page.</p>'}
     ${goneHtml}
     <h4>Folder rules</h4>
     <p class="cost-note">The first matching rule wins; a path no rule matches is Unassigned.</p>
@@ -721,12 +721,12 @@ function costSetPreviewHtml(st) {
         (m.by === 'key' && m.project != null ? ` <span class="muted">${esc('(project ' + m.project + ')')}</span>` : '')
       : esc(m.project);
   const moves = a.moves.length
-    ? `<table class="cost-table cost-set-moves"><tbody>${a.moves
+    ? `<div class="cost-scroll-x"><table class="cost-table cost-set-moves"><tbody>${a.moves
         .map(
           (m) =>
             `<tr><td>${what(m)}</td><td class="num">${esc(costMoney(m.listUSD))}</td><td>${esc(costSetCenterName(m.from, saved.centers) + ' → ' + costSetCenterName(m.to, drafted))}</td></tr>`,
         )
-        .join('')}</tbody></table>${a.more ? `<p class="cost-note">and ${Number(a.more)} more</p>` : ''}`
+        .join('')}</tbody></table></div>${a.more ? `<p class="cost-note">and ${Number(a.more)} more</p>` : ''}`
     : '<p class="cost-note">No project or key changes center.</p>';
   const full =
     ((st.drafts.rules && st.drafts.rules.folderRules) || saved.folderRules || []).length >= COST_SET_LIMITS.folderRules;
@@ -999,7 +999,7 @@ function costSetCurrencyHtml(st) {
   const full = c.rates.length >= COST_SET_LIMITS.rates;
   return `<div class="segmented" role="group" aria-label="Currency">${seg}</div>
     <label>Code<input class="input" ${f('currency.code')} maxlength="3" value="${esc(c.code)}" placeholder="IDR" autocomplete="off"></label>
-    <table class="cost-table cost-set-table"><thead><tr><th>Start date</th><th>Units per 1 USD</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="3">No rates yet.</td></tr>'}</tbody></table>
+    <div class="cost-scroll-x"><table class="cost-table cost-set-table"><thead><tr><th>Start date</th><th>Units per 1 USD</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="3">No rates yet.</td></tr>'}</tbody></table></div>
     <div><button type="button" class="btn ghost" data-cost-set-act="add-rate" ${full ? `disabled title="At most ${COST_SET_LIMITS.rates} rates"` : ''}>Add</button></div>
     <p class="cost-set-today" data-cost-set-rate>${esc(costSetRateLine(c.code, costSetRateToday(c.rates, today)))}</p>
     <p class="cost-note">${esc(COST_SET_RATE_NOTE)}</p>`;
@@ -1148,12 +1148,12 @@ function costSetHistoryHtml(st) {
     return `<p class="cost-note warn">${esc(st.historyError)}</p><button type="button" class="btn ghost" data-cost-set-act="retry-history">Retry</button>`;
   if (!st.history) return '<p class="cost-note">Loading…</p>';
   if (!st.history.length) return '<p class="cost-note">No restate yet.</p>';
-  return `<table class="cost-table"><thead><tr><th>When</th><th>Range</th><th>Reason</th><th class="num">Rows changed</th><th class="num">Price version</th></tr></thead><tbody>${st.history
+  return `<div class="cost-scroll-x"><table class="cost-table"><thead><tr><th>When</th><th>Range</th><th>Reason</th><th class="num">Rows changed</th><th class="num">Price version</th></tr></thead><tbody>${st.history
     .map(
       (c) =>
         `<tr><td>${esc(new Date(c.ts).toLocaleString('en'))}</td><td>${esc(c.from + ' – ' + c.to)}</td><td>${esc(c.reason)}</td><td class="num">${Number(c.rows)}</td><td class="num">${esc(c.priceVersion ?? '—')}</td></tr>`,
     )
-    .join('')}</tbody></table>`;
+    .join('')}</tbody></table></div>`;
 }
 
 function costSetRestateHtml(st) {
