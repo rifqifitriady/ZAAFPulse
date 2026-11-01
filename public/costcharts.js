@@ -120,10 +120,11 @@ function costBurnSvg(o, fmt, { width } = {}) {
     `<path class="cost-line" pathLength="1" d="${costPath(o.daily.map((d) => [x(d.day), y(d.cum)]))}" fill="none" stroke="${COST_C.cyan}" stroke-width="2.4" style="filter:drop-shadow(0 0 4px ${COST_C.cyan})"/>`,
     `<path class="cost-fade" d="${costPath(f.line.map((p) => [x(p.day), y(p.cum)]))}" fill="none" stroke="${COST_C.violet}" stroke-width="2" stroke-dasharray="6 5"/>`,
   );
+  // A budget's name sits at the line's left end: the forecast reaches the budget at the right, the month starts low.
   for (const l of lines) {
     const yy = costF(y(l.amount));
     out.push(
-      `<g class="cost-fade" data-tip="${costTip(['Monthly budget', l.name, fmt(l.amount)])}"><line x1="${m.l}" x2="${W - m.r}" y1="${yy}" y2="${yy}" stroke="${COST_C.orange}" stroke-width="1.6" stroke-dasharray="4 4"/><text x="${W - m.r - 4}" y="${costF(y(l.amount) - 5)}" text-anchor="end" fill="${COST_C.orange}">${esc(l.name)} · ${esc(fmt(l.amount))}</text></g>`,
+      `<g class="cost-fade" data-tip="${costTip(['Monthly budget', l.name, fmt(l.amount)])}"><line x1="${m.l}" x2="${W - m.r}" y1="${yy}" y2="${yy}" stroke="${COST_C.orange}" stroke-width="1.6" stroke-dasharray="4 4"/><text x="${m.l + 4}" y="${costF(y(l.amount) - 5)}" fill="${COST_C.orange}">${esc(l.name)} · ${esc(fmt(l.amount))}</text></g>`,
     );
   }
   pinned.forEach((l, i) => {

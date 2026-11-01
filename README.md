@@ -41,7 +41,7 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 
 | | Question | What you get |
 |---|---|---|
-| **$** | *What is AI costing me?* | API-equivalent spend per day, model, project and session at **provider list prices** (checked against Anthropic's and OpenAI's own price lists, kept current from OpenRouter's public list), with each API response counted once even when a session was resumed or forked, a month-end projection, and where the money goes: input, output, cache reads, cache writes or web searches. |
+| **$** | *What is AI costing me?* | API-equivalent spend per day, model, project and session at **provider list prices** (checked against Anthropic's and OpenAI's own price lists, kept current from OpenRouter's public list), with each API response counted once even when a session was resumed or forked, a month-end forecast, and where the money goes: input, output, cache reads, cache writes or web searches. A Cost Control menu adds a frozen daily ledger, cost centers, plan billing, budgets that alert, block or pause, anomalies, cheaper-model advice from your own experiments, and monthly reports for a client. |
 | **✓** | *Can I trust what it did?* | Tool-call accuracy that counts only failures the model caused, non-existent targets (paths, edit text, arguments, URLs, packages and commands that did not exist) and how often you had to correct it. |
 | **⚠** | *Did anything unsafe happen?* | Prompt-injection attempts in web and MCP content, secrets that surfaced in tool output, and risky commands such as `rm -rf` or force pushes. |
 | **◈** | *What are my agents doing right now?* | A live 3D office: every session and subagent walks to the room for the tool it is using, waits at the help desk when it needs you, and shows up in a request log, a stream inspector and a timeline. A topology on the Overview shows which tool reaches which router, runtime and provider through ZAAFPulse, and the path of each recent request. |
@@ -71,6 +71,26 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 
 **AI Office, live**<br>
 <sub>A 3D office driven by real transcript state: who is editing, reading, running commands, browsing or delegating, who is waiting for you and who needs approval. Subagents appear next to their parent.</sub>
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**Cost Control**<br>
+<sub>A daily ledger that counts each call once and keeps past days at their own prices. Cost centers from keys and folder rules, metered or plan billing, a display currency with your own rates, and a restate that corrects a past range and keeps the original rows. Six pages: Overview, Breakdown, Value, Budgets, Reports and Settings.</sub>
+
+</td>
+<td valign="top">
+
+**Budgets, forecast & anomalies**<br>
+<sub>Budgets by day, week or month on any scope, with alerts at your levels. A budget can block matching gateway requests or pause the agent that spent the most. A weekday forecast with its band, the day a budget runs out, daily anomalies with what drove them, and cheaper models your own Datasets experiments back.</sub>
+
+</td>
+<td valign="top">
+
+**Reports & export**<br>
+<sub>One cost center's month for a client, to print or download. The ledger as CSV or JSON, with a guard against spreadsheet formulas. An optional weekly digest to the desktop or a webhook, and read-only `cost` and `budgets` tools on the stdio MCP server.</sub>
 
 </td>
 </tr>
@@ -261,6 +281,23 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 <tr>
 <td width="50%"><img alt="Sessions: a constellation of every session by day and start hour, with session KPI tiles" src="docs/assets/screen-sessions.jpg"><br><sub>Sessions: every session by day and start hour.</sub></td>
 <td width="50%"><img alt="Estimated spend drill-down: in range, this month, projected month end, budget left, a month-to-date chart against the budget, and where the money goes" src="docs/assets/screen-drawer-spend.jpg"><br><sub>Drill-down: estimated spend, the projection against the budget, and where the money goes.</sub></td>
+</tr>
+</table>
+</details>
+
+<details open>
+<summary><b>Cost Control</b>: the month, where the money goes, what it bought, budgets, reports and settings</summary>
+<br>
+<img alt="Cost Control Overview: this month, forecast, budgets at risk and top cost center, a burn-down with the forecast and budget levels, daily spend with spikes, budget rings and anomalies" src="docs/assets/screen-cost-overview.jpg">
+<p align="center"><sub>Overview: the month so far, where it is heading, and the budgets it meets.</sub></p>
+<table>
+<tr>
+<td width="50%"><img alt="Cost Control Breakdown: a flow from source to provider, model and cost center, above an isometric treemap of projects by cost center" src="docs/assets/screen-cost-breakdown.jpg"><br><sub>Breakdown: from source to cost center, then projects as a treemap.</sub></td>
+<td width="50%"><img alt="Cost Control Value: a plan's usage value against its fee, a savings waterfall and local models" src="docs/assets/screen-cost-value.jpg"><br><sub>Value: plans against their fees, savings, cost against quality and cheaper models.</sub></td>
+</tr>
+<tr>
+<td width="50%"><img alt="Cost Control Budgets: one card per budget with its ring, scope, period, spent of amount and chips" src="docs/assets/screen-cost-budgets.jpg"><br><sub>Budgets: every limit, what it has used and what it does at the limit.</sub></td>
+<td width="50%"><img alt="Cost Control Reports: a month's totals for a cost center with spend by source, model, key and project" src="docs/assets/screen-cost-reports.jpg"><br><sub>Reports: one center's month, to print or export.</sub></td>
 </tr>
 </table>
 </details>
@@ -807,7 +844,24 @@ ZAAFPulse also keeps a **daily cost ledger** in `.data/cost/`, the base of the C
 
 **Budgets** sit on the ledger: global or per cost center, key, project, model, provider or source, by day, week (from Monday) or month, on the usage value or on what was paid, in USD or your display currency. Alerts at your levels (50 and 80 % by default), at 100 % and when the projection passes the amount, in the bell, the desktop or a webhook. A budget can also block matching gateway requests with 402 at once, or pause the local agent that spent the most in its scope and period. The old monthly budget and key budgets are read as budgets. See [docs/cost.md#budgets](docs/cost.md#budgets).
 
-The **Cost Control** menu draws the ledger: an Overview of the month with a forecast band, budget lines and spikes; a Breakdown from source to cost center with an isometric treemap of projects and a calendar; a Value page with plan value against its fee, a savings waterfall and cost against tool-call accuracy per model; and a Budgets page to add and edit budgets. See [docs/cost.md#cost-control-menu](docs/cost.md#cost-control-menu).
+The **Cost Control** menu draws the ledger, from a phone's width up, on six pages:
+
+| Page | What it shows |
+|---|---|
+| **Overview** | The month in both measures, a weekday forecast with its band, budget lines, daily spend against the same weekday, today's and yesterday's anomalies with what drove them, and budget rings with the day each runs out |
+| **Breakdown** | A flow from source to cost center, an isometric treemap of projects, a calendar, and a table grouped by up to four dimensions with **Export CSV** |
+| **Value** | Plan value against its fee, a savings waterfall, cost against tool-call accuracy per model, unit costs, and cheaper models your own Datasets experiments back. A recommendation needs at least 20 rows, a pass rate no more than 5 points lower and a cost of at most 80 %, and nothing is switched for you |
+| **Budgets** | One card per budget; add, edit and delete in a drawer |
+| **Reports** | One cost center's month (or all, or Unassigned) for a client, with **Print** for A4 and Letter and **Export CSV** |
+| **Settings** | Cost centers, gateway keys and folder rules with a preview of what moves, billing per source, the display currency, the weekly digest, and restate with a preview and its history |
+
+**Export.** `GET /api/cost/export` downloads the ledger grouping as CSV or JSON, at most 400 days and 100,000 rows. A text cell a spreadsheet would run as a formula gets a leading `'`.
+
+**Weekly digest.** Off by default. Once a week it sends last week's totals, top cost centers and models, budgets at risk, anomalies and the top recommendation to the desktop and, when one is set, the Monitors webhook. It carries numbers and names, never project folders or text.
+
+**Agents can read it too.** `acc_cost` and `acc_budgets` are read-only tools on the stdio MCP server, never on the gateway `/mcp`.
+
+See [docs/cost.md#cost-control-menu](docs/cost.md#cost-control-menu) and [docs/cost.md#reports-export-and-digest](docs/cost.md#reports-export-and-digest).
 
 Who counts what, frozen cost, billing, restate, settings, the `/api/cost/*` routes (dashboard sign-in only) and the known limits: **[docs/cost.md](docs/cost.md)**.
 
@@ -951,6 +1005,7 @@ Apart from the sign-in routes in the first row, every `/api` route needs a signe
 | `GET /api/brain` · `GET /api/brain/graph?source=…` · `POST /api/brain/sources` | second-brain sources and their graphs; save, test and delete a source |
 | `GET /api/gateway` · `POST /api/gateway/<route>` | the dashboard side of the agentic workspace: keys, providers, routes, agents, workflows, runs, knowledge, tools, skills, settings |
 | `POST /api/mcp/register` | register the MCP server in, or remove it from, one client (`{ "client": "claude\|kiro\|antigravity\|cursor\|vscode\|claude-desktop\|codex\|gemini\|windsurf\|windsurf-legacy\|zed\|all", "remove": false }`) |
+| `GET /api/cost/*` · `POST /api/cost/*` | the Cost Control menu: ledger, views, status, export, reports, budgets, settings, restate (dashboard sign-in only; every route in [docs/cost.md](docs/cost.md)) |
 | `GET /api/config` · `POST /api/config` | name, monthly budget, prices, vault path |
 | `GET /api/openrouter?section=models\|providers\|rankings\|account` | OpenRouter data, cached (models 12 h, providers 24 h, rankings 6 h) |
 | `GET /api/openrouter/endpoints?ids=…` | providers serving up to 40 models, with uptime and per-provider prices |
