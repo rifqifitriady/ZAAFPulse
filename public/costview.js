@@ -383,6 +383,7 @@ const COST = {
   form: null, // { id, isNew, opener } while the drawer is open
   suggest: new Map(), // scope dim -> values seen in the ledger (last 90 days)
   focusTimer: null, // the ?focus= highlight's end, released on unmount
+  draws: {}, // chart key (data-cost-fit) -> width => markup, for the page on screen (costFitCharts)
   hooked: false,
   budgetHooked: false,
 };
@@ -658,6 +659,8 @@ async function costMountPage(sub, quiet) {
           ? costBreakdownHtml(v, ctx)
           : costValueHtml(v, ctx);
     body.innerHTML = costNotesHtml(v) + html;
+    COST.draws = costChartDraws(page, v, ctx);
+    costFitCharts(body);
     if (page === 'breakdown') {
       const canvas = $('#cost-treemap');
       if (canvas && v.treemap.length)
@@ -677,6 +680,47 @@ async function costMountPage(sub, quiet) {
   } catch (e) {
     if (!live()) return;
     costShowError(body, e.message, quiet);
+  }
+}
+
+// The Value page's unit-cost lines, each in its own color (read at call time: public/costcharts.js defines COST_C).
+const costUnitColor = (key) =>
+  ({ perRequest: COST_C.cyan, perMillionTokens: COST_C.violet, perThousandToolCalls: COST_C.pink })[key];
+// Each chart of a page by its data-cost-fit key: width => markup, with the same arguments the page's markup used.
+function costChartDraws(page, v, ctx) {
+  const fmt = ctx.fmt;
+  if (page === 'overview')
+    return {
+      burn: (width) => costBurnSvg(v, fmt, { width }),
+      spikes: (width) => costSpikeSvg(v.spikes, fmt, { width }),
+    };
+  if (page === 'breakdown') {
+    const label = (col, key) => costName(col, key, ctx);
+    return { flow: (width) => costFlowSvg(v.flow, { fmt, label, width }) };
+  }
+  const draws = {
+    waterfall: (width) => costWaterfallSvg(v.waterfall, fmt, { width }),
+    scatter: (width) => costScatterSvg(v.scatter, fmt, { accuracyError: v.accuracyError, width }),
+  };
+  for (const key of ['perRequest', 'perMillionTokens', 'perThousandToolCalls'])
+    draws[`unit:${key}`] = (width) => costUnitSvg(v.unit, key, fmt, costUnitColor(key), { width });
+  return draws;
+}
+// A chart draws at its box's width so its text keeps its CSS size: the first paint uses each chart's default drawing,
+// scaled into its panel, and this redraws the ones whose box is a different width (after a paint, and on a resize).
+function costFitCharts(root) {
+  if (!root || typeof root.querySelectorAll !== 'function') return; // a test's stand-in body has no layout
+  for (const svg of root.querySelectorAll('svg[data-cost-fit]')) {
+    const draw = COST.draws[svg.dataset.costFit];
+    const box = svg.parentElement;
+    if (!draw || !box) continue;
+    const cs = getComputedStyle(box);
+    const width = Math.floor(box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight));
+    if (!(width > 0) || Math.abs(width - svg.viewBox.baseVal.width) <= 2) continue;
+    const t = document.createElement('template');
+    t.innerHTML = draw(width);
+    const next = t.content.querySelector('svg'); // the chart only: a note drawn after it is already on the page
+    if (next) svg.replaceWith(next);
   }
 }
 
@@ -823,7 +867,7 @@ function costBreakdownHtml(b, ctx) {
     : panel('Projects by cost center', '', holoEmpty('No project spend in this range.'));
   const flowMeta = `${fmt(b.total)} · source → provider → model → cost center · click a node to filter the table`;
   const calendar = `<div class="cost-scroll">${costCalendarSvg(b.calendar, fmt)}</div>`;
-  return `${panel('Cost flow', esc(flowMeta), flow)}
+  return `${panel('Cost flow', esc(flowMeta), `<div class="cost-scroll-x">${flow}</div>`)}
     ${stage}
     ${panel('Calendar', 'weeks across, Monday to Sunday down', calendar)}
     ${panel('Table', 'from the ledger', '<div id="cost-table"><div class="skeleton" style="height:120px"></div></div>')}`;
@@ -964,13 +1008,13 @@ function costValueHtml(v, ctx) {
     v.accuracyError || v.scatter.dots.length
       ? costScatterSvg(v.scatter, fmt, { accuracyError: v.accuracyError })
       : holoEmpty('No model with measured tool calls in this range.') + unmeasured;
-  const unit = (key, title, color, note) =>
+  const unit = (key, title, note) =>
     panel(
       esc(title),
       esc(note),
       key === 'perThousandToolCalls' && v.accuracyError
         ? '<p class="cost-note">Tool-call accuracy could not be read.</p>'
-        : costUnitSvg(v.unit, key, fmt, color),
+        : costUnitSvg(v.unit, key, fmt, costUnitColor(key)),
     );
   const quality = 'spend per request against tool-call accuracy · dot size = requests · hollow = little data';
   return `${panel('Plan value against plan fee', 'usage value of the plan days against what the plan cost', plans)}
@@ -980,9 +1024,9 @@ function costValueHtml(v, ctx) {
     </div>
     ${panel('Cost against quality', quality, scatter)}
     <div class="cost-units">
-      ${unit('perRequest', 'Per request', COST_C.cyan, 'spend per request')}
-      ${unit('perMillionTokens', 'Per million tokens', COST_C.violet, 'all token kinds')}
-      ${unit('perThousandToolCalls', 'Per 1,000 successful tool calls', COST_C.pink, 'Claude Code and Codex only')}
+      ${unit('perRequest', 'Per request', 'spend per request')}
+      ${unit('perMillionTokens', 'Per million tokens', 'all token kinds')}
+      ${unit('perThousandToolCalls', 'Per 1,000 successful tool calls', 'Claude Code and Codex only')}
     </div>
     ${panel('Recommendations', 'cheaper models that did about as well in your experiments · usage value in USD', costRecommendationsHtml(v.recommendations))}`;
 }
@@ -1573,4 +1617,6 @@ if (typeof module !== 'undefined')
     costExportHref,
     costPaintTable,
     costFilterTo,
+    costChartDraws,
+    costFitCharts,
   };

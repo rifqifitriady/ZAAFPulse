@@ -9014,6 +9014,16 @@ label.mon-cand.on {
 }
 
 /* ---------- Cost Control (public/costview.js, public/costcharts.js) ---------- */
+/* The page body stacks its panels with the deck's own gap; an empty slot (no ribbon, no bar, no drawer) takes none. */
+#cost-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.cost-deck > div:empty {
+  display: none;
+}
 .cost-bar {
   display: flex;
   flex-wrap: wrap;
@@ -9117,8 +9127,10 @@ label.mon-cand.on {
 .cost-ring span {
   max-width: 92px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
 }
 .cost-ring-svg text {
   fill: var(--h-text);
@@ -9211,9 +9223,31 @@ label.mon-cand.on {
   border-bottom: 1px solid var(--grid);
   text-align: left;
 }
+/* The global td does not wrap: a long name or "Used by" list would push the table past its panel. A button or an id
+   stays whole; a table still too wide scrolls in its box (.cost-scroll-x). */
+.cost-table td {
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+.cost-table td .btn,
+.cost-table td code {
+  white-space: nowrap;
+}
 .cost-table .num {
   text-align: right;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+/* A table wider than its panel scrolls inside it (Breakdown's table, the Settings tables on a phone). */
+#cost-table,
+.cost-scroll-x {
+  overflow-x: auto;
+  min-width: 0;
+}
+/* The flow's labels need about 600 px (public/costcharts.js costFlowSvg): narrower, it scrolls in its box. */
+.cost-flow {
+  min-width: 600px;
 }
 .cost-sort {
   border: 0;
@@ -9364,10 +9398,8 @@ label.mon-cand.on {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 14px;
 }
 .cost-banner {
-  margin-bottom: 10px;
   padding: 10px 14px;
   border-radius: 12px;
   border: 1px solid var(--warn-border);
@@ -9392,6 +9424,7 @@ label.mon-cand.on {
 .cost-card {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto; /* the actions sit at the bottom of a card stretched to its row */
   gap: 6px 14px;
   padding: 16px;
   border-radius: 16px;
@@ -9529,7 +9562,7 @@ label.mon-cand.on {
 
 /* Cost Control → Settings (public/costsettings.js): four panels, the rules panel with its preview beside the forms. */
 .cost-set-panel {
-  margin-bottom: 14px;
+  margin: 0;
 }
 .cost-set-panel > summary {
   cursor: pointer;
@@ -9558,13 +9591,28 @@ label.mon-cand.on {
   margin: 8px 0 0;
   font-size: 13px;
 }
+/* A choice takes its own width, not the panel's. */
+.cost-set-body > .segmented,
+.cost-set-forms > .segmented {
+  justify-self: start;
+  max-width: 100%;
+}
+/* Fields shrink with a narrow panel instead of pushing past it. */
+.cost-set-body label,
+.cost-set-body label > .input {
+  min-width: 0;
+}
+.cost-set-body label > .input {
+  width: 100%;
+}
 .cost-set-grid {
   display: grid;
   grid-template-columns: minmax(0, 3fr) minmax(260px, 2fr);
   gap: 18px;
   align-items: start;
 }
-@media (max-width: 900px) {
+/* Beside the sidebar, below about 1180 px the forms column is too narrow for the centers table: the preview goes under. */
+@media (max-width: 1180px) {
   .cost-set-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -9589,9 +9637,13 @@ label.mon-cand.on {
 .cost-set-table td:first-child .input {
   min-width: 26ch; /* a center name of about 24 characters shows in full */
 }
+/* On a phone the tables keep readable fields and scroll in their box (.cost-scroll-x). */
 @media (max-width: 640px) {
   .cost-set-table td:first-child .input {
-    min-width: 0;
+    min-width: 14ch;
+  }
+  .cost-set-table select.input {
+    min-width: 17ch;
   }
 }
 .cost-set-rules {
@@ -9615,6 +9667,15 @@ label.mon-cand.on {
 .cost-set-num {
   color: var(--h-muted);
   font-size: 12px;
+}
+/* On a phone a folder rule stacks beside its number: the glob, the center, then the buttons. */
+@media (max-width: 640px) {
+  .cost-set-rule {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .cost-set-rule > :not(.cost-set-num) {
+    grid-column: 2;
+  }
 }
 .cost-set-actions {
   display: flex;
@@ -9801,6 +9862,7 @@ label.mon-cand.on {
 }
 .cost-report {
   display: grid;
+  grid-template-columns: minmax(0, 1fr); /* the widest table never widens the report past the page */
   gap: 16px;
 }
 .cost-rep-head h2 {
@@ -9815,8 +9877,12 @@ label.mon-cand.on {
 }
 .cost-rep-tables {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); /* a five-column table needs about 440 px */
   gap: 16px;
+}
+.cost-rep-section {
+  min-width: 0;
+  overflow-x: auto;
 }
 .cost-rep-section h3 {
   margin: 0 0 8px;
@@ -9824,9 +9890,6 @@ label.mon-cand.on {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--h-muted);
-}
-.cost-rep-table td {
-  overflow-wrap: anywhere;
 }
 /* Print keeps the report only, in one column that fits A4 and Letter, black on white. */
 @media print {
@@ -9877,6 +9940,9 @@ label.mon-cand.on {
   .cost-rep-section,
   .cost-rep-table tr {
     break-inside: avoid;
+  }
+  .cost-rep-section {
+    overflow: visible;
   }
   .cost-report svg {
     max-width: 100%;

@@ -1101,6 +1101,7 @@ function drawPageCharts() {
   if (c) drawDaily(c);
   const q = $('#quality-chart');
   if (q) drawQualityChart(q);
+  if (typeof costFitCharts === 'function') costFitCharts($('#cost-body')); // Cost Control's SVG charts
 }
 
 // animate: entrance motion for route/range changes; background refreshes repaint quietly.
