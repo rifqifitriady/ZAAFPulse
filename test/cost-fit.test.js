@@ -75,6 +75,14 @@ test('fit: a measured width is the drawing width, never below the chart minimum;
   assert.equal(viewBox(C.costFlowSvg(flow, { fmt, label: (c, k) => k, width: 1000 }))[0], 1000);
 });
 
+test('fit: a budget line names itself at its left end, away from where the forecast crosses it', () => {
+  const rows = [1, 2, 3, 4, 10].map((v, i) => row(`2026-10-0${i + 1}`, v));
+  const budgets = [{ id: 'b', name: 'Team', scope: 'global', period: 'month', amount: 100, currency: 'USD' }];
+  const svg = C.costBurnSvg(V.overview({ rows, today: '2026-10-05', budgets }), fmt);
+  const [, x] = svg.match(/<text x="(\d+)" y="[\d.]+" fill="#ff9a3c">Team · \$100\.00</);
+  assert.ok(Number(x) < 100, x);
+});
+
 test('fit: a narrow chart shows fewer x-axis labels, so they never run into each other', () => {
   const o = month();
   assert.equal(xLabels(C.costBurnSvg(o, fmt)), 8);
