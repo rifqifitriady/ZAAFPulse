@@ -123,10 +123,12 @@ test('demo over HTTP: the forecast, yesterday’s anomaly with a named key, the 
       'the key by its name',
     );
     assert.equal(o.json.anomalies.today.anomaly, false);
-    assert.ok(
-      o.json.spikes.some((x) => x.spike),
-      'the spike line marks it',
-    );
+    // The spike line holds this month's days: on the 1st, yesterday's spike is last month's.
+    if (o.json.month.day > 1)
+      assert.ok(
+        o.json.spikes.some((x) => x.spike),
+        'the spike line marks it',
+      );
     assert.ok(o.json.rings.every((r) => 'runsOut' in r));
     const b = await call('/api/cost/budgets');
     assert.ok(b.json.budgets.every((v) => 'forecastUSD' in v && 'runsOut' in v));
