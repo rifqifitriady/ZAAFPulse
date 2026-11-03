@@ -203,12 +203,10 @@ test('inventory: for a dashboard session only; no sign-in or an API key is a 401
   assert.ok(s.alive());
 });
 
-test('inventory: a FIFO or an oversize client file is unreadable, never waited on; an agent prompt and a key never leave', async (t) => {
-  const { execFileSync } = require('child_process');
+test('inventory: an oversize client file is unreadable; an agent prompt and a key never leave', async (t) => {
   const s = await startServer(t, {}, (data) => {
     prepare(data);
     fs.writeFileSync(path.join(data, '.claude.json'), Buffer.alloc(21 * 1024 * 1024, 32));
-    if (process.platform !== 'win32') execFileSync('mkfifo', [path.join(data, '.codex-fifo')]);
   });
   const post = (route, body) => call(s, `/api/gateway/${route}`, { method: 'POST', body });
   const PROMPT = 'PROMPT-TEXT-UNIQUE-91';
@@ -227,3 +225,26 @@ test('inventory: a FIFO or an oversize client file is unreadable, never waited o
   assert.ok(!c || c.state === 'unreadable' || c.servers === 0);
   assert.ok(s.alive());
 });
+
+test(
+  'inventory: a FIFO where a client file should be is unreadable and never waited on',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const { execFileSync } = require('child_process');
+    const s = await startServer(t, {}, (data) => {
+      prepare(data);
+      fs.mkdirSync(path.join(data, '.cursor'));
+      execFileSync('mkfifo', [path.join(data, '.cursor', 'mcp.json')]);
+    });
+    const t0 = Date.now();
+    const r = await call(s, '/api/governance/inventory');
+    assert.ok(Date.now() - t0 < 1000, 'answered within a second');
+    assert.equal(r.status, 200);
+    const c = r.body.clients.find((x) => x.client === 'cursor');
+    assert.deepEqual([c.state, c.servers], ['unreadable', 0]);
+    assert.ok(
+      r.body.clients.some((x) => x.client === 'claude'),
+      'the other clients are still read',
+    );
+  },
+);
