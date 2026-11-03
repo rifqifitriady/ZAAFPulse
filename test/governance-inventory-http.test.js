@@ -160,7 +160,9 @@ test('inventory: the MCP servers of the client files, the gateway and the integr
     r.body.items.some((i) => i.kind === 'skill'),
     'the ZAAFPulse skills',
   );
-  assert.ok(r.body.clients.some((c) => c.client === 'claude' && c.state === 'ok' && c.file === '~/.claude.json'));
+  assert.ok(
+    r.body.clients.some((c) => c.client === 'claude' && c.state === 'ok' && c.file === `~${path.sep}.claude.json`),
+  );
   assert.deepEqual(r.body.failed, []);
   for (const x of SECRETS) assert.ok(!r.text.includes(x), `${x} must not leave the server`);
   assert.ok(!r.text.includes('systemPrompt'), 'an agent is read for its id, name and state only');
@@ -264,7 +266,10 @@ test('evidence: a Markdown and a JSON download, each a governance.export entry b
   assert.ok(json.body.inventory.items.some((i) => i.id === 'mcp:db' && !('projects' in i)));
   for (const text of [md.text, json.text]) {
     assert.ok(!text.includes(s.data), 'no path');
-    assert.ok(!text.includes('~/.claude.json') && !text.includes('code/shop'), 'no client file, no project folder');
+    assert.ok(
+      !text.includes(`~${path.sep}.claude.json`) && !text.includes(path.join('code', 'shop')),
+      'no client file, no project folder',
+    );
     for (const x of SECRETS) assert.ok(!text.includes(x), x);
   }
   assert.equal((await call(s, '/api/governance/evidence?format=pdf')).status, 400);
