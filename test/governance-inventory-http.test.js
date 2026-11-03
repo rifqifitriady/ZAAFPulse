@@ -135,7 +135,12 @@ function prepare(data) {
 
 test('inventory: the MCP servers of the client files, the gateway and the integrations, with no secret', async (t) => {
   const s = await startServer(t, {}, prepare);
-  const r = await call(s, '/api/governance/inventory');
+  // The summary counts as failed until the first scan of the logs is done.
+  let r = await call(s, '/api/governance/inventory');
+  for (let i = 0; i < 100 && r.status === 200 && r.body.failed.includes('summary'); i++) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    r = await call(s, '/api/governance/inventory');
+  }
   assert.equal(r.status, 200);
   const by = Object.fromEntries(r.body.items.map((i) => [i.id, i]));
   assert.deepEqual(
