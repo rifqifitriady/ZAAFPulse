@@ -360,7 +360,7 @@ function gwOverview() {
               e,
             ) => `<tr><td class="muted num">${fmtDate(e.ts)}</td><td>${esc(keyName(e.keyId))}</td><td><b>${esc(e.model || '—')}</b>${e.agent ? `<small class="block muted">${esc(e.agent)}${e.stream ? ' · stream' : ''}</small>` : e.stream ? '<small class="block muted">stream</small>' : ''}</td>
           <td class="r num">${fmtN(e.input || 0)} / ${fmtN(e.output || 0)}</td><td class="r num">${fmtUSD(e.cost || 0)}</td><td class="r num">${msFmt(e.ms)}</td>
-          <td><span class="state-pill" style="--c:${e.status < 400 ? '#5cf0a8' : '#ff4f6d'}"><i></i>${e.status}</span></td></tr>`,
+          <td><span class="state-pill" style="--c:${e.status < 400 ? '#5cf0a8' : '#ff4f6d'}"><i></i>${e.status}</span>${gwGuardChip(e.guard)}</td></tr>`,
           )
           .join('')}</tbody></table></div>`
           : holoEmpty('No requests yet. Create a key and call the gateway, or try the Playground.'),
@@ -557,7 +557,7 @@ function gwKeys() {
                 : k.expiresAt && Date.now() > k.expiresAt
                   ? ['expired', '#ffb547']
                   : ['active', '#5cf0a8'];
-              return `<tr><td><b>${esc(k.name)}</b><small class="block muted mono">${esc(k.prefix)}</small></td><td>${k.scopes.map((s) => `<span class="tag">${s}</span>`).join(' ')}</td>
+              return `<tr><td><b>${esc(k.name)}</b>${gwGuardKeyChip(k)}<small class="block muted mono">${esc(k.prefix)}</small></td><td>${k.scopes.map((s) => `<span class="tag">${s}</span>`).join(' ')}</td>
               <td class="muted"><small class="block">models: ${esc(k.models.join(', ') || 'all')}${k.privateOnly ? ' · <b class="good-text">private only</b>' : ''}</small><small class="block">agents: ${esc(k.agents.join(', ') || 'all')}</small><small class="block">knowledge: ${esc((k.knowledge || []).join(', ') || 'all')}${k.approveOwnRuns ? ' · <b class="warn-text">approves own runs</b>' : ''}</small></td>
               <td>${k.budgetUSD != null ? `<div class="cell-bar left"><span class="num">${fmtUSD(spent)} / ${fmtUSD(k.budgetUSD)}</span><i style="width:${Math.min(100, (spent / Math.max(k.budgetUSD, 1e-9)) * 100).toFixed(1)}%;background:${spent >= k.budgetUSD ? '#ff4f6d' : HOLO.orange}"></i></div>` : `<span class="num">${fmtUSD(spent)}</span> <small class="muted">no budget</small>`}</td>
               <td class="r num">${k.rpm}/min${k.expiresAt ? `<small class="block muted">until ${new Date(k.expiresAt).toLocaleDateString()}</small>` : ''}</td><td class="r muted">${k.lastUsedAt ? ago(k.lastUsedAt) : 'never'}</td>
@@ -587,6 +587,7 @@ function gwKeys() {
             .join('')}</fieldset>
           <label class="gw-check"><input type="checkbox" name="privateOnly"> Private models only (your own hardware: Ollama, LM Studio, vLLM, TGI)</label>
           <label class="gw-check"><input type="checkbox" name="approveOwnRuns"> May approve its own paused runs through the API or A2A (only for a pipeline that has its own human approval; otherwise approve in this dashboard)</label>
+          <fieldset><legend>Guardrails <small>default = the policy under Model router → Guardrails</small></legend><div class="gw-row">${gwGuardKeySelects()}</div></fieldset>
           <div class="gw-row"><label>Budget / month (USD)<input class="input" name="budgetUSD" type="number" min="0" step="0.01" placeholder="none"></label>
             <label>Requests / minute<input class="input" name="rpm" type="number" min="1" value="60"></label>
             <label>Expires in (days)<input class="input" name="expiresInDays" type="number" min="1" placeholder="never"></label>
@@ -1165,10 +1166,101 @@ function routerExtras() {
       <label class="ie-switch"><input type="checkbox" data-gwsaver ${s.tokenSaver ? 'checked' : ''}><span></span>Token saver ${s.tokenSaver ? 'on' : 'off'} <small class="muted">(per request: header <code>x-zp-token-saver: off</code>)</small></label>
       <p class="kpi-sub">Results over 600 characters are cut by a filter picked from the tool call and the output: git diff (60 lines per hunk), git log, git status, build and test output (errors kept, progress counted), grep (10 matches per file), file listings (noise folders dropped), large JSON (arrays cut to 20), long reads (start and end) and logs (repeats collapsed). ANSI colours are removed. Error results are never touched.</p>`,
     )}
+    ${gwGuardPanel(d)}
   </div>
   <section class="holo panel"><div class="panel-head"><h3>Model map</h3><span class="meta">tool model names → your models · first match wins · globs with *</span></div>
     <form class="gw-form" id="gw-map-form">${map.map((m, i) => `<div class="gw-row"><label>When the model is<input class="input mono" name="match-${i}" value="${esc(m.match)}" placeholder="claude-*opus*"></label><label>Use<input class="input mono" name="to-${i}" list="gw-models" value="${esc(m.to)}" placeholder="router/coding"></label><button class="icon-btn" type="button" data-gwmap="rm" data-i="${i}" aria-label="Remove">×</button></div>`).join('') || '<p class="muted">No rules: unknown names go to the code model, then the default model.</p>'}
       <div class="gw-row"><button class="btn ghost" type="button" data-gwmap="add">+ Add rule</button><button class="btn" type="submit">Save map</button><span class="muted">e.g. claude-*haiku* → ollama/qwen2.5-coder, claude-* → router/coding, gpt-*-codex → openrouter/…</span></div></form></section>`;
+}
+
+/* ---------- Guardrails: the policy, this month's counts, a key's own modes, a request's chip ---------- */
+const GW_GUARD_MODES = {
+  secrets: ['off', 'log', 'redact', 'block'],
+  pii: ['off', 'log', 'redact', 'block'],
+  injection: ['off', 'log', 'block'],
+};
+const GW_GUARD_LABEL = { secrets: 'Secrets', pii: 'Personal data', injection: 'Prompt injection' };
+const GW_GUARD_SCOPE = [
+  ['external', 'External providers'],
+  ['all', 'Every provider'],
+];
+const GW_GUARD_DEFAULTS = { scope: 'external', secrets: 'redact', pii: 'off', injection: 'log' };
+const GW_GUARD_ACTION = { redacted: 'redacted', blocked: 'blocked', logged: 'flagged' };
+const GW_GUARD_NOTE =
+  'Off: not checked. Log: sent as it is and counted as flagged. Redact: replaced before it is sent (‹secret: GitHub token›, ‹email›, ‹phone›, ‹ip›). Block: refused with 400 and nothing is sent. Prompt injection is checked in new input only. Home-folder paths are never touched.';
+
+function gwGuardSelect(name, options, current, label) {
+  return `<label>${esc(label)}<select class="input" name="${esc(name)}">${options
+    .map(([v, l]) => `<option value="${esc(v)}"${v === current ? ' selected' : ''}>${esc(l)}</option>`)
+    .join('')}</select></label>`;
+}
+
+// Model router → Guardrails: scope and the three modes, Save, and this month's counts.
+function gwGuardPanel(d) {
+  const g = { ...GW_GUARD_DEFAULTS, ...((d.settings && d.settings.guardrails) || {}) };
+  const t = (d.usage && d.usage.totals && d.usage.totals.guard) || {};
+  const modes = Object.keys(GW_GUARD_MODES)
+    .map((c) =>
+      gwGuardSelect(
+        c,
+        GW_GUARD_MODES[c].map((m) => [m, m]),
+        g[c],
+        GW_GUARD_LABEL[c],
+      ),
+    )
+    .join('');
+  return panel(
+    'Guardrails',
+    'checks what leaves through the gateway',
+    `<div class="live-metrics three">${[
+      metricTile({
+        label: 'Requests redacted',
+        value: whole.format(t.redacted || 0),
+        sub: 'this month',
+        color: HOLO.cyan,
+      }),
+      metricTile({
+        label: 'Requests blocked',
+        value: whole.format(t.blocked || 0),
+        sub: 'this month',
+        color: '#ff4f6d',
+      }),
+      metricTile({
+        label: 'Requests flagged',
+        value: whole.format(t.logged || 0),
+        sub: 'this month',
+        color: '#ffb547',
+      }),
+    ].join('')}</div>
+    <form class="gw-form" id="gw-guard-form"><div class="gw-row">${gwGuardSelect('scope', GW_GUARD_SCOPE, g.scope, 'Scope')}${modes}<button class="btn" type="submit">Save</button></div></form>
+    <p class="kpi-sub">${esc(GW_GUARD_NOTE)}</p>`,
+  );
+}
+
+// The key form's three selects: empty is "default" (the policy above).
+function gwGuardKeySelects() {
+  return Object.keys(GW_GUARD_MODES)
+    .map((c) =>
+      gwGuardSelect(`guard-${c}`, [['', 'default'], ...GW_GUARD_MODES[c].map((m) => [m, m])], '', GW_GUARD_LABEL[c]),
+    )
+    .join('');
+}
+
+// A chip on a key that sets its own modes; its title lists them.
+function gwGuardKeyChip(k) {
+  const own = Object.entries((k && k.guardrails) || {}).filter(([c, m]) => GW_GUARD_MODES[c] && m);
+  if (!own.length) return '';
+  const title = own.map(([c, m]) => `${GW_GUARD_LABEL[c]}: ${m}`).join(' · ');
+  return ` <span class="tag warn" title="${esc(title)}">own guardrails</span>`;
+}
+
+// A request row's chip: redacted, blocked or flagged, with the check labels in its title (never a value).
+function gwGuardChip(g) {
+  const word = g && GW_GUARD_ACTION[g.action];
+  if (!word) return '';
+  const hits = Array.isArray(g.hits) ? g.hits : [];
+  const title = hits.map((h) => `${GW_GUARD_LABEL[h.check] || h.check}: ${h.label} ×${h.count}`).join(', ');
+  return ` <span class="tag${g.action === 'blocked' ? ' warn' : ''}" title="${esc(title || 'guardrails')}">${word}</span>`;
 }
 
 /* ---------- RAG: API & usage ---------- */
@@ -2338,6 +2430,7 @@ document.addEventListener('submit', (e) => {
         rpm: v('rpm'),
         expiresInDays: v('expiresInDays'),
         privateOnly: f.privateOnly.checked,
+        guardrails: { secrets: v('guard-secrets'), pii: v('guard-pii'), injection: v('guard-injection') },
       });
       if (r.errors) {
         $('#gw-key-errors').innerHTML = errList(r.errors);
@@ -2347,6 +2440,14 @@ document.addEventListener('submit', (e) => {
       gw.maskedSecret = null;
       clearTimeout(gwMaskTimer);
       gwMaskTimer = setTimeout(forgetSecret, 60000);
+      await refreshGateway();
+    });
+  if (fid === 'gw-guard-form')
+    gwAct(async () => {
+      // A refused value is a 400, which api() throws and gwAct shows.
+      await gwPost('settings', {
+        guardrails: { scope: v('scope'), secrets: v('secrets'), pii: v('pii'), injection: v('injection') },
+      });
       await refreshGateway();
     });
   if (fid === 'gw-prov-form')
