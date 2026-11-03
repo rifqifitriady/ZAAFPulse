@@ -97,12 +97,15 @@ const MON_MEASURE = {
   guardrail_block: [(v) => `${monPlural(v, 'blocked request')} in the last hour`, null, null],
   audit_degraded: [(v) => `${monRound(v)} audit ${v === 1 ? 'entry' : 'entries'} not written`, null, null],
   audit_chain_broken: [(v) => (v > 0 ? `broken at entry ${monRound(v)}` : 'cannot be checked'), null, null],
+  // audit_chain_broken titled "rekeyed": an intact chain whose key was replaced (lib/monitors/rules.js).
+  audit_rekeyed: [(v) => `key replaced at entry ${monRound(v)}`, null, null],
 };
-function monMeasure(rule, value, threshold) {
+function monMeasure(rule, value, threshold, title) {
   const v = monNum(value) ? value : null;
   const t = monNum(threshold) ? threshold : null;
   if (v === null && t === null) return '';
-  let spec = Object.hasOwn(MON_MEASURE, rule) ? MON_MEASURE[rule] : [monRound, 'against', monRound];
+  const id = rule === 'audit_chain_broken' && title === 'rekeyed' ? 'audit_rekeyed' : rule;
+  let spec = Object.hasOwn(MON_MEASURE, id) ? MON_MEASURE[id] : [monRound, 'against', monRound];
   if (rule === 'tool_loop')
     spec =
       t === 1 && v !== null && v > 0
@@ -149,7 +152,7 @@ function alertLine(a, rules, agents) {
     id: typeof a.id === 'string' ? a.id : null,
     ts: monNum(a.ts) ? a.ts : null,
     title: monText(a.ruleTitle, MON_MAX_TITLE) || monRuleTitle(a.rule, rules),
-    measure: monMeasure(a.rule, a.value, a.threshold),
+    measure: monMeasure(a.rule, a.value, a.threshold, a.title),
     session: monText(a.title, MON_MAX_TITLE) || null,
     href: monHref(a.sessionKey),
   };
@@ -991,13 +994,13 @@ function monRuleNow(r) {
       )
       .map(
         (i) =>
-          `${monText(i.title, 40)}: ${i.state === 'no_data' ? 'not enough history' : monMeasure(r.id, i.value, i.threshold) || monStateWord(i.state)}`,
+          `${monText(i.title, 40)}: ${i.state === 'no_data' ? 'not enough history' : monMeasure(r.id, i.value, i.threshold, i.title) || monStateWord(i.state)}`,
       )
       .join(' · ');
   if (r.kind !== 'live') {
     const i = inst[0];
     if (!i) return 'Not checked yet.';
-    const m = monMeasure(r.id, i.value, i.threshold);
+    const m = monMeasure(r.id, i.value, i.threshold, i.title);
     return i.state === 'no_data' ? `No data yet${m ? ` · ${m}` : ''}` : m || monStateWord(i.state);
   }
   if (!inst.length) return 'No session to check right now.';

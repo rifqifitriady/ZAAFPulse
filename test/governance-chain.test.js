@@ -90,11 +90,19 @@ test('verify: each part between rekeys is checked with its own key; a part whose
     to: 5,
     unverified: 3,
     rekeyedAt: 4,
+    rekeyedTs: fresh[0].ts,
   });
   const tampered = [...old, fresh[0], { ...fresh[1], action: 'auth.login' }];
   assert.equal(verifyChain(tampered, keys(null)).brokenAt, 5);
-  // The old key still reads: the part before the rekey is checked too.
-  assert.deepEqual(verifyChain([...old, ...fresh], keys(OLD)), { ok: true, checked: 5, from: 1, to: 5 });
+  // The old key still reads: the part before the rekey is checked too, and the rekey is still reported.
+  assert.deepEqual(verifyChain([...old, ...fresh], keys(OLD)), {
+    ok: true,
+    checked: 5,
+    from: 1,
+    to: 5,
+    rekeyedAt: 4,
+    rekeyedTs: fresh[0].ts,
+  });
   // An edit before the rekey shows, whatever key the part after it was sealed with.
   const edited = [old[0], { ...old[1], action: 'auth.login' }, old[2], ...fresh];
   assert.deepEqual(verifyChain(edited, keys(OLD)), {
