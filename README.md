@@ -110,7 +110,7 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 <td valign="top">
 
 **Monitors & alerts**<br>
-<sub>Seven rules on cost, quality and agent behaviour, including cost anomalies, plus your budgets, with alerts in the top bar, a desktop notification or a webhook. Pause, resume or stop the agent behind a session, or let a cost or loop rule pause it (off by default). Snooze a rule for an hour or a day.</sub>
+<sub>Eight rules on cost, quality and agent behaviour, including cost anomalies and guardrail blocks, plus your budgets, with alerts in the top bar, a desktop notification or a webhook. Pause, resume or stop the agent behind a session, or let a cost or loop rule pause it (off by default). Snooze a rule for an hour or a day.</sub>
 
 </td>
 </tr>
@@ -251,6 +251,14 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 
 **Checked releases**<br>
 <sub>Checksums on every release file after 1.0.0 and, from 1.0.3, build-provenance attestations you can check with <code>gh attestation verify</code>. Single-file binaries after 1.0.3 check their unpacked files on every start and restore any that changed.</sub>
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**Gateway guardrails**<br>
+<sub>Secrets, personal data and prompt injection checked in everything the gateway sends to a provider or an MCP integration: off, log, redact or block, per key if you like. Redacted text becomes a fixed placeholder; nothing matched is ever stored. <a href="docs/guardrails.md">docs/guardrails.md</a></sub>
 
 </td>
 </tr>
@@ -591,7 +599,7 @@ The sidebar has two groups:
 
 | Layer | What it does |
 |---|---|
-| **Agent Gateway** | AuthN with ZAAFPulse API keys (`zp_…`, shown once, stored as SHA-256 hashes); AuthZ by scope (`llm`, `agents`, `rag`, `mcp`) and allowed model and agent globs, with a private-models-only option; per-key rate limit (requests per minute), monthly budget in USD and expiry; session management (24 h sessions per key). |
+| **Agent Gateway** | AuthN with ZAAFPulse API keys (`zp_…`, shown once, stored as SHA-256 hashes); AuthZ by scope (`llm`, `agents`, `rag`, `mcp`) and allowed model and agent globs, with a private-models-only option; per-key rate limit (requests per minute), monthly budget in USD and expiry; session management (24 h sessions per key); **guardrails** that redact or block secrets and personal data and catch prompt injection before a request leaves the machine ([docs/guardrails.md](docs/guardrails.md)). |
 | **Orchestrator / Planner** | Task planning (the planner model writes a dependency graph of up to 6 steps; independent steps run in parallel), routing (each step goes to the best domain agent, with keyword routing as a fallback), and memory (session history plus long-term notes that agents save and recall). |
 | **LLM Gateway / Model Router** | 52 provider presets: private LLMs on your own hardware (Ollama, LM Studio, **vLLM**, **TGI**, llama.cpp, Jan, LocalAI, LiteLLM) are always allowed; labs, inference clouds, routers, Asian providers and enterprise clouds (Azure OpenAI, Vertex AI, Bedrock) serve traffic only once **approved**; models come from each provider's own `/models`. Routes are virtual models (`router/fast`) that try their targets in order (fallback or round-robin); a 429 cools a target down (its reset time, or back-off to 5 minutes) and the route moves on. Rate-limit headers become a per-provider **quota** reading, with balances from OpenRouter, DeepSeek, Moonshot and SiliconFlow. Short-lived credentials **refresh themselves** (OAuth2 client credentials or refresh token, e.g. Entra ID; Google service accounts for Vertex), with one replay after a 401. |
 | **Code tools** | Claude Code (Anthropic `/v1/messages`), Codex (OpenAI `/v1/responses`), Gemini CLI (`/v1beta/models/*`) and every OpenAI-compatible tool (OpenCode, Cline/Roo/Kilo, Copilot, Continue, Aider, Zed, Qwen Code, OpenClaw, Factory Droid) on **any** provider: requests are **translated** OpenAI ⇄ Anthropic ⇄ Responses ⇄ Gemini (tools, images, streaming, usage), or passed straight through: `/v1/messages` to a native Anthropic provider (with the client's `anthropic-version` and `anthropic-beta` headers), and `/v1/responses` unchanged to OpenAI, Azure OpenAI or any provider set to `responses: true`. OpenAI and Azure OpenAI get `max_completion_tokens`, which their reasoning models require; other providers keep `max_tokens` unless they serve an OpenAI reasoning model. A model map sends tool model names (`claude-*`, `gpt-*-codex`) to your models. One click writes a tool's config with its own key (backup + revert). The **token saver** shortens long tool results (diffs, logs, builds, grep, listings, JSON) before they go upstream and logs the tokens saved. Subscription logins are not used: API keys and official OAuth only. |
@@ -720,7 +728,7 @@ Shapes, limits, privacy, the API and CI recipes: **[docs/datasets.md](docs/datas
 
 Monitors watch your usage, cost and quality inside the dashboard server and tell you when something looks wrong. The bell in the top bar lists recent alerts, and **Settings → Monitors** has the rules and the channels.
 
-- **Seven rules:** cost burn (per session, per 10 minutes), tool loop, agent stuck, accuracy drop, evaluator pass rate, unsafe content and cost anomaly (today's or yesterday's spend well above what the same weekday usually costs), plus your cost budgets. Each rule can be switched on or off, has its own limits, and can be snoozed for an hour or a day. A rule with missing input reports *no data* and never triggers.
+- **Eight rules:** cost burn (per session, per 10 minutes), tool loop, agent stuck, accuracy drop, evaluator pass rate, unsafe content, cost anomaly (today's or yesterday's spend well above what the same weekday usually costs) and guardrail block (the gateway guardrails blocked a request in the last hour), plus your cost budgets. Each rule can be switched on or off, has its own limits, and can be snoozed for an hour or a day. A rule with missing input reports *no data* and never triggers.
 - **Channels:** a desktop notification (on by default) and an optional webhook whose URL and headers go to the OS secret store. Neither carries transcript text. Demo mode sends nothing.
 - **Agent control:** pause (`SIGSTOP`), resume or stop the Claude Code or Codex process behind a session from the Trace explorer, the Live monitor or AI Office. Before every signal the process table is read again and the pid and start time must match; every action is written to `.data/agent-audit.jsonl`.
 - **Auto-pause** for cost burn and tool loop is off by default; a budget pauses only when you set it to. A paused agent is never resumed or stopped automatically.
@@ -980,6 +988,7 @@ docs/monitors.md       monitors, alerts, webhook, pausing an agent: rules, chann
 docs/local-models.md   starting and stopping local model servers: runtimes, your own entries, safety, API
 docs/topology.md       the Overview's provider topology: layers, colours, sources, tool routing, privacy
 docs/cost.md           cost ledger: who counts what, frozen cost, billing, cost centers, restate, the Cost Control menu, API, limits
+docs/guardrails.md     gateway guardrails: the checks, modes, scope, per-key policy, what is recorded, reading a block
 docs/assets/           README banner, diagrams, screenshots and GIFs
 ```
 </details>
@@ -1003,7 +1012,7 @@ Apart from the sign-in routes in the first row, every `/api` route needs a signe
 | `GET /api/mcp-calls` | recent MCP hub tool calls from the audit log |
 | `GET /api/vault` | notes, links and unresolved links of the Obsidian vault |
 | `GET /api/brain` · `GET /api/brain/graph?source=…` · `POST /api/brain/sources` | second-brain sources and their graphs; save, test and delete a source |
-| `GET /api/gateway` · `POST /api/gateway/<route>` | the dashboard side of the agentic workspace: keys, providers, routes, agents, workflows, runs, knowledge, tools, skills, settings |
+| `GET /api/gateway` · `POST /api/gateway/<route>` | the dashboard side of the agentic workspace: keys, providers, routes, agents, workflows, runs, knowledge, tools, skills, settings (`settings.guardrails` and a key's `guardrails`; a guardrails value that is not allowed is a 400; see [docs/guardrails.md](docs/guardrails.md#settings-and-api)) |
 | `POST /api/mcp/register` | register the MCP server in, or remove it from, one client (`{ "client": "claude\|kiro\|antigravity\|cursor\|vscode\|claude-desktop\|codex\|gemini\|windsurf\|windsurf-legacy\|zed\|all", "remove": false }`) |
 | `GET /api/cost/*` · `POST /api/cost/*` | the Cost Control menu: ledger, views, status, export, reports, budgets, settings, restate (dashboard sign-in only; every route in [docs/cost.md](docs/cost.md)) |
 | `GET /api/config` · `POST /api/config` | name, monthly budget, prices, vault path |
@@ -1040,6 +1049,7 @@ Everything is editable in **Settings** and saved to `config.json`:
 | Theme | follows the system |
 | Price auto-update (`pricingSync.enabled`) | on; fetches the public price list at startup and every 12 hours (toggle in Settings) |
 | OpenTelemetry export (`otel`) | off; set in `config.json` only ([docs/otel.md](docs/otel.md)) |
+| Gateway guardrails (`gateway.guardrails`) | secrets `redact`, personal data `off`, prompt injection `log`, scope `external` ([docs/guardrails.md](docs/guardrails.md)) |
 
 Environment variables: `PORT` / `ZAAFPULSE_PORT` (default `4777`), `ZAAFPULSE_HOST`, `ZAAFPULSE_DATA`, `ZAAFPULSE_AUTH` (`local` by default on 127.0.0.1, `1` for password, `none` to turn sign-in off), `ZAAFPULSE_INDEX_WORKERS` (worker threads for the first index; `0` turns them off), `ZAAFPULSE_CONTENT` (`off` hides transcript text in the Trace explorer, and eval explanations; in server mode it is off unless `on`), `ZAAFPULSE_OLLAMA_URL` and `ZAAFPULSE_LMSTUDIO_URL` (move the local judge servers; for tests and unusual setups, see [docs/evals.md](docs/evals.md)), `ZAAFPULSE_CLAUDE_BIN` (the Claude Code CLI for the [Claude Code judge](docs/evals.md#claude-code), when it is not found on its own), the server-mode settings in [docs/install.md](docs/install.md), the standard `OTEL_*` variables ([docs/otel.md](docs/otel.md)), and `DEMO=1` for synthetic data. Demo mode never writes `config.json`, the Keychain or your coding tools, and fetches nothing: model calls are answered by a scripted model inside the process, and gateway data lives in a temporary folder. It uses the cached price list if one exists.
 </details>
