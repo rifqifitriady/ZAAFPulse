@@ -104,6 +104,7 @@ const sources = () => ({
     { client: 'zed', name: 'Zed', file: '~/.config/zed/settings.json', state: 'unreadable', servers: [] },
   ],
 });
+const done = (map) => ({ exists: true, baselineDone: true, map });
 const byId = (inv) => Object.fromEntries(inv.items.map((i) => [i.id, i]));
 
 test('one item per system: sources merge by id, the best state wins, every source is named in where', () => {
@@ -212,7 +213,7 @@ test('first and last seen: kept from the store, today for a new item; a review o
     'mcp:retired': { owner: 'Ana', risk: 'high', decision: 'blocked' },
     'not an id': { owner: 'x' },
   };
-  const inv = buildInventory({ live: { apps: [{ id: 'claude', name: 'Claude Code' }] } }, reviews, seen, NOW);
+  const inv = buildInventory({ live: { apps: [{ id: 'claude', name: 'Claude Code' }] } }, reviews, done(seen), NOW);
   assert.deepEqual(
     inv.items.map((i) => [i.id, i.state, i.status, i.firstSeen, i.lastSeen]),
     [
@@ -229,8 +230,11 @@ test('first and last seen: kept from the store, today for a new item; a review o
     reviewedAt: 'x',
   });
   assert.deepEqual(inv.nextSeen, {
-    'app:claude': { first: '2026-09-01', last: '2026-11-03' },
-    'mcp:retired': { first: '2026-01-01', last: '2026-02-01' },
+    baselineDone: true,
+    map: {
+      'app:claude': { first: '2026-09-01', last: '2026-11-03', state: 'running' },
+      'mcp:retired': { first: '2026-01-01', last: '2026-02-01' },
+    },
   });
   assert.deepEqual(
     [inv.counts.total, inv.counts.reviewed, inv.counts.unreviewed, inv.counts.gone],
@@ -250,7 +254,7 @@ test('counts: new unreviewed items (first seen in the last 7 days, not ours) by 
   };
   const s = sources();
   s.gateway.providers.push({ id: 'x', preset: 'custom', enabled: true });
-  const inv = buildInventory(s, reviews, seen, NOW);
+  const inv = buildInventory(s, reviews, done(seen), NOW);
   assert.equal(inv.counts.total, 26);
   assert.equal(inv.counts.reviewed, 2);
   assert.equal(inv.counts.newUnreviewed, 22, 'all but codex (old), the two reviewed and ours');
@@ -290,34 +294,42 @@ test('a failed source is listed and the rest still counts; bad shapes never thro
   assert.deepEqual(buildInventory(undefined, undefined, undefined, NOW).counts.total, 0);
 });
 
-test('seen store: written atomically and privately only when it changed; unreadable reads as {}', (t) => {
+test('seen store: written atomically and privately only when it changed; a corrupt file reads loud', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-gov-seen-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'governance', 'seen.json');
   const store = createSeenStore({ file });
-  assert.deepEqual(store.read(), {});
+  assert.deepEqual(store.read(), { exists: false, baselineDone: false, map: {} });
   const map = { 'app:claude': { first: '2026-11-03', last: '2026-11-03' } };
-  assert.equal(store.write(map), true);
-  assert.equal(store.write(map), false, 'unchanged: not written again');
-  assert.deepEqual(createSeenStore({ file }).read(), map);
+  assert.equal(store.write({ baselineDone: false, map: {} }), true, 'the first build writes even an empty map');
+  assert.deepEqual(createSeenStore({ file }).read(), { exists: true, baselineDone: false, map: {} });
+  const next = { baselineDone: true, map };
+  assert.equal(store.write(next), true);
+  assert.equal(store.write(next), false, 'unchanged: not written again');
+  assert.deepEqual(createSeenStore({ file }).read(), { exists: true, baselineDone: true, map });
   if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.deepEqual(fs.readdirSync(path.dirname(file)), ['seen.json'], 'no temp file left');
-  fs.writeFileSync(file, '{ torn');
-  assert.deepEqual(createSeenStore({ file }).read(), {});
-  fs.writeFileSync(file, '[1]');
-  assert.deepEqual(createSeenStore({ file }).read(), {});
+  // The older flat shape still reads (the baseline was done by then).
+  fs.writeFileSync(file, JSON.stringify(map));
+  assert.deepEqual(createSeenStore({ file }).read(), { exists: true, baselineDone: true, map });
+  // Corrupt: loud, so that tampering cannot silence the new-item alert.
+  for (const bad of ['{ torn', '[1]', 'null', '"x"']) {
+    fs.writeFileSync(file, bad);
+    assert.deepEqual(createSeenStore({ file }).read(), { exists: true, baselineDone: true, map: {} }, bad);
+  }
 });
 
 test('baseline: the first build with no seen dates marks every item; an item first seen later is not a baseline', () => {
   const first = buildInventory(sources(), {}, {}, NOW);
   assert.ok(first.items.length > 0 && first.items.every((i) => i.baseline === true));
-  assert.ok(Object.values(first.nextSeen).every((d) => d.baseline === true && d.first === '2026-11-03'));
+  assert.equal(first.nextSeen.baselineDone, true);
+  assert.ok(Object.values(first.nextSeen.map).every((d) => d.baseline === true && d.first === '2026-11-03'));
   assert.ok(first.items.every((i) => i.status === 'unreviewed' && i.firstSeen === '2026-11-03'));
   assert.equal(first.counts.unreviewed, first.counts.total, 'baseline items still show as unreviewed');
   assert.equal(first.counts.newUnreviewed, 0, 'but none of them is new');
   assert.deepEqual(first.counts.newKinds, []);
-  for (const bad of [null, 'x', [1], { 'app:x': { first: 'no', last: 3 } }])
-    assert.equal(buildInventory(sources(), {}, bad, NOW).counts.newUnreviewed, 0, 'unusable seen data: a rebuild');
+  for (const bad of [null, 'x', [1], {}, { exists: false, baselineDone: false, map: {} }])
+    assert.equal(buildInventory(sources(), {}, bad, NOW).counts.newUnreviewed, 0, 'no seen file: a baseline');
 
   // A later build: the stored baseline stays, a new system is not a baseline and counts as new.
   const later = sources();
@@ -329,8 +341,94 @@ test('baseline: the first build with no seen dates marks every item; an item fir
   assert.equal(it['app:claude'].lastSeen, '2026-11-05');
   assert.equal(it['knowledge:kb_2'].baseline, undefined);
   assert.equal(it['knowledge:kb_2'].firstSeen, '2026-11-05');
-  assert.deepEqual(next.nextSeen['knowledge:kb_2'], { first: '2026-11-05', last: '2026-11-05' });
-  assert.equal(next.nextSeen['app:claude'].baseline, true);
+  assert.deepEqual(next.nextSeen.map['knowledge:kb_2'], {
+    first: '2026-11-05',
+    last: '2026-11-05',
+    state: 'configured',
+  });
+  assert.equal(next.nextSeen.map['app:claude'].baseline, true);
   assert.equal(next.counts.newUnreviewed, 1);
   assert.deepEqual(next.counts.newKinds, ['knowledge']);
+});
+
+test('baseline: a seen file that is there with no entries is not a baseline; a corrupt one is loud', () => {
+  const inv = buildInventory(sources(), {}, done({}), NOW);
+  assert.ok(inv.items.every((i) => i.baseline === undefined && i.firstSeen === '2026-11-03'));
+  assert.equal(inv.counts.newUnreviewed, 24, 'all but the zaafpulse MCP server (ours)');
+  const one = buildInventory({ live: { apps: [{ id: 'claude', name: 'Claude Code' }] } }, {}, done({}), NOW);
+  assert.equal(one.counts.newUnreviewed, 1);
+  assert.equal(one.items[0].baseline, undefined);
+  assert.equal(one.nextSeen.baselineDone, true);
+});
+
+test('baseline: a first build with a failed source keeps baselining until a build with every source', () => {
+  const partial = buildInventory(
+    { ...sources(), gateway: null },
+    {},
+    { exists: false, baselineDone: false, map: {} },
+    NOW,
+  );
+  assert.deepEqual(partial.failed, ['gateway']);
+  assert.ok(partial.items.every((i) => i.baseline === true));
+  assert.equal(partial.nextSeen.baselineDone, false, 'not done: a source was missing');
+  const full = buildInventory(sources(), {}, { exists: true, ...partial.nextSeen }, NOW + DAY);
+  const it = byId(full);
+  assert.equal(it['provider:openai'].baseline, true, 'found late, still the baseline');
+  assert.equal(it['app:claude'].baseline, true);
+  assert.equal(full.counts.newUnreviewed, 0);
+  assert.equal(full.nextSeen.baselineDone, true);
+  const later = sources();
+  later.gateway.knowledge.push({ id: 'kb_2', name: 'Playbooks' });
+  const after = buildInventory(later, {}, { exists: true, ...full.nextSeen }, NOW + 3 * DAY);
+  assert.equal(byId(after)['knowledge:kb_2'].baseline, undefined);
+  assert.equal(after.counts.newUnreviewed, 1);
+});
+
+test('ids: control characters are stripped so an id round-trips; names are looked up as own keys only', () => {
+  const inv = buildInventory(
+    {
+      gateway: { keys: [{ id: 'a\nb\u0007c', name: 'k' }], agents: [{ id: 'x' }] },
+      live: { apps: [], installed: ['constructor', 'toString'], names: {} },
+    },
+    { 'key:abc': { risk: 'high' } },
+    done({}),
+    NOW,
+  );
+  assert.ok(inv.items.some((i) => i.id === 'key:abc'));
+  assert.equal(inv.items.find((i) => i.id === 'key:abc').status, 'reviewed', 'the review finds the cleaned id');
+  assert.ok(inv.items.every((i) => /^[a-z]+:[^\u0000-\u001f]+$/.test(i.id)));
+  assert.deepEqual(
+    inv.items.filter((i) => i.kind === 'app').map((i) => i.name),
+    ['constructor', 'toString'],
+  );
+});
+
+test('seen entries last seen over 400 days ago are dropped', () => {
+  const seen = {
+    'mcp:old': { first: '2025-01-01', last: '2025-09-28' }, // 400+ days before 2026-11-03
+    'mcp:keep': { first: '2025-01-01', last: '2025-10-30' },
+  };
+  const inv = buildInventory({}, { 'mcp:old': { risk: 'high' } }, done(seen), NOW);
+  assert.deepEqual(Object.keys(inv.nextSeen.map), ['mcp:keep']);
+  assert.equal(inv.items[0].firstSeen, null, 'a review whose dates were dropped has none');
+});
+
+test('a reviewed item whose kind source failed is stale, not gone', () => {
+  const seen = {
+    'key:key_a1': { first: '2026-10-01', last: '2026-11-02', state: 'used' },
+    'mcp:retired': { first: '2026-10-01', last: '2026-11-02', state: 'configured' },
+  };
+  const reviews = { 'key:key_a1': { owner: 'Ana' }, 'mcp:retired': { owner: 'Ana' } };
+  const inv = buildInventory({ gateway: null, mcp: [] }, reviews, done(seen), NOW);
+  const it = byId(inv);
+  assert.deepEqual(
+    [it['key:key_a1'].state, it['key:key_a1'].stale, it['key:key_a1'].status],
+    ['used', true, 'reviewed'],
+  );
+  assert.deepEqual(
+    [it['mcp:retired'].state, it['mcp:retired'].stale, it['mcp:retired'].status],
+    ['gone', undefined, 'gone'],
+  );
+  assert.equal(it['key:key_a1'].lastSeen, '2026-11-02', 'not refreshed: it was not seen');
+  assert.equal(inv.counts.gone, 1);
 });
