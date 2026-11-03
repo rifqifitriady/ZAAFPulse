@@ -66,12 +66,37 @@ test('audit_chain_broken: triggered by a failed verify, titled with its reason o
   assert.equal(one(null).state, 'no_data');
 });
 
+test('audit_chain_broken: a rekey alerts for 7 days from its entry, with its seq; a broken chain comes first', () => {
+  const one = (v) => run('audit_chain_broken', { audit: { degraded: null, lastVerify: v } })[0];
+  const ago = (days) => new Date(NOW - days * 864e5).toISOString();
+  const rekeyed = { ok: true, checked: 9, from: 1, to: 9, rekeyedAt: 7, rekeyedTs: ago(2) };
+  assert.deepEqual(one(rekeyed), {
+    instance: 'all',
+    sessionId: null,
+    state: 'triggered',
+    value: 7,
+    threshold: null,
+    title: 'rekeyed',
+  });
+  assert.equal(one({ ...rekeyed, rekeyedTs: ago(8) }).state, 'ok');
+  assert.equal(one({ ...rekeyed, rekeyedTs: 'not a time' }).state, 'triggered'); // unknown age: loud
+  assert.equal(one({ ...rekeyed, unverified: 6 }).title, 'rekeyed');
+  assert.deepEqual(
+    [one({ ok: false, brokenAt: 3, reason: 'entry changed', rekeyedAt: 7, rekeyedTs: ago(1) })].map((r) => [
+      r.value,
+      r.title,
+    ]),
+    [[3, 'entry changed']],
+  );
+});
+
 test('the Monitors page words', () => {
   const { monMeasure } = require('../public/monitorsview');
   assert.equal(monMeasure('audit_degraded', 1, 1), '1 audit entry not written');
   assert.equal(monMeasure('audit_degraded', 4, 1), '4 audit entries not written');
   assert.equal(monMeasure('audit_chain_broken', 41, null), 'broken at entry 41');
   assert.equal(monMeasure('audit_chain_broken', 0, null), 'cannot be checked');
+  assert.equal(monMeasure('audit_chain_broken', 7, null, 'rekeyed'), 'key replaced at entry 7');
 });
 
 test('engine: the audit status is read on each aggregate pass and a broken chain alerts once', async (t) => {

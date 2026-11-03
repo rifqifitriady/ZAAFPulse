@@ -13,6 +13,7 @@ const { createSecretStore } = require('../lib/secret-store');
 
 const NOW = Date.UTC(2026, 10, 3, 12);
 const DAY = 864e5;
+const NOW_ISO = new Date(NOW).toISOString();
 function setup(t, { store = null } = {}) {
   const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'zp-gov-audit-')), 'audit');
   t.after(() => fs.rmSync(path.dirname(dir), { recursive: true, force: true }));
@@ -117,7 +118,15 @@ test('rekey: entries without their key are not sealed over silently; the chain r
     ],
   );
   assert.equal(e.seq, 5);
-  assert.deepEqual(lost.verify(), { ok: true, checked: 2, from: 4, to: 5, unverified: 3, rekeyedAt: 4 });
+  assert.deepEqual(lost.verify(), {
+    ok: true,
+    checked: 2,
+    from: 4,
+    to: 5,
+    unverified: 3,
+    rekeyedAt: 4,
+    rekeyedTs: NOW_ISO,
+  });
 });
 
 // A file-only attacker: a key of their own in chain.key and entries sealed with it, written into the month file.
@@ -491,13 +500,21 @@ test('key: a store that cannot be read while entries exist is not a lost key; th
   assert.equal(lost.record({ action: 'auth.login', actor: dash }).keyed, 'file');
   assert.equal(store.items.has(A.SERVICE), false);
   assert.equal(fs.existsSync(path.join(dir, 'chain.key')), true);
-  assert.deepEqual(lost.verify(), { ok: true, checked: 2, from: 7, to: 8, unverified: 6, rekeyedAt: 7 });
+  assert.deepEqual(lost.verify(), {
+    ok: true,
+    checked: 2,
+    from: 7,
+    to: 8,
+    unverified: 6,
+    rekeyedAt: 7,
+    rekeyedTs: NOW_ISO,
+  });
   // The old key comes back to the store: the chain goes on with the file's key, and verify checks both parts, each
   // with its own key.
   store.items.set(A.SERVICE, slot);
   const back = make();
   assert.equal(back.record({ action: 'auth.logout', actor: dash }).keyed, 'file');
-  assert.deepEqual(back.verify(), { ok: true, checked: 9, from: 1, to: 9 });
+  assert.deepEqual(back.verify(), { ok: true, checked: 9, from: 1, to: 9, rekeyedAt: 7, rekeyedTs: NOW_ISO });
 });
 
 test('key: a store that cannot decrypt the key (ZAAFPULSE_MASTER_KEY changed) degrades and never rekeys', (t) => {

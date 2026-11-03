@@ -148,6 +148,24 @@ test('status: the verify line is the server’s last result, so a later daily ve
   assert.doesNotMatch(read('governanceview.js'), /GOV\.verify/);
 });
 
+test('status: a rekey in the last verify is a warning line; the hero line says what is recorded', () => {
+  const f = { range: 'all', actor: '', action: '', outcome: '' };
+  const st = { retentionMonths: 12, months: [], bytes: 0, degraded: null };
+  const v = { ok: true, checked: 9, from: 1, to: 9, rekeyedAt: 7, rekeyedTs: '2026-11-02T10:00:00.000Z' };
+  const html = U.govStatusHtml({ ...st, lastVerify: v }, f);
+  assert.match(
+    html,
+    /<div class="gov-banner">The audit key was replaced at entry 7 \(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\)\. Entries before it are checked only when the old key can still be read\.<\/div>/,
+  );
+  assert.ok(!U.govStatusHtml({ ...st, lastVerify: { ...v, rekeyedAt: undefined } }, f).includes('was replaced'));
+  const odd = U.govStatusHtml({ ...st, lastVerify: { ...v, rekeyedAt: '<x>' } }, f);
+  assert.ok(!odd.includes('<x>'), 'escaped');
+  assert.match(
+    U.govView(),
+    /\|Changes made through the dashboard and by API keys: who, when, what and the outcome\. Read requests are not recorded; see docs\/governance\.md for the full list\.<\/div>/,
+  );
+});
+
 test('wiring: the Governance menu, the script before app.js, the route and its mount', () => {
   const html = read('index.html');
   assert.match(html, /<div class="nav-label">GOVERNANCE<\/div>\s*<a href="#governance" data-route="governance">/);

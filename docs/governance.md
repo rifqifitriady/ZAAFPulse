@@ -111,7 +111,14 @@ a new key, which is kept in `.data/audit/chain.key`, never in the store. Each pa
 (`store` or `file`), so a part sealed with a key of someone's own vouches for nothing before it: the old part is
 still checked with the old key whenever that key can be read (it comes back to the store, say). Entries whose key
 cannot be read, including a part keyed in an older `chain.key` that a later rekey replaced, are counted as
-`unverified` and still checked for their order; `rekeyedAt` is where the checked part after them starts.
+`unverified` and still checked for their order. Whenever the kept log holds a rekey, verify reports the latest one
+as `rekeyedAt` (its seq) and `rekeyedTs` (its time), and the page shows "The audit key was replaced at entry N (date).
+Entries before it are checked only when the old key can still be read."
+
+A rekey always alerts, through `audit_chain_broken` (below), because it is the one change to the chain that someone
+who can write `.data/audit/` but not read the store can make look valid: a rekey of their own, sealed with a
+`chain.key` of their own, lets them replace every entry after it. A genuine rekey (the key really went missing) alerts
+the same way, so the owner can confirm it was one.
 
 ## Retention
 
@@ -154,7 +161,9 @@ its `config.change` and its request); the page shows "Degraded since …", `GET 
 - `audit_degraded` (on by default): triggered while entries cannot be written; its value is the number of entries
   missed.
 - `audit_chain_broken` (on by default): triggered when the last verify failed; its value is the seq where the chain
-  broke (0 when the key is missing) and its title the reason.
+  broke (0 when the key is missing) and its title the reason. Also triggered, titled `rekeyed` with the rekey's seq,
+  while the chain holds a rekey whose entry is less than 7 days old: one alert per rekey, which clears after 7 days
+  unless the chain is otherwise broken.
 
 Neither pauses anything, and neither alert carries anything from an entry.
 
@@ -166,7 +175,7 @@ All behind the dashboard sign-in; no gateway key or MCP client reaches them.
 |---|---|
 | `GET /api/governance/audit?from&to&actor&action&outcome&limit&before` | entries, newest first, at most 500 per page (default 100); `from`/`to` are `YYYY-MM-DD` (a UTC day; `to` is the end of it) or ISO times with a zone (`Z` or `+07:00`), `actor` a kind (`dashboard`, `apikey`, `cli`, `system`, `rule`) or a key id, `action` text found in the action or its `op`; the answer is `{ entries, next, skipped }` (`next` is the `before` of the next page, `skipped` counts unreadable lines) |
 | `GET /api/governance/audit/export?from&to&format=jsonl\|csv` | a download |
-| `GET /api/governance/audit/verify` | `{ ok, checked, from, to, brokenAt?, reason?, unverified?, rekeyedAt? }` |
+| `GET /api/governance/audit/verify` | `{ ok, checked, from, to, brokenAt?, reason?, unverified?, rekeyedAt?, rekeyedTs? }` |
 | `GET /api/governance/audit/status` | `{ retentionMonths, months: [{ month, bytes }], bytes, degraded, lastVerify }` |
 | `POST /api/governance/settings` | `{ "audit": { "retentionMonths": n } }` (6 to 120; JSON only: 415 otherwise, 413 for a body that is too large) |
 
@@ -180,7 +189,9 @@ A bad query value is a 400 that names it, as `limit: a whole number from 1 to 50
 - Someone who can write `.data/audit/` but not read the store can still cut the chain at an entry of their choosing:
   an `audit.rekey` of their own, sealed with a `chain.key` of their own, and entries of their own after it. What comes
   before the cut is still checked with the store's key and cannot be changed unseen; what came after it can be
-  replaced. Such a rekey shows in the log; one while the store still holds its key is worth a look.
+  replaced. Such a rekey alerts (`audit_chain_broken`, `rekeyed`) and shows on the page; one while the store still
+  holds its key is worth a look. The alert's 7 days count from the time the rekey entry gives, which its writer
+  chose.
 - Removing the whole log while the server is stopped is caught only by the rule for entry 1: a log written again by
   hand shows (its entry 1 is not `audit.key_created`, or is keyed in `chain.key` while the store holds a key). A folder
   emptied and left for the server to start over is not caught: the new log begins with its own `audit.key_created`,

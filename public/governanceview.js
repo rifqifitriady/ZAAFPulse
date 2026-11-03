@@ -156,7 +156,13 @@ function govStatusHtml(st, f) {
   const banner = st.degraded
     ? `<div class="gov-banner">${esc(`Degraded since ${govTime(st.degraded.since)}: ${st.degraded.missed} audit ${st.degraded.missed === 1 ? 'entry' : 'entries'} could not be written. Changes still go ahead.`)}</div>`
     : '';
-  return `${banner}<div class="gov-bar">
+  // A rekey in the chain always shows: whoever can write the files could seal one of their own.
+  const v = st.lastVerify;
+  const rekey =
+    v && v.rekeyedAt != null
+      ? `<div class="gov-banner">${esc(`The audit key was replaced at entry ${v.rekeyedAt} (${govTime(v.rekeyedTs)}). Entries before it are checked only when the old key can still be read.`)}</div>`
+      : '';
+  return `${banner}${rekey}<div class="gov-bar">
     <form id="gov-retention" class="gov-inline"><label>${esc('Keep months')}<input class="input" type="number" name="retentionMonths" min="6" max="120" step="1" value="${esc(st.retentionMonths)}"></label><button class="btn ghost" type="submit">${esc('Save')}</button></form>
     <span class="muted">${esc(govSize(st))}</span>
     <button class="btn ghost" type="button" data-gov-verify>${esc('Verify')}</button>
@@ -182,7 +188,7 @@ function govFiltersHtml(f) {
 /* ---------- the page ---------- */
 
 function govView() {
-  return `<div class="holo-deck">${subHero('GOVERNANCE · AUDIT LOG', 'Audit log', esc('Every change made to ZAAFPulse by a person or an API key: who, when, what and the outcome. Entries are chained, so a changed or deleted line shows when you verify.'))}<div id="gov-app">
+  return `<div class="holo-deck">${subHero('GOVERNANCE · AUDIT LOG', 'Audit log', esc('Changes made through the dashboard and by API keys: who, when, what and the outcome. Read requests are not recorded; see docs/governance.md for the full list.'))}<div id="gov-app">
     <section class="holo panel"><div class="panel-head"><h3>${esc('Audit log')}</h3><span class="meta">${esc('kept by month, chained')}</span></div><div id="gov-status"><div class="skeleton" style="height:40px"></div></div>${govFiltersHtml(GOV.filters)}<div class="table-wrap"><table class="holo-table"><thead><tr><th>${esc('Time')}</th><th>${esc('Actor')}</th><th>${esc('Action')}</th><th>${esc('Target')}</th><th>${esc('Outcome')}</th></tr></thead><tbody id="gov-rows"></tbody></table></div><div id="gov-more"></div></section>
   </div></div>`;
 }
