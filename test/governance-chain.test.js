@@ -275,3 +275,27 @@ test('diff: URL credentials in a text value are replaced on both sides of a chan
   ]);
   assert.ok(!JSON.stringify(changes).includes('hunter2') && !JSON.stringify(changes).includes('newpass'));
 });
+
+test('diff: a URL password with an @ in it is masked whole, and so are query values under secret-looking names', () => {
+  const { changes } = diff(
+    {},
+    {
+      a: 'https://admin:p@ss-W0rd@host/x',
+      b: 'https://h/v1?api_key=sk-live-123&x=1',
+      c: 'wss://h/s?token=t0k&Sig=abc#frag',
+      d: 'https://h/p?monkey=1&keys=2&access_token=zz&apikey=q&password=pw&auth=a&signature=s&secret=x&key=k',
+    },
+  );
+  assert.deepEqual(
+    changes.map((c) => c.to),
+    [
+      'https://‹changed›@host/x',
+      'https://h/v1?api_key=‹changed›&x=1',
+      'wss://h/s?token=‹changed›&Sig=‹changed›#frag',
+      'https://h/p?monkey=1&keys=2&access_token=‹changed›&apikey=‹changed›&password=‹changed›&auth=‹changed›&signature=‹changed›&secret=‹changed›&key=‹changed›',
+    ].map((s) => (Array.from(s).length > 120 ? `${Array.from(s).slice(0, 119).join('')}…` : s)),
+  );
+  const text = JSON.stringify(changes);
+  for (const secret of ['ss-W0rd', 'p@ss', 'sk-live-123', 't0k', 'abc', '=zz', '=pw', '=k'])
+    assert.ok(!text.includes(secret), secret);
+});

@@ -39,6 +39,12 @@ test('requests: method and route with ids as :id, the action word, the target, t
     ids: ['my-set', 'ex_7'],
   });
   assert.deepEqual(routeOf('/api/monitors/channels'), { route: '/api/monitors/channels', ids: [] });
+  assert.deepEqual(requestEntry({ method: 'POST', path: '/api/cost/budgets/team-a/delete', status: 200, body: '{}' }), {
+    action: 'POST /api/cost/budgets/:id/delete',
+    target: { type: 'cost', id: 'team-a' },
+    outcome: 'ok',
+    status: 200,
+  });
   assert.deepEqual(
     requestEntry({
       method: 'POST',
