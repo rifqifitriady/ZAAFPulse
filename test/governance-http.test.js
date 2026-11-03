@@ -294,3 +294,29 @@ test('sign-in: login, a change, logout, five failures and one lockout, with the 
   assert.ok(!JSON.stringify(all).includes('nope') && !JSON.stringify(all).includes('horse'));
   assert.ok(s.alive());
 });
+
+test('a GET on a gateway admin route that writes is 405 and changes nothing; the request log still reads', async (t) => {
+  const s = await startServer(t);
+  const set = await call(s, '/api/gateway/defaults', { method: 'POST', body: { model: 'a/b', plannerModel: 'a/c' } });
+  assert.deepEqual(set.body.defaults, { model: 'a/b', plannerModel: 'a/c', codeModel: '' });
+  const config = () => JSON.parse(fs.readFileSync(path.join(s.data, 'config.json'), 'utf8'));
+  const before = config();
+  for (const route of ['defaults', 'settings', 'playground', 'quota', 'keys', 'providers'])
+    assert.equal((await call(s, `/api/gateway/${route}`)).status, 405, route);
+  assert.deepEqual(config(), before);
+  assert.deepEqual((await call(s, '/api/gateway')).body.defaults, { model: 'a/b', plannerModel: 'a/c', codeModel: '' });
+  assert.ok(Array.isArray((await call(s, '/api/gateway/logs')).body.entries));
+  const del = await call(s, '/api/gateway/defaults', { method: 'DELETE', body: {} });
+  assert.equal(del.status, 405);
+  assert.deepEqual(config(), before);
+  assert.deepEqual(
+    entries(s)
+      .filter((e) => e.action.includes('/api/gateway/defaults'))
+      .map((e) => [e.action, e.outcome, e.status]),
+    [
+      ['POST /api/gateway/defaults', 'ok', 200],
+      ['DELETE /api/gateway/defaults', 'refused', 405],
+    ],
+  );
+  assert.ok(s.alive());
+});

@@ -1273,7 +1273,14 @@ const handler = async (req, res) => {
     if (url.pathname === '/api/gateway' && req.method === 'GET') return send(res, 200, await gateway.admin('', 'GET'));
     const gwAdmin = url.pathname.match(/^\/api\/gateway\/([a-z]+)$/);
     if (gwAdmin) {
-      if (req.method === 'GET') return send(res, 200, await gateway.admin(gwAdmin[1], 'GET'));
+      // Only the request log is read with GET. Every other admin route writes (defaults, settings), spends tokens
+      // (playground) or calls providers (quota), so a GET there is 405 and changes nothing (A7); so is any method but
+      // POST.
+      if (req.method === 'GET')
+        return gwAdmin[1] === 'logs'
+          ? send(res, 200, await gateway.admin('logs', 'GET'))
+          : send(res, 405, { error: 'method not allowed' });
+      if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
       if (!(req.headers['content-type'] || '').startsWith('application/json'))
         return send(res, 415, { error: 'json only' });
       try {
