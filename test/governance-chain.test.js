@@ -164,3 +164,62 @@ test('diff: at most 50 changes, then truncated says how many more', () => {
   assert.equal(d.changes[0].path, 'k00');
   assert.equal(d.sections.length, 73);
 });
+
+test('fix round 1: the mac covers the entry as JSON writes it (a Date, a function)', () => {
+  const e = seal(KEY, {
+    seq: 1,
+    ts: new Date(Date.UTC(2026, 10, 1)),
+    action: 'x',
+    fn() {},
+    sym: Symbol('s'),
+    prev: GENESIS,
+  });
+  const line = JSON.parse(JSON.stringify(e));
+  assert.equal(verifyChain([line], KEY).ok, true);
+  assert.equal(macOf(KEY, line), e.mac);
+});
+
+test('fix round 1: a mac that differs in the last digit is still an entry changed', () => {
+  const [e] = chainOf(1);
+  const bad = { ...e, mac: e.mac.slice(0, 63) + (e.mac.endsWith('0') ? '1' : '0') };
+  assert.equal(verifyChain([bad], KEY).reason, 'entry changed');
+});
+
+test('fix round 1: a list under a secret-looking key is one masked value, with no id in the path', () => {
+  const d = diff(
+    { x: { tokens: [{ id: 'sk-abcdef123456', label: 'a' }] } },
+    { x: { tokens: [{ id: 'sk-abcdef123456', label: 'b' }] } },
+  );
+  assert.deepEqual(d.changes, [{ path: 'x.tokens', from: MASK, to: MASK }]);
+});
+
+test('fix round 1: a number under a secret-looking key is masked; a boolean is not', () => {
+  assert.deepEqual(diff({ gateway: { pin: { password: 1234 } } }, { gateway: { pin: { password: 987654 } } }).changes, [
+    { path: 'gateway.pin.password', from: MASK, to: MASK },
+  ]);
+  assert.deepEqual(diff({ n: 1 }, { n: 2 }).changes, [{ path: 'n', from: 1, to: 2 }]);
+});
+
+test('fix round 1: secrets and keyCenters are exempt only at their own paths', () => {
+  assert.deepEqual(diff({ foo: { secrets: { openai: 'sk-a' } } }, { foo: { secrets: { openai: 'sk-b' } } }).changes, [
+    { path: 'foo.secrets.openai', from: MASK, to: MASK },
+  ]);
+  assert.deepEqual(
+    diff({ gateway: { guardrails: { secrets: 'redact' } } }, { gateway: { guardrails: { secrets: 'block' } } }).changes,
+    [{ path: 'gateway.guardrails.secrets', from: 'redact', to: 'block' }],
+  );
+  assert.deepEqual(
+    diff({ cost: { keyCenters: { key_a: 'acme' } } }, { cost: { keyCenters: { key_a: 'beta' } } }).changes,
+    [{ path: 'cost.keyCenters.key_a', from: 'acme', to: 'beta' }],
+  );
+  assert.deepEqual(diff({ foo: { keyCenters: { a: 'x' } } }, { foo: { keyCenters: { a: 'y' } } }).changes, [
+    { path: 'foo.keyCenters.a', from: MASK, to: MASK },
+  ]);
+});
+
+test('fix round 1: cut never splits a surrogate pair', () => {
+  const s = `${'a'.repeat(118)}😀${'b'.repeat(10)}`;
+  const to = diff({ t: '' }, { t: s }).changes[0].to;
+  assert.equal(to, `${'a'.repeat(118)}😀…`);
+  assert.doesNotMatch(to, /[\ud800-\udbff](?![\udc00-\udfff])/);
+});
