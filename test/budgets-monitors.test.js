@@ -38,8 +38,8 @@ const res = (over = {}) => ({
 });
 const brief = (a) => [a.state, a.previous, a.projected];
 
-test('the budget rule sits beside the ten fixed rules', () => {
-  assert.equal(RULES.length, 10);
+test('the budget rule sits beside the twelve fixed rules', () => {
+  assert.equal(RULES.length, 12);
   assert.equal(
     RULES.some((r) => r.id === 'budget'),
     false,
@@ -453,9 +453,11 @@ test('alerts API: retired rules are left out, and a change to one is refused', a
     'unsafe_content',
     'cost_anomaly',
     'guardrail_block',
+    'audit_degraded',
+    'audit_chain_broken',
   ]);
   const r = await call('/api/monitors/daily_cost', { method: 'POST', body: { enabled: true } });
   assert.equal(r.status, 410);
   assert.match(r.body.error, /replaced by budgets/);
-  assert.equal((await api().call('/api/monitors')).body.rules.length, 10, 'without the option nothing changes');
+  assert.equal((await api().call('/api/monitors')).body.rules.length, 12, 'without the option nothing changes');
 });

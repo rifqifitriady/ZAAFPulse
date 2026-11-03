@@ -36,6 +36,8 @@ test('the rule table is data-driven and complete', () => {
       'unsafe_content',
       'cost_anomaly',
       'guardrail_block',
+      'audit_degraded',
+      'audit_chain_broken',
     ],
   );
   for (const r of RULES) {
@@ -75,6 +77,8 @@ test('defaultOn follows the budget and the fixed defaults', () => {
     unsafe_content: true,
     cost_anomaly: true,
     guardrail_block: true,
+    audit_degraded: true,
+    audit_chain_broken: true,
   });
   assert.strictEqual(on('cost_burn', { monthlyBudgetUSD: 500 }), false);
 });

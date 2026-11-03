@@ -66,6 +66,8 @@ const secretsFor = (env = {}) =>
 // file that does not exist, so it never finds (or starts) the machine's own claude.
 // A spawned server.js also runs the monitors, whose alerts would show desktop notifications for real: off here. It
 // would also read the loaded models of this machine's Ollama every 30 s (lib/runtimes/models.js): off too.
+// Its first change makes the governance audit key (lib/governance/audit.js), which goes to the secret store: here an
+// encrypted file in the test's data folder, never this machine's Keychain or keyring (and no DPAPI on Windows).
 const NO_CLAUDE = path.join(__dirname, 'fixtures', 'no-claude-here', 'claude');
 const NO_JUDGE_PORTS = {
   ZAAFPULSE_OLLAMA_URL: 'http://127.0.0.1:9',
@@ -73,6 +75,8 @@ const NO_JUDGE_PORTS = {
   ZAAFPULSE_CLAUDE_BIN: NO_CLAUDE,
   ZAAFPULSE_NOTIFY: 'off',
   ZAAFPULSE_RUNTIME_WATCH: 'off',
+  ZAAFPULSE_SECRET_STORE: 'file',
+  ZAAFPULSE_MASTER_KEY: 'a-master-key-for-the-tests-only',
 };
 
 // A stand-in for the Claude Code CLI. FAKE_CLAUDE_MODE picks what it does, FAKE_CLAUDE_LOG (a file outside its working
