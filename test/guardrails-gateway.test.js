@@ -25,7 +25,9 @@ const oaReply = () => ({
   },
 });
 
-async function setup({ guardrails, routes = [], chat = oaReply } = {}) {
+const embReply = () => ({ body: { data: [{ index: 0, embedding: [0.1, 0.2] }], usage: { prompt_tokens: 3 } } });
+
+async function setup({ guardrails, routes = [], chat = oaReply, embeddings = embReply, providers = [] } = {}) {
   const up = await fakeServer({
     'POST /chat/completions': chat,
     'POST /messages': () => ({
@@ -43,7 +45,7 @@ async function setup({ guardrails, routes = [], chat = oaReply } = {}) {
     'POST /responses': () => ({
       body: { id: 'resp_1', object: 'response', model: 'm1', status: 'completed', output: [], usage: {} },
     }),
-    'POST /embeddings': () => ({ body: { data: [{ index: 0, embedding: [0.1, 0.2] }], usage: { prompt_tokens: 3 } } }),
+    'POST /embeddings': embeddings,
   });
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-guard-gw-'));
   const gw = {
@@ -59,6 +61,7 @@ async function setup({ guardrails, routes = [], chat = oaReply } = {}) {
         approved: true,
         apiKey: { env: 'ANTH_KEY' },
       },
+      ...providers.map((p) => ({ baseUrl: up.url, approved: true, ...p })),
     ],
     routes,
     defaults: { model: 'oai/m1' },
@@ -352,4 +355,25 @@ test('fail closed: any other error out of checkBody is a 500 on every path, noth
   });
   await assert.rejects(s.gateway.embed('oai/m1', ['hello']), { status: 500, message: 'guardrails failed' });
   assert.equal(s.up.requests.length, 0, 'nothing reached the provider');
+});
+
+test('fallback: in llm() and embed() only the entry of the target that answered carries guard', async (t) => {
+  // m1 is busy (503), m2 answers: the fallback entry has no guard, so a redaction is counted once.
+  const busy = (r) => r.body.model === 'm1';
+  const s = await setup({
+    routes: [{ name: 'router/two', targets: ['oai/m1', 'oai/m2'], strategy: 'fallback' }],
+    chat: (r) => (busy(r) ? { status: 503, body: { error: { message: 'busy' } } } : oaReply()),
+    embeddings: (r) => (busy(r) ? { status: 503, body: { error: { message: 'busy' } } } : embReply()),
+  });
+  t.after(s.close);
+  const want = { action: 'redacted', hits: [{ check: 'secrets', label: 'Anthropic API key', count: 1 }] };
+  const r = await s.gateway.admin('playground', 'POST', { model: 'router/two', input: `use ${ANT}` });
+  assert.equal(r.text, 'ok');
+  let [second, first] = s.gateway.usage.recent(2);
+  assert.deepEqual([first.status, first.guard], [503, undefined]);
+  assert.deepEqual([second.status, second.guard], [200, want]);
+  await s.gateway.embed('router/two', [`doc ${ANT}`]);
+  [second, first] = s.gateway.usage.recent(2);
+  assert.deepEqual([first.status, first.guard], [503, undefined]);
+  assert.deepEqual([second.status, second.guard], [200, want]);
 });
