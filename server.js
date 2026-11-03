@@ -687,6 +687,12 @@ const monitors = createMonitors({
     const r = cost.budgetRows({ from: costAddDays(today, -ANOMALY_HISTORY_DAYS), to: today });
     return recentDays(r.rows, { today, unread: r.unread, since: cost.firstDay() });
   },
+  // guardrail_block: the gateway requests the guardrails blocked, as times and check names (no label, no text).
+  guardBlocks: () =>
+    gateway.usage
+      .recent(2000)
+      .filter((e) => e.guard && e.guard.action === 'blocked')
+      .map((e) => ({ ts: e.ts, checks: [...new Set((e.guard.hits || []).map((h) => h.check))] })),
 });
 // The routes: rules, channels, alerts and agent control. Demo serves a seeded store of its own (mixed states, five
 // alerts) so the page always has something to show; the engine keeps evaluating into its own file.
