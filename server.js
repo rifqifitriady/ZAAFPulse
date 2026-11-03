@@ -78,6 +78,7 @@ const { createReceiver } = require('./lib/trace/otlp');
 const govContext = require('./lib/governance/context');
 const { requestEntry } = require('./lib/governance/events');
 const { createGovernanceAudit, keySource } = require('./lib/governance/audit');
+const { diff: govDiff } = require('./lib/governance/diff');
 
 const PORT = Number(process.env.ZAAFPULSE_PORT || process.env.PORT) || 4777;
 const HOST = process.env.ZAAFPULSE_HOST || process.env.HOST || '127.0.0.1';
@@ -232,7 +233,11 @@ function getIntegrations() {
   }
   return integ.registry;
 }
-const integrationConfig = createIntegrationConfig({ file: CONFIG_FILE, secrets: createSecrets() });
+const integrationConfig = createIntegrationConfig({
+  file: CONFIG_FILE,
+  secrets: createSecrets(),
+  onChange: (before, after) => configChanged(before, after),
+});
 // Agent Gateway: OpenAI-compatible /v1 API, agents, orchestrator and MCP over HTTP, behind ZAAFPulse
 // API keys. Provider settings live in config.json under "gateway"; keys, agents, sessions and memory
 // in .data/ (demo mode uses a throwaway folder so it never touches your data).
@@ -252,6 +257,19 @@ const governance = createGovernanceAudit({
 // An entry's actor: the one it names, else the request's (lib/governance/context.js), else the server's own.
 function govRecord(entry) {
   return governance.record({ ...entry, actor: entry.actor || govContext.actor() || { via: 'system' } });
+}
+// Every config.json write, from either writer (saveConfigSections below, lib/integration-config.js), is one
+// config.change entry with its field-level changes, secrets masked (lib/governance/diff.js). A write that changed
+// nothing is no entry.
+function configChanged(before, after) {
+  const d = govDiff(before, after);
+  if (!d.changes.length) return;
+  govRecord({
+    action: 'config.change',
+    target: { type: 'config', id: d.sections.join(',').slice(0, 80) },
+    changes: d.changes,
+    ...(d.truncated ? { truncated: d.truncated } : {}),
+  });
 }
 let rawCache = {
   mtime: -1,
@@ -285,7 +303,9 @@ const CONFIG_UNSAVED = 'the settings could not be saved';
 const CONFIG_BROKEN = 'config.json could not be read; fix it first';
 function saveConfigSections(patch) {
   if (DEMO) {
+    const before = rawCache.value;
     rawCache.value = { ...rawCache.value, ...patch };
+    configChanged(before, rawCache.value);
     return;
   }
   const refuse = (message, err, status = 500) => {
@@ -315,6 +335,7 @@ function saveConfigSections(patch) {
     fs.rmSync(tmpFile, { force: true });
     throw refuse(CONFIG_UNSAVED, e);
   }
+  configChanged(base, raw);
   try {
     rawCache = { mtime: fs.statSync(CONFIG_FILE).mtimeMs, value: raw };
   } catch {
@@ -1041,8 +1062,12 @@ function send(res, status, body, type = 'application/json', headers = {}) {
   const p = pendingAudit.get(res);
   if (p) {
     pendingAudit.delete(res);
-    const e = requestEntry({ method: p.req.method, path: p.path, status, body: bodies.get(p.req), reply: body });
-    if (e) govRecord(e);
+    try {
+      const e = requestEntry({ method: p.req.method, path: p.path, status, body: bodies.get(p.req), reply: body });
+      if (e) govRecord(e);
+    } catch {
+      /* an audit bug never fails a response (A6) */
+    }
   }
   res.writeHead(status, responseHeaders(type, headers, SECURITY_HEADERS));
   res.end(type === 'application/json' ? JSON.stringify(body) : body);
@@ -1059,6 +1084,7 @@ const wholeParam = (v) => (v == null || v === '' ? undefined : /^\d{1,15}$/.test
 
 // The text each request sent, as read, for the audit entry of a dashboard change (send() keeps its short fields only).
 const bodies = new WeakMap();
+const AUDIT_BODY_MAX = 64 * 1024;
 function readBody(req, max = 1e6) {
   return new Promise((resolve, reject) => {
     let data = '';
@@ -1070,7 +1096,7 @@ function readBody(req, max = 1e6) {
       }
     });
     req.on('end', () => {
-      bodies.set(req, data);
+      if (data.length <= AUDIT_BODY_MAX) bodies.set(req, data); // a bigger body loses only op/target in its entry
       resolve(data);
     });
   });
@@ -1645,9 +1671,12 @@ const handler = async (req, res) => {
         return send(res, 415, { error: 'json only' });
       indexer.refresh().then(() => {
         memo.clear();
-        evalTick();
-        monitorTick();
-        costTick();
+        // The passes are the system's, not the person who clicked Rescan.
+        govContext.runAs({ via: 'system' }, () => {
+          evalTick();
+          monitorTick();
+          costTick();
+        });
       });
       return send(res, 202, indexer.state);
     }

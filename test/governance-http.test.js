@@ -132,3 +132,53 @@ test('dashboard changes: one entry each, with the dashboard actor and the outcom
   assert.ok(!JSON.stringify(all).includes(made.body.secret), 'a key secret is never written');
   assert.ok(s.alive());
 });
+
+test('config changes: both writers leave a config.change entry with the fields, secrets masked', async (t) => {
+  const s = await startServer(t);
+  assert.equal((await call(s, '/api/config', { method: 'POST', body: { userName: 'Ana' } })).status, 200);
+  const guard = { guardrails: { secrets: 'block' } };
+  assert.equal((await call(s, '/api/gateway/settings', { method: 'POST', body: guard })).status, 200);
+  const integration = { id: 'r1', type: 'router', values: { baseUrl: 'http://127.0.0.1:9', flavor: '9router' } };
+  assert.equal((await call(s, '/api/integrations/save', { method: 'POST', body: integration })).status, 200);
+  assert.equal((await call(s, '/api/integrations/delete', { method: 'POST', body: { id: 'r1' } })).status, 200);
+  const all = entries(s).filter((e) => e.action !== 'audit.key_created');
+  assert.deepEqual(
+    all.map((e) => e.action),
+    [
+      'config.change',
+      'POST /api/config',
+      'config.change',
+      'POST /api/gateway/settings',
+      'config.change',
+      'POST /api/integrations/save',
+      'config.change',
+      'POST /api/integrations/delete',
+    ],
+  );
+  const [cfg, , gw, , saved, , gone] = all;
+  assert.deepEqual(cfg.target, { type: 'config', id: 'monthlyBudgetUSD,userName,vaultPaths' });
+  assert.deepEqual(
+    cfg.changes.find((c) => c.path === 'userName'),
+    { path: 'userName', from: null, to: 'Ana' },
+  );
+  assert.ok(gw.changes.some((c) => c.path === 'gateway.guardrails.secrets' && c.to === 'block'));
+  assert.ok(saved.changes.some((c) => c.path === 'integrations.r1.baseUrl' && c.to === 'http://127.0.0.1:9'));
+  assert.ok(gone.changes.some((c) => c.path === 'integrations.r1.baseUrl' && c.from === 'http://127.0.0.1:9'));
+  assert.deepEqual(all[5].target, { type: 'integrations', id: 'r1' });
+  for (const e of all) assert.deepEqual(e.actor, LOCAL);
+  assert.ok(s.alive());
+});
+
+test('request bodies over 64 KiB lose only op and target in their entry', async (t) => {
+  const s = await startServer(t);
+  const pad = 'a'.repeat(70 * 1024);
+  const r = await call(s, '/api/integrations/delete', { method: 'POST', body: { id: 'nope', pad } });
+  assert.equal(r.status, 200);
+  await call(s, '/api/integrations/delete', { method: 'POST', body: { id: 'nope' } });
+  const reqs = entries(s).filter((e) => e.action === 'POST /api/integrations/delete');
+  assert.equal(reqs.length, 2);
+  assert.equal(reqs[0].target, undefined);
+  assert.deepEqual(reqs[1].target, { type: 'integrations', id: 'nope' });
+  assert.equal(reqs[0].status, reqs[1].status);
+  assert.ok(s.alive());
+});
