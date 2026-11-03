@@ -80,6 +80,8 @@ const { requestEntry, controlEntry } = require('./lib/governance/events');
 const { createGovernanceAudit, keySource } = require('./lib/governance/audit');
 const { diff: govDiff } = require('./lib/governance/diff');
 const { createGovernanceApi } = require('./lib/governance/api');
+const mcpScan = require('./lib/governance/mcp-scan');
+const { createSeenStore } = require('./lib/governance/seen');
 
 const PORT = Number(process.env.ZAAFPULSE_PORT || process.env.PORT) || 4777;
 const HOST = process.env.ZAAFPULSE_HOST || process.env.HOST || '127.0.0.1';
@@ -289,10 +291,14 @@ function configChanged(before, after) {
     /* the save stands; an audit bug never fails it (A6) */
   }
 }
-// /api/governance/*: the entries, an export, verify, status, and the retention in config.json "governance.audit".
+// /api/governance/*: the entries, an export, verify, status, and the retention in config.json "governance.audit"; the
+// AI inventory (AI Governance 3) from inventorySources() below, its reviews in "governance.inventory" and the days each
+// item was first and last seen in .data/governance/seen.json (demo: the throwaway folder).
 const governanceApi = createGovernanceApi({
   audit: governance,
   settings: { get: () => rawConfig().governance, save: (g) => saveConfigSection('governance', g) },
+  sources: () => inventorySources(),
+  seen: createSeenStore({ file: path.join(DEMO ? demoDir : path.join(DIR, '.data'), 'governance', 'seen.json') }),
 });
 let rawCache = {
   mtime: -1,
@@ -1069,6 +1075,82 @@ async function topology() {
       .then((v) => ((topoCache.value = v), (topoCache.at = Date.now()), v))
       .finally(() => (topoCache.pending = null));
   return topoCache.pending;
+}
+// The AI inventory's sources (lib/governance/inventory.js buildInventory): each one capped at 2 s, and null when it
+// failed (the page names it). Only what an item shows is read: gateway agents by id, name, state and remote address,
+// never a system prompt; keys by id, name and dates, never a secret. The MCP scan reads the AI clients' own config
+// files (lib/governance/mcp-scan.js); demo mode never reads them.
+const INV_FAILED = Symbol('failed');
+const invSource = async (fn) => {
+  const v = await topoSource(fn, INV_FAILED);
+  return v === INV_FAILED ? null : v;
+};
+// An AI client's config file: its text, or null when it is not there.
+function readClientFile(file) {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch (e) {
+    if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return null;
+    throw e;
+  }
+}
+async function inventorySources() {
+  const pick = (list, fields) =>
+    (Array.isArray(list) ? list : []).map((x) => Object.fromEntries(fields.map((k) => [k, x && x[k]])));
+  const [live, summary, traced, gw, runtimes, integrations, mcp] = await Promise.all([
+    invSource(async () => {
+      const s = DEMO ? demo.live() : await processes.snapshot();
+      return {
+        apps: pick(s.apps, ['id', 'name']),
+        installed: s.installed,
+        names: Object.fromEntries(processes.APPS.map((a) => [a.id, a.name])),
+      };
+    }),
+    invSource(() => {
+      const s = getSummary(30);
+      return {
+        tools: pick(s.tools, ['id', 'name', 'lastActive']),
+        toolUse: pick(s.toolUse, ['name']),
+        models: pick(s.models, ['model']),
+      };
+    }),
+    invSource(() => trace.sources()),
+    invSource(() => {
+      const g = (rawConfig() || {}).gateway || {};
+      return {
+        providers: pick(g.providers, ['id', 'preset', 'baseUrl', 'enabled']),
+        models: Object.keys(gateway.usage.summary().byModel || {}),
+        keys: pick(gateway.keys.list(), ['id', 'name', 'revokedAt', 'expiresAt', 'lastUsedAt']),
+        agents: pick(gateway.agents.list(), ['id', 'name', 'enabled', 'remoteUrl']),
+        skills: pick(gateway.skills.list(), ['name', 'claude', 'agents']),
+        workflows: pick(gateway.workflows.list(), ['id', 'name']),
+        knowledge: pick(gateway.knowledge.list(), ['id', 'name']),
+      };
+    }),
+    invSource(async () => (await runtimeApi.route({ method: 'GET', path: '/api/runtimes' })).body),
+    invSource(() =>
+      DEMO
+        ? demo.integrations().integrations.filter((i) => i.type !== 'acc')
+        : Object.entries((rawConfig() || {}).integrations || {}).map(([id, c]) => ({
+            id,
+            type: c && c.type,
+            flavor: c && c.flavor,
+            enabled: !(c && c.enabled === false),
+            url: c && (c.url || c.baseUrl),
+          })),
+    ),
+    invSource(() =>
+      DEMO
+        ? []
+        : mcpScan.scanClients({
+            home: os.homedir(),
+            env: process.env,
+            platform: process.platform,
+            read: readClientFile,
+          }),
+    ),
+  ]);
+  return { live, summary, trace: traced, gateway: gw, runtimes, integrations, mcp };
 }
 const insightMemo = new Map();
 function getInsights(range) {
