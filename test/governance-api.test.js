@@ -120,3 +120,32 @@ test('settings: the retention from 6 to 120 months is saved beside other governa
   assert.equal((await s.call('/api/governance/audit/status')).body.retentionMonths, 24);
   assert.equal((await post('{nope')).status, 400);
 });
+
+test('the daily pass: each step runs when one before it fails, and a failure is logged without its message', () => {
+  const done = [];
+  const logs = [];
+  const audit = {
+    importPending: () => {
+      done.push('importPending');
+      throw Object.assign(new Error('EACCES: permission denied, open /Users/x/.data/audit/pending'), {
+        code: 'EACCES',
+      });
+    },
+    prune: (n) => {
+      done.push(`prune ${n}`);
+      throw new TypeError('bad value in /tmp/x');
+    },
+    verify: () => done.push('verify'),
+  };
+  const api = createGovernanceApi({
+    audit,
+    settings: { get: () => ({ audit: { retentionMonths: 24 } }), save() {} },
+    log: (m) => logs.push(m),
+  });
+  api.dailyPass();
+  assert.deepEqual(done, ['importPending', 'prune 24', 'verify']);
+  assert.deepEqual(logs, [
+    'audit: the daily pass failed at importPending (EACCES)',
+    'audit: the daily pass failed at prune (TypeError)',
+  ]);
+});

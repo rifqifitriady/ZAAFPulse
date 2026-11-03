@@ -396,3 +396,35 @@ test('the API: entries, export, verify, status, retention; a write failure is de
   assert.deepEqual(cfg.changes, [{ path: 'governance.audit.retentionMonths', from: null, to: 24 }]);
   assert.ok(s.alive());
 });
+
+test('the daily pass: a pending file with no real date goes unrecorded, and the chain is still checked', async (t) => {
+  const s = await startServer(t, {}, (data) => {
+    const pending = path.join(data, '.data', 'audit', 'pending');
+    fs.mkdirSync(pending, { recursive: true });
+    fs.writeFileSync(path.join(pending, '1-0000000a.json'), '{"action":"auth.password_set","ts":1e20}');
+  });
+  const st = (await call(s, '/api/governance/audit/status')).body;
+  assert.deepEqual(fs.readdirSync(path.join(s.data, '.data', 'audit', 'pending')), []);
+  assert.deepEqual(entries(s), []);
+  assert.ok(st.lastVerify, 'the verify ran');
+  assert.deepEqual([st.lastVerify.ok, st.lastVerify.checked], [true, 0]);
+  assert.ok(s.alive());
+});
+
+test('the daily pass: a month past the retention goes, and the pruning is recorded as the system', async (t) => {
+  const s = await startServer(t, {}, (data) => {
+    const dir = path.join(data, '.data', 'audit');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'governance-2020-01.jsonl'), '');
+  });
+  assert.ok(!fs.existsSync(path.join(s.data, '.data', 'audit', 'governance-2020-01.jsonl')));
+  assert.deepEqual(
+    entries(s).map((e) => [e.action, e.actor, e.months, e.retentionMonths, e.keptFrom]),
+    [
+      ['audit.key_created', { via: 'system' }, undefined, undefined, undefined],
+      ['audit.prune', { via: 'system' }, ['2020-01'], 12, 1],
+    ],
+  );
+  assert.deepEqual((await call(s, '/api/governance/audit/verify')).body, { ok: true, checked: 2, from: 1, to: 2 });
+  assert.ok(s.alive());
+});
