@@ -1,0 +1,166 @@
+// Governance audit log (AI Governance 2): the pure chain (lib/governance/chain.js) and the field-level changes
+// (lib/governance/diff.js). A changed field, a deleted or moved line and an unreadable line are each found at the right
+// seq; a chain that starts after deleted months, or restarts after a rekey, still verifies.
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const crypto = require('crypto');
+const { canonical, macOf, seal, verifyChain, GENESIS, REKEYED } = require('../lib/governance/chain');
+const { diff, MASK } = require('../lib/governance/diff');
+
+const KEY = Buffer.alloc(32, 7);
+// n sealed entries in a row, the first one after `prev`.
+function chainOf(n, { key = KEY, prev = GENESIS, from = 1 } = {}) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const e = seal(key, {
+      seq: from + i,
+      ts: new Date(Date.UTC(2026, 10, 1, 0, i)).toISOString(),
+      action: 'config.change',
+      actor: { via: 'dashboard', mode: 'local', device: null, ip: '127.0.0.1' },
+      prev: out.length ? out[out.length - 1].mac : prev,
+    });
+    out.push(e);
+  }
+  return out;
+}
+
+test('chain: canonical JSON sorts keys at every level and leaves undefined out', () => {
+  assert.equal(canonical({ b: 1, a: { d: [2, { y: 1, x: 0 }], c: undefined } }), '{"a":{"d":[2,{"x":0,"y":1}]},"b":1}');
+  assert.equal(canonical('x'), '"x"');
+  assert.equal(canonical(null), 'null');
+});
+
+test('chain: the mac is HMAC-SHA256 of prev, a newline and the canonical entry without its mac', () => {
+  const e = { seq: 1, ts: '2026-11-01T00:00:00.000Z', action: 'audit.key_created', prev: GENESIS };
+  const want = crypto
+    .createHmac('sha256', KEY)
+    .update(`genesis\n${canonical(e)}`)
+    .digest('hex');
+  assert.equal(macOf(KEY, e), want);
+  assert.equal(seal(KEY, e).mac, want);
+  assert.equal(macOf(KEY, { ...e, mac: 'ignored' }), want);
+  assert.notEqual(macOf(Buffer.alloc(32, 8), e), want);
+});
+
+test('verify: an untouched chain is ok, also when it starts after deleted months', () => {
+  assert.deepEqual(verifyChain(chainOf(5), KEY), { ok: true, checked: 5, from: 1, to: 5 });
+  // Retention deleted seq 1-40: the first kept entry points at a mac that is no longer there.
+  const kept = chainOf(3, { prev: 'f'.repeat(64), from: 41 });
+  assert.deepEqual(verifyChain(kept, KEY), { ok: true, checked: 3, from: 41, to: 43 });
+  assert.deepEqual(verifyChain([], KEY), { ok: true, checked: 0, from: null, to: null });
+});
+
+test('verify: a changed field, a deleted line, a moved line and an unreadable line are found at their seq', () => {
+  const c = chainOf(5);
+  const changed = c.map((e) => (e.seq === 3 ? { ...e, actor: { ...e.actor, ip: '10.0.0.9' } } : e));
+  assert.deepEqual(verifyChain(changed, KEY), {
+    ok: false,
+    checked: 2,
+    from: 1,
+    to: 2,
+    brokenAt: 3,
+    reason: 'entry changed',
+  });
+  const deleted = c.filter((e) => e.seq !== 4);
+  assert.equal(verifyChain(deleted, KEY).brokenAt, 4);
+  assert.equal(verifyChain(deleted, KEY).reason, 'sequence broken');
+  const moved = [c[0], c[2], c[1], c[3], c[4]];
+  assert.equal(verifyChain(moved, KEY).brokenAt, 2);
+  // A line renumbered to hide a deletion still breaks the chain: its prev names the deleted entry.
+  const renumbered = [c[0], c[1], { ...c[3], seq: 3 }];
+  assert.equal(verifyChain(renumbered, KEY).reason, 'chain broken');
+  const unreadable = [c[0], c[1], null, c[3]];
+  assert.deepEqual(
+    [verifyChain(unreadable, KEY).brokenAt, verifyChain(unreadable, KEY).reason],
+    [3, 'unreadable line'],
+  );
+  assert.equal(verifyChain([null, c[1]], KEY).brokenAt, 1);
+  assert.equal(verifyChain(c, Buffer.alloc(32, 1)).reason, 'entry changed');
+});
+
+test('verify: after a rekey only the new part is checked; the part before it is counted as unverified', () => {
+  const old = chainOf(3, { key: Buffer.alloc(32, 1) });
+  const fresh = chainOf(2, { prev: REKEYED, from: 4 });
+  assert.deepEqual(verifyChain([...old, ...fresh], KEY), {
+    ok: true,
+    checked: 2,
+    from: 4,
+    to: 5,
+    unverified: 3,
+    rekeyedAt: 4,
+  });
+  const tampered = [...old, fresh[0], { ...fresh[1], action: 'auth.login' }];
+  assert.equal(verifyChain(tampered, KEY).brokenAt, 5);
+});
+
+test('diff: field paths, secrets masked by key name and by reference, text cut to 120 characters', () => {
+  const before = {
+    userName: 'Ana',
+    gateway: { guardrails: { secrets: 'redact' }, tokenSaver: true },
+    monitors: { channels: { webhook: { url: { keychain: 'acc.monitors-webhook-url' } } } },
+    vaultPaths: ['/a'],
+  };
+  const after = {
+    userName: 'x'.repeat(200),
+    gateway: { guardrails: { secrets: 'block' }, tokenSaver: true, apiToken: 'plain-text' },
+    monitors: { channels: { webhook: { url: { keychain: 'acc.other' } } } },
+    vaultPaths: ['/a', '/b'],
+  };
+  const d = diff(before, after);
+  assert.deepEqual(d.changes, [
+    { path: 'gateway.apiToken', from: null, to: MASK },
+    { path: 'gateway.guardrails.secrets', from: 'redact', to: 'block' },
+    { path: 'monitors.channels.webhook.url', from: MASK, to: MASK },
+    { path: 'userName', from: 'Ana', to: `${'x'.repeat(119)}…` },
+    { path: 'vaultPaths', from: '["/a"]', to: '["/a","/b"]' },
+  ]);
+  assert.deepEqual(d.sections, ['gateway', 'monitors', 'userName', 'vaultPaths']);
+  assert.equal(d.truncated, undefined);
+  assert.deepEqual(diff({ a: 1 }, { a: 1 }), { changes: [], sections: [] });
+  // A switch or a number under a secret-looking name cannot hold a secret, and stays readable.
+  assert.deepEqual(diff({ gateway: { tokenSaver: true } }, { gateway: { tokenSaver: false } }).changes, [
+    { path: 'gateway.tokenSaver', from: true, to: false },
+  ]);
+});
+
+test('diff: arrays of objects are compared by id or name; a new section counts', () => {
+  const p = (id, extra = {}) => ({ id, preset: 'custom', baseUrl: `https://${id}.example/v1`, ...extra });
+  const before = { gateway: { providers: [p('a'), p('b')], routes: [{ name: 'r1', targets: ['a/m'] }] } };
+  const after = {
+    gateway: {
+      providers: [p('b', { baseUrl: 'https://b2.example/v1' }), p('c', { apiKey: { keychain: 'acc.gw-c' } })],
+      routes: [{ name: 'r1', targets: ['a/m', 'b/m'] }],
+    },
+    governance: { audit: { retentionMonths: 24 } },
+  };
+  assert.deepEqual(diff(before, after).changes, [
+    { path: 'gateway.providers[a].baseUrl', from: 'https://a.example/v1', to: null },
+    { path: 'gateway.providers[a].id', from: 'a', to: null },
+    { path: 'gateway.providers[a].preset', from: 'custom', to: null },
+    { path: 'gateway.providers[b].baseUrl', from: 'https://b.example/v1', to: 'https://b2.example/v1' },
+    { path: 'gateway.providers[c].apiKey', from: null, to: MASK },
+    { path: 'gateway.providers[c].baseUrl', from: null, to: 'https://c.example/v1' },
+    { path: 'gateway.providers[c].id', from: null, to: 'c' },
+    { path: 'gateway.providers[c].preset', from: null, to: 'custom' },
+    { path: 'gateway.routes[r1].targets', from: '["a/m"]', to: '["a/m","b/m"]' },
+    { path: 'governance.audit.retentionMonths', from: null, to: 24 },
+  ]);
+  // A list whose objects have no id is compared whole, and masked when it holds a secret.
+  assert.deepEqual(diff({ x: [{ a: 1 }] }, { x: [{ a: 2 }] }).changes, [
+    { path: 'x', from: '[{"a":1}]', to: '[{"a":2}]' },
+  ]);
+  assert.deepEqual(diff({ x: [{ a: 1 }] }, { x: [{ token: 'abc' }] }).changes, [
+    { path: 'x', from: '[{"a":1}]', to: MASK },
+  ]);
+  assert.deepEqual(diff({}, { cost: {} }).changes, [{ path: 'cost', from: null, to: '{}' }]);
+});
+
+test('diff: at most 50 changes, then truncated says how many more', () => {
+  const after = {};
+  for (let i = 0; i < 73; i++) after[`k${String(i).padStart(2, '0')}`] = i;
+  const d = diff({}, after);
+  assert.equal(d.changes.length, 50);
+  assert.equal(d.truncated, 23);
+  assert.equal(d.changes[0].path, 'k00');
+  assert.equal(d.sections.length, 73);
+});
