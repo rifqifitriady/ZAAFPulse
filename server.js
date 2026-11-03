@@ -783,6 +783,8 @@ const monitors = createMonitors({
       .map((e) => ({ ts: e.ts, checks: [...new Set((e.guard.hits || []).map((h) => h.check))] })),
   // audit_degraded and audit_chain_broken: the governance audit log's state and its last verify (no entry content).
   auditStatus: () => governance.status(),
+  // inventory_unreviewed: the AI inventory's last counts (new unreviewed items and their kinds; no names).
+  inventoryStatus: () => governanceApi.inventoryStatus(),
 });
 // The routes: rules, channels, alerts and agent control. Demo serves a seeded store of its own (mixed states, five
 // alerts) so the page always has something to show; the engine keeps evaluating into its own file.
@@ -1927,6 +1929,14 @@ server.listen(PORT, HOST, () => {
   const auditDaily = () => govContext.runAs({ via: 'system' }, () => governanceApi.dailyPass());
   auditDaily();
   setInterval(auditDaily, 24 * 3600 * 1000).unref();
+  // The AI inventory, now and every 10 minutes, so inventory_unreviewed sees new systems without the page open (a
+  // read of the page builds it too). The pass is the system's; a failure is logged and the next one tries again.
+  const inventoryPass = () =>
+    govContext.runAs({ via: 'system' }, () =>
+      governanceApi.inventory().catch(() => console.error('governance: the inventory pass failed')),
+    );
+  inventoryPass();
+  setInterval(inventoryPass, 10 * 60 * 1000).unref();
   // Local model servers: remember what is loaded. Not in demo mode, server mode or Docker (control is off there), and
   // not with ZAAFPULSE_RUNTIME_WATCH=off (the tests' spawned servers, which must not read this machine's Ollama).
   if (!DEMO && !runtimeControl.offReason() && process.env.ZAAFPULSE_RUNTIME_WATCH !== 'off')
