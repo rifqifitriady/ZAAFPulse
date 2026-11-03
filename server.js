@@ -81,7 +81,7 @@ const { createGovernanceAudit, keySource } = require('./lib/governance/audit');
 const { diff: govDiff } = require('./lib/governance/diff');
 const { createGovernanceApi } = require('./lib/governance/api');
 const mcpScan = require('./lib/governance/mcp-scan');
-const { liveOrThrow, runtimesOrThrow } = require('./lib/governance/sources');
+const { liveOrThrow, runtimesOrThrow, indexReadyOrThrow } = require('./lib/governance/sources');
 const { createSeenStore } = require('./lib/governance/seen');
 
 const PORT = Number(process.env.ZAAFPULSE_PORT || process.env.PORT) || 4777;
@@ -1120,6 +1120,7 @@ async function inventorySources() {
       };
     }),
     invSource(() => {
+      indexReadyOrThrow(indexer.state);
       const s = getSummary(30);
       return {
         tools: pick(s.tools, ['id', 'name', 'lastActive']),
@@ -1212,7 +1213,8 @@ function send(res, status, body, type = 'application/json', headers = {}) {
     } catch {
       /* an audit bug never fails a response (A6) */
     }
-    // A change the dashboard made (an agent, a key, a setting): the next inventory read sees it, not a kept copy.
+    // A change the dashboard made (an agent, a key, a setting): the next inventory read sees it, not a kept copy. Not
+    // covered: gateway calls with an API key, the auth routes and replies that bypass send(); the 5 s TTL bounds those.
     try {
       if (p.req.method !== 'GET' && status < 400) governanceApi.invalidateInventory();
     } catch {
@@ -1941,7 +1943,8 @@ server.listen(PORT, HOST, () => {
     govContext.runAs({ via: 'system' }, () =>
       governanceApi.inventory().catch(() => console.error('governance: the inventory pass failed')),
     );
-  inventoryPass();
+  // The first one waits for the log index, so the baseline holds the tools and models seen in the logs.
+  indexer.refresh().then(inventoryPass, inventoryPass);
   setInterval(inventoryPass, 10 * 60 * 1000).unref();
   // Local model servers: remember what is loaded. Not in demo mode, server mode or Docker (control is off there), and
   // not with ZAAFPULSE_RUNTIME_WATCH=off (the tests' spawned servers, which must not read this machine's Ollama).

@@ -82,6 +82,9 @@ test('engine: the counts of the last inventory build are read on each aggregate 
     [['triggered', 1, 'mcp']],
   );
   assert.ok(!JSON.stringify(sent).includes('github-token-server'), 'no name in an alert');
+  clock.t += 6e3;
+  await monitors.tickAggregate();
+  assert.equal(sent.filter((a) => a.rule === 'inventory_unreviewed').length, 1, 'still triggered: no repeat alert');
   servers = [];
   clock.t += 6e3;
   await api.inventory();
