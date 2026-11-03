@@ -219,3 +219,19 @@ test('GET inventory: a source that failed is listed, its reviewed items are stal
   assert.notEqual(claude.state, 'gone');
   assert.equal(s.st.seen.baselineDone, false, 'the baseline stays open');
 });
+
+test('invalidateInventory: the next build reads the sources again, within the 5 s they are kept', async () => {
+  let n = 0;
+  const api = createGovernanceApi({
+    audit: {},
+    settings: { get: () => ({}), save: () => {} },
+    sources: async () => ({ mcp: [], marker: ++n }),
+    now: () => 1000,
+  });
+  await api.inventory();
+  await api.inventory();
+  assert.equal(n, 1, 'kept');
+  api.invalidateInventory();
+  await api.inventory();
+  assert.equal(n, 2, 'read again');
+});
