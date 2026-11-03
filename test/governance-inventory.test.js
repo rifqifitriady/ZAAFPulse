@@ -257,7 +257,11 @@ test('counts: new unreviewed items (first seen in the last 7 days, not ours) by 
   const inv = buildInventory(s, reviews, done(seen), NOW);
   assert.equal(inv.counts.total, 26);
   assert.equal(inv.counts.reviewed, 2);
-  assert.equal(inv.counts.newUnreviewed, 22, 'all but codex (old), the two reviewed and ours');
+  assert.equal(
+    inv.counts.newUnreviewed,
+    21,
+    'all but codex (old), the two reviewed, ours and the catalogue skill not installed',
+  );
   assert.deepEqual(inv.counts.newKinds, [
     'agent',
     'app',
@@ -354,7 +358,11 @@ test('baseline: the first build with no seen dates marks every item; an item fir
 test('baseline: a seen file that is there with no entries is not a baseline; a corrupt one is loud', () => {
   const inv = buildInventory(sources(), {}, done({}), NOW);
   assert.ok(inv.items.every((i) => i.baseline === undefined && i.firstSeen === '2026-11-03'));
-  assert.equal(inv.counts.newUnreviewed, 24, 'all but the zaafpulse MCP server (ours)');
+  assert.equal(
+    inv.counts.newUnreviewed,
+    23,
+    'all but the zaafpulse MCP server (ours) and the catalogue skill not installed',
+  );
   const one = buildInventory({ live: { apps: [{ id: 'claude', name: 'Claude Code' }] } }, {}, done({}), NOW);
   assert.equal(one.counts.newUnreviewed, 1);
   assert.equal(one.items[0].baseline, undefined);
@@ -468,4 +476,53 @@ test('baseline: the time of the first write is kept, and 24 h later the baseline
 test('ids: U+2028 and U+2029 are stripped like other line breaks', () => {
   const inv = buildInventory({ gateway: { keys: [{ id: 'a b c', name: 'k' }] } }, {}, done({}), NOW);
   assert.ok(inv.items.some((i) => i.id === 'key:abc'));
+});
+
+test('an unreadable client file: a reviewed MCP server not found is stale, not gone, and the file is counted', () => {
+  const reviews = { 'mcp:github': { owner: 'Ana', decision: 'approved' } };
+  const seen = done({ 'mcp:github': { first: '2026-10-01', last: '2026-11-02', state: 'configured' } });
+  const cursor = (state, servers) => [{ client: 'cursor', name: 'Cursor', file: '~/.cursor/mcp.json', state, servers }];
+  const ok = buildInventory({ mcp: cursor('ok', [{ name: 'github', transport: 'stdio' }]) }, reviews, seen, NOW);
+  assert.deepEqual([byId(ok)['mcp:github'].status, ok.counts.unreadableClients], ['reviewed', 0]);
+  const bad = buildInventory({ mcp: cursor('unreadable', []) }, reviews, seen, NOW);
+  const it = byId(bad)['mcp:github'];
+  assert.deepEqual([it.state, it.stale, it.status], ['configured', true, 'reviewed']);
+  assert.equal(bad.counts.gone, 0);
+  assert.equal(bad.counts.unreadableClients, 1);
+  // Other kinds are not held up by a client file.
+  const other = buildInventory(
+    { mcp: cursor('unreadable', []), gateway: {} },
+    { 'key:gone': { owner: 'Ana' } },
+    seen,
+    NOW,
+  );
+  assert.equal(byId(other)['key:gone'].status, 'gone');
+});
+
+test('ids: a name cut at 120 characters loses a trailing space, so its review round-trips', () => {
+  const { cleanReview } = require('../lib/governance/inventory');
+  const name = `${'a'.repeat(119)} ${'b'.repeat(10)}`; // the space is the 120th character
+  const src = { gateway: { agents: [{ id: name, name: 'long' }] } };
+  const inv = buildInventory(src, {}, done({}), NOW);
+  const id = inv.items.find((i) => i.kind === 'agent').id;
+  assert.equal(id, `agent:${'a'.repeat(119)}`);
+  const r = cleanReview({ id, owner: 'Ana' });
+  assert.deepEqual(r.errors, []);
+  const again = buildInventory(src, { [r.id]: r.value }, done({}), NOW);
+  assert.equal(byId(again)[id].status, 'reviewed');
+});
+
+test('a ZAAFPulse catalogue skill that is not installed is never new; an installed one can be', () => {
+  const src = {
+    gateway: {
+      skills: [
+        { name: 'cost', claude: 'missing', agents: 'missing' },
+        { name: 'zaafpulse', claude: 'installed', agents: 'missing' },
+      ],
+    },
+  };
+  const inv = buildInventory(src, {}, done({}), NOW);
+  assert.deepEqual(inv.counts.newKinds, ['skill']);
+  assert.equal(inv.counts.newUnreviewed, 1, 'only the installed skill');
+  assert.equal(byId(inv)['skill:cost'].status, 'unreviewed', 'still listed as unreviewed');
 });
