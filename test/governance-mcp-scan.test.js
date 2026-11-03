@@ -346,3 +346,25 @@ test('packageOf: a version must look like one, so user@1password is not a packag
   assert.equal(packageOf(['pkg@1.2.3-beta.1']), 'pkg@1.2.3-beta.1');
   assert.equal(packageOf(['pkg@next']), 'pkg@next');
 });
+
+test('JSONC: the fallback reads at most 2 MB; a larger file that is not plain JSON is unreadable', () => {
+  const { parseConfig } = require('../lib/governance/mcp-scan');
+  const pad = ' '.repeat(2 * 1024 * 1024);
+  const big = `{ // a comment\n "mcpServers": { "a": { "command": "npx" } } }${pad}`;
+  assert.throws(() => parseJsonc(big), /too large/);
+  assert.throws(() => parseConfig(big), /too large/);
+  // Plain JSON of any size is still read, and a small JSONC file too.
+  assert.deepEqual(Object.keys(parseConfig(`{ "mcpServers": {} }${pad}`)), ['mcpServers']);
+  assert.deepEqual(Object.keys(parseConfig('{ // c\n "mcpServers": {}, }')), ['mcpServers']);
+  const out = scanClients({ home: HOME, env: {}, platform: 'linux', read: reader({ [FILES.cursor.file]: big }) });
+  assert.deepEqual(
+    out.map((c) => [c.client, c.state]),
+    [['cursor', 'unreadable']],
+  );
+});
+
+test('packageOf: a prerelease is lower case letters, digits and dots, so user@1-Password is not a package', () => {
+  assert.equal(packageOf(['user@1-Password']), null);
+  assert.equal(packageOf(['pkg@1-x_y']), null);
+  assert.equal(packageOf(['pkg@2.0.0-rc.1']), 'pkg@2.0.0-rc.1');
+});
