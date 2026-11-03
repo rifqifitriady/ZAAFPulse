@@ -1169,7 +1169,9 @@ const handler = async (req, res) => {
       if (!(req.headers['content-type'] || '').startsWith('application/json'))
         return send(res, 415, { error: 'json only' });
       try {
-        return send(res, 200, await gateway.admin(gwAdmin[1], 'POST', JSON.parse(await readBody(req))));
+        // A refused guardrails setting (badRequest) is a 400; every other admin answer keeps its 200, errors included.
+        const out = await gateway.admin(gwAdmin[1], 'POST', JSON.parse(await readBody(req)));
+        return send(res, out && out.badRequest === true ? 400 : 200, out);
       } catch (err) {
         return send(res, 200, { errors: [err.message] });
       }
