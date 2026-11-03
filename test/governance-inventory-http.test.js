@@ -208,6 +208,41 @@ test('inventory: for a dashboard session only; no sign-in or an API key is a 401
   assert.ok(s.alive());
 });
 
+test('controls: seventeen controls from the live settings, OpenTelemetry and trace retention included', async (t) => {
+  const s = await startServer(t, {}, prepare);
+  const r = await call(s, '/api/governance/controls');
+  assert.equal(r.status, 200);
+  assert.match(r.body.notice, /^Evidence for your assessment, not a certification\./);
+  assert.equal(r.body.controls.length, 17);
+  const by = Object.fromEntries(r.body.controls.map((c) => [c.id, c]));
+  for (const c of r.body.controls) assert.ok(['in place', 'partial', 'off', 'unknown'].includes(c.status), c.id);
+  assert.deepEqual(by.guardrails.evidence, [
+    'secrets: redact',
+    'personal data: off',
+    'prompt injection: log',
+    'scope: external',
+  ]);
+  assert.equal(by.guardrails.status, 'partial');
+  assert.deepEqual([by.sign_in.status, by.sign_in.evidence[0]], ['off', 'sign-in: no sign-in']);
+  assert.deepEqual([by.otel_export.status, by.otel_export.evidence], ['off', ['not set up (see docs/otel.md)']]);
+  assert.deepEqual(
+    [by.trace_retention.status, by.trace_retention.evidence[0]],
+    ['partial', 'kept 14 days, up to 500 MB'],
+  );
+  assert.deepEqual(
+    [by.secret_store.status, by.secret_store.evidence],
+    ['partial', ['provider keys and tokens in the encrypted secret file']],
+  );
+  assert.deepEqual(
+    [by.agent_control.status, by.agent_control.evidence],
+    ['off', ['agent control is off without a dashboard sign-in']],
+  );
+  assert.equal(by.provider_approval.status, 'partial', 'the provider in config.json has no recorded approval');
+  assert.equal(by.inventory_coverage.status, 'off');
+  assert.ok(!r.text.includes('X_KEY') && !r.text.includes(s.data), 'no secret reference, no path');
+  assert.ok(s.alive());
+});
+
 test('inventory: an oversize client file is unreadable; an agent prompt and a key never leave', async (t) => {
   const s = await startServer(t, {}, (data) => {
     prepare(data);
