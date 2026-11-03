@@ -81,6 +81,7 @@ const { createGovernanceAudit, keySource } = require('./lib/governance/audit');
 const { diff: govDiff } = require('./lib/governance/diff');
 const { createGovernanceApi } = require('./lib/governance/api');
 const mcpScan = require('./lib/governance/mcp-scan');
+const { liveOrThrow, runtimesOrThrow } = require('./lib/governance/sources');
 const { createSeenStore } = require('./lib/governance/seen');
 
 const PORT = Number(process.env.ZAAFPULSE_PORT || process.env.PORT) || 4777;
@@ -1109,7 +1110,7 @@ async function inventorySources() {
   const [live, summary, traced, gw, runtimes, integrations, mcp] = await Promise.all([
     invSource(async () => {
       const s = DEMO ? demo.live() : await processes.snapshot();
-      if (s && s.error) throw new Error('the process list could not be read');
+      liveOrThrow(s);
       return {
         apps: pick(s.apps, ['id', 'name']),
         installed: s.installed,
@@ -1138,9 +1139,7 @@ async function inventorySources() {
       };
     }),
     invSource(async () => {
-      const r = await runtimeApi.route({ method: 'GET', path: '/api/runtimes' });
-      if (!r || r.status !== 200 || !Array.isArray(r.body)) throw new Error('the runtimes could not be read');
-      return r.body;
+      return runtimesOrThrow(await runtimeApi.route({ method: 'GET', path: '/api/runtimes' }));
     }),
     invSource(() =>
       DEMO
