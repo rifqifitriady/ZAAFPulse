@@ -38,6 +38,7 @@ test('the rule table is data-driven and complete', () => {
       'guardrail_block',
       'audit_degraded',
       'audit_chain_broken',
+      'inventory_unreviewed',
     ],
   );
   for (const r of RULES) {
@@ -79,6 +80,7 @@ test('defaultOn follows the budget and the fixed defaults', () => {
     guardrail_block: true,
     audit_degraded: true,
     audit_chain_broken: true,
+    inventory_unreviewed: true,
   });
   assert.strictEqual(on('cost_burn', { monthlyBudgetUSD: 500 }), false);
 });

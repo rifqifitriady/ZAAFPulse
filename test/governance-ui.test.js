@@ -13,6 +13,7 @@ global.esc = (v) =>
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
   );
 global.subHero = (eyebrow, title, sub) => `<div class="hero">${eyebrow}|${title}|${sub}</div>`;
+global.subTabs = (route) => `<nav class="subtabs">${route}</nav>`;
 const U = require('../public/governanceview');
 
 const PUB = path.join(__dirname, '..', 'public');
@@ -135,7 +136,7 @@ test('status: the degraded line, the retention, verify and the export links', ()
   assert.match(form, /<option value="30" selected>Last 30 days<\/option>/);
   assert.match(form, /<option value="rule" selected>Monitors rule<\/option>/);
   assert.match(form, /value="&quot;&gt;&lt;x"/);
-  assert.match(U.govView(), /GOVERNANCE · AUDIT LOG\|Audit log\|/);
+  assert.match(U.govView('audit'), /GOVERNANCE · AUDIT LOG\|Audit log\|/);
 });
 
 test('status: the verify line is the server’s last result, so a later daily verify is never hidden', () => {
@@ -161,7 +162,7 @@ test('status: a rekey in the last verify is a warning line; the hero line says w
   const odd = U.govStatusHtml({ ...st, lastVerify: { ...v, rekeyedAt: '<x>' } }, f);
   assert.ok(!odd.includes('<x>'), 'escaped');
   assert.match(
-    U.govView(),
+    U.govView('audit'),
     /\|Changes made through the dashboard and by API keys: who, when, what and the outcome\. Read requests are not recorded; see docs\/governance\.md for the full list\.<\/div>/,
   );
 });
@@ -169,13 +170,16 @@ test('status: a rekey in the last verify is a warning line; the hero line says w
 test('wiring: the Governance menu, the script before app.js, the route and its mount', () => {
   const html = read('index.html');
   assert.match(html, /<div class="nav-label">GOVERNANCE<\/div>\s*<a href="#governance" data-route="governance">/);
-  assert.match(html, /<a class="nav-sub" href="#governance" data-route="governance\/">Audit log<\/a>/);
+  assert.match(html, /<a class="nav-sub" href="#governance\/audit" data-route="governance\/audit">Audit log<\/a>/);
   assert.ok(html.indexOf('governanceview.js') > html.indexOf('costreports.js'));
   assert.ok(html.indexOf('governanceview.js') < html.indexOf('src="app.js"'));
   const app = read('app.js');
   assert.match(app, /governance: 'GOVERNANCE',/);
   assert.match(app, /governance: govView,/);
-  assert.match(app, /if \(state\.route === 'governance'\) \{\s*el\.innerHTML = govView\(\);\s*return govMount\(\);/);
+  assert.match(
+    app,
+    /if \(state\.route === 'governance'\) \{\s*el\.innerHTML = govView\(state\.sub\);\s*return govMount\(state\.sub\);/,
+  );
   assert.match(app, /state\.route !== 'governance' &&/);
   assert.ok(read('styles.css').includes('.gov-banner'));
 });
