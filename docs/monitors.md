@@ -6,7 +6,7 @@ The bell in the top bar shows open alerts. Its drawer lists recent alerts, and *
 
 ## Rules
 
-Eight rules ship with ZAAFPulse. Each can be switched on or off and has its own limits. A rule that is on its default setting follows the table. Your own choices are kept in `.data/monitors.json`.
+Ten rules ship with ZAAFPulse. Each can be switched on or off and has its own limits. A rule that is on its default setting follows the table. Your own choices are kept in `.data/monitors.json`.
 
 `daily_cost` and `month_projection` have been replaced by [budgets](cost.md#budgets). They are no longer evaluated,
 listed or changed; their old states and alerts remain as history.
@@ -21,6 +21,8 @@ listed or changed; their old states and alerts remain as history.
 | `unsafe_content` | A secret leak, or a prompt injection from outside, in the window | `windowMin`: 60 | yes | no |
 | `cost_anomaly` | Today's or yesterday's spend is well above what the same weekday usually costs (see [Forecast and anomalies](cost.md#forecast-and-anomalies)) | `ratio`: 2 (above 1, up to 100), `minUSD`: 1 (above 0, up to 1,000,000) | yes | no |
 | `guardrail_block` | The gateway guardrails blocked one or more requests in the last 60 minutes (see [docs/guardrails.md](guardrails.md)) | none | yes | no |
+| `audit_degraded` | The governance audit log cannot write its entries (see [docs/governance.md](governance.md)) | none | yes | no |
+| `audit_chain_broken` | The last check of the governance audit log's chain failed | none | yes | no |
 
 Notes:
 
@@ -39,6 +41,7 @@ Notes:
 - `eval_pass_rate` looks at the worst evaluator that has at least `minSamples` results. Evaluators with fewer are ignored.
 - `unsafe_content` counts a secret leak, or a prompt injection that came from outside (a tool result or a file, not from you).
 - `guardrail_block` reads the gateway's usage entries after each refresh. Its value is the number of blocked requests in the last 60 minutes and the alert's title names the checks that blocked (`injection, secrets`): never a label or the text that was found.
+- `audit_degraded` and `audit_chain_broken` read the governance audit log's state after each refresh. The first one's value is the number of entries that could not be written so far; the second one's is the seq where the chain broke (0 when the key is missing) and its title the reason (`entry changed`, `chain broken`, `sequence broken`, `unreadable line` or `key missing`). The chain is checked at start, once a day and whenever you press Verify. Neither alert carries anything from an entry.
 - A rule whose input is missing reports `no_data`. It never triggers on missing data.
 - A live session that has not been seen for a minute (it ended or went idle) leaves the rule card and the counts; its alerts stay in the history.
 - The live check is skipped while no live rule and no auto-pause is on.
