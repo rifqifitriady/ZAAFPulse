@@ -237,6 +237,7 @@ const TITLES = {
   settings: 'SETTINGS',
   datasets: 'DATASETS',
   cost: 'COST CONTROL',
+  governance: 'GOVERNANCE',
 };
 
 async function api(path, opts) {
@@ -1090,6 +1091,7 @@ const VIEWS = {
   a2a: viewA2a,
   datasets: viewDatasets,
   cost: viewCost,
+  governance: govView, // public/governanceview.js
 };
 // Pages that moved when the sidebar was regrouped (AI Observability / Agentic Workspace).
 const ROUTE_MOVED = { agents: '#skills/usage' };
@@ -1122,7 +1124,9 @@ function render(animate = true) {
       ? 'AGENTIC WORKSPACE'
       : state.route === 'settings'
         ? 'PREFERENCES'
-        : 'AI OBSERVABILITY';
+        : state.route === 'governance'
+          ? 'GOVERNANCE'
+          : 'AI OBSERVABILITY';
   const full = state.sub ? `${state.route}/${state.sub}` : state.route;
   for (const a of $$('nav a'))
     a.classList.toggle(
@@ -1144,6 +1148,11 @@ function render(animate = true) {
   unmountBrain();
   unmountStages();
   if (state.route === 'settings') return viewSettings(el);
+  // Governance → Audit log loads its own data (public/governanceview.js): it never waits for the summary.
+  if (state.route === 'governance') {
+    el.innerHTML = govView();
+    return govMount();
+  }
   if (!state.data && !['live', 'brain', 'integrations', 'trace', 'datasets', 'cost'].includes(state.route)) {
     el.innerHTML =
       '<div class="grid kpis">' +
@@ -1335,6 +1344,7 @@ function applyTheme() {
       /* patched in place */
     } else if (
       !['settings', 'brain', 'squad', 'trace', 'datasets', 'cost'].includes(state.route) &&
+      state.route !== 'governance' && // the audit log keeps its filters and pages: it reloads on Apply
       !$('#view').contains(document.activeElement)
     )
       render(false); // squad, trace and cost pages poll on their own
