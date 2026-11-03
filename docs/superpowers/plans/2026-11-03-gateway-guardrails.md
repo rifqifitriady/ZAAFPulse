@@ -172,11 +172,13 @@ treated as the defaults, and the settings route refuses bad input with 400; an M
   nothing; never recorded.
 - **G11. MCP.** Tier: a tool whose name starts with `acc_` is `private`, every other `external`. Arguments:
   `checkBody(args, policy, { format: 'arguments' })`; blocked → JSON-RPC `-32602` with the message, a failed check →
-  `-32603` `guardrails failed`; the integration is not called. Result: the text parts joined with `\n`,
+  `-32603` `guardrails failed`; the integration is not called. Result: the text parts and embedded resource texts (`resource.text`) joined with `\n`,
   `checkText(text, policy, { part: 'result' })`; blocked → `{ content: [{ type: 'text', text: <message> }], isError:
   true }`, a failed check (redact/block mode) → the same with `guardrails failed`. Recorded (kind `mcp`, `provider` =
-  the integration id before the first `_`, `model` = the tool name, status 200, or 400/500 as above) only when a check
-  found something, blocked or failed.
+  the integration id before the first `_`, `model` = the tool name, status 200, or 400/500 as above; an integration
+  `{ error }` answer is 502 `integration error`, an `isError` result 200 `tool error`; a blocked result records the
+  argument hits and the injection hits together) only when a check found something, blocked or failed. (Amended after
+  the Task 5 review, c08a182.)
 - **G12. Monitors.** `guardrail_block`: title `Guardrail block`, describe `The gateway guardrails blocked one or more
   requests in the last 60 minutes.`, `params: {}`. Input `snap.guardBlocks` = `[{ ts, checks }]` (no array →
   `no_data`). Blocks with `now − 60 min ≤ ts ≤ now` count; none → `ok` (value 0, threshold 1); else `triggered`, value
