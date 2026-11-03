@@ -1996,7 +1996,9 @@ server.listen(PORT, HOST, () => {
   if (auth.mode === 'local') console.log('Sign-in: only this OS account; open the dashboard with `zaafpulse open`');
   console.log(`Data: ${DIR}`);
   const t = Date.now();
-  indexer.refresh().then(() => {
+  // The first scan of the logs. Kept: a second indexer.refresh() while it runs returns at once.
+  const firstScan = indexer.refresh();
+  firstScan.then(() => {
     console.log(`Indexed logs in ${((Date.now() - t) / 1000).toFixed(1)}s`);
     evalTick();
     monitorTick();
@@ -2040,8 +2042,8 @@ server.listen(PORT, HOST, () => {
     govContext.runAs({ via: 'system' }, () =>
       governanceApi.inventory().catch(() => console.error('governance: the inventory pass failed')),
     );
-  // The first one waits for the log index, so the baseline holds the tools and models seen in the logs.
-  indexer.refresh().then(inventoryPass, inventoryPass);
+  // The first one waits for the first scan of the log index, so the baseline holds the tools and models in the logs.
+  firstScan.then(inventoryPass, inventoryPass);
   setInterval(inventoryPass, 10 * 60 * 1000).unref();
   // Local model servers: remember what is loaded. Not in demo mode, server mode or Docker (control is off there), and
   // not with ZAAFPULSE_RUNTIME_WATCH=off (the tests' spawned servers, which must not read this machine's Ollama).
