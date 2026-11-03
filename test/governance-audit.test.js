@@ -225,8 +225,19 @@ test('prune: whole months that ended more than the retention ago go, and the pru
   );
   const last = audit.list({ limit: 1 }).entries[0];
   assert.deepEqual([last.action, last.months, last.retentionMonths], ['audit.prune', ['2025-09', '2025-10'], 12]);
+  assert.equal(last.keptFrom, 4); // the first entry of 2025-11, the oldest month kept
   assert.deepEqual(audit.verify(), { ok: true, checked: 3, from: 4, to: 6 });
   assert.deepEqual(audit.prune(12), []);
+  // The oldest kept month deleted by hand: the kept months no longer start where the pruning said.
+  fs.rmSync(path.join(dir, 'governance-2025-11.jsonl'));
+  assert.deepEqual(audit.verify(), {
+    ok: false,
+    checked: 0,
+    from: null,
+    to: null,
+    brokenAt: 4,
+    reason: 'sequence broken',
+  });
   // A retention out of range counts as 12; at most 120, at least 6.
   assert.deepEqual(
     [A.cleanRetention(5), A.cleanRetention(6), A.cleanRetention(120), A.cleanRetention('24')],
@@ -247,4 +258,220 @@ test('pending: the CLI leaves an event, the server records it with the cli actor
     ['auth.password_set', { via: 'cli' }, '2026-11-02T09:00:00.000Z'],
   );
   assert.equal(audit.importPending(), 0);
+});
+
+// A store that can be locked (every read answers null, every write fails, as a locked Keychain does) or answer null
+// to a number of reads of the audit key (a timeout).
+const flakyStore = () => {
+  const items = new Map();
+  const s = {
+    items,
+    down: false,
+    nullReads: 0,
+    get(k) {
+      if (s.down) return null;
+      if (k === A.SERVICE && s.nullReads > 0) {
+        s.nullReads--;
+        return null;
+      }
+      return items.get(k) || null;
+    },
+    set(k, v) {
+      if (s.down) throw new Error('locked');
+      items.set(k, v);
+    },
+  };
+  return s;
+};
+const brokenAtStart = (brokenAt) => ({
+  ok: false,
+  checked: 0,
+  from: null,
+  to: null,
+  brokenAt,
+  reason: 'sequence broken',
+});
+
+test('verify: lines deleted from the start, or a whole month deleted by hand, break the chain', (t) => {
+  const { dir, audit } = setup(t, { store: memStore() });
+  for (let i = 0; i < 4; i++) audit.record({ action: 'config.change', actor: dash, op: `n${i}` });
+  const file = path.join(dir, 'governance-2026-11.jsonl');
+  const lines = fs.readFileSync(file, 'utf8').trim().split('\n');
+  assert.equal(lines.length, 5);
+  fs.writeFileSync(file, lines.slice(3).join('\n') + '\n');
+  assert.deepEqual(audit.verify(), brokenAtStart(1));
+
+  const other = setup(t, { store: memStore() });
+  for (const m of [8, 9, 10]) {
+    other.clock.t = Date.UTC(2026, m, 15);
+    other.audit.record({ action: 'auth.login', actor: dash });
+  }
+  assert.deepEqual(other.audit.verify(), { ok: true, checked: 4, from: 1, to: 4 });
+  fs.rmSync(path.join(other.dir, 'governance-2026-09.jsonl')); // no audit.prune says it went
+  assert.deepEqual(other.audit.verify(), brokenAtStart(1));
+});
+
+test('record: a last line left half written is cut off before the next entry, which reads and verifies', (t) => {
+  const { dir, clock, audit, make } = setup(t, { store: memStore() });
+  audit.record({ action: 'auth.login', actor: dash });
+  audit.record({ action: 'auth.logout', actor: dash });
+  const file = path.join(dir, 'governance-2026-11.jsonl');
+  fs.appendFileSync(file, '{"seq":4,"ts":"2026-11-03T12:0'); // the server stopped mid-write
+  const again = make();
+  const e = again.record({ action: 'config.change', actor: dash });
+  assert.equal(e.seq, 4);
+  assert.deepEqual(
+    linesIn(file).map((x) => x.seq),
+    [1, 2, 3, 4],
+  );
+  assert.deepEqual([again.list({}).entries[0], again.list({}).skipped], [e, 0]);
+  assert.deepEqual(again.verify(), { ok: true, checked: 4, from: 1, to: 4 });
+  // The same at the end of a month: the next entry goes to the next month's file.
+  fs.appendFileSync(file, '{"seq":5,"ts":"2026-11-30T23:5');
+  clock.t = Date.UTC(2026, 11, 1, 0, 5);
+  const later = make();
+  assert.equal(later.record({ action: 'auth.login', actor: dash }).seq, 5);
+  assert.deepEqual(later.verify(), { ok: true, checked: 5, from: 1, to: 5 });
+  // A whole entry that only lacks its "\n" is the one the chain goes on from: it stays.
+  const dec = path.join(dir, 'governance-2026-12.jsonl');
+  fs.writeFileSync(dec, fs.readFileSync(dec, 'utf8').replace(/\n$/, ''));
+  const last = make();
+  assert.equal(last.record({ action: 'auth.logout', actor: dash }).seq, 6);
+  assert.deepEqual(last.verify(), { ok: true, checked: 6, from: 1, to: 6 });
+});
+
+test('record: a write that fails half way is cut back, so the next entry does not run into it', (t) => {
+  const { dir, audit } = setup(t, { store: memStore() });
+  audit.record({ action: 'auth.login', actor: dash });
+  const real = fs.writeSync;
+  fs.writeSync = (fd, buf) => {
+    real(fd, Buffer.from(buf).subarray(0, 10));
+    throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' });
+  };
+  try {
+    assert.equal(audit.record({ action: 'config.change', actor: dash }), null);
+  } finally {
+    fs.writeSync = real;
+  }
+  assert.equal(audit.record({ action: 'auth.logout', actor: dash }).seq, 4); // 3 is the audit.gap
+  assert.deepEqual(
+    linesIn(path.join(dir, 'governance-2026-11.jsonl')).map((x) => x.action),
+    ['audit.key_created', 'auth.login', 'audit.gap', 'auth.logout'],
+  );
+  assert.deepEqual(audit.verify(), { ok: true, checked: 4, from: 1, to: 4 });
+});
+
+test('key: a store that cannot be read while entries exist is not a lost key; the slot is never written over', (t) => {
+  const store = flakyStore();
+  const { dir, audit, make } = setup(t, { store });
+  audit.record({ action: 'auth.login', actor: dash });
+  audit.record({ action: 'auth.logout', actor: dash });
+  const slot = store.items.get(A.SERVICE);
+  const file = path.join(dir, 'governance-2026-11.jsonl');
+  // Locked: the call is degraded, no new key is made.
+  store.down = true;
+  const locked = make();
+  assert.equal(locked.record({ action: 'config.change', actor: dash }), null);
+  assert.equal(locked.status().degraded.missed, 1);
+  assert.equal(fs.existsSync(path.join(dir, 'chain.key')), false);
+  // Unlocked: the next call goes on with the same key.
+  store.down = false;
+  assert.equal(locked.record({ action: 'config.change', actor: dash }).seq, 5);
+  assert.deepEqual(
+    linesIn(file).map((x) => x.action),
+    ['audit.key_created', 'auth.login', 'auth.logout', 'audit.gap', 'config.change'],
+  );
+  assert.deepEqual(locked.verify(), { ok: true, checked: 5, from: 1, to: 5 });
+  // One read that answers null (a timeout) is not a lost key either.
+  store.nullReads = 1;
+  const slow = make();
+  assert.equal(slow.record({ action: 'auth.login', actor: dash }).seq, 6);
+  assert.equal(store.items.get(A.SERVICE), slot);
+  assert.deepEqual(slow.verify(), { ok: true, checked: 6, from: 1, to: 6 });
+  // Really gone from a store that works: the chain restarts with a key in chain.key, never in the store's slot.
+  store.items.delete(A.SERVICE);
+  const lost = make();
+  assert.equal(lost.record({ action: 'auth.login', actor: dash }).keyed, 'file');
+  assert.equal(store.items.has(A.SERVICE), false);
+  assert.equal(fs.existsSync(path.join(dir, 'chain.key')), true);
+  // The old key comes back to the store: the part after the rekey is still checked with the file's key.
+  store.items.set(A.SERVICE, slot);
+  const back = make();
+  assert.equal(back.record({ action: 'auth.logout', actor: dash }).keyed, 'file');
+  assert.deepEqual(back.verify(), { ok: true, checked: 3, from: 7, to: 9, unverified: 6, rekeyedAt: 7 });
+});
+
+test('key: a chain keyed in chain.key stays on it when the store later answers with a key of its own', (t) => {
+  const store = flakyStore();
+  store.down = true; // the store cannot take the first key
+  const { audit, make } = setup(t, { store });
+  assert.equal(audit.record({ action: 'auth.login', actor: dash }).keyed, 'file');
+  store.down = false;
+  store.items.set(A.SERVICE, Buffer.alloc(32, 7).toString('base64'));
+  const again = make();
+  assert.equal(again.record({ action: 'auth.logout', actor: dash }).keyed, 'file');
+  assert.deepEqual(again.verify(), { ok: true, checked: 3, from: 1, to: 3 });
+});
+
+test('record: the chain fields are the store’s own, never the caller’s', (t) => {
+  const { audit } = setup(t, { store: memStore() });
+  const e = audit.record({
+    action: 'auth.login',
+    actor: dash,
+    seq: 99,
+    ts: 'then',
+    prev: 'genesis',
+    mac: 'f'.repeat(64),
+    keyed: 'file',
+  });
+  assert.deepEqual([e.seq, e.ts, e.keyed, e.prev === 'genesis'], [2, '2026-11-03T12:00:00.000Z', undefined, false]);
+  assert.deepEqual(audit.verify(), { ok: true, checked: 2, from: 1, to: 2 });
+});
+
+test('record: a clock that steps back into the month before writes to the newest month file', (t) => {
+  const { dir, clock, audit } = setup(t, { store: memStore() });
+  clock.t = Date.UTC(2026, 11, 1, 0, 0, 5);
+  audit.record({ action: 'auth.login', actor: dash });
+  clock.t = Date.UTC(2026, 10, 30, 23, 59, 59);
+  assert.equal(audit.record({ action: 'auth.logout', actor: dash }).seq, 3);
+  assert.deepEqual(
+    fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl')),
+    ['governance-2026-12.jsonl'],
+  );
+  assert.deepEqual(audit.verify(), { ok: true, checked: 3, from: 1, to: 3 });
+});
+
+test('record: a folder that already exists with looser modes is tightened to 0700', (t) => {
+  if (process.platform === 'win32') return;
+  const { dir, audit } = setup(t, { store: memStore() });
+  fs.mkdirSync(dir);
+  fs.chmodSync(dir, 0o755);
+  audit.record({ action: 'auth.login', actor: dash });
+  assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
+});
+
+test('list: a limit that is not a whole number still stops the page', (t) => {
+  const { audit } = setup(t, { store: memStore() });
+  for (let i = 0; i < 5; i++) audit.record({ action: 'auth.login', actor: dash });
+  const page = audit.list({ limit: 2.5 });
+  assert.deepEqual([page.entries.length, page.next], [3, 4]);
+});
+
+test('pending: a file that cannot be removed is not recorded twice', (t) => {
+  const { dir, audit } = setup(t, { store: memStore() });
+  A.queueEvent(dir, { action: 'auth.password_set' }, Date.UTC(2026, 10, 2, 9));
+  const real = fs.rmSync;
+  fs.rmSync = (p, o) => {
+    if (String(p).includes(`${path.sep}pending${path.sep}`)) throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+    return real(p, o);
+  };
+  try {
+    assert.equal(audit.importPending(), 1);
+    assert.equal(audit.importPending(), 0);
+  } finally {
+    fs.rmSync = real;
+  }
+  assert.equal(audit.importPending(), 0);
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'pending')), []);
+  assert.equal(audit.list({ action: 'auth.password_set' }).entries.length, 1);
 });
