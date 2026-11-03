@@ -75,6 +75,11 @@ const otel = require('./lib/otel');
 const { createTraceStore } = require('./lib/trace/store');
 const { createRecorder } = require('./lib/trace/recorder');
 const { createReceiver } = require('./lib/trace/otlp');
+const govContext = require('./lib/governance/context');
+const { requestEntry, controlEntry } = require('./lib/governance/events');
+const { createGovernanceAudit, keySource } = require('./lib/governance/audit');
+const { diff: govDiff } = require('./lib/governance/diff');
+const { createGovernanceApi } = require('./lib/governance/api');
 
 const PORT = Number(process.env.ZAAFPULSE_PORT || process.env.PORT) || 4777;
 const HOST = process.env.ZAAFPULSE_HOST || process.env.HOST || '127.0.0.1';
@@ -131,7 +136,13 @@ const { fullName, computerName } = platform;
 const HOSTNAME = DEMO ? demo.config.host : computerName();
 let auth;
 try {
-  auth = createAuth({ dataDir: DIR, host: HOST, demo: DEMO, headers: () => SECURITY_HEADERS });
+  auth = createAuth({
+    dataDir: DIR,
+    host: HOST,
+    demo: DEMO,
+    headers: () => SECURITY_HEADERS,
+    onEvent: (e) => govRecord(e), // sign-ins and sign-outs for the governance audit log
+  });
 } catch (err) {
   console.error(err.message);
   process.exit(78);
@@ -229,7 +240,11 @@ function getIntegrations() {
   }
   return integ.registry;
 }
-const integrationConfig = createIntegrationConfig({ file: CONFIG_FILE, secrets: createSecrets() });
+const integrationConfig = createIntegrationConfig({
+  file: CONFIG_FILE,
+  secrets: createSecrets(),
+  onChange: (before, after) => configChanged(before, after),
+});
 // Agent Gateway: OpenAI-compatible /v1 API, agents, orchestrator and MCP over HTTP, behind ZAAFPulse
 // API keys. Provider settings live in config.json under "gateway"; keys, agents, sessions and memory
 // in .data/ (demo mode uses a throwaway folder so it never touches your data).
@@ -237,6 +252,48 @@ const integrationConfig = createIntegrationConfig({ file: CONFIG_FILE, secrets: 
 const demoDir = DEMO ? fs.mkdtempSync(path.join(os.tmpdir(), 'zp-demo-')) : null;
 const demoGw = DEMO ? require('./lib/demo-gateway') : null;
 let demoReady = !DEMO;
+// Governance audit log (AI Governance 2, lib/governance): every change a person or an API key makes, with its actor and
+// outcome, in .data/audit (demo: the throwaway folder), chained with acc.audit-chain from the secret store (demo: a
+// key file, so demo mode never touches the store).
+const govDir = path.join(DEMO ? demoDir : path.join(DIR, '.data'), 'audit');
+const governance = createGovernanceAudit({
+  dir: govDir,
+  now: Date.now,
+  getKey: keySource({ dir: govDir, store: DEMO ? null : require('./lib/secret-store').defaultStore(), now: Date.now }),
+});
+// An id from a request body as it may be kept in an entry (lib/governance/events.js keeps the same shape).
+const GOV_ID = /^[A-Za-z0-9_.:-]{1,80}$/;
+// An entry's actor: the one it names, else the request's (lib/governance/context.js), else the server's own.
+// Never throws (A6): whatever calls it goes ahead.
+function govRecord(entry) {
+  try {
+    return governance.record({ ...entry, actor: entry.actor || govContext.actor() || { via: 'system' } });
+  } catch {
+    return null;
+  }
+}
+// Every config.json write, from either writer (saveConfigSections below, lib/integration-config.js), is one
+// config.change entry with its field-level changes, secrets masked (lib/governance/diff.js). A write that changed
+// nothing is no entry.
+function configChanged(before, after) {
+  try {
+    const d = govDiff(before, after);
+    if (!d.changes.length) return;
+    govRecord({
+      action: 'config.change',
+      target: { type: 'config', id: d.sections.join(',').slice(0, 80) },
+      changes: d.changes,
+      ...(d.truncated ? { truncated: d.truncated } : {}),
+    });
+  } catch {
+    /* the save stands; an audit bug never fails it (A6) */
+  }
+}
+// /api/governance/*: the entries, an export, verify, status, and the retention in config.json "governance.audit".
+const governanceApi = createGovernanceApi({
+  audit: governance,
+  settings: { get: () => rawConfig().governance, save: (g) => saveConfigSection('governance', g) },
+});
 let rawCache = {
   mtime: -1,
   value: DEMO ? { gateway: demoGw.CONFIG, brain: { sources: demoGw.BRAIN_SOURCES(path.join(demoDir, 'brain')) } } : {},
@@ -269,7 +326,9 @@ const CONFIG_UNSAVED = 'the settings could not be saved';
 const CONFIG_BROKEN = 'config.json could not be read; fix it first';
 function saveConfigSections(patch) {
   if (DEMO) {
+    const before = rawCache.value;
     rawCache.value = { ...rawCache.value, ...patch };
+    configChanged(before, rawCache.value);
     return;
   }
   const refuse = (message, err, status = 500) => {
@@ -299,6 +358,7 @@ function saveConfigSections(patch) {
     fs.rmSync(tmpFile, { force: true });
     throw refuse(CONFIG_UNSAVED, e);
   }
+  configChanged(base, raw);
   try {
     rawCache = { mtime: fs.statSync(CONFIG_FILE).mtimeMs, value: raw };
   } catch {
@@ -421,6 +481,7 @@ const gateway = createGateway({
   publicUrl: process.env.ZAAFPULSE_PUBLIC_URL || '',
   trustProxy: process.env.ZAAFPULSE_TRUST_PROXY === '1',
   budgetGuard,
+  audit: (e) => govRecord(e), // key changes, run approvals and cancels
 });
 
 // Trace explorer: every log source behind opaque keys and ids. Content (prompts, replies, tool output) is off
@@ -662,7 +723,27 @@ const monitorChannels = createChannels({
 // Control also needs a dashboard sign-in, so ZAAFPULSE_AUTH=none turns it off too, except in demo (which never signals).
 const AGENTS_OFF =
   SERVER_MODE || auth.mode === 'password' ? 'server' : auth.mode === 'none' && !DEMO ? 'no-sign-in' : false;
-const agentControl = createAgentControl({ dataDir: monitorDir, serverMode: AGENTS_OFF, log: (m) => console.error(m) });
+// Agent and runtime control keep their own log (agent-audit.jsonl); each line is also a governance entry (A4(5)).
+function controlAudit(dir) {
+  const log = createAudit(path.join(dir, 'agent-audit.jsonl'));
+  return {
+    record(line) {
+      log.record(line);
+      try {
+        const e = controlEntry(line);
+        if (e) govRecord(e);
+      } catch {
+        /* the control line is written; an audit bug never fails the action (A6) */
+      }
+    },
+  };
+}
+const agentControl = createAgentControl({
+  dataDir: monitorDir,
+  serverMode: AGENTS_OFF,
+  log: (m) => console.error(m),
+  audit: controlAudit(monitorDir),
+});
 // daily_cost and month_projection became budgets (legacy-monthly): they are not evaluated, listed or changed, so
 // nothing alerts twice.
 const RETIRED_RULES = ['daily_cost', 'month_projection'];
@@ -693,6 +774,8 @@ const monitors = createMonitors({
       .recent(2000)
       .filter((e) => e.guard && e.guard.action === 'blocked')
       .map((e) => ({ ts: e.ts, checks: [...new Set((e.guard.hits || []).map((h) => h.check))] })),
+  // audit_degraded and audit_chain_broken: the governance audit log's state and its last verify (no entry content).
+  auditStatus: () => governance.status(),
 });
 // The routes: rules, channels, alerts and agent control. Demo serves a seeded store of its own (mixed states, five
 // alerts) so the page always has something to show; the engine keeps evaluating into its own file.
@@ -781,6 +864,7 @@ const runtimeControl = createRuntimeControl({
   state: runtimeState,
   entries: runtimeEntries,
   dataDir: runtimeDir,
+  audit: controlAudit(runtimeDir),
   started: runtimeStarted,
   // The agents' rule: a runtime start runs a command, so it needs a sign-in just as pausing an agent does.
   serverMode: AGENTS_OFF,
@@ -1017,8 +1101,21 @@ const SECURITY_HEADERS = {
   'Cross-Origin-Resource-Policy': 'same-origin',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), usb=(), payment=()',
 };
+// Dashboard changes waiting for their answer (A4(1)): the entry is written right before the answer, so whoever reads
+// the log after the answer finds it. The request's body comes from readBody; only its short fields are kept.
+const pendingAudit = new WeakMap();
 // `headers` may add a download's Content-Disposition only (lib/response-headers.js).
 function send(res, status, body, type = 'application/json', headers = {}) {
+  const p = pendingAudit.get(res);
+  if (p) {
+    pendingAudit.delete(res);
+    try {
+      const e = requestEntry({ method: p.req.method, path: p.path, status, body: bodies.get(p.req), reply: body });
+      if (e) govRecord(e);
+    } catch {
+      /* an audit bug never fails a response (A6) */
+    }
+  }
   res.writeHead(status, responseHeaders(type, headers, SECURITY_HEADERS));
   res.end(type === 'application/json' ? JSON.stringify(body) : body);
 }
@@ -1032,6 +1129,9 @@ function traceError(res, e) {
 // A query value that must be a whole number >= 0 (an offset or turn): undefined when absent, NaN when bad.
 const wholeParam = (v) => (v == null || v === '' ? undefined : /^\d{1,15}$/.test(v) ? Number(v) : NaN);
 
+// The text each request sent, as read, for the audit entry of a dashboard change (send() keeps its short fields only).
+const bodies = new WeakMap();
+const AUDIT_BODY_MAX = 64 * 1024;
 function readBody(req, max = 1e6) {
   return new Promise((resolve, reject) => {
     let data = '';
@@ -1042,7 +1142,10 @@ function readBody(req, max = 1e6) {
         reject(new Error('too large'));
       }
     });
-    req.on('end', () => resolve(data));
+    req.on('end', () => {
+      if (data.length <= AUDIT_BODY_MAX) bodies.set(req, data); // a bigger body loses only op/target in its entry
+      resolve(data);
+    });
   });
 }
 
@@ -1144,10 +1247,17 @@ const handler = async (req, res) => {
     if (await gateway.handle(req, res, url)) return;
     // Dashboard and /api: a signed-in session in server mode.
     if (await auth.handle(req, res, url)) return;
-    if (!auth.check(req) && !['/login.html', '/login.js'].includes(url.pathname)) {
+    const signedIn = auth.check(req);
+    if (!signedIn && !['/login.html', '/login.js'].includes(url.pathname)) {
       if (url.pathname.startsWith('/api/')) return send(res, 401, { error: 'sign in first' });
       res.writeHead(302, { location: '/login.html', ...SECURITY_HEADERS });
       return res.end();
+    }
+    if (signedIn) {
+      // The governance audit log: who this request acts as, and one entry for each change it makes (A4(1)).
+      govContext.setActor(auth.actorOf(req));
+      if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && url.pathname.startsWith('/api/'))
+        pendingAudit.set(res, { req, path: url.pathname });
     }
     if (url.pathname === '/api/platform') {
       return send(res, 200, {
@@ -1171,7 +1281,14 @@ const handler = async (req, res) => {
     if (url.pathname === '/api/gateway' && req.method === 'GET') return send(res, 200, await gateway.admin('', 'GET'));
     const gwAdmin = url.pathname.match(/^\/api\/gateway\/([a-z]+)$/);
     if (gwAdmin) {
-      if (req.method === 'GET') return send(res, 200, await gateway.admin(gwAdmin[1], 'GET'));
+      // Only the request log is read with GET. Every other admin route writes (defaults, settings), spends tokens
+      // (playground) or calls providers (quota), so a GET there is 405 and changes nothing (A7); so is any method but
+      // POST.
+      if (req.method === 'GET')
+        return gwAdmin[1] === 'logs'
+          ? send(res, 200, await gateway.admin('logs', 'GET'))
+          : send(res, 405, { error: 'method not allowed' });
+      if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
       if (!(req.headers['content-type'] || '').startsWith('application/json'))
         return send(res, 415, { error: 'json only' });
       try {
@@ -1287,7 +1404,24 @@ const handler = async (req, res) => {
         if (index !== undefined && !Number.isInteger(index)) return send(res, 400, { error: 'mask index required' });
         if (offset !== undefined && !(Number.isInteger(offset) && offset >= 0))
           return send(res, 400, { error: 'bad offset' });
-        return send(res, 200, await trace.reveal(id, index, { offset }));
+        // A secret was shown (A4(6)): which content and which mask, never the value. An id that is not id-shaped
+        // (content ids are ci_<hex>) is not copied.
+        const target = { type: 'content', ...(typeof id === 'string' && GOV_ID.test(id) ? { id } : {}) };
+        let shown;
+        try {
+          shown = await trace.reveal(id, index, { offset });
+        } catch (err) {
+          const st = err && err.status;
+          govRecord({
+            action: 'trace.reveal',
+            target,
+            outcome: Number.isInteger(st) && st < 500 ? 'refused' : 'error',
+            ...(Number.isInteger(st) ? { status: st } : {}),
+          });
+          throw err;
+        }
+        govRecord({ action: 'trace.reveal', target, ...(index !== undefined ? { index } : {}) });
+        return send(res, 200, shown);
       } catch (err) {
         return traceError(res, err);
       }
@@ -1341,6 +1475,18 @@ const handler = async (req, res) => {
     // export is a download: its own type and Content-Disposition.
     {
       const hit = await costApi.route({
+        method: req.method,
+        path: url.pathname,
+        query: url.searchParams,
+        contentType: req.headers['content-type'],
+        readBody: () => readBody(req),
+      });
+      if (hit) return send(res, hit.status, hit.body, hit.type || 'application/json', hit.headers);
+    }
+    // The governance audit log: entries, export (a download), verify, status and the retention setting. Behind the
+    // same sign-in; no gateway key or MCP client reaches it.
+    {
+      const hit = await governanceApi.route({
         method: req.method,
         path: url.pathname,
         query: url.searchParams,
@@ -1608,9 +1754,12 @@ const handler = async (req, res) => {
         return send(res, 415, { error: 'json only' });
       indexer.refresh().then(() => {
         memo.clear();
-        evalTick();
-        monitorTick();
-        costTick();
+        // The passes are the system's, not the person who clicked Rescan.
+        govContext.runAs({ via: 'system' }, () => {
+          evalTick();
+          monitorTick();
+          costTick();
+        });
       });
       return send(res, 202, indexer.state);
     }
@@ -1625,7 +1774,9 @@ const handler = async (req, res) => {
     send(res, 500, { error: err.message });
   }
 };
-const traced = otel.wrapHandler(handler); // continues an incoming traceparent on gateway requests
+// Each request runs with its own actor slot for the governance audit log (filled after sign-in or the key check);
+// otel continues an incoming traceparent on gateway requests.
+const traced = otel.wrapHandler((req, res) => govContext.runAs(null, () => handler(req, res)));
 const server = TLS ? https.createServer(TLS, traced) : http.createServer(traced);
 server.on('error', (err) => {
   console.error(
@@ -1675,6 +1826,12 @@ server.listen(PORT, HOST, () => {
   };
   keepTraces();
   setInterval(keepTraces, 5 * 60 * 1000).unref();
+  // The governance audit log, now and once a day: the CLI's events, the whole months past the retention, and a check
+  // of the chain (the Monitors rules audit_degraded and audit_chain_broken read the result). The pass is the system's;
+  // each step runs on its own (lib/governance/api.js dailyPass).
+  const auditDaily = () => govContext.runAs({ via: 'system' }, () => governanceApi.dailyPass());
+  auditDaily();
+  setInterval(auditDaily, 24 * 3600 * 1000).unref();
   // Local model servers: remember what is loaded. Not in demo mode, server mode or Docker (control is off there), and
   // not with ZAAFPULSE_RUNTIME_WATCH=off (the tests' spawned servers, which must not read this machine's Ollama).
   if (!DEMO && !runtimeControl.offReason() && process.env.ZAAFPULSE_RUNTIME_WATCH !== 'off')

@@ -9965,3 +9965,52 @@ label.mon-cand.on {
 .cost-table-bar .cost-export {
   margin-left: auto;
 }
+
+/* Governance → Audit log (public/governanceview.js): the filter and status bars, the degraded banner, the changes. */
+.gov-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin: 0 0 14px;
+}
+.gov-bar label,
+.gov-inline label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.gov-inline {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+.gov-inline .input {
+  width: 90px;
+}
+.gov-banner {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--warn-border);
+  border-radius: 8px;
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+.gov-changes {
+  margin-top: 6px;
+  font-size: 12px;
+}
+.gov-changes ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.gov-changes code {
+  overflow-wrap: anywhere;
+}
+.gov-note {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+}
