@@ -15,7 +15,7 @@ function setup(t, { store = null } = {}) {
   t.after(() => fs.rmSync(path.dirname(dir), { recursive: true, force: true }));
   const clock = { t: NOW };
   const make = (s = store) =>
-    A.createGovernanceAudit({ dir, getKey: A.keySource({ dir, store: s }), now: () => clock.t });
+    A.createGovernanceAudit({ dir, getKey: A.keySource({ dir, store: s, now: () => clock.t }), now: () => clock.t });
   return { dir, clock, audit: make(), make };
 }
 const memStore = () => {
@@ -454,7 +454,7 @@ test('list: a limit that is not a whole number still stops the page', (t) => {
   const { audit } = setup(t, { store: memStore() });
   for (let i = 0; i < 5; i++) audit.record({ action: 'auth.login', actor: dash });
   const page = audit.list({ limit: 2.5 });
-  assert.deepEqual([page.entries.length, page.next], [3, 4]);
+  assert.deepEqual([page.entries.length, page.next], [2, 5]);
 });
 
 test('pending: a file that cannot be removed is not recorded twice', (t) => {
@@ -474,4 +474,45 @@ test('pending: a file that cannot be removed is not recorded twice', (t) => {
   assert.equal(audit.importPending(), 0);
   assert.deepEqual(fs.readdirSync(path.join(dir, 'pending')), []);
   assert.equal(audit.list({ action: 'auth.password_set' }).entries.length, 1);
+});
+
+test('prune: keptFrom comes from the months deleted, so a pruning cannot launder lines deleted from the head', (t) => {
+  const { dir, clock, audit } = setup(t, { store: memStore() });
+  clock.t = Date.UTC(2025, 9, 10);
+  for (let i = 0; i < 3; i++) audit.record({ action: 'auth.login', actor: dash }); // 2025-10: seq 1-4
+  clock.t = Date.UTC(2025, 10, 10);
+  for (let i = 0; i < 3; i++) audit.record({ action: 'auth.logout', actor: dash }); // 2025-11: seq 5-7
+  const nov = path.join(dir, 'governance-2025-11.jsonl');
+  const lines = fs.readFileSync(nov, 'utf8').trim().split('\n');
+  fs.writeFileSync(nov, lines.slice(2).join('\n') + '\n');
+  assert.deepEqual([audit.verify().ok, audit.verify().brokenAt], [false, 5]);
+  clock.t = Date.UTC(2026, 10, 1);
+  assert.deepEqual(audit.prune(12), ['2025-10']);
+  assert.equal(audit.list({ limit: 1 }).entries[0].keptFrom, 5);
+  assert.deepEqual(audit.verify(), brokenAtStart(5));
+});
+
+test('key: while a store-keyed chain cannot read its key, the store is probed at most once a minute', (t) => {
+  const store = flakyStore();
+  const calls = { get: 0, set: 0 };
+  const { get, set } = store;
+  store.get = (k) => (calls.get++, get(k));
+  store.set = (k, v) => (calls.set++, set(k, v));
+  const { clock, audit, make } = setup(t, { store });
+  audit.record({ action: 'auth.login', actor: dash });
+  store.down = true;
+  const locked = make();
+  const before = { ...calls };
+  for (let i = 0; i < 5; i++) {
+    clock.t += 1000;
+    assert.equal(locked.record({ action: 'config.change', actor: dash }), null);
+  }
+  // Each call reads the key once; only the first also writes the probe and reads the key again.
+  assert.deepEqual([calls.set - before.set, calls.get - before.get], [1, 6]);
+  clock.t += 60000;
+  assert.equal(locked.record({ action: 'config.change', actor: dash }), null);
+  assert.deepEqual([calls.set - before.set, calls.get - before.get], [2, 8]);
+  store.down = false;
+  assert.equal(locked.record({ action: 'auth.logout', actor: dash }).seq, 4); // 3 is the audit.gap (6 missed)
+  assert.equal(locked.verify().ok, true);
 });
