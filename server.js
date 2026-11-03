@@ -83,6 +83,8 @@ const { createGovernanceApi } = require('./lib/governance/api');
 const mcpScan = require('./lib/governance/mcp-scan');
 const { liveOrThrow, runtimesOrThrow, indexReadyOrThrow } = require('./lib/governance/sources');
 const { createSeenStore } = require('./lib/governance/seen');
+const { cleanPolicy: guardPolicy } = require('./lib/gateway/guardrails');
+const { RULES: MONITOR_RULES } = require('./lib/monitors/rules');
 
 const PORT = Number(process.env.ZAAFPULSE_PORT || process.env.PORT) || 4777;
 const HOST = process.env.ZAAFPULSE_HOST || process.env.HOST || '127.0.0.1';
@@ -299,6 +301,7 @@ const governanceApi = createGovernanceApi({
   audit: governance,
   settings: { get: () => rawConfig().governance, save: (g) => saveConfigSection('governance', g) },
   sources: () => inventorySources(),
+  controlState: () => controlState(),
   seen: createSeenStore({ file: path.join(DEMO ? demoDir : path.join(DIR, '.data'), 'governance', 'seen.json') }),
 });
 let rawCache = {
@@ -419,13 +422,18 @@ function costSettings() {
 // Local trace store: every gateway trace without content, under .data/traces (on unless "tracing": { "enabled":
 // false }). Retention is read at start; the on/off switch whenever config.json changes.
 const tracingCfg = () => (rawConfig() || {}).tracing || {};
-// A store that cannot open (unwritable or corrupt folder) never takes the server down: tracing is just off.
+// A store that cannot open (unwritable or corrupt folder) never takes the server down: tracing is just off. The
+// retention in force is kept for the Compliance page (GET /api/governance/controls).
+const TRACE_RETENTION = {
+  days: Number(tracingCfg().retentionDays) > 0 ? Number(tracingCfg().retentionDays) : 14,
+  maxBytes: Number(tracingCfg().maxBytes) > 0 ? Number(tracingCfg().maxBytes) : 500 * 1024 * 1024,
+};
 let traceStore = null;
 try {
   traceStore = createTraceStore({
     dir: path.join(DEMO ? demoDir : path.join(DIR, '.data'), 'traces'),
-    retentionDays: Number(tracingCfg().retentionDays) > 0 ? Number(tracingCfg().retentionDays) : 14,
-    maxBytes: Number(tracingCfg().maxBytes) > 0 ? Number(tracingCfg().maxBytes) : 500 * 1024 * 1024,
+    retentionDays: TRACE_RETENTION.days,
+    maxBytes: TRACE_RETENTION.maxBytes,
   });
 } catch (err) {
   console.error('traces: the local trace store is off:', err.message);
@@ -1167,6 +1175,81 @@ async function inventorySources() {
     ),
   ]);
   return { live, summary, trace: traced, gateway: gw, runtimes, integrations, mcp };
+}
+// The state the controls of the Compliance page are worked out from (lib/governance/controls.js): settings, counts and
+// dates only. Each part is capped at 2 s and null when it could not be read. The OpenTelemetry export is named by its
+// endpoint's origin, never its headers.
+async function controlState() {
+  const gw = () => (rawConfig() || {}).gateway || {};
+  const list = (v) => (Array.isArray(v) ? v : []);
+  const parts = {
+    guardrails: () => guardPolicy(gw().guardrails),
+    usage: () => ({ requests: gateway.usage.summary().totals.requests }),
+    providers: () =>
+      list(gw().providers).map((p) => ({
+        id: p.id,
+        tier: gateway.providers.tierOf(p),
+        approved: p.approved !== false,
+        recorded: typeof p.approved === 'boolean',
+      })),
+    keys: () =>
+      gateway.keys.list().map((k) => ({
+        revokedAt: k.revokedAt,
+        expiresAt: k.expiresAt,
+        budgetUSD: k.budgetUSD,
+        scopes: k.scopes,
+      })),
+    workflows: () =>
+      gateway.workflows.list().map((w) => ({ tier: w.tier, gated: list(w.steps).some((x) => x && x.approve) })),
+    agentControl: () => ({ off: agentControl.off() }),
+    monitors: () =>
+      MONITOR_RULES.filter((r) => !RETIRED_RULES.includes(r.id)).map((r) => ({
+        id: r.id,
+        enabled: monitorApiState.settings(r.id).enabled,
+      })),
+    evals: async () => {
+      const cfg = evalApi.settings();
+      const st = await evalEngine.status();
+      const on = Object.values(cfg.evaluators || {});
+      return {
+        judge: cfg.judge !== false,
+        evaluators: on.filter(Boolean).length,
+        total: on.length,
+        ok: !!(st && st.judge && st.judge.ok),
+        model: (st && st.judge && st.judge.model) || null,
+        today: (st && st.today && st.today.count) || 0,
+      };
+    },
+    datasets: () => ({
+      count: datasets.list().length,
+      experiments: experiments.list().map((x) => ({ status: x.status, endedAt: x.endedAt })),
+    }),
+    budgets: () => costBudgets.list().budgets.map((b) => ({ enforce: b.enforce })),
+    secretStore: () => {
+      const s = require('./lib/secret-store').defaultStore();
+      return { id: s.id, label: s.label };
+    },
+    signIn: () => ({ mode: auth.mode, serverMode: SERVER_MODE, tls: !!TLS }),
+    content: () => ({ otelCapture: otel.status().captureContent === true, traceContentOff: contentOff }),
+    otel: () => {
+      const o = otel.status();
+      return {
+        enabled: !!o.enabled,
+        error: !!o.error,
+        origin: o.endpoint ? mcpScan.originOf(o.endpoint) : null,
+        protocol: o.protocol || null,
+      };
+    },
+    traces: () => ({
+      store: !!traceStore,
+      enabled: tracingOn(),
+      retentionDays: TRACE_RETENTION.days,
+      maxBytes: TRACE_RETENTION.maxBytes,
+    }),
+  };
+  const names = Object.keys(parts);
+  const values = await Promise.all(names.map((k) => invSource(parts[k])));
+  return Object.fromEntries(names.map((k, i) => [k, values[i]]));
 }
 const insightMemo = new Map();
 function getInsights(range) {
