@@ -79,6 +79,7 @@ const govContext = require('./lib/governance/context');
 const { requestEntry, controlEntry } = require('./lib/governance/events');
 const { createGovernanceAudit, keySource } = require('./lib/governance/audit');
 const { diff: govDiff } = require('./lib/governance/diff');
+const { createGovernanceApi } = require('./lib/governance/api');
 
 const PORT = Number(process.env.ZAAFPULSE_PORT || process.env.PORT) || 4777;
 const HOST = process.env.ZAAFPULSE_HOST || process.env.HOST || '127.0.0.1';
@@ -288,6 +289,11 @@ function configChanged(before, after) {
     /* the save stands; an audit bug never fails it (A6) */
   }
 }
+// /api/governance/*: the entries, an export, verify, status, and the retention in config.json "governance.audit".
+const governanceApi = createGovernanceApi({
+  audit: governance,
+  settings: { get: () => rawConfig().governance, save: (g) => saveConfigSection('governance', g) },
+});
 let rawCache = {
   mtime: -1,
   value: DEMO ? { gateway: demoGw.CONFIG, brain: { sources: demoGw.BRAIN_SOURCES(path.join(demoDir, 'brain')) } } : {},
@@ -768,6 +774,8 @@ const monitors = createMonitors({
       .recent(2000)
       .filter((e) => e.guard && e.guard.action === 'blocked')
       .map((e) => ({ ts: e.ts, checks: [...new Set((e.guard.hits || []).map((h) => h.check))] })),
+  // audit_degraded and audit_chain_broken: the governance audit log's state and its last verify (no entry content).
+  auditStatus: () => governance.status(),
 });
 // The routes: rules, channels, alerts and agent control. Demo serves a seeded store of its own (mixed states, five
 // alerts) so the page always has something to show; the engine keeps evaluating into its own file.
@@ -1475,6 +1483,18 @@ const handler = async (req, res) => {
       });
       if (hit) return send(res, hit.status, hit.body, hit.type || 'application/json', hit.headers);
     }
+    // The governance audit log: entries, export (a download), verify, status and the retention setting. Behind the
+    // same sign-in; no gateway key or MCP client reaches it.
+    {
+      const hit = await governanceApi.route({
+        method: req.method,
+        path: url.pathname,
+        query: url.searchParams,
+        contentType: req.headers['content-type'],
+        readBody: () => readBody(req),
+      });
+      if (hit) return send(res, hit.status, hit.body, hit.type || 'application/json', hit.headers);
+    }
     if (url.pathname === '/api/logs') {
       return send(res, 200, DEMO ? reqlogs.demoLogs() : reqlogs.logs());
     }
@@ -1806,6 +1826,20 @@ server.listen(PORT, HOST, () => {
   };
   keepTraces();
   setInterval(keepTraces, 5 * 60 * 1000).unref();
+  // The governance audit log, now and once a day: the CLI's events, the whole months past the retention, and a check
+  // of the chain (the Monitors rules audit_degraded and audit_chain_broken read the result). The pass is the system's.
+  const auditDaily = () =>
+    govContext.runAs({ via: 'system' }, () => {
+      try {
+        governance.importPending();
+        governance.prune(governanceApi.retention());
+        governance.verify();
+      } catch {
+        console.error('audit: the daily pass failed');
+      }
+    });
+  auditDaily();
+  setInterval(auditDaily, 24 * 3600 * 1000).unref();
   // Local model servers: remember what is loaded. Not in demo mode, server mode or Docker (control is off there), and
   // not with ZAAFPULSE_RUNTIME_WATCH=off (the tests' spawned servers, which must not read this machine's Ollama).
   if (!DEMO && !runtimeControl.offReason() && process.env.ZAAFPULSE_RUNTIME_WATCH !== 'off')

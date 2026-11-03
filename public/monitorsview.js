@@ -95,6 +95,8 @@ const MON_MEASURE = {
   unsafe_content: [(v) => `${monPlural(v, 'unsafe finding')} in the window`, null, null],
   cost_anomaly: [(v) => `${monUSD(v)} spent`, 'against an anomaly level of', monUSD],
   guardrail_block: [(v) => `${monPlural(v, 'blocked request')} in the last hour`, null, null],
+  audit_degraded: [(v) => `${monRound(v)} audit ${v === 1 ? 'entry' : 'entries'} not written`, null, null],
+  audit_chain_broken: [(v) => (v > 0 ? `broken at entry ${monRound(v)}` : 'cannot be checked'), null, null],
 };
 function monMeasure(rule, value, threshold) {
   const v = monNum(value) ? value : null;

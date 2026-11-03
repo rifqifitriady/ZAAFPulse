@@ -258,6 +258,12 @@ test('keys, runs, reveal and control: the gateway key and the API key that acts 
 
 test('sign-in: login, a change, logout, five failures and one lockout, with the device and address', async (t) => {
   const s = await startServer(t, { ZAAFPULSE_AUTH: '1', ZAAFPULSE_ADMIN_PASSWORD: 'correct horse battery' });
+  // /api/governance/* is for a dashboard session only: no sign-in, or an API key, is a 401.
+  for (const headers of [{}, { authorization: 'Bearer zp_not_a_session' }]) {
+    assert.equal((await call(s, '/api/governance/audit/status', { headers })).status, 401);
+    const post = { method: 'POST', body: { audit: { retentionMonths: 24 } }, headers };
+    assert.equal((await call(s, '/api/governance/settings', post)).status, 401);
+  }
   const ok = await call(s, '/api/login', { method: 'POST', body: { password: 'correct horse battery' } });
   assert.equal(ok.status, 200);
   const cookie = ok.headers
@@ -318,5 +324,75 @@ test('a GET on a gateway admin route that writes is 405 and changes nothing; the
       ['DELETE /api/gateway/defaults', 'refused', 405],
     ],
   );
+  assert.ok(s.alive());
+});
+
+test('the API: entries, export, verify, status, retention; a write failure is degraded, then one audit.gap', async (t) => {
+  // The CLI's set-password event waits in pending/ and is recorded when the server starts.
+  const s = await startServer(t, {}, (data) =>
+    queueEvent(path.join(data, '.data', 'audit'), { action: 'auth.password_set' }),
+  );
+  assert.deepEqual(
+    entries(s).map((e) => [e.action, e.actor.via]),
+    [
+      ['audit.key_created', 'system'],
+      ['auth.password_set', 'cli'],
+    ],
+  );
+  const change = (name) => call(s, '/api/config', { method: 'POST', body: { userName: name } });
+  assert.equal((await change('Ana')).status, 200);
+  const list = await call(s, '/api/governance/audit?limit=2');
+  assert.deepEqual(
+    list.body.entries.map((e) => e.action),
+    ['POST /api/config', 'config.change'],
+  );
+  assert.equal(list.body.next, 3);
+  const csv = await call(s, '/api/governance/audit/export?format=csv');
+  assert.equal(csv.headers.get('content-type'), 'text/csv; charset=utf-8');
+  assert.match(csv.headers.get('content-disposition'), /^attachment; filename="zaafpulse-audit-start-now\.csv"$/);
+  assert.match(csv.body, /,ok,,monthlyBudgetUSD: ∅ → 0; userName: ∅ → Ana; vaultPaths: ∅ → \[\],/);
+  const jsonl = await call(s, '/api/governance/audit/export?format=jsonl');
+  assert.equal(jsonl.body.trim().split('\n').length, 4);
+  // The month file is a folder for a while: the changes go ahead, the log is degraded (two entries each).
+  const month = new Date().toISOString().slice(0, 7);
+  const file = path.join(s.data, '.data', 'audit', `governance-${month}.jsonl`);
+  fs.renameSync(file, `${file}.kept`);
+  fs.mkdirSync(file);
+  assert.equal((await change('Budi')).status, 200);
+  assert.equal((await change('Citra')).status, 200);
+  const degraded = (await call(s, '/api/governance/audit/status')).body.degraded;
+  assert.equal(degraded.missed, 4);
+  assert.match(degraded.since, /^\d{4}-\d{2}-\d{2}T/);
+  fs.rmdirSync(file);
+  fs.renameSync(`${file}.kept`, file);
+  assert.equal((await change('Dewi')).status, 200);
+  const after = (await call(s, '/api/governance/audit?limit=3')).body.entries;
+  assert.deepEqual(
+    after.map((e) => [e.action, e.missed ?? null]),
+    [
+      ['POST /api/config', null],
+      ['config.change', null],
+      ['audit.gap', 4],
+    ],
+  );
+  assert.equal((await call(s, '/api/governance/audit/status')).body.degraded, null);
+  assert.deepEqual((await call(s, '/api/governance/audit/verify')).body, { ok: true, checked: 7, from: 1, to: 7 });
+  // The retention: 400 and nothing written for a bad value; a good one is a config change like any other.
+  const bad = await call(s, '/api/governance/settings', { method: 'POST', body: { audit: { retentionMonths: 3 } } });
+  assert.deepEqual(bad.body, { error: 'audit.retentionMonths: a whole number from 6 to 120' });
+  assert.equal(bad.status, 400);
+  assert.ok(!('governance' in JSON.parse(fs.readFileSync(path.join(s.data, 'config.json'), 'utf8'))));
+  const good = await call(s, '/api/governance/settings', { method: 'POST', body: { audit: { retentionMonths: 24 } } });
+  assert.deepEqual(good.body, { audit: { retentionMonths: 24 } });
+  const st = (await call(s, '/api/governance/audit/status')).body;
+  assert.equal(st.retentionMonths, 24);
+  assert.deepEqual(
+    st.months.map((m) => m.month),
+    [month],
+  );
+  assert.ok(st.bytes > 0);
+  assert.equal(st.lastVerify.ok, true);
+  const cfg = entries(s).find((e) => e.action === 'config.change' && e.target.id === 'governance');
+  assert.deepEqual(cfg.changes, [{ path: 'governance.audit.retentionMonths', from: null, to: 24 }]);
   assert.ok(s.alive());
 });

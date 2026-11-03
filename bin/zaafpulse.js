@@ -122,16 +122,21 @@ const commands = {
   },
   async 'set-password'() {
     const { setPassword } = require('../lib/auth');
+    const { queueEvent } = require('../lib/governance/audit');
     const pw = await askHidden('New admin password (10+ characters): ');
     if (process.stdin.isTTY && (await askHidden('Again: ')) !== pw) die('The passwords do not match.');
     const dir = platform.dataDir();
     try {
       const file = setPassword(dir, pw);
+      // The governance audit log records it (actor: cli) when the server next starts or runs its daily pass; the CLI
+      // never writes the chain itself.
+      const queued = queueEvent(path.join(dir, '.data', 'audit'), { action: 'auth.password_set' });
       // A root-run CLI writes for the service user that owns the data folder (Linux system install).
       if (typeof process.getuid === 'function' && process.getuid() === 0) {
         const st = fs.statSync(dir);
         fs.chownSync(file, st.uid, st.gid);
         fs.chownSync(path.dirname(file), st.uid, st.gid);
+        for (const p of queued) fs.chownSync(p, st.uid, st.gid);
       }
       console.log(`Saved (scrypt hash) in ${file}. Restart ZAAFPulse if it is running: zaafpulse service restart`);
     } catch (err) {
