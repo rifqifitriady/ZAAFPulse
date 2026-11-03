@@ -754,7 +754,9 @@ found, its state and the days it was first and last seen.
   recorded in the audit log.
 - **Shadow AI:** the `inventory_unreviewed` rule alerts when a system first seen in the last 7 days has no review.
 - **Private:** of an MCP server only its name, transport, command and package name, or its URL's origin, are kept;
-  never env values, headers or tokens.
+  never env values, headers, the argument after a secret-looking flag (`--token`, `--api-key` …) or anything that
+  looks like a token. The package is the first other package-looking argument, so it can be a plain flag's value
+  (`--port 8080`).
 
 **Governance → Compliance** shows seventeen controls (the guardrails, the audit log, approvals, keys, agent control,
 the Monitors, evals, budgets, sign-in, retention, the inventory itself …) with their status from your settings and
