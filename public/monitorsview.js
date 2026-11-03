@@ -94,6 +94,7 @@ const MON_MEASURE = {
   eval_pass_rate: [(v) => `${monPct(v)} passed`, 'against a minimum of', monPct],
   unsafe_content: [(v) => `${monPlural(v, 'unsafe finding')} in the window`, null, null],
   cost_anomaly: [(v) => `${monUSD(v)} spent`, 'against an anomaly level of', monUSD],
+  guardrail_block: [(v) => `${monPlural(v, 'blocked request')} in the last hour`, null, null],
 };
 function monMeasure(rule, value, threshold) {
   const v = monNum(value) ? value : null;
