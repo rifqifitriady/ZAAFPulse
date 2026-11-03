@@ -239,3 +239,82 @@ test('scan: Windows home folders are ~ in either slash and any case; the table i
   assert.deepEqual(Object.keys(register.clients(HOME, { env: {} })), Object.keys(FILES));
   assert.equal(register.isOurs, require('../lib/mcp-clients').isOurs);
 });
+
+const scanCodex = (text) => {
+  const f = clients(HOME, { env: {}, platform: 'linux' }).codex.file;
+  return scanClients({ home: HOME, env: {}, platform: 'linux', read: (x) => (x === f ? text : null) });
+};
+
+test('TOML: __proto__, constructor and prototype keys never reach Object.prototype', () => {
+  for (const text of [
+    '[mcp_servers.evil]\ncommand = "npx"\n__proto__.polluted = "yes"\n',
+    '[mcp_servers.evil]\ncommand = "npx"\n[mcp_servers.evil.__proto__.polluted]\na = 1\n',
+    '[mcp_servers.evil]\nargs = [{ __proto__.polluted = "yes" }]\n',
+    '[mcp_servers.evil]\nconstructor.prototype.polluted = "yes"\n',
+  ]) {
+    try {
+      scanCodex(text);
+    } finally {
+      const bad = {}.polluted;
+      delete Object.prototype.polluted;
+      assert.equal(bad, undefined, text);
+    }
+  }
+  assert.throws(() => require('../lib/mcp-clients').toml.body('__proto__.x = "y"'));
+  assert.deepEqual(require('../lib/mcp-clients').toml.body('a.b = "y"\nc = [1]'), { a: { b: 'y' }, c: [{ raw: '1' }] });
+});
+
+test('commandOf: only the first word counts, so an argument tail never leaks', () => {
+  assert.equal(commandOf('/usr/local/bin/mcp-proxy --url https://h.example.com/secretpath'), 'mcp-proxy');
+  assert.equal(commandOf('/opt/tool --token=abc/SECRETTAIL'), 'tool');
+});
+
+test('packageOf: flag values, emails, UUIDs and long keys are never a package', () => {
+  const no = [
+    ['--api-key', '1b4e28ba-2fa1-11d2-883f-0016d3cca427'],
+    ['--api-key', 'fc-0123456789abcdef0123456789abcdef'],
+    ['--password', 'hunter2'],
+    ['--user', 'ana@example.com'],
+    ['admin@s3cr3t'],
+    ['--token=abcdef'],
+    ['1b4e28ba-2fa1-11d2-883f-0016d3cca427'],
+    ['a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6-x'],
+  ];
+  for (const a of no) assert.equal(packageOf(a), null, JSON.stringify(a));
+  assert.equal(packageOf(['-y', '@scope/pkg@1.2.3']), '@scope/pkg@1.2.3');
+  assert.equal(packageOf(['mcp-server-git']), 'mcp-server-git');
+  assert.equal(packageOf(['pkg@latest']), 'pkg@latest');
+});
+
+test('Codex: servers as inline or dotted keys under [mcp_servers] make the file unreadable; other tables are fine', () => {
+  const state = (t) => scanCodex(t)[0].state;
+  assert.equal(state('[mcp_servers]\nfoo = { command = "npx" }\n'), 'unreadable');
+  assert.equal(state('[mcp_servers]\nfoo.command = "npx"\n'), 'unreadable');
+  assert.equal(state('[mcp_servers]\n# nothing\n\n[mcp_servers.y]\ncommand = "npx"\n'), 'ok');
+  const ok = scanCodex('[profiles.p]\nmcp_servers.x.enabled = false\n[mcp_servers.y]\ncommand = "npx"\n');
+  assert.equal(ok[0].state, 'ok');
+  assert.deepEqual(
+    ok[0].servers.map((s) => s.name),
+    ['y'],
+  );
+});
+
+test('scan: a Windows home folder with a character whose lower case is longer cuts at the right place', () => {
+  const home = 'C:\\Users\\İsa';
+  const win = clients(home, { env: {}, platform: 'win32' });
+  const files = {
+    [win.claude.file]: JSON.stringify({
+      projects: { 'C:\\Users\\İsa\\app': { mcpServers: { x: { command: 'npx' } } } },
+    }),
+  };
+  const out = scanClients({ home, env: {}, platform: 'win32', read: reader(files) });
+  assert.equal(out[0].servers[0].project, '~\\app');
+});
+
+test('scan: a Claude project folder outside the home folder comes back as it is (the export drops it)', () => {
+  const files = {
+    [FILES.claude.file]: JSON.stringify({ projects: { '/srv/x': { mcpServers: { a: { command: 'npx' } } } } }),
+  };
+  const out = scanClients({ home: HOME, env: {}, platform: 'linux', read: reader(files) });
+  assert.equal(out[0].servers[0].project, '/srv/x');
+});
