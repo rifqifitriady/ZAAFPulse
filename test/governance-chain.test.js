@@ -78,10 +78,12 @@ test('verify: a changed field, a deleted line, a moved line and an unreadable li
   assert.equal(verifyChain(c, Buffer.alloc(32, 1)).reason, 'entry changed');
 });
 
-test('verify: after a rekey only the new part is checked; the part before it is counted as unverified', () => {
-  const old = chainOf(3, { key: Buffer.alloc(32, 1) });
+test('verify: each part between rekeys is checked with its own key; a part whose key is gone is unverified', () => {
+  const OLD = Buffer.alloc(32, 1);
+  const old = chainOf(3, { key: OLD });
   const fresh = chainOf(2, { prev: REKEYED, from: 4 });
-  assert.deepEqual(verifyChain([...old, ...fresh], KEY), {
+  const keys = (oldKey) => (part) => (part.index === 0 ? oldKey : KEY);
+  assert.deepEqual(verifyChain([...old, ...fresh], keys(null)), {
     ok: true,
     checked: 2,
     from: 4,
@@ -90,7 +92,22 @@ test('verify: after a rekey only the new part is checked; the part before it is 
     rekeyedAt: 4,
   });
   const tampered = [...old, fresh[0], { ...fresh[1], action: 'auth.login' }];
-  assert.equal(verifyChain(tampered, KEY).brokenAt, 5);
+  assert.equal(verifyChain(tampered, keys(null)).brokenAt, 5);
+  // The old key still reads: the part before the rekey is checked too.
+  assert.deepEqual(verifyChain([...old, ...fresh], keys(OLD)), { ok: true, checked: 5, from: 1, to: 5 });
+  // An edit before the rekey shows, whatever key the part after it was sealed with.
+  const edited = [old[0], { ...old[1], action: 'auth.login' }, old[2], ...fresh];
+  assert.deepEqual(verifyChain(edited, keys(OLD)), {
+    ok: false,
+    checked: 1,
+    from: 1,
+    to: 1,
+    brokenAt: 2,
+    reason: 'entry changed',
+  });
+  // A part whose key is gone is still checked for its order.
+  assert.equal(verifyChain([old[0], old[2], ...fresh], keys(null)).reason, 'sequence broken');
+  assert.equal(verifyChain([...old, { ...fresh[0], seq: 7 }, fresh[1]], keys(null)).brokenAt, 4);
 });
 
 test('diff: field paths, secrets masked by key name and by reference, text cut to 120 characters', () => {

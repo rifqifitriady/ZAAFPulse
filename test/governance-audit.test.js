@@ -6,7 +6,10 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const A = require('../lib/governance/audit');
+const { seal, GENESIS, REKEYED } = require('../lib/governance/chain');
+const { createSecretStore } = require('../lib/secret-store');
 
 const NOW = Date.UTC(2026, 10, 3, 12);
 const DAY = 864e5;
@@ -115,6 +118,66 @@ test('rekey: entries without their key are not sealed over silently; the chain r
   );
   assert.equal(e.seq, 5);
   assert.deepEqual(lost.verify(), { ok: true, checked: 2, from: 4, to: 5, unverified: 3, rekeyedAt: 4 });
+});
+
+// A file-only attacker: a key of their own in chain.key and entries sealed with it, written into the month file.
+const forgeWith = (dir, key) => fs.writeFileSync(path.join(dir, 'chain.key'), `${key.toString('base64')}\n`);
+const sys = { via: 'system' };
+
+test('verify: a forged audit.rekey sealed with a chain.key of its own does not hide an edit before it', (t) => {
+  const { dir, audit, make } = setup(t, { store: memStore() });
+  audit.record({ action: 'POST /api/gateway/keys', op: 'create', target: { type: 'gateway.keys', name: 'evil' } });
+  audit.record({ action: 'config.change', target: { type: 'config', id: 'gateway' } });
+  const file = path.join(dir, 'governance-2026-11.jsonl');
+  const lines = linesIn(file);
+  lines[1].target.name = 'harmless'; // the edit
+  const k = crypto.randomBytes(32);
+  forgeWith(dir, k);
+  const rekey = { action: 'audit.rekey', actor: sys, outcome: 'ok', reason: 'key missing', keyed: 'file' };
+  lines.push(seal(k, { seq: 4, ts: '2026-11-03T12:00:00.000Z', ...rekey, prev: REKEYED }));
+  fs.writeFileSync(file, lines.map((e) => JSON.stringify(e)).join('\n') + '\n');
+  const after = make(); // after a restart
+  const changed = { ok: false, checked: 1, from: 1, to: 1, brokenAt: 2, reason: 'entry changed' };
+  assert.deepEqual(after.verify(), changed);
+  after.record({ action: 'later' });
+  assert.deepEqual(after.verify(), changed);
+});
+
+test('verify: a log rebuilt from scratch shows at entry 1; a new log over a key the store holds still says so', (t) => {
+  const store = memStore();
+  const { dir, audit, make } = setup(t, { store });
+  audit.record({ action: 'auth.login', actor: dash });
+  const file = path.join(dir, 'governance-2026-11.jsonl');
+  const ts = '2026-11-03T12:00:00.000Z';
+  const atOne = { ok: false, checked: 0, from: null, to: null, brokenAt: 1, reason: 'chain broken' };
+  // Rewritten with a key of one's own: a first entry keyed in chain.key while the store holds the key.
+  const k = crypto.randomBytes(32);
+  forgeWith(dir, k);
+  const e1 = seal(k, {
+    seq: 1,
+    ts,
+    action: 'audit.key_created',
+    actor: sys,
+    outcome: 'ok',
+    keyed: 'file',
+    prev: GENESIS,
+  });
+  const e2 = seal(k, { seq: 2, ts, action: 'auth.login', actor: dash, outcome: 'ok', keyed: 'file', prev: e1.mac });
+  fs.writeFileSync(file, `${JSON.stringify(e1)}\n${JSON.stringify(e2)}\n`);
+  assert.deepEqual(make().verify(), atOne);
+  // A first entry that is not audit.key_created, even when it is sealed with the right key.
+  fs.rmSync(path.join(dir, 'chain.key'));
+  const real = Buffer.from(store.items.get(A.SERVICE), 'base64');
+  const f1 = seal(real, { seq: 1, ts, action: 'auth.login', actor: dash, outcome: 'ok', prev: GENESIS });
+  fs.writeFileSync(file, `${JSON.stringify(f1)}\n`);
+  assert.deepEqual(make().verify(), atOne);
+  // A second data folder with the same store (another checkout on this Mac) finds the key there: its log still
+  // starts with audit.key_created and verifies.
+  const other = setup(t, { store });
+  assert.equal(other.audit.record({ action: 'auth.login', actor: dash }).seq, 2);
+  const [first] = linesIn(path.join(other.dir, 'governance-2026-11.jsonl'));
+  assert.deepEqual([first.action, first.keyed, first.prev], ['audit.key_created', 'store', GENESIS]);
+  assert.deepEqual(other.audit.verify(), { ok: true, checked: 2, from: 1, to: 2 });
 });
 
 test('degraded: a write that fails is counted, the status says since when, and one audit.gap entry follows', (t) => {
@@ -410,11 +473,13 @@ test('key: a store that cannot be read while entries exist is not a lost key; th
   assert.equal(lost.record({ action: 'auth.login', actor: dash }).keyed, 'file');
   assert.equal(store.items.has(A.SERVICE), false);
   assert.equal(fs.existsSync(path.join(dir, 'chain.key')), true);
-  // The old key comes back to the store: the part after the rekey is still checked with the file's key.
+  assert.deepEqual(lost.verify(), { ok: true, checked: 2, from: 7, to: 8, unverified: 6, rekeyedAt: 7 });
+  // The old key comes back to the store: the chain goes on with the file's key, and verify checks both parts, each
+  // with its own key.
   store.items.set(A.SERVICE, slot);
   const back = make();
   assert.equal(back.record({ action: 'auth.logout', actor: dash }).keyed, 'file');
-  assert.deepEqual(back.verify(), { ok: true, checked: 3, from: 7, to: 9, unverified: 6, rekeyedAt: 7 });
+  assert.deepEqual(back.verify(), { ok: true, checked: 9, from: 1, to: 9 });
 });
 
 test('key: a chain keyed in chain.key stays on it when the store later answers with a key of its own', (t) => {
@@ -422,11 +487,21 @@ test('key: a chain keyed in chain.key stays on it when the store later answers w
   store.down = true; // the store cannot take the first key
   const { audit, make } = setup(t, { store });
   assert.equal(audit.record({ action: 'auth.login', actor: dash }).keyed, 'file');
+  assert.deepEqual(audit.verify(), { ok: true, checked: 2, from: 1, to: 2 });
   store.down = false;
   store.items.set(A.SERVICE, Buffer.alloc(32, 7).toString('base64'));
   const again = make();
   assert.equal(again.record({ action: 'auth.logout', actor: dash }).keyed, 'file');
-  assert.deepEqual(again.verify(), { ok: true, checked: 3, from: 1, to: 3 });
+  // A log that began in chain.key while the store holds a key is what a rewrite from scratch looks like, so verify
+  // says so (the price of catching one: a store that was locked when the log began, and held a key, looks the same).
+  assert.deepEqual(again.verify(), {
+    ok: false,
+    checked: 0,
+    from: null,
+    to: null,
+    brokenAt: 1,
+    reason: 'chain broken',
+  });
 });
 
 test('record: the chain fields are the store’s own, never the caller’s', (t) => {
