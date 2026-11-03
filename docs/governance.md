@@ -16,7 +16,8 @@ Everything stays on this machine. The Compliance page is evidence for your asses
 ### What is listed
 
 The inventory is built when you open the page, and every 10 minutes in the background for the Monitors rule (the first
-build waits for the log index, so the tools and models in the logs are in it), from what ZAAFPulse already reads plus
+build waits for the first scan of the log index, so the tools and models in the logs are in it; during a later rescan
+the previous scan is used), from what ZAAFPulse already reads plus
 the AI clients' MCP settings:
 
 | Kind | From | Shown in "where" as |
@@ -37,24 +38,29 @@ the gateway's usage this month, a key's last use), `configured`, then `idle` (in
 revoked or expired). The vendor is shown where it is known. An agent is read for its id, name, state and remote
 address only, never its system prompt; a key for its id, name and dates, never its secret.
 
-A source that fails, or takes longer than 2 seconds, is named on the page and the list is built from the rest.
+A source that fails, or takes longer than 2 seconds, is named on the page and the list is built from the rest. So is an
+AI client file that could not be read (by the client's name; the page also shows its `~` path).
 
 ### MCP servers in your AI clients
 
 ZAAFPulse reads the files `zaafpulse register-mcp` knows: Claude Code (`~/.claude.json`: the user's servers and each
 project's), Claude Desktop, Cursor, Kiro, Antigravity, VS Code (`servers`), Windsurf / Devin Desktop (and the folder
 from before the rename), Gemini CLI, Zed (`context_servers`) and Codex CLI (the `[mcp_servers.<name>]` tables of
-`config.toml`). Comments and trailing commas are fine. A client file must be a regular file of at most 20 MB. A file
-that cannot be read or parsed, or is ambiguous, shows as `unreadable` (for Codex that includes a server written inline
-rather than as a `[mcp_servers.<name>]` table, or a table with a `__proto__`, `constructor` or `prototype` key), and
-the other clients are still listed. The same server in several clients is one item that names every client. A
+`config.toml`). Comments and trailing commas are fine in a file of at most 2 MB; a larger file must be plain JSON. A
+client file must be a regular file of at most 20 MB. A file that cannot be read or parsed shows as `unreadable`, and the
+other clients are still listed. A Codex file that is ambiguous is `unreadable` too: a server written inline rather than
+as a `[mcp_servers.<name>]` table, or a table with a `__proto__`, `constructor` or `prototype` key. In the JSON
+clients' files an ambiguous command (a path with spaces followed by more words) gives no command; the file is still
+read. The same server in several clients is one item that names every client. A
 project's own `.mcp.json` or `.cursor/mcp.json` is not read.
 
 Of a server only this is kept: its name, the clients that have it, the transport (`stdio` or `http`), the command's
 base name (`npx`) and the first argument that looks like a package name (`npx -y @scope/pkg` gives `@scope/pkg`), or
 for an HTTP server its URL's origin (`https://mcp.example.com`: no path, query or user). Never an env value, a header,
-a flag's value (the argument after a flag such as `--token` is skipped), another argument, or anything that looks like a
-token or a UUID. ZAAFPulse's own entry is marked and is never counted as new. A project's folder shows as a `~` path on the
+a flag, the argument after a flag whose name looks secret (`--token`, `--api-key`, `--password`, `--auth` …), or
+anything that looks like a token, an email-like `user@host` or a UUID. Only those secret-looking flags skip the next
+argument: the package is the first other argument that looks like a package name, so it can be a plain flag's value
+(`--port 8080` gives `8080`). ZAAFPulse's own entry is marked and is never counted as new. A project's folder shows as a `~` path on the
 dashboard only; the evidence export leaves it out. Demo mode reads no client file.
 
 ### Reviews
@@ -70,7 +76,8 @@ The decision is a record: blocking a system stays with API keys and the guardrai
 ### First and last seen
 
 `.data/governance/seen.json` holds, for each item id, the first and the last day (UTC) the inventory saw it, and
-nothing else (the state last seen, a baseline mark, and whether the baseline is done). It is written when a build
+nothing else (the state last seen and a baseline mark), plus whether the baseline is done and, while it is open,
+`baselineSince`: the time the file was first written. It is written when a build
 changes it, and an entry not seen for 400 days is dropped. The page never fails on it.
 
 **Baseline.** Everything found before the first complete build is the baseline: there is no seen file yet, and the
@@ -80,14 +87,15 @@ upgrading does not raise an alert for everything already here. If the file is th
 baseline and every item counts as new: damaging or emptying the file raises the alert instead of silencing it.
 
 When a source fails, a reviewed item that source would have found is kept as it was last seen and marked `stale`
-("not confirmed this build"), not `gone`.
+("not confirmed this build"), not `gone`. The same goes for a reviewed MCP server while any AI client file is
+`unreadable`: the server may be in that file.
 
 ### The Monitors rule
 
 `inventory_unreviewed` (on by default, never pauses) is triggered while an item first seen in the last 7 days has no
 review and is not part of the baseline: a new AI system nobody has looked at (shadow AI). Its value is how many, its
 title their kinds (`mcp, provider`): the alert carries a count and kinds only, never a name. ZAAFPulse's own MCP entry
-does not count. The rule reads the last build, so it needs no open page.
+does not count, nor does a skill of ZAAFPulse's catalogue that is not installed. The rule reads the last build, so it needs no open page.
 
 ## Compliance
 
@@ -108,7 +116,7 @@ of AI meets a law or a standard.
 
 | Control | In place when | Partial when | Off when |
 |---|---|---|---|
-| Gateway guardrails (A.9) | secrets and personal data are `redact` or `block` and prompt injection is `block` | secrets are `redact` or `block` but another check only logs or is off, or an active key sets a check weaker than the global one | secrets are only logged or not checked |
+| Gateway guardrails (A.9) | secrets and personal data are `redact` or `block` and prompt injection is `block` | secrets are `redact` or `block` but another check only logs or is off, or an active key sets a check weaker than the global one, or the keys could not be read | secrets are only logged or not checked |
 | Governance audit log | entries are written and the last verify found the chain intact (kept at least 6 months) | not verified yet | writing fails, or the chain is broken |
 | Gateway request log | always: every gateway request is a line, never its text | the log reached its size cap and rotated, and reaches back under 183 days | |
 | External providers need approval (A.2) | every enabled external provider is approved or waits for approval | one is served without a recorded approval (set up before approvals existed) | |
@@ -118,13 +126,13 @@ of AI meets a law or a standard.
 | Monitors rules | `guardrail_block`, `audit_chain_broken` and `inventory_unreviewed` are on | one or two of them are off | all three are off |
 | Evals running | a judge model is ready, judge evaluators are on and the judge is not paused | the judge is off, waiting for a model or paused by its daily or cost cap (the code evaluators always run) | |
 | Dataset experiments | an experiment finished in the last 90 days | datasets, but no experiment finished in the last 90 days | no dataset |
-| Budgets that block or pause | a budget blocks, or pauses while agent control is on | budgets only alert (a pause budget counts for nothing while agent control is off) | no budget |
+| Budgets that block or pause | a budget blocks, or pauses while agent control is on | budgets only alert (a pause budget counts for nothing while agent control is off or could not be read) | no budget |
 | Secrets in the OS store (A.4) | the Keychain or the keyring | the encrypted secret file | |
 | Dashboard sign-in | this OS account (local) or a password | | no sign-in |
 | Content capture off | the OpenTelemetry export sends no prompt or reply | | it does (`otel.captureContent`) |
 | OpenTelemetry export | spans are exported | the exporter reports failed exports since start | not set up |
 | Trace retention | traces are kept at least 183 days (6 months) | they are kept less | tracing is off |
-| AI inventory reviewed | every item is reviewed, every high or unacceptable one has a decision and every unacceptable one is blocked, and every inventory source was read | some are reviewed, or a source could not be read | none is |
+| AI inventory reviewed | every item is reviewed, every high or unacceptable one has a decision and every unacceptable one is blocked, every inventory source was read and every AI client file could be read | some are reviewed, or a source or an AI client file could not be read ("N AI client files could not be read") | none is |
 
 Guardrails are the strictest of these: the default configuration (secrets `redact`, personal data `off`, injection
 `log`) shows `partial`, and `in place` needs personal data on and injection set to `block`.
@@ -138,8 +146,9 @@ and for OpenTelemetry settings that could not be used. The page and the exports 
 
 **Export Markdown** and **Export JSON** download `GET /api/governance/evidence?format=md|json`
 (`zaafpulse-evidence-<day>.md` or `.json`): the inventory with its reviews, the controls with status, evidence and
-clauses, the audit log's retention and last verify, the time and the ZAAFPulse version. It holds no path: an item's
-project folders and the client files are left out. Review notes (owner, purpose, note) are exported verbatim, so do
+clauses, the audit log's retention and last verify, the time and the ZAAFPulse version, and the AI clients whose files
+could not be read (`unreadableClients`, by name). It holds no path: an item's project folders and the client files are
+left out. Markdown in a table cell is escaped, so a name or a note cannot make a link or an image. Review notes (owner, purpose, note) are exported verbatim, so do
 not paste a secret into one. Each export is recorded as a `governance.export` entry, with the format and who asked.
 
 ### Inventory and compliance API
@@ -148,7 +157,7 @@ All behind the dashboard sign-in; no gateway key or MCP client reaches them.
 
 | Route | What |
 |---|---|
-| `GET /api/governance/inventory` | `{ generatedAt, items, counts, failed, clients }`: the items, their counts, the sources that failed, and the AI clients' files (`state` `ok` or `unreadable`, `~` paths) |
+| `GET /api/governance/inventory` | `{ generatedAt, items, counts, failed, clients }`: the items, their counts (`unreadableClients` among them), the sources that failed, and the AI clients' files (`state` `ok` or `unreadable`, `~` paths) |
 | `POST /api/governance/inventory` | `{ id, owner, purpose, risk, decision, note }` saves a review, `{ id, clear: true }` removes it; a bad field is a 400 that names it (`risk: minimal, limited, high, unacceptable or empty`) and nothing is written |
 | `GET /api/governance/controls` | `{ generatedAt, notice, frameworks, clauses, controls: [{ id, title, status, evidence, link, clauses }] }` |
 | `GET /api/governance/evidence?format=json\|md` | a download (`json` by default); any other format is a 400 |
@@ -157,7 +166,8 @@ All behind the dashboard sign-in; no gateway key or MCP client reaches them.
 
 - An owner is free text until named users arrive (a later sub-project).
 - Only the client files listed above are read; a project's own `.mcp.json` or `.cursor/mcp.json` is not.
-- The package is the first argument that looks like one, so `docker run …` shows `run`.
+- The package is the first argument that looks like one, so `docker run …` shows `run`, and a plain flag's value can
+  be taken for it (`--port 8080` shows `8080`); only flags whose name looks secret skip the argument after them.
 - No questionnaire, impact assessment workflow or external attestation. A decision is a record, not enforcement.
 
 ## Audit log
