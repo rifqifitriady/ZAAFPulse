@@ -130,15 +130,19 @@ treated as the defaults, and the settings route refuses bad input with 400; an M
 - **G2. Walker.** String leaves only, copy-on-write (an object or array is copied only when a string under it
   changed; a spread keeps symbol keys such as `tr.DROPPED`); the top level is always a new object. Structural keys
   (string value skipped): `model`, `role`, `type`, `id`, `name`, `tool_choice`, `stop`, any key ending in `_id`.
-  Binary or opaque keys (whole value skipped): `data`, `b64_json`, `image_url`, `inline_data`, `signature`,
-  `encrypted_content`. Strings starting with `data:` are skipped. Format `arguments` (MCP) has no structural keys
-  and no injection check.
+  Binary or opaque keys (whole value skipped): `b64_json`, `image_url`, `inline_data`, `signature`,
+  `encrypted_content`, and `data` only when its parent has `type: 'base64'`. Only base64 data URLs
+  (`data:<mime>;base64,…`) are skipped; other strings starting with `data:` are checked. Objects with `type`
+  `thinking`, `redacted_thinking` or `reasoning` are opaque (signed model output, passed through unchanged).
+  Format `arguments` (MCP) skips no key at all (no structural, binary or opaque skip) and has no injection check.
+  (Amended after the Task 2 review, f19fe6c.)
 - **G3. New input.** The list is `messages` (`openai-chat`, `anthropic`) or `input` (`responses`); an item is new when
   its index is after the last item with `role: 'assistant'` (in `responses` also an item whose `type` is one the model
   produces: `function_call`, `custom_tool_call`, `reasoning`, `web_search_call`, `file_search_call`, `computer_call`,
   `code_interpreter_call`, `image_generation_call`, `local_shell_call`, `mcp_call`). Every other top-level field
   (`system`, `instructions`, `tools`, …) is new only when there is no assistant item. A string `input` and every
-  `embeddings` input is new.
+  `embeddings` input is new. A trailing assistant item (a prefill) is ignored when finding that last assistant item.
+  (Amended after the Task 2 review, f19fe6c.)
 - **G4. Secrets.** `signals.secretSpans(text)`; each span is one hit of its label. A `Private key` span (its pattern
   matches the `BEGIN` line only) is widened to the matching `-----END … PRIVATE KEY-----` line, or to the end of the
   text when there is none, so the key body never leaves.
