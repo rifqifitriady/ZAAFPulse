@@ -31,7 +31,7 @@ test('the rules: aggregate, on by default, never pausing, no parameters', () => 
   );
   assert.equal(
     rule('audit_chain_broken').describe,
-    'The daily check of the governance audit log found an entry changed, missing or out of order.',
+    'The daily check of the governance audit log found an entry changed, missing or out of order, or the audit key replaced.',
   );
 });
 
