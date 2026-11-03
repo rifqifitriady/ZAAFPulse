@@ -235,12 +235,12 @@ test('walker: structural and binary keys are skipped, and the input body is neve
   assert.equal(m.content[1].image_url.url, `https://x/${ANT}`);
   assert.equal(m.content[2].source.data, ANT);
   assert.equal(m.content[3].text, 'data:text/plain,‹secret: Anthropic API key›');
-  assert.equal(m.content[4].text, `data:image/png;base64,${ANT}`);
+  assert.equal(m.content[4].text, 'data:image/png;base64,‹secret: Anthropic API key›', 'not a base64 body');
   assert.equal(m.content[5].signature, ANT);
   assert.equal(r.body.user_id, ANT);
   assert.deepEqual(r.body.stop, [ANT]);
   assert.equal(r.body.metadata.note, '‹secret: Anthropic API key›');
-  assert.deepEqual(r.hits, [{ check: 'secrets', label: 'Anthropic API key', count: 3 }]);
+  assert.deepEqual(r.hits, [{ check: 'secrets', label: 'Anthropic API key', count: 4 }]);
   // MCP arguments: no key is structural there; injection is not checked.
   const args = G.checkBody({ name: `${ANT} ${INJ}` }, policy({ injection: 'block' }), { format: 'arguments' });
   assert.equal(args.body.name, `‹secret: Anthropic API key› ${INJ}`);
@@ -389,4 +389,32 @@ test('injection: a long single-line body is scanned in linear time (no backward 
     const took = ms(() => G.checkBody(chat([{ role: 'user', content: text }]), policy(), { format: 'openai-chat' }));
     assert.ok(took < 1000, `${name}: ${took.toFixed(0)} ms`);
   }
+});
+
+test('walker: a data URL is skipped only when all of it is base64, so text after a short prefix is still checked', () => {
+  // A 1x1 PNG, wrapped the way MIME wraps base64.
+  const png =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\n' +
+    'iVBORw0KGgo=';
+  const sneaky = `data:text/plain;base64,AAAA\nmy key is ${ANT}`;
+  const body = chat([
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: png },
+        { type: 'text', text: sneaky },
+      ],
+    },
+  ]);
+  const r = G.checkBody(body, policy(), { format: 'openai-chat' });
+  assert.equal(r.body.messages[0].content[0].text, png);
+  assert.equal(
+    r.body.messages[0].content[1].text,
+    'data:text/plain;base64,AAAA\nmy key is ‹secret: Anthropic API key›',
+  );
+  assert.throws(
+    () =>
+      G.checkBody(chat([{ role: 'user', content: sneaky }]), policy({ secrets: 'block' }), { format: 'openai-chat' }),
+    G.GuardrailBlock,
+  );
 });
