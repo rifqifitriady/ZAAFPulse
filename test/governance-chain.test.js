@@ -217,6 +217,29 @@ test('fix round 1: secrets and keyCenters are exempt only at their own paths', (
   ]);
 });
 
+test('diff: a guardrails mode is readable at any path ending in guardrails.secrets; other secrets stay masked', () => {
+  // A list compared by id (a list named "keys" would itself be a secret-looking name, and stays masked).
+  const list = (name, mode) => ({ [name]: [{ id: 'k1', guardrails: mode ? { secrets: mode } : {} }] });
+  assert.deepEqual(diff(list('providers', null), list('providers', 'block')).changes, [
+    { path: 'providers[k1].guardrails.secrets', from: null, to: 'block' },
+  ]);
+  assert.deepEqual(diff(list('keys', null), list('keys', 'block')).changes, [{ path: 'keys', from: MASK, to: MASK }]);
+  assert.deepEqual(diff({ guardrails: { secrets: 'off' } }, { guardrails: { secrets: 'redact' } }).changes, [
+    { path: 'guardrails.secrets', from: 'off', to: 'redact' },
+  ]);
+  assert.deepEqual(diff({ foo: { secrets: { openai: 'sk-a' } } }, { foo: { secrets: { openai: 'sk-b' } } }).changes, [
+    { path: 'foo.secrets.openai', from: MASK, to: MASK },
+  ]);
+  // Under a secret-looking parent, or a segment that only ends in "guardrails": masked as before.
+  assert.deepEqual(
+    diff({ apiKey: { guardrails: { secrets: 'a' } } }, { apiKey: { guardrails: { secrets: 'b' } } }).changes,
+    [{ path: 'apiKey.guardrails.secrets', from: MASK, to: MASK }],
+  );
+  assert.deepEqual(diff({ myguardrails: { secrets: 'a' } }, { myguardrails: { secrets: 'b' } }).changes, [
+    { path: 'myguardrails.secrets', from: MASK, to: MASK },
+  ]);
+});
+
 test('fix round 1: cut never splits a surrogate pair', () => {
   const s = `${'a'.repeat(118)}😀${'b'.repeat(10)}`;
   const to = diff({ t: '' }, { t: s }).changes[0].to;
