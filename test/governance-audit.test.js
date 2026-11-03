@@ -498,8 +498,8 @@ test('record: a write that fails half way is cut back, so the next entry does no
   const { dir, audit } = setup(t, { store: memStore() });
   audit.record({ action: 'auth.login', actor: dash });
   const real = fs.writeSync;
-  fs.writeSync = (fd, buf) => {
-    real(fd, Buffer.from(buf).subarray(0, 10));
+  fs.writeSync = (fd, buf, off, len, at) => {
+    real(fd, Buffer.from(buf).subarray(0, 10), 0, 10, at);
     throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' });
   };
   try {
@@ -758,4 +758,27 @@ test('key: while a store-keyed chain cannot read its key, the store is probed at
   store.down = false;
   assert.equal(locked.record({ action: 'auth.logout', actor: dash }).seq, 4); // 3 is the audit.gap (6 missed)
   assert.equal(locked.verify().ok, true);
+});
+
+test('record: a torn line is mended where an append-mode handle cannot be truncated (as on Windows)', (t) => {
+  const { dir, audit, make } = setup(t, { store: memStore() });
+  audit.record({ action: 'auth.login', actor: dash });
+  const file = path.join(dir, 'governance-2026-11.jsonl');
+  fs.appendFileSync(file, '{"seq":3,"ts":"2026-11-03T12:0');
+  const { openSync, ftruncateSync, closeSync } = fs;
+  const append = new Set();
+  fs.openSync = (p, flags, ...rest) => {
+    const fd = openSync(p, flags, ...rest);
+    if (String(flags).startsWith('a')) append.add(fd);
+    return fd;
+  };
+  fs.closeSync = (fd) => (append.delete(fd), closeSync(fd));
+  fs.ftruncateSync = (fd, len) => {
+    if (append.has(fd)) throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
+    return ftruncateSync(fd, len);
+  };
+  t.after(() => Object.assign(fs, { openSync, ftruncateSync, closeSync }));
+  const e = make().record({ action: 'config.change', actor: dash });
+  assert.equal(e && e.seq, 3);
+  assert.deepEqual(make().verify(), { ok: true, checked: 3, from: 1, to: 3 });
 });
