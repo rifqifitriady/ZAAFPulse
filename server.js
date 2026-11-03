@@ -1085,13 +1085,22 @@ const invSource = async (fn) => {
   const v = await topoSource(fn, INV_FAILED);
   return v === INV_FAILED ? null : v;
 };
-// An AI client's config file: its text, or null when it is not there.
+// An AI client's config file: its text, or null when it is not there. It is opened (without waiting on a pipe) and must
+// be a regular file of at most 20 MB, so a FIFO or a huge file cannot hold up the page.
+const CLIENT_FILE_MAX = 20 * 1024 * 1024;
 function readClientFile(file) {
+  let fd = null;
   try {
-    return fs.readFileSync(file, 'utf8');
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0));
+    const st = fs.fstatSync(fd);
+    if (!st.isFile()) throw new Error('not a regular file');
+    if (st.size > CLIENT_FILE_MAX) throw new Error('file too large');
+    return fs.readFileSync(fd, 'utf8');
   } catch (e) {
     if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return null;
     throw e;
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
   }
 }
 async function inventorySources() {
@@ -1100,6 +1109,7 @@ async function inventorySources() {
   const [live, summary, traced, gw, runtimes, integrations, mcp] = await Promise.all([
     invSource(async () => {
       const s = DEMO ? demo.live() : await processes.snapshot();
+      if (s && s.error) throw new Error('the process list could not be read');
       return {
         apps: pick(s.apps, ['id', 'name']),
         installed: s.installed,
@@ -1127,7 +1137,11 @@ async function inventorySources() {
         knowledge: pick(gateway.knowledge.list(), ['id', 'name']),
       };
     }),
-    invSource(async () => (await runtimeApi.route({ method: 'GET', path: '/api/runtimes' })).body),
+    invSource(async () => {
+      const r = await runtimeApi.route({ method: 'GET', path: '/api/runtimes' });
+      if (!r || r.status !== 200 || !Array.isArray(r.body)) throw new Error('the runtimes could not be read');
+      return r.body;
+    }),
     invSource(() =>
       DEMO
         ? demo.integrations().integrations.filter((i) => i.type !== 'acc')

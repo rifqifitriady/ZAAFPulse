@@ -202,3 +202,28 @@ test('inventory: for a dashboard session only; no sign-in or an API key is a 401
   assert.equal((await call(s, '/api/governance/inventory', { headers: { cookie } })).status, 200);
   assert.ok(s.alive());
 });
+
+test('inventory: a FIFO or an oversize client file is unreadable, never waited on; an agent prompt and a key never leave', async (t) => {
+  const { execFileSync } = require('child_process');
+  const s = await startServer(t, {}, (data) => {
+    prepare(data);
+    fs.writeFileSync(path.join(data, '.claude.json'), Buffer.alloc(21 * 1024 * 1024, 32));
+    if (process.platform !== 'win32') execFileSync('mkfifo', [path.join(data, '.codex-fifo')]);
+  });
+  const post = (route, body) => call(s, `/api/gateway/${route}`, { method: 'POST', body });
+  const PROMPT = 'PROMPT-TEXT-UNIQUE-91';
+  await post('agents', { action: 'save', id: 'secret-agent', name: 'Secret agent', systemPrompt: PROMPT });
+  const k = await post('keys', { action: 'create', name: 'inv-key' });
+  const r = await call(s, '/api/governance/inventory');
+  assert.equal(r.status, 200);
+  assert.ok(r.body.items.some((i) => i.id === 'agent:secret-agent'));
+  assert.ok(!r.text.includes(PROMPT), 'the system prompt must not leave the server');
+  const secrets = [k.body && k.body.secret, k.body && k.body.key, k.body && k.body.hash].filter(
+    (x) => typeof x === 'string' && x.length > 8,
+  );
+  assert.ok(secrets.length > 0, 'the key answer carries a secret to look for');
+  for (const x of secrets) assert.ok(!r.text.includes(x), 'a key secret must not leave the server');
+  const c = r.body.clients.find((x) => x.client === 'claude');
+  assert.ok(!c || c.state === 'unreadable' || c.servers === 0);
+  assert.ok(s.alive());
+});
