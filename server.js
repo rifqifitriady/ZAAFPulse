@@ -75,6 +75,9 @@ const otel = require('./lib/otel');
 const { createTraceStore } = require('./lib/trace/store');
 const { createRecorder } = require('./lib/trace/recorder');
 const { createReceiver } = require('./lib/trace/otlp');
+const govContext = require('./lib/governance/context');
+const { requestEntry } = require('./lib/governance/events');
+const { createGovernanceAudit, keySource } = require('./lib/governance/audit');
 
 const PORT = Number(process.env.ZAAFPULSE_PORT || process.env.PORT) || 4777;
 const HOST = process.env.ZAAFPULSE_HOST || process.env.HOST || '127.0.0.1';
@@ -237,6 +240,19 @@ const integrationConfig = createIntegrationConfig({ file: CONFIG_FILE, secrets: 
 const demoDir = DEMO ? fs.mkdtempSync(path.join(os.tmpdir(), 'zp-demo-')) : null;
 const demoGw = DEMO ? require('./lib/demo-gateway') : null;
 let demoReady = !DEMO;
+// Governance audit log (AI Governance 2, lib/governance): every change a person or an API key makes, with its actor and
+// outcome, in .data/audit (demo: the throwaway folder), chained with acc.audit-chain from the secret store (demo: a
+// key file, so demo mode never touches the store).
+const govDir = path.join(DEMO ? demoDir : path.join(DIR, '.data'), 'audit');
+const governance = createGovernanceAudit({
+  dir: govDir,
+  now: Date.now,
+  getKey: keySource({ dir: govDir, store: DEMO ? null : require('./lib/secret-store').defaultStore(), now: Date.now }),
+});
+// An entry's actor: the one it names, else the request's (lib/governance/context.js), else the server's own.
+function govRecord(entry) {
+  return governance.record({ ...entry, actor: entry.actor || govContext.actor() || { via: 'system' } });
+}
 let rawCache = {
   mtime: -1,
   value: DEMO ? { gateway: demoGw.CONFIG, brain: { sources: demoGw.BRAIN_SOURCES(path.join(demoDir, 'brain')) } } : {},
@@ -1017,8 +1033,17 @@ const SECURITY_HEADERS = {
   'Cross-Origin-Resource-Policy': 'same-origin',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), usb=(), payment=()',
 };
+// Dashboard changes waiting for their answer (A4(1)): the entry is written right before the answer, so whoever reads
+// the log after the answer finds it. The request's body comes from readBody; only its short fields are kept.
+const pendingAudit = new WeakMap();
 // `headers` may add a download's Content-Disposition only (lib/response-headers.js).
 function send(res, status, body, type = 'application/json', headers = {}) {
+  const p = pendingAudit.get(res);
+  if (p) {
+    pendingAudit.delete(res);
+    const e = requestEntry({ method: p.req.method, path: p.path, status, body: bodies.get(p.req), reply: body });
+    if (e) govRecord(e);
+  }
   res.writeHead(status, responseHeaders(type, headers, SECURITY_HEADERS));
   res.end(type === 'application/json' ? JSON.stringify(body) : body);
 }
@@ -1032,6 +1057,8 @@ function traceError(res, e) {
 // A query value that must be a whole number >= 0 (an offset or turn): undefined when absent, NaN when bad.
 const wholeParam = (v) => (v == null || v === '' ? undefined : /^\d{1,15}$/.test(v) ? Number(v) : NaN);
 
+// The text each request sent, as read, for the audit entry of a dashboard change (send() keeps its short fields only).
+const bodies = new WeakMap();
 function readBody(req, max = 1e6) {
   return new Promise((resolve, reject) => {
     let data = '';
@@ -1042,7 +1069,10 @@ function readBody(req, max = 1e6) {
         reject(new Error('too large'));
       }
     });
-    req.on('end', () => resolve(data));
+    req.on('end', () => {
+      bodies.set(req, data);
+      resolve(data);
+    });
   });
 }
 
@@ -1144,10 +1174,17 @@ const handler = async (req, res) => {
     if (await gateway.handle(req, res, url)) return;
     // Dashboard and /api: a signed-in session in server mode.
     if (await auth.handle(req, res, url)) return;
-    if (!auth.check(req) && !['/login.html', '/login.js'].includes(url.pathname)) {
+    const signedIn = auth.check(req);
+    if (!signedIn && !['/login.html', '/login.js'].includes(url.pathname)) {
       if (url.pathname.startsWith('/api/')) return send(res, 401, { error: 'sign in first' });
       res.writeHead(302, { location: '/login.html', ...SECURITY_HEADERS });
       return res.end();
+    }
+    if (signedIn) {
+      // The governance audit log: who this request acts as, and one entry for each change it makes (A4(1)).
+      govContext.setActor(auth.actorOf(req));
+      if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && url.pathname.startsWith('/api/'))
+        pendingAudit.set(res, { req, path: url.pathname });
     }
     if (url.pathname === '/api/platform') {
       return send(res, 200, {
@@ -1625,7 +1662,9 @@ const handler = async (req, res) => {
     send(res, 500, { error: err.message });
   }
 };
-const traced = otel.wrapHandler(handler); // continues an incoming traceparent on gateway requests
+// Each request runs with its own actor slot for the governance audit log (filled after sign-in or the key check);
+// otel continues an incoming traceparent on gateway requests.
+const traced = otel.wrapHandler((req, res) => govContext.runAs(null, () => handler(req, res)));
 const server = TLS ? https.createServer(TLS, traced) : http.createServer(traced);
 server.on('error', (err) => {
   console.error(
