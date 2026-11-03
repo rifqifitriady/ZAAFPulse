@@ -1212,6 +1212,12 @@ function send(res, status, body, type = 'application/json', headers = {}) {
     } catch {
       /* an audit bug never fails a response (A6) */
     }
+    // A change the dashboard made (an agent, a key, a setting): the next inventory read sees it, not a kept copy.
+    try {
+      if (p.req.method !== 'GET' && status < 400) governanceApi.invalidateInventory();
+    } catch {
+      /* never fails a response */
+    }
   }
   res.writeHead(status, responseHeaders(type, headers, SECURITY_HEADERS));
   res.end(type === 'application/json' ? JSON.stringify(body) : body);
