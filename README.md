@@ -258,7 +258,7 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 <td valign="top">
 
 **Gateway guardrails**<br>
-<sub>Secrets, personal data and prompt injection checked in everything the gateway sends to a provider or an MCP integration: off, log, redact or block, per key if you like. Redacted text becomes a fixed placeholder; nothing matched is ever stored. <a href="docs/guardrails.md">docs/guardrails.md</a></sub>
+<sub>Secrets, personal data and prompt injection checked in everything the gateway sends to a provider or an MCP integration: off, log, redact or block, per key if you like. Redacted text becomes a fixed placeholder; nothing matched is ever stored. On by default: after an upgrade, coding agents see <code>‹secret: …›</code> where a file holds a key (set secrets to log to opt out; <a href="docs/guardrails.md#what-changes-when-you-upgrade">what changes</a>). <a href="docs/guardrails.md">docs/guardrails.md</a></sub>
 
 </td>
 </tr>
