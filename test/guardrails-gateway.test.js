@@ -193,6 +193,30 @@ test('scope: a private target is not checked under scope external, and is under 
   assert.equal(all.sentTo('/chat/completions').at(-1).body.messages[0].content, `key ${RED}`);
 });
 
+test('scope: a local router on automatic tier and an Ollama cloud model are checked under scope external', async (t) => {
+  const s = await setup({
+    providers: [
+      { id: 'lite', preset: 'litellm' },
+      { id: 'mine', preset: 'litellm', tier: 'private' },
+      { id: 'nine', preset: '9router' },
+      { id: 'oll', preset: 'ollama' },
+    ],
+  });
+  t.after(s.close);
+  for (const [model, checked] of [
+    ['lite/gpt-x', true],
+    ['mine/gpt-x', false],
+    ['nine/claude-x', true],
+    ['oll/qwen3-coder:480b-cloud', true],
+    ['oll/llama3.2', false],
+  ]) {
+    const r = await s.call('/v1/chat/completions', { model, ...userMsg(`key ${ANT}`) });
+    assert.equal(r.status, 200, model);
+    assert.equal(s.sentTo('/chat/completions').at(-1).body.messages[0].content, `key ${checked ? RED : ANT}`, model);
+    assert.equal(s.last().guard?.action, checked ? 'redacted' : undefined, model);
+  }
+});
+
 test('scope: each route target is checked for its own tier', async (t) => {
   // The private target fails first (no key header from it); the external fallback gets the redacted body.
   const s = await setup({

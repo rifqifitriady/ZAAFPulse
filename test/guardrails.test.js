@@ -72,6 +72,36 @@ test('scope: external leaves private providers alone, all checks every call', ()
   assert.equal(G.inScope(policy({ scope: 'all' }), 'private'), true);
 });
 
+test('scope tier: a local router the owner left on automatic, and an Ollama cloud model, count as external', () => {
+  const providers = require('../lib/gateway/providers');
+  const tier = (provider, model) => G.scopeTier(provider, model, providers);
+  assert.equal(tier({ preset: 'litellm' }, 'gpt-x'), 'external');
+  assert.equal(tier({ preset: '9router' }, 'claude-x'), 'external');
+  assert.equal(tier({ preset: 'litellm', tier: 'private' }, 'gpt-x'), 'private', 'the owner marked it private');
+  assert.equal(tier({ preset: 'ollama' }, 'llama3.2'), 'private');
+  assert.equal(tier({ preset: 'ollama' }, 'qwen3-coder:480b-cloud'), 'external');
+  assert.equal(tier({ preset: 'ollama', tier: 'private' }, 'gpt-oss:120b-cloud'), 'external', 'runs on ollama.com');
+  assert.equal(tier({ preset: 'ollama' }, 'glm-4.6:cloud'), 'external');
+  assert.equal(tier({ preset: 'lmstudio' }, 'phi'), 'private');
+  assert.equal(tier({ preset: 'custom', tier: 'private' }, 'm'), 'private');
+  assert.equal(tier({ preset: 'openai' }, 'gpt-x'), 'external');
+  // Access control is unchanged: providers.tierOf still calls a LiteLLM proxy private.
+  assert.equal(providers.tierOf({ preset: 'litellm' }), 'private');
+});
+
+test('scope tier: a provider saved with its tier on Automatic stores none, so the owner’s own choice can be told apart', () => {
+  const providers = require('../lib/gateway/providers');
+  const auto = providers.cleanProvider({ id: 'lite', preset: 'litellm', tier: '' }).value;
+  assert.equal(Object.hasOwn(auto, 'tier'), false);
+  assert.deepEqual([providers.tierOf(auto), auto.approved], ['private', true], 'access control as before');
+  assert.equal(G.scopeTier(auto, 'gpt-x', providers), 'external');
+  const mine = providers.cleanProvider({ id: 'lite', preset: 'litellm', tier: 'private' }).value;
+  assert.equal(mine.tier, 'private');
+  assert.equal(G.scopeTier(mine, 'gpt-x', providers), 'private');
+  const ext = providers.cleanProvider({ id: 'oai', preset: 'openai', approved: false }).value;
+  assert.deepEqual([providers.tierOf(ext), ext.approved], ['external', false]);
+});
+
 test('secrets: off, log, redact and block; a database URL keeps its host; a private key goes whole', () => {
   const body = chat([{ role: 'user', content: `keys ${ANT} and ${GHP}, db ${DB}\n${PEM}\nend` }]);
   const off = G.checkBody(body, policy({ secrets: 'off' }), { format: 'openai-chat' });

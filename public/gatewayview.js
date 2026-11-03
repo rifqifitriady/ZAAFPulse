@@ -598,6 +598,14 @@ function gwKeys() {
 }
 
 /* ---------- Providers ---------- */
+// The provider form's Tier select: Automatic unless the owner chose a tier. A preset that forwards requests to hosted
+// APIs (LiteLLM, 9router) says that the guardrails count it external while it is on Automatic.
+function gwTierSelect(e, pre) {
+  const chosen = e.tierAuto ? '' : e.tier;
+  const auto = `${pre.local ? 'private' : 'external'}${pre.forwards ? '; guardrails check it as external' : ''}`;
+  return `<select class="input" name="tier"><option value="">Automatic (${auto})</option><option value="private" ${chosen === 'private' ? 'selected' : ''}>Private: my own hardware</option><option value="external" ${chosen === 'external' ? 'selected' : ''}>External: hosted API</option></select>`;
+}
+
 function gwProviders() {
   const d = gw.data;
   const e = gw.editingProvider;
@@ -629,7 +637,7 @@ function gwProviders() {
           <input class="input" name="secretValue" type="password" autocomplete="off" placeholder="key, ${storeName()} item or env name"></div></label>
         <label>Extra models <small>comma-separated, added to what the provider lists</small><input class="input" name="models" value="${esc((e.models || []).join(', '))}"></label>
         <label>Aliases <small>JSON, e.g. {"fast": "llama3.2"}</small><input class="input mono" name="aliases" value="${esc(JSON.stringify(e.aliases || {}))}"></label>
-        <div class="gw-row"><label>Tier<select class="input" name="tier"><option value="">Automatic (${d.presets[e.preset].local ? 'private' : 'external'})</option><option value="private" ${e.tier === 'private' ? 'selected' : ''}>Private: my own hardware</option><option value="external" ${e.tier === 'external' ? 'selected' : ''}>External: hosted API</option></select></label>
+        <div class="gw-row"><label>Tier${gwTierSelect(e, d.presets[e.preset])}</label>
           <label class="ie-switch"><input type="checkbox" name="approved" ${e.approved !== false ? 'checked' : ''}><span></span>Approved for use (external)</label>
           <label class="ie-switch"><input type="checkbox" name="enabled" ${e.enabled !== false ? 'checked' : ''}><span></span>Enabled</label></div>
         <div id="gw-prov-errors"></div>

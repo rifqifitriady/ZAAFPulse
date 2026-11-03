@@ -132,3 +132,16 @@ test('save: the Guardrails form posts the four values to the settings route', ()
     body: { guardrails: { scope: 'all', secrets: 'redact', pii: 'block', injection: 'log' } },
   });
 });
+
+test('provider form: the tier shows Automatic unless the owner chose one, and says when guardrails count it external', () => {
+  const { ctx } = load();
+  const lite = { label: 'LiteLLM proxy', local: true, forwards: true };
+  const auto = ctx.gwTierSelect({ originalId: 'lite', preset: 'litellm', tier: 'private', tierAuto: true }, lite);
+  assert.ok(auto.includes('<option value="">Automatic (private; guardrails check it as external)</option>'));
+  assert.ok(!auto.includes('selected'), 'Automatic, the first option');
+  const mine = ctx.gwTierSelect({ originalId: 'lite', preset: 'litellm', tier: 'private', tierAuto: false }, lite);
+  assert.ok(mine.includes('<option value="private" selected>'));
+  const oll = ctx.gwTierSelect({ preset: 'ollama' }, { label: 'Ollama', local: true });
+  assert.ok(oll.includes('<option value="">Automatic (private)</option>'));
+  assert.ok(!oll.includes('selected'));
+});
