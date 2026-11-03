@@ -433,14 +433,14 @@ test('a reviewed item whose kind source failed is stale, not gone', () => {
   assert.equal(inv.counts.gone, 1);
 });
 
-test('seen store: write never throws; a folder that cannot be made gives false and the next write tries again', (t) => {
+test('seen store: write never throws; a folder that cannot be made gives failed and the next write tries again', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-gov-seen-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   fs.writeFileSync(path.join(dir, 'governance'), 'a file where the folder should be');
   const file = path.join(dir, 'governance', 'seen.json');
   const store = createSeenStore({ file });
   const state = { baselineDone: true, map: { 'app:claude': { first: '2026-11-03', last: '2026-11-03' } } };
-  assert.equal(store.write(state), false);
+  assert.equal(store.write(state), 'failed');
   fs.rmSync(path.join(dir, 'governance'));
   assert.equal(store.write(state), true, 'the failed write was not remembered as done');
 });

@@ -38,7 +38,10 @@ function setup({ governance = { audit: { retentionMonths: 24 } }, seenWrite } = 
       };
     },
     seen: {
-      read: () => st.seen,
+      read: () => {
+        if (st.seenThrows) throw new Error('EIO');
+        return st.seen;
+      },
       write: seenWrite || ((state) => ((st.seen = state), st.writes++, true)),
     },
     now: () => st.t,
@@ -98,6 +101,24 @@ test('GET inventory: a seen store that cannot be written never fails the page', 
   const r = await s.call('/api/governance/inventory');
   assert.equal(r.status, 200);
   assert.deepEqual(s.st.logs, ['governance: the inventory dates could not be saved (EACCES)']);
+  // The real store reports a failed write as 'failed': logged, with no path.
+  const f = setup({ seenWrite: () => 'failed' });
+  assert.equal((await f.call('/api/governance/inventory')).status, 200);
+  assert.deepEqual(f.st.logs, ['governance: the inventory dates could not be saved (error)']);
+  // A store that cannot be read is the loud shape: nothing is a baseline.
+  const g = setup();
+  g.st.seenThrows = true;
+  const items = (await g.call('/api/governance/inventory')).body.items;
+  assert.ok(items.length > 0 && items.every((i) => i.baseline === undefined));
+});
+
+test('POST inventory: an id must be the canonical one; clearing a review that is not there writes nothing', async () => {
+  const s = setup();
+  for (const id of ['mcp:GitHub', 'mcp:a\tb', 'mcp:a\u0000b', 'mcp:a\u2028b', 'mcp: x'])
+    assert.equal((await s.call('/api/governance/inventory', { method: 'POST', body: { id } })).status, 400, id);
+  const r = await s.call('/api/governance/inventory', { method: 'POST', body: { id: 'mcp:none', clear: true } });
+  assert.deepEqual([r.status, r.body], [200, { id: 'mcp:none', review: null }]);
+  assert.equal(s.st.saved.length, 0);
 });
 
 test('POST inventory: a review is saved beside the other settings, shown on the item, and cleared', async () => {
@@ -180,4 +201,21 @@ test('reviews: 200 characters after trimming; the audit diff of a key item revie
   assert.deepEqual(diff({}, { governance: { apiKey: 'zp_x' } }).changes, [
     { path: 'governance.apiKey', from: null, to: '‹changed›' },
   ]);
+});
+
+test('GET inventory: a source that failed is listed, its reviewed items are stale and the first build stays a baseline', async () => {
+  const s = setup({ governance: { inventory: { 'app:claude': { owner: 'Ana' } } } });
+  const api = createGovernanceApi({
+    audit: {},
+    settings: { get: () => s.st.governance, save() {} },
+    sources: async () => ({ live: null, gateway: { agents: [{ id: 'a1', name: 'A' }] } }),
+    seen: { read: () => s.st.seen, write: (x) => ((s.st.seen = x), true) },
+    now: () => NOW,
+  });
+  const r = (await api.route({ method: 'GET', path: '/api/governance/inventory', query: new URLSearchParams() })).body;
+  assert.ok(r.failed.includes('live'));
+  const claude = r.items.find((i) => i.id === 'app:claude');
+  assert.equal(claude.stale, true);
+  assert.notEqual(claude.state, 'gone');
+  assert.equal(s.st.seen.baselineDone, false, 'the baseline stays open');
 });
