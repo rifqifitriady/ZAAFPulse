@@ -223,3 +223,15 @@ test('fix round 1: cut never splits a surrogate pair', () => {
   assert.equal(to, `${'a'.repeat(118)}😀…`);
   assert.doesNotMatch(to, /[\ud800-\udbff](?![\udc00-\udfff])/);
 });
+
+test('diff: URL credentials in a text value are replaced on both sides of a change', () => {
+  const { changes } = diff(
+    { gateway: { note: 'see https://bob:hunter2@host.example/x', hook: 'ftp://svc:pw@h' } },
+    { gateway: { note: 'see https://bob:newpass@host.example/y', hook: 'ftp://h' } },
+  );
+  assert.deepEqual(changes, [
+    { path: 'gateway.hook', from: 'ftp://‹changed›@h', to: 'ftp://h' },
+    { path: 'gateway.note', from: 'see https://‹changed›@host.example/x', to: 'see https://‹changed›@host.example/y' },
+  ]);
+  assert.ok(!JSON.stringify(changes).includes('hunter2') && !JSON.stringify(changes).includes('newpass'));
+});
