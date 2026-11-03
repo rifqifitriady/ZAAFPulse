@@ -110,7 +110,7 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 <td valign="top">
 
 **Monitors & alerts**<br>
-<sub>Eight rules on cost, quality and agent behaviour, including cost anomalies and guardrail blocks, plus your budgets, with alerts in the top bar, a desktop notification or a webhook. Pause, resume or stop the agent behind a session, or let a cost or loop rule pause it (off by default). Snooze a rule for an hour or a day.</sub>
+<sub>Ten rules on cost, quality, agent behaviour and the audit log, including cost anomalies and guardrail blocks, plus your budgets, with alerts in the top bar, a desktop notification or a webhook. Pause, resume or stop the agent behind a session, or let a cost or loop rule pause it (off by default). Snooze a rule for an hour or a day.</sub>
 
 </td>
 </tr>
@@ -259,6 +259,12 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 
 **Gateway guardrails**<br>
 <sub>Secrets, personal data and prompt injection checked in everything the gateway sends to a provider or an MCP integration: off, log, redact or block, per key if you like. Redacted text becomes a fixed placeholder; nothing matched is ever stored. On by default: after an upgrade, coding agents see <code>‹secret: …›</code> where a file holds a key (set secrets to log to opt out; <a href="docs/guardrails.md#what-changes-when-you-upgrade">what changes</a>). <a href="docs/guardrails.md">docs/guardrails.md</a></sub>
+
+</td>
+<td valign="top">
+
+**Governance audit log**<br>
+<sub>Every change made by a person or an API key (settings, keys, providers, guardrails, integrations, budgets, sign-ins, approvals) with who, when, what and the outcome. Monthly files kept 12 months by default, chained with a key so an edited or deleted line shows when you verify, exportable as CSV or JSON lines. <a href="docs/governance.md">docs/governance.md</a></sub>
 
 </td>
 </tr>
@@ -728,13 +734,29 @@ Shapes, limits, privacy, the API and CI recipes: **[docs/datasets.md](docs/datas
 
 Monitors watch your usage, cost and quality inside the dashboard server and tell you when something looks wrong. The bell in the top bar lists recent alerts, and **Settings → Monitors** has the rules and the channels.
 
-- **Eight rules:** cost burn (per session, per 10 minutes), tool loop, agent stuck, accuracy drop, evaluator pass rate, unsafe content, cost anomaly (today's or yesterday's spend well above what the same weekday usually costs) and guardrail block (the gateway guardrails blocked a request in the last hour), plus your cost budgets. Each rule can be switched on or off, has its own limits, and can be snoozed for an hour or a day. A rule with missing input reports *no data* and never triggers.
+- **Ten rules:** cost burn (per session, per 10 minutes), tool loop, agent stuck, accuracy drop, evaluator pass rate, unsafe content, cost anomaly (today's or yesterday's spend well above what the same weekday usually costs), guardrail block (the gateway guardrails blocked a request in the last hour), audit log degraded and audit chain broken (see [Governance audit log](#governance-audit-log)), plus your cost budgets. Each rule can be switched on or off, has its own limits, and can be snoozed for an hour or a day. A rule with missing input reports *no data* and never triggers.
 - **Channels:** a desktop notification (on by default) and an optional webhook whose URL and headers go to the OS secret store. Neither carries transcript text. Demo mode sends nothing.
 - **Agent control:** pause (`SIGSTOP`), resume or stop the Claude Code or Codex process behind a session from the Trace explorer, the Live monitor or AI Office. Before every signal the process table is read again and the pid and start time must match; every action is written to `.data/agent-audit.jsonl`.
 - **Auto-pause** for cost burn and tool loop is off by default; a budget pauses only when you set it to. A paused agent is never resumed or stopped automatically.
 - **Where control is off:** server mode, password sign-in, no sign-in, and Docker. Windows has no pause or resume.
 
 Rules, states, channels, safety checks, the API and known limits: **[docs/monitors.md](docs/monitors.md)**.
+
+## Governance audit log
+
+**Governance → Audit log** lists every change made to ZAAFPulse by a person or an API key: dashboard changes with
+their route and outcome, every `config.json` write with its changed fields (secrets masked), sign-ins and lockouts, API
+key changes, approvals and cancels of collaboration runs (with the key that asked), agent and runtime control, and
+each secret shown in the Trace explorer.
+
+- **Kept** in monthly files under `.data/audit/` for 12 months by default (6 to 120), then deleted by whole months.
+- **Chained:** each entry carries an HMAC of the one before it, with a key in the OS secret store. **Verify** shows
+  the first entry that was changed, removed or moved; it also runs once a day, and the `audit_chain_broken` rule alerts.
+- **Never in the way:** when an entry cannot be written the change still happens, the page shows "Degraded since …",
+  and `audit_degraded` alerts; one `audit.gap` entry follows once writing works again.
+- **Export** as CSV or JSON lines; no request body is copied.
+
+What is recorded, the chain, retention and the API: **[docs/governance.md](docs/governance.md)**.
 
 ## Local model servers
 
@@ -989,6 +1011,7 @@ docs/local-models.md   starting and stopping local model servers: runtimes, your
 docs/topology.md       the Overview's provider topology: layers, colours, sources, tool routing, privacy
 docs/cost.md           cost ledger: who counts what, frozen cost, billing, cost centers, restate, the Cost Control menu, API, limits
 docs/guardrails.md     gateway guardrails: the checks, modes, scope, per-key policy, what is recorded, reading a block
+docs/governance.md     governance audit log: what is recorded, the chain, verify, retention, export, degraded mode, API
 docs/assets/           README banner, diagrams, screenshots and GIFs
 ```
 </details>
@@ -1027,6 +1050,7 @@ Apart from the sign-in routes in the first row, every `/api` route needs a signe
 | `GET /api/monitors` · `status` · `POST /api/monitors/<rule>` · `channels` · `test` · `GET /api/alerts` | monitor rules and their state, channels, a test send, and recent alerts; see [docs/monitors.md](docs/monitors.md#api) |
 | `GET /api/agents/candidates` · `POST /api/agents/pause` · `resume` · `stop` | the processes that could be behind a session, and pausing, resuming or stopping one; see [docs/monitors.md](docs/monitors.md#agent-control) |
 | `GET /api/runtimes` · `/api/runtimes/config` · `POST /api/runtimes/start` · `stop` · `approve` · `save` · `delete` | local model servers: Start and Stop in AI Office and your own runtimes in Settings; see [docs/local-models.md](docs/local-models.md#api) |
+| `GET /api/governance/audit` · `export` · `verify` · `status` · `POST /api/governance/settings` | the governance audit log: entries, a CSV or JSON-lines download, a check of the chain, its state, and the retention; see [docs/governance.md](docs/governance.md#api) |
 | `POST /api/rescan` | re-index changed log files now |
 | `GET /api/integrations` | integration health, client registration and recent MCP tool calls |
 | `POST /api/integrations/test` | fresh health check of one integration (`{ "id": "..." }`) |
@@ -1050,6 +1074,7 @@ Everything is editable in **Settings** and saved to `config.json`:
 | Price auto-update (`pricingSync.enabled`) | on; fetches the public price list at startup and every 12 hours (toggle in Settings) |
 | OpenTelemetry export (`otel`) | off; set in `config.json` only ([docs/otel.md](docs/otel.md)) |
 | Gateway guardrails (`gateway.guardrails`) | secrets `redact`, personal data `off`, prompt injection `log`, scope `external` ([docs/guardrails.md](docs/guardrails.md)) |
+| Audit log retention (`governance.audit.retentionMonths`) | 12 months, from 6 to 120 ([docs/governance.md](docs/governance.md#retention)) |
 
 Environment variables: `PORT` / `ZAAFPULSE_PORT` (default `4777`), `ZAAFPULSE_HOST`, `ZAAFPULSE_DATA`, `ZAAFPULSE_AUTH` (`local` by default on 127.0.0.1, `1` for password, `none` to turn sign-in off), `ZAAFPULSE_INDEX_WORKERS` (worker threads for the first index; `0` turns them off), `ZAAFPULSE_CONTENT` (`off` hides transcript text in the Trace explorer, and eval explanations; in server mode it is off unless `on`), `ZAAFPULSE_OLLAMA_URL` and `ZAAFPULSE_LMSTUDIO_URL` (move the local judge servers; for tests and unusual setups, see [docs/evals.md](docs/evals.md)), `ZAAFPULSE_CLAUDE_BIN` (the Claude Code CLI for the [Claude Code judge](docs/evals.md#claude-code), when it is not found on its own), the server-mode settings in [docs/install.md](docs/install.md), the standard `OTEL_*` variables ([docs/otel.md](docs/otel.md)), and `DEMO=1` for synthetic data. Demo mode never writes `config.json`, the Keychain or your coding tools, and fetches nothing: model calls are answered by a scripted model inside the process, and gateway data lives in a temporary folder. It uses the cached price list if one exists.
 </details>
