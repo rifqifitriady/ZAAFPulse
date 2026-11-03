@@ -1184,13 +1184,17 @@ async function controlState() {
   const list = (v) => (Array.isArray(v) ? v : []);
   const parts = {
     guardrails: () => guardPolicy(gw().guardrails),
-    usage: () => ({ requests: gateway.usage.summary().totals.requests }),
+    usage: () => {
+      const o = gateway.usage.oldest();
+      return { requests: gateway.usage.summary().totals.requests, oldest: o.ts, rotated: o.rotated };
+    },
     providers: () =>
       list(gw().providers).map((p) => ({
         id: p.id,
         tier: gateway.providers.tierOf(p),
         approved: p.approved !== false,
         recorded: typeof p.approved === 'boolean',
+        enabled: p.enabled !== false,
       })),
     keys: () =>
       gateway.keys.list().map((k) => ({
@@ -1198,6 +1202,12 @@ async function controlState() {
         expiresAt: k.expiresAt,
         budgetUSD: k.budgetUSD,
         scopes: k.scopes,
+        // The mode words a key sets, nothing else.
+        guardrails: Object.fromEntries(
+          Object.entries(k.guardrails || {}).filter(
+            ([c, m]) => ['secrets', 'pii', 'injection'].includes(c) && typeof m === 'string',
+          ),
+        ),
       })),
     workflows: () =>
       gateway.workflows.list().map((w) => ({ tier: w.tier, gated: list(w.steps).some((x) => x && x.approve) })),
@@ -1218,6 +1228,7 @@ async function controlState() {
         ok: !!(st && st.judge && st.judge.ok),
         model: (st && st.judge && st.judge.model) || null,
         today: (st && st.today && st.today.count) || 0,
+        paused: typeof (st && st.paused) === 'string' ? st.paused : null,
       };
     },
     datasets: () => ({
@@ -1236,6 +1247,7 @@ async function controlState() {
       return {
         enabled: !!o.enabled,
         error: !!o.error,
+        failed: Number((o.stats && o.stats.failed) || 0),
         origin: o.endpoint ? mcpScan.originOf(o.endpoint) : null,
         protocol: o.protocol || null,
       };

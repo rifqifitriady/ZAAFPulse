@@ -9,6 +9,7 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { NO_JUDGE_PORTS } = require('./helpers');
+const { STATUSES } = require('../lib/governance/controls');
 
 const ROOT = path.join(__dirname, '..');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -196,6 +197,7 @@ test('inventory: for a dashboard session only; no sign-in or an API key is a 401
   const s = await startServer(t, { ZAAFPULSE_AUTH: '1', ZAAFPULSE_ADMIN_PASSWORD: 'correct horse battery' });
   for (const headers of [{}, { authorization: 'Bearer zp_not_a_session' }]) {
     assert.equal((await call(s, '/api/governance/inventory', { headers })).status, 401);
+    assert.equal((await call(s, '/api/governance/controls', { headers })).status, 401);
     const post = { method: 'POST', body: { id: 'mcp:x', owner: 'x' }, headers };
     assert.equal((await call(s, '/api/governance/inventory', post)).status, 401);
   }
@@ -205,6 +207,7 @@ test('inventory: for a dashboard session only; no sign-in or an API key is a 401
     .map((c) => c.split(';')[0])
     .join('; ');
   assert.equal((await call(s, '/api/governance/inventory', { headers: { cookie } })).status, 200);
+  assert.equal((await call(s, '/api/governance/controls', { headers: { cookie } })).status, 200);
   assert.ok(s.alive());
 });
 
@@ -215,7 +218,7 @@ test('controls: seventeen controls from the live settings, OpenTelemetry and tra
   assert.match(r.body.notice, /^Evidence for your assessment, not a certification\./);
   assert.equal(r.body.controls.length, 17);
   const by = Object.fromEntries(r.body.controls.map((c) => [c.id, c]));
-  for (const c of r.body.controls) assert.ok(['in place', 'partial', 'off', 'unknown'].includes(c.status), c.id);
+  for (const c of r.body.controls) assert.ok(STATUSES.includes(c.status), c.id);
   assert.deepEqual(by.guardrails.evidence, [
     'secrets: redact',
     'personal data: off',
@@ -231,7 +234,7 @@ test('controls: seventeen controls from the live settings, OpenTelemetry and tra
   );
   assert.deepEqual(
     [by.secret_store.status, by.secret_store.evidence],
-    ['partial', ['provider keys and tokens in the encrypted secret file']],
+    ['partial', ['secrets saved from the dashboard are kept in the encrypted secret file']],
   );
   assert.deepEqual(
     [by.agent_control.status, by.agent_control.evidence],

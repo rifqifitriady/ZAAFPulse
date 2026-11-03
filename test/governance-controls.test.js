@@ -12,15 +12,15 @@ const DAY = 864e5;
 // A state where every control is in place.
 const good = () => ({
   now: NOW,
-  guardrails: { scope: 'external', secrets: 'redact', pii: 'log', injection: 'block' },
+  guardrails: { scope: 'external', secrets: 'redact', pii: 'redact', injection: 'block' },
   audit: {
     retentionMonths: 12,
     degraded: null,
     lastVerify: { ok: true, checked: 40, from: 1, to: 40, at: '2026-11-03T02:00:00.000Z' },
   },
-  usage: { requests: 120 },
+  usage: { requests: 120, oldest: NOW - 400 * DAY, rotated: true },
   providers: [
-    { id: 'openai', tier: 'external', approved: true, recorded: true },
+    { id: 'openai', tier: 'external', approved: true, recorded: true, enabled: true },
     { id: 'local', tier: 'private', approved: true, recorded: false },
   ],
   keys: [
@@ -39,15 +39,24 @@ const good = () => ({
     { id: 'inventory_unreviewed', enabled: true },
     { id: 'cost_burn', enabled: false },
   ],
-  evals: { judge: true, evaluators: 3, total: 5, ok: true, model: 'llama3', today: 12 },
+  evals: { judge: true, evaluators: 3, total: 5, ok: true, model: 'llama3', today: 12, paused: null },
   datasets: { count: 2, experiments: [{ status: 'done', endedAt: NOW - 10 * DAY }] },
   budgets: [{ enforce: 'block' }, { enforce: 'none' }],
   secretStore: { id: 'keychain', label: 'macOS Keychain' },
   signIn: { mode: 'local', serverMode: false, tls: false },
   content: { otelCapture: false, traceContentOff: false },
-  otel: { enabled: true, error: false, origin: 'https://otel.example.com', protocol: 'http/protobuf' },
+  otel: { enabled: true, error: false, failed: 0, origin: 'https://otel.example.com', protocol: 'http/protobuf' },
   traces: { store: true, enabled: true, retentionDays: 190, maxBytes: 500 * 1048576 },
-  inventory: { total: 4, reviewed: 4, high: 1, unacceptable: 0, riskUndecided: 0, unacceptableNotBlocked: 0 },
+  inventory: {
+    total: 4,
+    reviewed: 4,
+    high: 1,
+    unacceptable: 0,
+    riskUndecided: 0,
+    unacceptableNotBlocked: 0,
+    failed: 0,
+    sources: 7,
+  },
 });
 const statusOf = (state) => Object.fromEntries(controls(state).map((c) => [c.id, c.status]));
 const one = (state, id) => controls(state).find((c) => c.id === id);
@@ -102,7 +111,7 @@ test('the catalogue: seventeen controls in a fixed order, each with a link and a
   );
   assert.deepEqual(
     CLAUSES.filter((c) => c.framework === 'iso-42001').map((c) => c.ref),
-    ['A.2', 'A.5', 'A.6', 'A.7', 'A.8', 'A.9', 'A.10'],
+    ['A.2', 'A.4', 'A.5', 'A.6', 'A.7', 'A.8', 'A.9', 'A.10'],
   );
   for (const c of CLAUSES.filter((x) => x.framework === 'nist-ai-rmf'))
     assert.match(c.ref, /^(GOVERN 1|MAP 1|MEASURE 2|MANAGE 2|MANAGE 4)\.\d+$/);
@@ -125,7 +134,7 @@ test('every control is in place for a good state, with its evidence', () => {
   const ev = Object.fromEntries(out.map((c) => [c.id, c.evidence]));
   assert.deepEqual(ev.guardrails, [
     'secrets: redact',
-    'personal data: log',
+    'personal data: redact',
     'prompt injection: block',
     'scope: external',
   ]);
@@ -133,8 +142,12 @@ test('every control is in place for a good state, with its evidence', () => {
     'kept 12 months (at least 6)',
     'last verify (2026-11-03): chain intact, 40 entries checked',
   ]);
-  assert.deepEqual(ev.usage_log, ['120 gateway requests recorded this month']);
+  assert.deepEqual(ev.usage_log, [
+    '120 gateway requests recorded this month',
+    `oldest entry ${new Date(NOW - 400 * DAY).toISOString().slice(0, 10)}`,
+  ]);
   assert.deepEqual(ev.provider_approval, ['1 external provider', '1 approved', '0 waiting for approval']);
+  assert.deepEqual(ev.secret_store, ['secrets saved from the dashboard are kept in the macOS Keychain']);
   assert.deepEqual(ev.api_keys, ['2 active keys', '1 with a budget', '1 with an expiry', '1 limited to some scopes']);
   assert.deepEqual(ev.approval_gates, [
     'workflows that send, change or decide: 1 of 1 wait for a person',
@@ -176,13 +189,15 @@ test('partial: a check, a key, a gate or a rule missing; an old approval; a shor
   s.datasets.experiments = [{ status: 'done', endedAt: NOW - 200 * DAY }];
   s.budgets = [{ enforce: 'none' }];
   s.secretStore = { id: 'file', label: 'encrypted secret file' };
-  s.otel.error = true;
+  s.otel.failed = 3;
+  s.usage = { requests: 5, oldest: NOW - 30 * DAY, rotated: true };
   s.traces.retentionDays = 14;
   s.inventory = { total: 4, reviewed: 3, high: 1, unacceptable: 1, riskUndecided: 1, unacceptableNotBlocked: 1 };
   const st = statusOf(s);
   for (const id of [
     'guardrails',
     'audit_log',
+    'usage_log',
     'provider_approval',
     'api_keys',
     'approval_gates',
@@ -207,8 +222,96 @@ test('partial: a check, a key, a gate or a rule missing; an old approval; a shor
   assert.equal(one(s, 'evals').evidence[1], 'judge waiting for a model');
   assert.deepEqual(one(s, 'otel_export').evidence, [
     'to https://otel.example.com over http/protobuf',
-    'the exporter reports an error',
+    '3 spans failed to export since start',
   ]);
+});
+
+test('usage log: a young install that never rotated is in place; one that rotated under 183 days is partial', () => {
+  const s = good();
+  s.usage = { requests: 5, oldest: NOW - 30 * DAY, rotated: false };
+  assert.equal(one(s, 'usage_log').status, 'in place');
+  s.usage = { requests: 0, oldest: null, rotated: false };
+  assert.deepEqual(one(s, 'usage_log').evidence, ['0 gateway requests recorded this month', 'no entry yet']);
+});
+
+test('guardrails: thresholds, and a key that weakens a check', () => {
+  const at = (g) => {
+    const s = good();
+    s.guardrails = { scope: 'external', ...g };
+    return one(s, 'guardrails').status;
+  };
+  assert.equal(at({ secrets: 'block', pii: 'block', injection: 'block' }), 'in place');
+  assert.equal(at({ secrets: 'redact', pii: 'redact', injection: 'log' }), 'partial');
+  assert.equal(at({ secrets: 'redact', pii: 'off', injection: 'log' }), 'partial', 'the default config');
+  assert.equal(at({ secrets: 'log', pii: 'block', injection: 'block' }), 'off');
+  assert.equal(at({ secrets: 'off', pii: 'block', injection: 'block' }), 'off');
+  const s = good();
+  s.keys.push({ budgetUSD: null, expiresAt: null, scopes: ['llm'], guardrails: { pii: 'log', injection: 'block' } });
+  s.keys.push({ revokedAt: NOW - DAY, scopes: ['llm'], guardrails: { secrets: 'off' } });
+  s.keys.push({ budgetUSD: null, expiresAt: null, scopes: ['llm'], guardrails: { secrets: 'block' } });
+  const g = one(s, 'guardrails');
+  assert.equal(g.status, 'partial');
+  assert.equal(g.evidence.at(-1), '1 key weakens a check');
+  s.keys = 'x';
+  assert.equal(one(s, 'guardrails').status, 'in place', 'keys that cannot be read do not change the checks');
+});
+
+test('otel: failures by count, a settings error is unknown', () => {
+  const s = good();
+  s.otel = { enabled: false, error: true };
+  assert.deepEqual(
+    [one(s, 'otel_export').status, one(s, 'otel_export').evidence],
+    ['unknown', ['the OpenTelemetry settings could not be used']],
+  );
+  s.otel = { enabled: true, error: false, failed: 1, origin: 'https://o.example.com', protocol: 'grpc' };
+  assert.equal(one(s, 'otel_export').evidence[1], '1 span failed to export since start');
+});
+
+test('inventory coverage: sources that failed to read', () => {
+  const s = good();
+  s.inventory = { ...s.inventory, failed: 2, sources: 7 };
+  const c = one(s, 'inventory_coverage');
+  assert.equal(c.status, 'partial');
+  assert.equal(c.evidence.at(-1), '2 inventory sources could not be read');
+  s.inventory = { ...s.inventory, failed: 7, sources: 7 };
+  assert.deepEqual(
+    [one(s, 'inventory_coverage').status, one(s, 'inventory_coverage').evidence[0]],
+    ['unknown', 'could not be read'],
+  );
+});
+
+test('other checks: pause budgets need agent control; a paused judge; disabled providers; wrong-shape parts', () => {
+  const s = good();
+  s.budgets = [{ enforce: 'pause' }];
+  assert.equal(one(s, 'cost_budgets').status, 'in place');
+  s.agentControl = { off: 'agent control is off on this server' };
+  const b = one(s, 'cost_budgets');
+  assert.equal(b.status, 'partial');
+  assert.ok(b.evidence.includes('pause budgets do nothing while agent control is off'));
+  s.budgets = [{ enforce: 'block' }, { enforce: 'pause' }];
+  assert.equal(one(s, 'cost_budgets').status, 'in place');
+  const e = good();
+  e.evals.paused = 'daily cap';
+  assert.equal(one(e, 'evals').status, 'partial');
+  assert.equal(one(e, 'evals').evidence[1], 'judge paused: daily cap');
+  const p = good();
+  p.providers.push({ id: 'off', tier: 'external', approved: false, recorded: true, enabled: false });
+  assert.deepEqual(one(p, 'provider_approval').evidence.slice(0, 3), [
+    '1 external provider',
+    '1 approved',
+    '0 waiting for approval',
+  ]);
+  // A part whose check throws is unknown.
+  const t = good();
+  t.keys = [null, { scopes: 5, guardrails: 5 }];
+  assert.ok(['in place', 'partial', 'off', 'unknown'].includes(one(t, 'api_keys').status));
+  const bad = good();
+  Object.defineProperty(bad, 'workflows', {
+    get() {
+      throw new Error('boom');
+    },
+  });
+  assert.equal(one(bad, 'approval_gates').status, 'unknown');
 });
 
 test('off: everything switched off, degraded or broken; unknown: a part that cannot be read', () => {
@@ -240,6 +343,8 @@ test('off: everything switched off, degraded or broken; unknown: a part that can
   assert.deepEqual(one(s, 'usage_log').evidence, ['could not be read']);
   assert.deepEqual(one(s, 'agent_control').evidence, ['agent control is off on this server']);
   assert.deepEqual(one(s, 'sign_in').evidence, ['sign-in: no sign-in', 'this machine only']);
+  s.audit = { retentionMonths: 12, degraded: null, lastVerify: { ok: false, reason: 'key missing' } };
+  assert.equal(one(s, 'audit_log').evidence[1], 'last verify: the audit key is missing');
   s.audit = { retentionMonths: 12, degraded: null, lastVerify: { ok: false, brokenAt: 9, reason: 'chain broken' } };
   assert.deepEqual(one(s, 'audit_log').evidence[1], 'last verify: broken at entry 9 (chain broken)');
   // A state that is not there at all, or a part of the wrong shape, never throws.
@@ -270,4 +375,47 @@ test('GET /api/governance/controls: the controls with the audit state and the in
     ['off', '0 of 1 item reviewed (0%)'],
   );
   assert.equal((await api.route({ method: 'POST', path: '/api/governance/controls' })).status, 405);
+});
+
+test('GET /api/governance/controls: a rejecting server part or inventory only makes its controls unknown', async () => {
+  const st = good();
+  const mk = (extra) =>
+    createGovernanceApi({
+      audit: { status: () => ({ degraded: null, lastVerify: st.audit.lastVerify }) },
+      settings: { get: () => ({}), save: () => {} },
+      sources: async () => {
+        throw new Error('/secret/path failed');
+      },
+      controlState: async () => {
+        throw new Error('/secret/path failed');
+      },
+      now: () => NOW,
+      ...extra,
+    });
+  const r = await mk({}).route({ method: 'GET', path: '/api/governance/controls', query: new URLSearchParams() });
+  assert.equal(r.status, 200);
+  const by = Object.fromEntries(r.body.controls.map((c) => [c.id, c]));
+  assert.equal(by.guardrails.status, 'unknown');
+  assert.equal(by.inventory_coverage.status, 'unknown');
+  assert.notEqual(by.audit_log.status, 'unknown');
+  assert.doesNotMatch(JSON.stringify(r.body), /secret\/path/);
+});
+
+test('usage.oldest: the first entry kept and whether the log rotated', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { createUsage } = require('../lib/gateway/usage');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-usage-'));
+  try {
+    const file = path.join(dir, 'u.jsonl');
+    const mk = () => createUsage({ file, getPricing: () => ({}), now: () => NOW });
+    assert.deepEqual(mk().oldest(), { ts: null, rotated: false });
+    fs.writeFileSync(file, JSON.stringify({ ts: NOW - 5 * DAY }) + '\n');
+    assert.deepEqual(mk().oldest(), { ts: NOW - 5 * DAY, rotated: false });
+    fs.writeFileSync(`${file}.1`, JSON.stringify({ ts: NOW - 9 * DAY }) + '\n');
+    assert.deepEqual(mk().oldest(), { ts: NOW - 9 * DAY, rotated: true });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
