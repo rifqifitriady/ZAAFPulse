@@ -1148,10 +1148,11 @@ function render(animate = true) {
   unmountBrain();
   unmountStages();
   if (state.route === 'settings') return viewSettings(el);
-  // Governance → Audit log loads its own data (public/governanceview.js): it never waits for the summary.
+  // The Governance pages (Inventory, Compliance, Audit log) load their own data (public/governanceview.js): they never
+  // wait for the summary.
   if (state.route === 'governance') {
-    el.innerHTML = govView();
-    return govMount();
+    el.innerHTML = govView(state.sub);
+    return govMount(state.sub);
   }
   if (!state.data && !['live', 'brain', 'integrations', 'trace', 'datasets', 'cost'].includes(state.route)) {
     el.innerHTML =
@@ -1344,7 +1345,7 @@ function applyTheme() {
       /* patched in place */
     } else if (
       !['settings', 'brain', 'squad', 'trace', 'datasets', 'cost'].includes(state.route) &&
-      state.route !== 'governance' && // the audit log keeps its filters and pages: it reloads on Apply
+      state.route !== 'governance' && // the Governance pages keep their filters and drawer: they reload on their own
       !$('#view').contains(document.activeElement)
     )
       render(false); // squad, trace and cost pages poll on their own

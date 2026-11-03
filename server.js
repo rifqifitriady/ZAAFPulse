@@ -80,6 +80,11 @@ const { requestEntry, controlEntry } = require('./lib/governance/events');
 const { createGovernanceAudit, keySource } = require('./lib/governance/audit');
 const { diff: govDiff } = require('./lib/governance/diff');
 const { createGovernanceApi } = require('./lib/governance/api');
+const mcpScan = require('./lib/governance/mcp-scan');
+const { liveOrThrow, runtimesOrThrow, indexReadyOrThrow } = require('./lib/governance/sources');
+const { createSeenStore } = require('./lib/governance/seen');
+const { cleanPolicy: guardPolicy } = require('./lib/gateway/guardrails');
+const { RULES: MONITOR_RULES } = require('./lib/monitors/rules');
 
 const PORT = Number(process.env.ZAAFPULSE_PORT || process.env.PORT) || 4777;
 const HOST = process.env.ZAAFPULSE_HOST || process.env.HOST || '127.0.0.1';
@@ -289,10 +294,17 @@ function configChanged(before, after) {
     /* the save stands; an audit bug never fails it (A6) */
   }
 }
-// /api/governance/*: the entries, an export, verify, status, and the retention in config.json "governance.audit".
+// /api/governance/*: the entries, an export, verify, status, and the retention in config.json "governance.audit"; the
+// AI inventory (AI Governance 3) from inventorySources() below, its reviews in "governance.inventory" and the days each
+// item was first and last seen in .data/governance/seen.json (demo: the throwaway folder).
 const governanceApi = createGovernanceApi({
   audit: governance,
   settings: { get: () => rawConfig().governance, save: (g) => saveConfigSection('governance', g) },
+  sources: () => inventorySources(),
+  controlState: () => controlState(),
+  record: (e) => govRecord(e), // the evidence export (a GET), with the request's actor
+  version: require('./package.json').version,
+  seen: createSeenStore({ file: path.join(DEMO ? demoDir : path.join(DIR, '.data'), 'governance', 'seen.json') }),
 });
 let rawCache = {
   mtime: -1,
@@ -412,13 +424,18 @@ function costSettings() {
 // Local trace store: every gateway trace without content, under .data/traces (on unless "tracing": { "enabled":
 // false }). Retention is read at start; the on/off switch whenever config.json changes.
 const tracingCfg = () => (rawConfig() || {}).tracing || {};
-// A store that cannot open (unwritable or corrupt folder) never takes the server down: tracing is just off.
+// A store that cannot open (unwritable or corrupt folder) never takes the server down: tracing is just off. The
+// retention in force is kept for the Compliance page (GET /api/governance/controls).
+const TRACE_RETENTION = {
+  days: Number(tracingCfg().retentionDays) > 0 ? Number(tracingCfg().retentionDays) : 14,
+  maxBytes: Number(tracingCfg().maxBytes) > 0 ? Number(tracingCfg().maxBytes) : 500 * 1024 * 1024,
+};
 let traceStore = null;
 try {
   traceStore = createTraceStore({
     dir: path.join(DEMO ? demoDir : path.join(DIR, '.data'), 'traces'),
-    retentionDays: Number(tracingCfg().retentionDays) > 0 ? Number(tracingCfg().retentionDays) : 14,
-    maxBytes: Number(tracingCfg().maxBytes) > 0 ? Number(tracingCfg().maxBytes) : 500 * 1024 * 1024,
+    retentionDays: TRACE_RETENTION.days,
+    maxBytes: TRACE_RETENTION.maxBytes,
   });
 } catch (err) {
   console.error('traces: the local trace store is off:', err.message);
@@ -776,6 +793,8 @@ const monitors = createMonitors({
       .map((e) => ({ ts: e.ts, checks: [...new Set((e.guard.hits || []).map((h) => h.check))] })),
   // audit_degraded and audit_chain_broken: the governance audit log's state and its last verify (no entry content).
   auditStatus: () => governance.status(),
+  // inventory_unreviewed: the AI inventory's last counts (new unreviewed items and their kinds; no names).
+  inventoryStatus: () => governanceApi.inventoryStatus(),
 });
 // The routes: rules, channels, alerts and agent control. Demo serves a seeded store of its own (mixed states, five
 // alerts) so the page always has something to show; the engine keeps evaluating into its own file.
@@ -1070,6 +1089,182 @@ async function topology() {
       .finally(() => (topoCache.pending = null));
   return topoCache.pending;
 }
+// The AI inventory's sources (lib/governance/inventory.js buildInventory): each one capped at 2 s, and null when it
+// failed (the page names it). Only what an item shows is read: gateway agents by id, name, state and remote address,
+// never a system prompt; keys by id, name and dates, never a secret. The MCP scan reads the AI clients' own config
+// files (lib/governance/mcp-scan.js); demo mode never reads them.
+const INV_FAILED = Symbol('failed');
+const invSource = async (fn) => {
+  const v = await topoSource(fn, INV_FAILED);
+  return v === INV_FAILED ? null : v;
+};
+// An AI client's config file: its text, or null when it is not there. It is opened (without waiting on a pipe) and must
+// be a regular file of at most 20 MB, so a FIFO or a huge file cannot hold up the page.
+const CLIENT_FILE_MAX = 20 * 1024 * 1024;
+function readClientFile(file) {
+  let fd = null;
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0));
+    const st = fs.fstatSync(fd);
+    if (!st.isFile()) throw new Error('not a regular file');
+    if (st.size > CLIENT_FILE_MAX) throw new Error('file too large');
+    return fs.readFileSync(fd, 'utf8');
+  } catch (e) {
+    if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return null;
+    throw e;
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
+  }
+}
+async function inventorySources() {
+  const pick = (list, fields) =>
+    (Array.isArray(list) ? list : []).map((x) => Object.fromEntries(fields.map((k) => [k, x && x[k]])));
+  const [live, summary, traced, gw, runtimes, integrations, mcp] = await Promise.all([
+    invSource(async () => {
+      const s = DEMO ? demo.live() : await processes.snapshot();
+      liveOrThrow(s);
+      return {
+        apps: pick(s.apps, ['id', 'name']),
+        installed: s.installed,
+        names: Object.fromEntries(processes.APPS.map((a) => [a.id, a.name])),
+      };
+    }),
+    invSource(() => {
+      indexReadyOrThrow(indexer.state);
+      const s = getSummary(30);
+      return {
+        tools: pick(s.tools, ['id', 'name', 'lastActive']),
+        toolUse: pick(s.toolUse, ['name']),
+        models: pick(s.models, ['model']),
+      };
+    }),
+    invSource(() => trace.sources()),
+    invSource(() => {
+      const g = (rawConfig() || {}).gateway || {};
+      return {
+        providers: pick(g.providers, ['id', 'preset', 'baseUrl', 'enabled']),
+        models: Object.keys(gateway.usage.summary().byModel || {}),
+        keys: pick(gateway.keys.list(), ['id', 'name', 'revokedAt', 'expiresAt', 'lastUsedAt']),
+        agents: pick(gateway.agents.list(), ['id', 'name', 'enabled', 'remoteUrl']),
+        skills: pick(gateway.skills.list(), ['name', 'claude', 'agents']),
+        workflows: pick(gateway.workflows.list(), ['id', 'name']),
+        knowledge: pick(gateway.knowledge.list(), ['id', 'name']),
+      };
+    }),
+    invSource(async () => {
+      return runtimesOrThrow(await runtimeApi.route({ method: 'GET', path: '/api/runtimes' }));
+    }),
+    invSource(() =>
+      DEMO
+        ? demo.integrations().integrations.filter((i) => i.type !== 'acc')
+        : Object.entries((rawConfig() || {}).integrations || {}).map(([id, c]) => ({
+            id,
+            type: c && c.type,
+            flavor: c && c.flavor,
+            enabled: !(c && c.enabled === false),
+            url: c && (c.url || c.baseUrl),
+          })),
+    ),
+    invSource(() =>
+      DEMO
+        ? []
+        : mcpScan.scanClients({
+            home: os.homedir(),
+            env: process.env,
+            platform: process.platform,
+            read: readClientFile,
+          }),
+    ),
+  ]);
+  return { live, summary, trace: traced, gateway: gw, runtimes, integrations, mcp };
+}
+// The state the controls of the Compliance page are worked out from (lib/governance/controls.js): settings, counts and
+// dates only. Each part is capped at 2 s and null when it could not be read. The OpenTelemetry export is named by its
+// endpoint's origin, never its headers.
+async function controlState() {
+  const gw = () => (rawConfig() || {}).gateway || {};
+  const list = (v) => (Array.isArray(v) ? v : []);
+  const parts = {
+    guardrails: () => guardPolicy(gw().guardrails),
+    usage: () => {
+      const o = gateway.usage.oldest();
+      return { requests: gateway.usage.summary().totals.requests, oldest: o.ts, rotated: o.rotated };
+    },
+    providers: () =>
+      list(gw().providers).map((p) => ({
+        id: p.id,
+        tier: gateway.providers.tierOf(p),
+        approved: p.approved !== false,
+        recorded: typeof p.approved === 'boolean',
+        enabled: p.enabled !== false,
+      })),
+    keys: () =>
+      gateway.keys.list().map((k) => ({
+        revokedAt: k.revokedAt,
+        expiresAt: k.expiresAt,
+        budgetUSD: k.budgetUSD,
+        scopes: k.scopes,
+        // The mode words a key sets, nothing else.
+        guardrails: Object.fromEntries(
+          Object.entries(k.guardrails || {}).filter(
+            ([c, m]) => ['secrets', 'pii', 'injection'].includes(c) && typeof m === 'string',
+          ),
+        ),
+      })),
+    workflows: () =>
+      gateway.workflows.list().map((w) => ({ tier: w.tier, gated: list(w.steps).some((x) => x && x.approve) })),
+    agentControl: () => ({ off: agentControl.off() }),
+    monitors: () =>
+      MONITOR_RULES.filter((r) => !RETIRED_RULES.includes(r.id)).map((r) => ({
+        id: r.id,
+        enabled: monitorApiState.settings(r.id).enabled,
+      })),
+    evals: async () => {
+      const cfg = evalApi.settings();
+      const st = await evalEngine.status();
+      const on = Object.values(cfg.evaluators || {});
+      return {
+        judge: cfg.judge !== false,
+        evaluators: on.filter(Boolean).length,
+        total: on.length,
+        ok: !!(st && st.judge && st.judge.ok),
+        model: (st && st.judge && st.judge.model) || null,
+        today: (st && st.today && st.today.count) || 0,
+        paused: typeof (st && st.paused) === 'string' ? st.paused : null,
+      };
+    },
+    datasets: () => ({
+      count: datasets.list().length,
+      experiments: experiments.list().map((x) => ({ status: x.status, endedAt: x.endedAt })),
+    }),
+    budgets: () => costBudgets.list().budgets.map((b) => ({ enforce: b.enforce })),
+    secretStore: () => {
+      const s = require('./lib/secret-store').defaultStore();
+      return { id: s.id, label: s.label };
+    },
+    signIn: () => ({ mode: auth.mode, serverMode: SERVER_MODE, tls: !!TLS }),
+    content: () => ({ otelCapture: otel.status().captureContent === true, traceContentOff: contentOff }),
+    otel: () => {
+      const o = otel.status();
+      return {
+        enabled: !!o.enabled,
+        error: !!o.error,
+        failed: Number((o.stats && o.stats.failed) || 0),
+        origin: o.endpoint ? mcpScan.originOf(o.endpoint) : null,
+        protocol: o.protocol || null,
+      };
+    },
+    traces: () => ({
+      store: !!traceStore,
+      enabled: tracingOn(),
+      retentionDays: TRACE_RETENTION.days,
+      maxBytes: TRACE_RETENTION.maxBytes,
+    }),
+  };
+  const names = Object.keys(parts);
+  const values = await Promise.all(names.map((k) => invSource(parts[k])));
+  return Object.fromEntries(names.map((k, i) => [k, values[i]]));
+}
 const insightMemo = new Map();
 function getInsights(range) {
   const key = `${range}|${indexer.version}|${new Date().getHours()}`;
@@ -1114,6 +1309,13 @@ function send(res, status, body, type = 'application/json', headers = {}) {
       if (e) govRecord(e);
     } catch {
       /* an audit bug never fails a response (A6) */
+    }
+    // A change the dashboard made (an agent, a key, a setting): the next inventory read sees it, not a kept copy. Not
+    // covered: gateway calls with an API key, the auth routes and replies that bypass send(); the 5 s TTL bounds those.
+    try {
+      if (p.req.method !== 'GET' && status < 400) governanceApi.invalidateInventory();
+    } catch {
+      /* never fails a response */
     }
   }
   res.writeHead(status, responseHeaders(type, headers, SECURITY_HEADERS));
@@ -1794,7 +1996,9 @@ server.listen(PORT, HOST, () => {
   if (auth.mode === 'local') console.log('Sign-in: only this OS account; open the dashboard with `zaafpulse open`');
   console.log(`Data: ${DIR}`);
   const t = Date.now();
-  indexer.refresh().then(() => {
+  // The first scan of the logs. Kept: a second indexer.refresh() while it runs returns at once.
+  const firstScan = indexer.refresh();
+  firstScan.then(() => {
     console.log(`Indexed logs in ${((Date.now() - t) / 1000).toFixed(1)}s`);
     evalTick();
     monitorTick();
@@ -1832,6 +2036,15 @@ server.listen(PORT, HOST, () => {
   const auditDaily = () => govContext.runAs({ via: 'system' }, () => governanceApi.dailyPass());
   auditDaily();
   setInterval(auditDaily, 24 * 3600 * 1000).unref();
+  // The AI inventory, now and every 10 minutes, so inventory_unreviewed sees new systems without the page open (a
+  // read of the page builds it too). The pass is the system's; a failure is logged and the next one tries again.
+  const inventoryPass = () =>
+    govContext.runAs({ via: 'system' }, () =>
+      governanceApi.inventory().catch(() => console.error('governance: the inventory pass failed')),
+    );
+  // The first one waits for the first scan of the log index, so the baseline holds the tools and models in the logs.
+  firstScan.then(inventoryPass, inventoryPass);
+  setInterval(inventoryPass, 10 * 60 * 1000).unref();
   // Local model servers: remember what is loaded. Not in demo mode, server mode or Docker (control is off there), and
   // not with ZAAFPULSE_RUNTIME_WATCH=off (the tests' spawned servers, which must not read this machine's Ollama).
   if (!DEMO && !runtimeControl.offReason() && process.env.ZAAFPULSE_RUNTIME_WATCH !== 'off')

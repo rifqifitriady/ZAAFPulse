@@ -99,6 +99,7 @@ const MON_MEASURE = {
   audit_chain_broken: [(v) => (v > 0 ? `broken at entry ${monRound(v)}` : 'cannot be checked'), null, null],
   // audit_chain_broken titled "rekeyed": an intact chain whose key was replaced (lib/monitors/rules.js).
   audit_rekeyed: [(v) => `key replaced at entry ${monRound(v)}`, null, null],
+  inventory_unreviewed: [(v) => `${monPlural(v, 'new AI system')} not reviewed`, null, null],
 };
 function monMeasure(rule, value, threshold, title) {
   const v = monNum(value) ? value : null;
