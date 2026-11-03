@@ -169,7 +169,14 @@ test('new input: after the last assistant message in OpenAI, Anthropic and Respo
     'no assistant message yet: the whole input, tool descriptions too',
   );
   // Anthropic: the system prompt is history once an assistant turn exists.
-  const ant = { system: INJ, messages: [old, { role: 'assistant', content: [{ type: 'text', text: 'ok' }] }] };
+  const ant = {
+    system: INJ,
+    messages: [
+      old,
+      { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+      { role: 'user', content: 'thanks' },
+    ],
+  };
   assert.equal(G.checkBody(ant, p, { format: 'anthropic' }).action, null);
   const antNew = {
     messages: [
@@ -180,9 +187,10 @@ test('new input: after the last assistant message in OpenAI, Anthropic and Respo
   assert.throws(() => G.checkBody(antNew, p, { format: 'anthropic' }), G.GuardrailBlock);
   assert.throws(() => G.checkBody({ system: INJ, messages: [] }, p, { format: 'anthropic' }), G.GuardrailBlock);
   // Responses: a function_call item is the model's turn; its output after it is new. A string input is all new.
-  const res = { instructions: INJ, input: [old, { type: 'function_call', call_id: 'c1', name: 'f', arguments: '{}' }] };
+  const call = { type: 'function_call', call_id: 'c1', name: 'f', arguments: '{}' };
+  const res = { instructions: INJ, input: [old, call, { type: 'function_call_output', call_id: 'c1', output: 'ok' }] };
   assert.equal(G.checkBody(res, p, { format: 'responses' }).action, null);
-  const resNew = { input: [...res.input, { type: 'function_call_output', call_id: 'c1', output: INJ }] };
+  const resNew = { input: [old, call, { type: 'function_call_output', call_id: 'c1', output: INJ }] };
   assert.throws(() => G.checkBody(resNew, p, { format: 'responses' }), G.GuardrailBlock);
   assert.throws(() => G.checkBody({ input: INJ }, p, { format: 'responses' }), G.GuardrailBlock);
   assert.throws(() => G.checkBody({ model: 'e', input: ['a', INJ] }, p, { format: 'embeddings' }), G.GuardrailBlock);
@@ -209,6 +217,7 @@ test('walker: structural and binary keys are skipped, and the input body is neve
             { type: 'image_url', image_url: { url: `https://x/${ANT}` } },
             { type: 'image', source: { type: 'base64', media_type: 'image/png', data: ANT } },
             { type: 'text', text: `data:text/plain,${ANT}` },
+            { type: 'text', text: `data:image/png;base64,${ANT}` },
             { type: 'thinking', thinking: 'x', signature: ANT },
           ],
         },
@@ -225,12 +234,13 @@ test('walker: structural and binary keys are skipped, and the input body is neve
   assert.equal(m.content[0].text, 'see ‹secret: Anthropic API key›');
   assert.equal(m.content[1].image_url.url, `https://x/${ANT}`);
   assert.equal(m.content[2].source.data, ANT);
-  assert.equal(m.content[3].text, `data:text/plain,${ANT}`);
-  assert.equal(m.content[4].signature, ANT);
+  assert.equal(m.content[3].text, 'data:text/plain,‹secret: Anthropic API key›');
+  assert.equal(m.content[4].text, `data:image/png;base64,${ANT}`);
+  assert.equal(m.content[5].signature, ANT);
   assert.equal(r.body.user_id, ANT);
   assert.deepEqual(r.body.stop, [ANT]);
   assert.equal(r.body.metadata.note, '‹secret: Anthropic API key›');
-  assert.deepEqual(r.hits, [{ check: 'secrets', label: 'Anthropic API key', count: 2 }]);
+  assert.deepEqual(r.hits, [{ check: 'secrets', label: 'Anthropic API key', count: 3 }]);
   // MCP arguments: no key is structural there; injection is not checked.
   const args = G.checkBody({ name: `${ANT} ${INJ}` }, policy({ injection: 'block' }), { format: 'arguments' });
   assert.equal(args.body.name, `‹secret: Anthropic API key› ${INJ}`);
@@ -303,4 +313,55 @@ test('a 1 MB body with every check on is checked in well under a second', () => 
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
   assert.equal(r.action, 'redacted');
   assert.ok(ms < 1000, `took ${ms.toFixed(0)} ms`);
+});
+
+test('arguments format skips no key; plain-text data sources and data: strings are checked', () => {
+  const b = { data: { token: ANT }, image_url: ANT, type: ANT };
+  assert.throws(() => G.checkBody(b, policy({ secrets: 'block' }), { format: 'arguments' }), G.GuardrailBlock);
+  const r = G.checkBody(b, policy(), { format: 'arguments' });
+  assert.equal(r.body.data.token, '‹secret: Anthropic API key›');
+  assert.equal(r.body.image_url, '‹secret: Anthropic API key›');
+  const doc = { type: 'document', source: { type: 'text', media_type: 'text/plain', data: `KEY=${ANT}` } };
+  const a = G.checkBody({ messages: [{ role: 'user', content: [doc] }] }, policy(), { format: 'anthropic' });
+  assert.equal(a.body.messages[0].content[0].source.data, 'KEY=‹secret: Anthropic API key›');
+  const j = G.checkBody(chat([{ role: 'user', content: `data: {"key":"${ANT}"}` }]), policy(), {
+    format: 'openai-chat',
+  });
+  assert.equal(j.body.messages[0].content, 'data: {"key":"‹secret: Anthropic API key›"}');
+});
+
+test('thinking, redacted_thinking and reasoning blocks pass through unchanged', () => {
+  const think = { type: 'thinking', thinking: 'mail a@b.com from 10.1.2.3', signature: 'sig' };
+  const red = { type: 'redacted_thinking', data: 'a@b.com' };
+  const reas = { type: 'reasoning', summary: [{ type: 'summary_text', text: 'a@b.com' }] };
+  const msgs = [
+    { role: 'user', content: 'hi' },
+    { role: 'assistant', content: [think, red, { type: 'text', text: 'write a@b.com' }] },
+    { role: 'user', content: 'ok' },
+  ];
+  const r = G.checkBody({ messages: msgs }, policy({ pii: 'redact' }), { format: 'anthropic' });
+  const c = r.body.messages[1].content;
+  assert.equal(JSON.stringify(c[0]), JSON.stringify(think));
+  assert.equal(JSON.stringify(c[1]), JSON.stringify(red));
+  assert.notEqual(c[2].text, 'write a@b.com');
+  const rr = G.checkBody({ input: [reas, { role: 'user', content: 'a@b.com' }] }, policy({ pii: 'redact' }), {
+    format: 'responses',
+  });
+  assert.equal(JSON.stringify(rr.body.input[0]), JSON.stringify(reas));
+  assert.notEqual(rr.body.input[1].content, 'a@b.com');
+});
+
+test('a trailing assistant message (prefill) does not hide the user turn before it', () => {
+  const pre = chat([
+    { role: 'user', content: INJ },
+    { role: 'assistant', content: '{' },
+  ]);
+  assert.throws(() => G.checkBody(pre, policy({ injection: 'block' }), { format: 'openai-chat' }), G.GuardrailBlock);
+  const resp = {
+    input: [
+      { role: 'user', content: INJ },
+      { type: 'reasoning', summary: [] },
+    ],
+  };
+  assert.throws(() => G.checkBody(resp, policy({ injection: 'block' }), { format: 'responses' }), G.GuardrailBlock);
 });
