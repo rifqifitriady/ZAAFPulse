@@ -221,3 +221,72 @@ test('Markdown: the summary counts all four statuses, unknown included', () => {
     .find((l) => /^\d+ in place · /.test(l));
   assert.match(line, /^\d+ in place · \d+ partial · \d+ off · [1-9]\d* unknown$/);
 });
+
+test('the report names the AI clients whose files could not be read, by display name only', () => {
+  const inv = {
+    ...inventory,
+    clients: [
+      ...inventory.clients,
+      { client: 'cursor', name: 'Cursor', file: '~/.cursor/mcp.json', state: 'unreadable', servers: 0 },
+    ],
+  };
+  const r = evidenceReport({ inventory: inv, controls: { controls: [] }, audit, version: 'x', generatedAt: 'now' });
+  assert.deepEqual(r.inventory.unreadableClients, ['Cursor']);
+  assert.ok(!toJson(r).includes('.cursor'), 'no file path');
+  const md = toMarkdown(r).split('\n');
+  assert.ok(md.includes('AI client files that could not be read: Cursor.'));
+  assert.ok(!md.join('\n').includes('.cursor'));
+  const none = evidenceReport({ inventory, controls: { controls: [] }, audit, version: 'x', generatedAt: 'now' });
+  assert.deepEqual(none.inventory.unreadableClients, []);
+  assert.ok(!toMarkdown(none).includes('AI client files that could not be read'));
+});
+
+test('Markdown cells: inline markup is escaped, so a name cannot make a link or fetch an image', () => {
+  const item = (name, note) => ({
+    id: `mcp:${name.toLowerCase()}`,
+    kind: 'mcp',
+    name,
+    where: [],
+    state: 'configured',
+    status: 'reviewed',
+    review: { owner: '', purpose: '', risk: '', decision: '', note },
+  });
+  const inv = {
+    counts: {},
+    failed: [],
+    items: [item('[a](javascript:x)', 'a\u2028b\u2029c\u0085d'), item('![i](http://x)', '`code` *b* _i_')],
+  };
+  const md = toMarkdown(
+    evidenceReport({ inventory: inv, controls: { controls: [] }, audit, version: 'x', generatedAt: 'now' }),
+  );
+  const rows = md.split('\n').filter((l) => l.includes('javascript:x') || l.includes('http://x'));
+  assert.equal(rows.length, 2, 'each item stays on one line');
+  assert.ok(rows[0].startsWith('| \\[a\\](javascript:x) (mcp:\\[a\\](javascript:x)) |'), rows[0]);
+  assert.ok(rows[0].endsWith('| a b c d |'), 'U+2028, U+2029 and U+0085 are line breaks');
+  assert.ok(rows[1].startsWith('| \\!\\[i\\](http://x) '), rows[1]);
+  assert.ok(rows[1].endsWith('| \\`code\\` \\*b\\* \\_i\\_ |'), rows[1]);
+  assert.doesNotMatch(md, /[^\\]\[a\]|[^\\]!\[i\]/);
+  assert.doesNotMatch(md, /[\u2028\u2029\u0085]/);
+});
+
+test('GET evidence: an audit log that throws never stops the export', async () => {
+  const api = createGovernanceApi({
+    audit: { status: () => audit },
+    settings: { get: () => ({ audit: { retentionMonths: 12 } }), save: () => {} },
+    sources: async () => ({ live: { apps: [{ id: 'claude', name: 'Claude Code' }] } }),
+    record: () => {
+      throw new Error('the audit log is down');
+    },
+    version: '1.0.4',
+    now: () => NOW,
+  });
+  for (const format of ['json', 'md']) {
+    const r = await api.route({
+      method: 'GET',
+      path: '/api/governance/evidence',
+      query: new URLSearchParams({ format }),
+    });
+    assert.equal(r.status, 200, format);
+    assert.ok(typeof r.body === 'string' && r.body.includes('ZAAFPulse governance evidence'), format);
+  }
+});

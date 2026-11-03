@@ -252,8 +252,14 @@ test('guardrails: thresholds, and a key that weakens a check', () => {
   const g = one(s, 'guardrails');
   assert.equal(g.status, 'partial');
   assert.equal(g.evidence.at(-1), '1 key weakens a check');
-  s.keys = 'x';
-  assert.equal(one(s, 'guardrails').status, 'in place', 'keys that cannot be read do not change the checks');
+  // Keys that cannot be read may hold a weaker check: in place is capped at partial, and the evidence says why.
+  for (const keys of ['x', null, undefined]) {
+    s.keys = keys;
+    const k = one(s, 'guardrails');
+    assert.deepEqual([k.status, k.evidence.at(-1)], ['partial', 'keys could not be read'], String(keys));
+  }
+  s.guardrails = { scope: 'external', secrets: 'off', pii: 'off', injection: 'off' };
+  assert.equal(one(s, 'guardrails').status, 'off', 'a cap never raises a status');
 });
 
 test('otel: failures by count, a settings error is unknown', () => {
@@ -280,6 +286,36 @@ test('inventory coverage: sources that failed to read', () => {
   );
 });
 
+test('inventory coverage: AI client files that could not be read cap it at partial', () => {
+  const s = good();
+  s.inventory = { ...s.inventory, unreadableClients: 1 };
+  const c = one(s, 'inventory_coverage');
+  assert.deepEqual([c.status, c.evidence.at(-1)], ['partial', '1 AI client file could not be read']);
+  s.inventory = { ...s.inventory, failed: 1, unreadableClients: 2 };
+  assert.deepEqual(one(s, 'inventory_coverage').evidence.slice(-2), [
+    '1 inventory source could not be read',
+    '2 AI client files could not be read',
+  ]);
+  s.inventory = { ...s.inventory, reviewed: 0, failed: 0 };
+  assert.equal(one(s, 'inventory_coverage').status, 'off', 'a cap never raises a status');
+});
+
+test('budgets: pause budgets count for nothing when agent control cannot be read', () => {
+  const s = good();
+  s.budgets = [{ enforce: 'pause' }];
+  for (const agentControl of [null, undefined, 'x']) {
+    s.agentControl = agentControl;
+    const b = one(s, 'cost_budgets');
+    assert.deepEqual(
+      [b.status, b.evidence.at(-1)],
+      ['partial', 'pause budgets are not counted: agent control could not be read'],
+      String(agentControl),
+    );
+  }
+  s.budgets = [{ enforce: 'pause' }, { enforce: 'block' }];
+  assert.equal(one(s, 'cost_budgets').status, 'in place', 'a block budget still counts');
+});
+
 test('other checks: pause budgets need agent control; a paused judge; disabled providers; wrong-shape parts', () => {
   const s = good();
   s.budgets = [{ enforce: 'pause' }];
@@ -301,10 +337,16 @@ test('other checks: pause budgets need agent control; a paused judge; disabled p
     '1 approved',
     '0 waiting for approval',
   ]);
-  // A part whose check throws is unknown.
+  // Entries that are not keys are skipped, and fields of the wrong shape count for nothing: one active key without a
+  // budget, an expiry or a scope list.
   const t = good();
   t.keys = [null, { scopes: 5, guardrails: 5 }];
-  assert.ok(['in place', 'partial', 'off', 'unknown'].includes(one(t, 'api_keys').status));
+  assert.deepEqual(
+    [one(t, 'api_keys').status, one(t, 'api_keys').evidence],
+    ['off', ['1 active key', '0 with a budget', '0 with an expiry', '0 limited to some scopes']],
+  );
+  assert.equal(one(t, 'guardrails').status, 'in place', 'a key whose guardrails are not an object weakens nothing');
+  // A part whose check throws is unknown.
   const bad = good();
   Object.defineProperty(bad, 'workflows', {
     get() {
@@ -415,6 +457,35 @@ test('usage.oldest: the first entry kept and whether the log rotated', () => {
     assert.deepEqual(mk().oldest(), { ts: NOW - 5 * DAY, rotated: false });
     fs.writeFileSync(`${file}.1`, JSON.stringify({ ts: NOW - 9 * DAY }) + '\n');
     assert.deepEqual(mk().oldest(), { ts: NOW - 9 * DAY, rotated: true });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('usage.oldest: read when asked, so two rotations in one run move it to the first entry of the rotated file', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const { createUsage } = require('../lib/gateway/usage');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-usage-'));
+  try {
+    const file = path.join(dir, 'u.jsonl');
+    let t = NOW - 30 * DAY;
+    // A tiny size cap, so every append after the first rotates the log (lib/gateway/store.js jsonlLog).
+    const u = createUsage({ file, getPricing: () => ({}), now: () => t, maxBytes: 10 });
+    const first = u.record({ model: 'm' }).ts;
+    assert.deepEqual(u.oldest(), { ts: first, rotated: false });
+    t += DAY;
+    u.record({ model: 'm' });
+    assert.deepEqual(u.oldest(), { ts: first, rotated: true }, 'one rotation: the first entry is in the .1 file');
+    t += DAY;
+    const third = u.record({ model: 'm' }).ts;
+    t += DAY;
+    u.record({ model: 'm' });
+    assert.deepEqual(u.oldest(), { ts: third, rotated: true }, 'the entries before the last rotation are gone');
+    // Only the start of the file is read: a long file costs no more.
+    fs.appendFileSync(`${file}.1`, `${'x'.repeat(1 << 20)}\n`);
+    assert.equal(u.oldest().ts, third);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
