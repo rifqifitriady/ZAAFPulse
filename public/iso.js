@@ -600,6 +600,12 @@ const SUBPAGES = {
     ['proxy', 'Proxy logs'],
     ['time', 'Time'],
   ],
+  // The inventory is the default page; the audit log moved to #governance/audit (public/governanceview.js).
+  governance: [
+    ['', 'Inventory'],
+    ['compliance', 'Compliance'],
+    ['audit', 'Audit log'],
+  ],
 };
 function subTabs(route) {
   return `<nav class="subtabs" aria-label="Subpages">${SUBPAGES[route]

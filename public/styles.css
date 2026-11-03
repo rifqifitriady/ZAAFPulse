@@ -10014,3 +10014,26 @@ label.mon-cand.on {
   margin: 0;
   font-size: 12px;
 }
+/* Governance → Inventory and Compliance (public/governanceview.js). The review drawer uses the cost drawer's styles. */
+.gov-summary {
+  margin: 0 0 10px;
+  color: var(--h-muted);
+}
+.gov-id {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.gov-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 0;
+  font-size: 12.5px;
+}
+.gov-facts dt {
+  color: var(--h-muted);
+}
+.gov-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}

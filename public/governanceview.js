@@ -1,10 +1,16 @@
 'use strict';
-/* Governance → Audit log (#governance, AI Governance 2): every change made to ZAAFPulse by a person or an API key,
-   from GET /api/governance/audit (newest first, a page at a time). Filters: the range, the kind of actor, action text
-   and the outcome. Each row's field changes open in a <details>. Verify checks the chain (GET …/audit/verify), the
-   export links download CSV or JSON lines, and the retention is saved with POST /api/governance/settings. Events are
-   delegated (the CSP allows no inline handler); pure helpers are exported for Node tests, and nothing here touches the
-   DOM at load time. Every server or owner string reaches the markup through esc(). */
+/* The Governance menu's three pages (AI Governance 2 and 3).
+   - Inventory (#governance): every AI system ZAAFPulse can see, from GET /api/governance/inventory, filtered by kind,
+     state and review in the page; a drawer records an item's owner, purpose, risk and decision (POST
+     /api/governance/inventory).
+   - Compliance (#governance/compliance): the controls from GET /api/governance/controls, one table per framework, and
+     the evidence export (GET /api/governance/evidence?format=md|json).
+   - Audit log (#governance/audit): every change made to ZAAFPulse by a person or an API key, from GET
+     /api/governance/audit (newest first, a page at a time). Filters: the range, the kind of actor, action text and the
+     outcome. Each row's field changes open in a <details>. Verify checks the chain (GET …/audit/verify), the export
+     links download CSV or JSON lines, and the retention is saved with POST /api/governance/settings.
+   Events are delegated (the CSP allows no inline handler); pure helpers are exported for Node tests, and nothing here
+   touches the DOM at load time. Every server or owner string reaches the markup through esc(). */
 
 const GOV_RANGES = [
   ['1', 'Last 24 hours'],
@@ -31,6 +37,7 @@ const GOV = {
   rows: [],
   next: null,
   hooked: false,
+  inv: { filters: { kind: '', state: '', review: '' }, data: null, open: null },
 };
 
 /* ---------- pure helpers (exported) ---------- */
@@ -185,10 +192,200 @@ function govFiltersHtml(f) {
   </form>`;
 }
 
-/* ---------- the page ---------- */
+/* ---------- Inventory and Compliance (AI Governance 3): pure helpers (exported) ---------- */
 
-function govView() {
-  return `<div class="holo-deck">${subHero('GOVERNANCE · AUDIT LOG', 'Audit log', esc('Changes made through the dashboard and by API keys: who, when, what and the outcome. Read requests are not recorded; see docs/governance.md for the full list.'))}<div id="gov-app">
+const GOV_SUBS = [
+  ['', 'Inventory'],
+  ['compliance', 'Compliance'],
+  ['audit', 'Audit log'],
+];
+const GOV_KINDS = [
+  ['app', 'App'],
+  ['mcp', 'MCP server'],
+  ['provider', 'Provider'],
+  ['model', 'Model'],
+  ['agent', 'Agent'],
+  ['skill', 'Skill'],
+  ['workflow', 'Workflow'],
+  ['knowledge', 'Knowledge base'],
+  ['runtime', 'Local runtime'],
+  ['integration', 'Integration'],
+  ['key', 'API key'],
+];
+const GOV_STATES = [
+  ['running', 'Running'],
+  ['used', 'Used'],
+  ['configured', 'Configured'],
+  ['idle', 'Idle'],
+  ['gone', 'Gone'],
+];
+const GOV_REVIEWS = [
+  ['unreviewed', 'Unreviewed'],
+  ['reviewed', 'Reviewed'],
+  ['gone', 'Gone'],
+];
+const GOV_RISKS = [
+  ['', '—'],
+  ['minimal', 'Minimal'],
+  ['limited', 'Limited'],
+  ['high', 'High'],
+  ['unacceptable', 'Unacceptable'],
+];
+const GOV_DECISIONS = [
+  ['', '—'],
+  ['approved', 'Approved'],
+  ['restricted', 'Restricted'],
+  ['blocked', 'Blocked'],
+];
+// The inventory's sources, in words, for "could not read …".
+const GOV_SOURCES = {
+  live: 'the running apps',
+  summary: 'the indexed logs',
+  trace: 'the trace sources',
+  gateway: 'the gateway',
+  runtimes: 'the local runtimes',
+  integrations: 'the integrations',
+  mcp: "the AI clients' MCP settings",
+};
+const GOV_STATUS_WORDS = { 'in place': 'In place', partial: 'Partial', off: 'Off', unknown: 'Unknown' };
+
+/** The Governance sub-page of a hash: '' (Inventory), 'compliance' or 'audit'; anything else is ''. */
+const govSub = (sub) => (GOV_SUBS.some(([s]) => s && s === sub) ? sub : '');
+/** A value's label in one of the [value, label] lists; the value itself when it is not listed. */
+const govLabel = (list, v) => (list.find(([k]) => k === v) || [v, String(v ?? '')])[1];
+/** The items the filters keep: { kind, state, review } ('' keeps all). */
+function govInvFilter(items, f) {
+  return (Array.isArray(items) ? items : []).filter(
+    (i) => (!f.kind || i.kind === f.kind) && (!f.state || i.state === f.state) && (!f.review || i.status === f.review),
+  );
+}
+/** An item's review as a tag: Unreviewed, or its risk and decision (Gone in front when the item is no longer seen). */
+function govReviewTag(i) {
+  if (i.status === 'unreviewed') return `<span class="tag warn">${esc('Unreviewed')}</span>`;
+  const r = i.review || {};
+  const words = [r.risk ? govLabel(GOV_RISKS, r.risk) : '', r.decision ? govLabel(GOV_DECISIONS, r.decision) : '']
+    .filter(Boolean)
+    .join(' · ');
+  const text = i.status === 'gone' ? ['Gone', words].filter(Boolean).join(' · ') : words || 'Reviewed';
+  return `<span class="tag${i.status === 'gone' ? ' warn' : ''}">${esc(text)}</span>`;
+}
+/** The inventory's rows. */
+function govInvRowsHtml(items) {
+  if (!items.length) return `<tr><td colspan="7" class="muted">${esc('No items for these filters.')}</td></tr>`;
+  return items
+    .map((i) => {
+      const detail = [i.vendor, i.package, i.origin, i.ours ? 'this ZAAFPulse' : ''].filter(Boolean).join(' · ');
+      const owner = i.review && i.review.owner ? `<div class="muted">${esc(i.review.owner)}</div>` : '';
+      // A source failed this build: the item is kept as it was last seen, not confirmed.
+      const stale = i.stale ? `<div class="muted">${esc('not confirmed this build')}</div>` : '';
+      return `<tr><td><b>${esc(i.name)}</b><div class="muted mono gov-id">${esc(i.id)}</div>${detail ? `<div class="muted">${esc(detail)}</div>` : ''}</td><td>${esc(govLabel(GOV_KINDS, i.kind))}</td><td>${esc((i.where || []).join(', ') || '—')}</td><td>${esc(govLabel(GOV_STATES, i.state))}</td><td class="mono">${esc(i.firstSeen || '—')}<br>${esc(i.lastSeen || '—')}</td><td>${govReviewTag(i)}${owner}${stale}</td><td><button class="btn ghost" type="button" data-gov-review="${esc(i.id)}">${esc(i.status === 'unreviewed' ? 'Review' : 'Edit')}</button></td></tr>`;
+    })
+    .join('');
+}
+/** The inventory's counts, the sources that failed and the client files that could not be read. */
+function govInvSummaryHtml(d) {
+  const c = d.counts || {};
+  const parts = [
+    `${c.total || 0} items`,
+    `${c.reviewed || 0} reviewed`,
+    `${c.unreviewed || 0} unreviewed`,
+    `${c.newUnreviewed || 0} new this week and not reviewed`,
+    ...(c.gone ? [`${c.gone} reviews of items no longer seen`] : []),
+  ];
+  const failed = (d.failed || []).map((s) => GOV_SOURCES[s] || s);
+  const unreadable = (d.clients || []).filter((x) => x.state === 'unreadable');
+  return `${failed.length ? `<div class="gov-banner">${esc(`Could not read ${failed.join(', ')}; the list is built from the rest.`)}</div>` : ''}${unreadable.length ? `<div class="gov-banner">${esc(`MCP settings that could not be read: ${unreadable.map((x) => `${x.name} (${x.file})`).join(', ')}.`)}</div>` : ''}<p class="gov-summary">${esc(parts.join(' · '))}</p>`;
+}
+/** The inventory's filters: kind, state and review. */
+function govInvFiltersHtml(f) {
+  const select = (name, any, list) =>
+    `<select class="input" name="${name}"><option value="">${esc(any)}</option>${list.map(([v, label]) => `<option value="${esc(v)}"${v === f[name] ? ' selected' : ''}>${esc(label)}</option>`).join('')}</select>`;
+  return `<form id="gov-inv-filters" class="gov-bar">
+    <label>${esc('Kind')}${select('kind', 'Any kind', GOV_KINDS)}</label>
+    <label>${esc('State')}${select('state', 'Any state', GOV_STATES)}</label>
+    <label>${esc('Review')}${select('review', 'Any review', GOV_REVIEWS)}</label>
+  </form>`;
+}
+/** The review drawer of one item: what is known of it, then owner, purpose, risk, decision and note. */
+function govReviewFormHtml(i) {
+  const r = i.review || {};
+  const opt = (list, v) =>
+    list
+      .map(([k, label]) => `<option value="${esc(k)}"${k === (v || '') ? ' selected' : ''}>${esc(label)}</option>`)
+      .join('');
+  const facts = [
+    ['Kind', govLabel(GOV_KINDS, i.kind)],
+    ['Vendor', i.vendor],
+    ['Where', (i.where || []).join(', ')],
+    ['State', govLabel(GOV_STATES, i.state)],
+    ['First seen', i.firstSeen],
+    ['Last seen', i.lastSeen],
+    ['Transport', i.transport],
+    ['Command', i.command],
+    ['Package', i.package],
+    ['Address', i.origin],
+    ['Clients', (i.clients || []).join(', ')],
+    ['Projects', (i.projects || []).join(', ')],
+    ['Reviewed', r.reviewedAt ? govTime(r.reviewedAt) : ''],
+  ].filter(([, v]) => v);
+  return `<div class="cost-drawer-backdrop" data-gov-close></div>
+  <aside class="cost-drawer holo-deck" role="dialog" aria-modal="true" aria-labelledby="gov-review-title">
+    <form id="gov-review" novalidate data-gov-id="${esc(i.id)}">
+      <div class="cost-drawer-head"><h2 id="gov-review-title">${esc(i.name)}</h2><button type="button" class="btn ghost" data-gov-close aria-label="Close">×</button></div>
+      <p class="muted mono">${esc(i.id)}</p>
+      <dl class="gov-facts">${facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
+      <label>${esc('Owner')}<input class="input" name="owner" maxlength="200" value="${esc(r.owner || '')}" autocomplete="off"></label>
+      <label>${esc('Purpose')}<input class="input" name="purpose" maxlength="200" value="${esc(r.purpose || '')}" autocomplete="off"></label>
+      <div class="cost-row"><label>${esc('Risk (EU AI Act tier)')}<select class="input" name="risk">${opt(GOV_RISKS, r.risk)}</select></label><label>${esc('Decision')}<select class="input" name="decision">${opt(GOV_DECISIONS, r.decision)}</select></label></div>
+      <label>${esc('Note')}<textarea class="input" name="note" maxlength="200" rows="3">${esc(r.note || '')}</textarea></label>
+      <p class="muted">${esc('Notes are exported with the evidence; do not paste secrets.')}</p>
+      <p class="muted">${esc('The decision is a record: blocking a system stays with API keys and the guardrails.')}</p>
+      <div id="gov-review-msg" role="alert"></div>
+      <div class="cost-drawer-foot"><button class="btn" type="submit">${esc('Save')}</button>${i.review ? `<button class="btn ghost" type="button" data-gov-clear>${esc('Clear review')}</button>` : ''}<button class="btn ghost" type="button" data-gov-close>${esc('Cancel')}</button></div>
+    </form>
+  </aside>`;
+}
+/** The body of POST /api/governance/inventory from the review form's fields. */
+function govReviewBody(id, get) {
+  const text = (k) => String(get(k) ?? '').trim();
+  return {
+    id,
+    owner: text('owner'),
+    purpose: text('purpose'),
+    risk: text('risk'),
+    decision: text('decision'),
+    note: text('note'),
+  };
+}
+/** A control's status as a tag. */
+const govStatusTag = (s) =>
+  `<span class="tag${s === 'in place' ? '' : ' warn'}">${esc(GOV_STATUS_WORDS[s] || s)}</span>`;
+/** A control's page: a dashboard hash, else the Governance page. */
+const govLink = (l) => (typeof l === 'string' && /^#[a-z0-9/-]+$/.test(l) ? l : '#governance');
+/** The Compliance page's body: the counts, the export links, the notice, then one table per framework, its clauses in
+ * order, each with the controls that show it. */
+function govCompHtml(d) {
+  const list = d.controls || [];
+  const n = (s) => list.filter((c) => c.status === s).length;
+  const head = `<div class="gov-bar"><span class="gov-summary">${esc(`${n('in place')} in place · ${n('partial')} partial · ${n('off')} off · ${n('unknown')} unknown`)}</span><a class="btn ghost" href="/api/governance/evidence?format=md" download>${esc('Export Markdown')}</a><a class="btn ghost" href="/api/governance/evidence?format=json" download>${esc('Export JSON')}</a><p class="muted gov-note">${esc(d.notice || '')}</p></div>`;
+  const sections = (d.frameworks || []).map((f) => {
+    const rows = [];
+    for (const k of (d.clauses || []).filter((x) => x.framework === f.id))
+      for (const c of list)
+        if ((c.clauses || []).some((x) => x.id === k.id))
+          rows.push(
+            `<tr><td><b>${esc(k.ref)}</b> ${esc(k.title)}</td><td><a href="${esc(govLink(c.link))}">${esc(c.title)}</a></td><td>${govStatusTag(c.status)}</td><td>${esc((c.evidence || []).join(' · '))}</td></tr>`,
+          );
+    return `<section class="holo panel"><div class="panel-head"><h3>${esc(f.name)}</h3><span class="meta">${esc(f.version)}</span></div><div class="table-wrap"><table class="holo-table"><thead><tr><th>${esc('Clause')}</th><th>${esc('Control')}</th><th>${esc('Status')}</th><th>${esc('Evidence')}</th></tr></thead><tbody>${rows.join('') || `<tr><td colspan="4" class="muted">${esc('No control maps here.')}</td></tr>`}</tbody></table></div></section>`;
+  });
+  return head + sections.join('');
+}
+
+/* ---------- the pages ---------- */
+
+/** Governance → Audit log (#governance/audit). */
+function govAuditView() {
+  return `<div class="holo-deck">${subTabs('governance')}${subHero('GOVERNANCE · AUDIT LOG', 'Audit log', esc('Changes made through the dashboard and by API keys: who, when, what and the outcome. Read requests are not recorded; see docs/governance.md for the full list.'))}<div id="gov-app">
     <section class="holo panel"><div class="panel-head"><h3>${esc('Audit log')}</h3><span class="meta">${esc('kept by month, chained')}</span></div><div id="gov-status"><div class="skeleton" style="height:40px"></div></div>${govFiltersHtml(GOV.filters)}<div class="table-wrap"><table class="holo-table"><thead><tr><th>${esc('Time')}</th><th>${esc('Actor')}</th><th>${esc('Action')}</th><th>${esc('Target')}</th><th>${esc('Outcome')}</th></tr></thead><tbody id="gov-rows"></tbody></table></div><div id="gov-more"></div></section>
   </div></div>`;
 }
@@ -217,10 +414,86 @@ async function govLoadRows(more = false) {
     body.innerHTML = `<tr><td colspan="5">${esc(`Could not read the audit log: ${e.message}`)}</td></tr>`;
   }
 }
-function govMount() {
+/** Governance → Inventory (#governance). */
+function govInvView() {
+  return `<div class="holo-deck">${subTabs('governance')}${subHero('GOVERNANCE · INVENTORY', 'AI inventory', esc('Every AI system ZAAFPulse can see here: apps, the MCP servers in your AI clients, providers and models, agents, skills, workflows, knowledge bases, local runtimes, integrations and API keys. Record who owns each one, what it is for, its risk and your decision.'))}<div id="gov-app">
+    <section class="holo panel"><div class="panel-head"><h3>${esc('Inventory')}</h3><span class="meta">${esc('built when you open it')}</span></div><div id="gov-inv-summary"><div class="skeleton" style="height:40px"></div></div>${govInvFiltersHtml(GOV.inv.filters)}<div class="table-wrap"><table class="holo-table"><thead><tr><th>${esc('Item')}</th><th>${esc('Kind')}</th><th>${esc('Where')}</th><th>${esc('State')}</th><th>${esc('First / last seen')}</th><th>${esc('Review')}</th><th></th></tr></thead><tbody id="gov-inv-rows"></tbody></table></div></section>
+    <div id="gov-review-host"></div>
+  </div></div>`;
+}
+/** Governance → Compliance (#governance/compliance). */
+function govCompView() {
+  return `<div class="holo-deck">${subTabs('governance')}${subHero('GOVERNANCE · COMPLIANCE', 'Compliance', esc('Evidence for your assessment, not a certification: the controls ZAAFPulse provides, their status from your current settings, and the clauses of the EU AI Act, the NIST AI RMF and ISO/IEC 42001 they map to.'))}<div id="gov-app"><div id="gov-comp"><div class="skeleton" style="height:240px"></div></div></div></div>`;
+}
+/** The page of a Governance sub-page ('' Inventory, 'compliance', 'audit'). */
+function govView(sub) {
+  const s = govSub(sub);
+  return s === 'audit' ? govAuditView() : s === 'compliance' ? govCompView() : govInvView();
+}
+async function govLoadInv() {
+  const body = $('#gov-inv-rows');
+  if (!body) return;
+  try {
+    GOV.inv.data = await api('/api/governance/inventory');
+    govPaintInv();
+  } catch (e) {
+    body.innerHTML = `<tr><td colspan="7">${esc(`Could not read the inventory: ${e.message}`)}</td></tr>`;
+  }
+}
+function govPaintInv() {
+  const d = GOV.inv.data;
+  if (!d) return;
+  const sum = $('#gov-inv-summary');
+  if (sum) sum.innerHTML = govInvSummaryHtml(d);
+  const body = $('#gov-inv-rows');
+  if (body) body.innerHTML = govInvRowsHtml(govInvFilter(d.items, GOV.inv.filters));
+}
+async function govLoadComp() {
+  const el = $('#gov-comp');
+  if (!el) return;
+  try {
+    el.innerHTML = govCompHtml(await api('/api/governance/controls'));
+  } catch (e) {
+    el.innerHTML = `<div class="gov-banner">${esc(`Could not read the controls: ${e.message}`)}</div>`;
+  }
+}
+function govOpenReview(id) {
+  const host = $('#gov-review-host');
+  const item = GOV.inv.data && GOV.inv.data.items.find((i) => i.id === id);
+  if (!host || !item) return;
+  GOV.inv.open = id;
+  host.innerHTML = govReviewFormHtml(item);
+  const first = host.querySelector('input[name="owner"]');
+  if (first) first.focus();
+}
+function govCloseReview() {
+  GOV.inv.open = null;
+  const host = $('#gov-review-host');
+  if (host) host.replaceChildren();
+}
+async function govSaveReview(body) {
+  try {
+    await api('/api/governance/inventory', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    const msg = $('#gov-review-msg');
+    if (msg) msg.textContent = `Not saved: ${govErrorText(err)}`;
+    return;
+  }
+  govCloseReview();
+  govLoadInv();
+}
+function govMount(sub) {
   govInstallEvents();
-  govLoadStatus();
-  govLoadRows();
+  const s = govSub(sub);
+  if (s === 'audit') {
+    govLoadStatus();
+    govLoadRows();
+  } else if (s === 'compliance') govLoadComp();
+  else govLoadInv();
 }
 function govInstallEvents() {
   if (GOV.hooked) return;
@@ -230,7 +503,9 @@ function govInstallEvents() {
     if (!form || !form.closest || !form.closest('#gov-app')) return;
     e.preventDefault();
     const data = new FormData(form);
-    if (form.id === 'gov-filters') {
+    if (form.id === 'gov-review') {
+      govSaveReview(govReviewBody(form.dataset.govId, (k) => data.get(k)));
+    } else if (form.id === 'gov-filters') {
       GOV.filters = {
         range: String(data.get('range') || '7'),
         actor: String(data.get('actor') || ''),
@@ -253,10 +528,32 @@ function govInstallEvents() {
       govLoadRows();
     }
   });
+  // The inventory's filters apply as they change, on the list already loaded.
+  document.addEventListener('change', (e) => {
+    const form = e.target && e.target.closest && e.target.closest('#gov-inv-filters');
+    if (!form) return;
+    const data = new FormData(form);
+    GOV.inv.filters = {
+      kind: String(data.get('kind') || ''),
+      state: String(data.get('state') || ''),
+      review: String(data.get('review') || ''),
+    };
+    govPaintInv();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && GOV.inv.open) govCloseReview();
+  });
   document.addEventListener('click', async (e) => {
-    const t = e.target.closest && e.target.closest('#gov-app [data-gov-verify], #gov-app [data-gov-more]');
+    const t =
+      e.target.closest &&
+      e.target.closest(
+        '#gov-app [data-gov-verify], #gov-app [data-gov-more], #gov-app [data-gov-review], #gov-app [data-gov-close], #gov-app [data-gov-clear]',
+      );
     if (!t) return;
     if (t.hasAttribute('data-gov-more')) return void govLoadRows(true);
+    if (t.hasAttribute('data-gov-review')) return void govOpenReview(t.getAttribute('data-gov-review'));
+    if (t.hasAttribute('data-gov-close')) return void govCloseReview();
+    if (t.hasAttribute('data-gov-clear')) return void govSaveReview({ id: GOV.inv.open, clear: true });
     const out = $('#gov-verify');
     if (out) out.textContent = 'Checking…';
     try {
@@ -289,4 +586,21 @@ if (typeof module !== 'undefined')
     govStatusHtml,
     govFiltersHtml,
     govView,
+    govAuditView,
+    GOV_SUBS,
+    GOV_KINDS,
+    govSub,
+    govLabel,
+    govInvFilter,
+    govReviewTag,
+    govInvRowsHtml,
+    govInvSummaryHtml,
+    govInvFiltersHtml,
+    govReviewFormHtml,
+    govReviewBody,
+    govStatusTag,
+    govLink,
+    govCompHtml,
+    govInvView,
+    govCompView,
   };
