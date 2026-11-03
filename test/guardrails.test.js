@@ -365,3 +365,28 @@ test('a trailing assistant message (prefill) does not hide the user turn before 
   };
   assert.throws(() => G.checkBody(resp, policy({ injection: 'block' }), { format: 'responses' }), G.GuardrailBlock);
 });
+
+test('injection: a long single-line body is scanned in linear time (no backward search to the start)', () => {
+  const ms = (fn) => {
+    const t = process.hrtime.bigint();
+    fn();
+    return Number(process.hrtime.bigint() - t) / 1e6;
+  };
+  // A 2 MB log export on one line, anchors ("token", "password", "admin") every hundred characters or so.
+  const recs = Array.from({ length: 10000 }, (_, i) => ({
+    level: 'ERROR',
+    content: `Request ${i} failed: the user token expired, please run the job again or ask the admin to reset the password`,
+    host: `ip-10-0-0-${i % 255}`,
+  }));
+  const json = JSON.stringify({ records: recs }).slice(0, 2e6);
+  assert.equal(json.includes('\n'), false);
+  const fn = 'function f(a){return fetch(url,{method:"POST",body:JSON.stringify({token:a,secret:b})})}';
+  const minified = fn.repeat(12000);
+  for (const [name, text] of [
+    ['2 MB single-line JSON', json],
+    ['1 MB minified JS', minified],
+  ]) {
+    const took = ms(() => G.checkBody(chat([{ role: 'user', content: text }]), policy(), { format: 'openai-chat' }));
+    assert.ok(took < 1000, `${name}: ${took.toFixed(0)} ms`);
+  }
+});
