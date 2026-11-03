@@ -318,3 +318,31 @@ test('scan: a Claude project folder outside the home folder comes back as it is 
   const out = scanClients({ home: HOME, env: {}, platform: 'linux', read: reader(files) });
   assert.equal(out[0].servers[0].project, '/srv/x');
 });
+
+test('commandOf: a plain first word is the program; a path with spaces is read only when nothing else follows', () => {
+  const cases = [
+    ['npx @scope/pkg', 'npx'],
+    ['uvx mcp-server-fetch', 'uvx'],
+    ['node server.js', 'node'],
+    ['docker run -i --rm img', 'docker'],
+    ['python3 /x.py', 'python3'],
+    ['/usr/bin/node /home/ana/s/server.js', null],
+    ['C:\\Program Files\\nodejs\\node.exe', 'node.exe'],
+    ['C:\\Program Files\\nodejs\\node.exe C:\\Users\\Ana\\srv\\index.js', null],
+    ['/opt/my tool/run --token abc', null],
+    ['/usr/local/bin/mcp-proxy --url https://h/x', 'mcp-proxy'],
+  ];
+  for (const [input, want] of cases) assert.equal(commandOf(input), want, input);
+});
+
+test('Codex: a server whose table cannot be read makes the file unreadable', () => {
+  assert.equal(scanCodex('[mcp_servers.x]\ncommand = "npx"\nnote = """\nhi\n"""\n')[0].state, 'unreadable');
+  assert.equal(scanCodex('[mcp_servers.x]\n__proto__.p = "y"\n')[0].state, 'unreadable');
+  assert.equal({}.p, undefined);
+});
+
+test('packageOf: a version must look like one, so user@1password is not a package', () => {
+  assert.equal(packageOf(['user@1password']), null);
+  assert.equal(packageOf(['pkg@1.2.3-beta.1']), 'pkg@1.2.3-beta.1');
+  assert.equal(packageOf(['pkg@next']), 'pkg@next');
+});
