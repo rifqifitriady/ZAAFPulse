@@ -110,7 +110,7 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 <td valign="top">
 
 **Monitors & alerts**<br>
-<sub>Ten rules on cost, quality, agent behaviour and the audit log, including cost anomalies and guardrail blocks, plus your budgets, with alerts in the top bar, a desktop notification or a webhook. Pause, resume or stop the agent behind a session, or let a cost or loop rule pause it (off by default). Snooze a rule for an hour or a day.</sub>
+<sub>Eleven rules on cost, quality, agent behaviour, the audit log and new AI systems, including cost anomalies and guardrail blocks, plus your budgets, with alerts in the top bar, a desktop notification or a webhook. Pause, resume or stop the agent behind a session, or let a cost or loop rule pause it (off by default). Snooze a rule for an hour or a day.</sub>
 
 </td>
 </tr>
@@ -263,8 +263,8 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 </td>
 <td valign="top">
 
-**Governance audit log**<br>
-<sub>Every change made by a person or an API key (settings, keys, providers, guardrails, integrations, budgets, sign-ins, approvals) with who, when, what and the outcome. Monthly files kept 12 months by default, chained with a key so an edited or deleted line shows when you verify, exportable as CSV or JSON lines. <a href="docs/governance.md">docs/governance.md</a></sub>
+**AI governance**<br>
+<sub>An inventory of every AI system here (apps, the MCP servers in your AI clients, providers, models, agents, keys) with its owner, purpose, risk and your decision; seventeen controls mapped to the EU AI Act, the NIST AI RMF and ISO/IEC 42001 with their evidence, exportable as Markdown or JSON; and an audit log of every change made by a person or an API key, chained so an edited or deleted line shows when you verify. <a href="docs/governance.md">docs/governance.md</a></sub>
 
 </td>
 </tr>
@@ -734,13 +734,34 @@ Shapes, limits, privacy, the API and CI recipes: **[docs/datasets.md](docs/datas
 
 Monitors watch your usage, cost and quality inside the dashboard server and tell you when something looks wrong. The bell in the top bar lists recent alerts, and **Settings → Monitors** has the rules and the channels.
 
-- **Ten rules:** cost burn (per session, per 10 minutes), tool loop, agent stuck, accuracy drop, evaluator pass rate, unsafe content, cost anomaly (today's or yesterday's spend well above what the same weekday usually costs), guardrail block (the gateway guardrails blocked a request in the last hour), audit log degraded and audit chain broken (see [Governance audit log](#governance-audit-log)), plus your cost budgets. Each rule can be switched on or off, has its own limits, and can be snoozed for an hour or a day. A rule with missing input reports *no data* and never triggers.
+- **Eleven rules:** cost burn (per session, per 10 minutes), tool loop, agent stuck, accuracy drop, evaluator pass rate, unsafe content, cost anomaly (today's or yesterday's spend well above what the same weekday usually costs), guardrail block (the gateway guardrails blocked a request in the last hour), audit log degraded and audit chain broken (see [Governance audit log](#governance-audit-log)), unreviewed AI system (see [AI inventory and compliance](#ai-inventory-and-compliance)), plus your cost budgets. Each rule can be switched on or off, has its own limits, and can be snoozed for an hour or a day. A rule with missing input reports *no data* and never triggers.
 - **Channels:** a desktop notification (on by default) and an optional webhook whose URL and headers go to the OS secret store. Neither carries transcript text. Demo mode sends nothing.
 - **Agent control:** pause (`SIGSTOP`), resume or stop the Claude Code or Codex process behind a session from the Trace explorer, the Live monitor or AI Office. Before every signal the process table is read again and the pid and start time must match; every action is written to `.data/agent-audit.jsonl`.
 - **Auto-pause** for cost burn and tool loop is off by default; a budget pauses only when you set it to. A paused agent is never resumed or stopped automatically.
 - **Where control is off:** server mode, password sign-in, no sign-in, and Docker. Windows has no pause or resume.
 
 Rules, states, channels, safety checks, the API and known limits: **[docs/monitors.md](docs/monitors.md)**.
+
+## AI inventory and compliance
+
+**Governance → Inventory** lists every AI system ZAAFPulse can see on this machine: the apps running and installed, the
+MCP servers in your AI clients' own settings (Claude Code, Claude Desktop, Cursor, Kiro, Antigravity, VS Code,
+Windsurf, Gemini CLI, Zed and Codex CLI), the gateway's providers and the models they served, agents, skills,
+workflows, knowledge bases, local runtimes, integrations and API keys. One system is one item, with where it was
+found, its state and the days it was first and last seen.
+
+- **Review** each item: owner, purpose, risk (the EU AI Act tiers) and your decision, saved in `config.json` and
+  recorded in the audit log.
+- **Shadow AI:** the `inventory_unreviewed` rule alerts when a system first seen in the last 7 days has no review.
+- **Private:** of an MCP server only its name, transport, command and package name, or its URL's origin, are kept;
+  never env values, headers or tokens.
+
+**Governance → Compliance** shows seventeen controls (the guardrails, the audit log, approvals, keys, agent control,
+the Monitors, evals, budgets, sign-in, retention, the inventory itself …) with their status from your settings and
+their evidence, mapped to the EU AI Act, the NIST AI RMF 1.0 and ISO/IEC 42001:2023. **Export** the inventory, the
+controls and the audit log's state as Markdown or JSON. It is evidence for your assessment, not a certification.
+
+What is listed, the reviews, every control and the API: **[docs/governance.md](docs/governance.md)**.
 
 ## Governance audit log
 
@@ -1011,7 +1032,7 @@ docs/local-models.md   starting and stopping local model servers: runtimes, your
 docs/topology.md       the Overview's provider topology: layers, colours, sources, tool routing, privacy
 docs/cost.md           cost ledger: who counts what, frozen cost, billing, cost centers, restate, the Cost Control menu, API, limits
 docs/guardrails.md     gateway guardrails: the checks, modes, scope, per-key policy, what is recorded, reading a block
-docs/governance.md     governance audit log: what is recorded, the chain, verify, retention, export, degraded mode, API
+docs/governance.md     governance: the AI inventory and reviews, compliance controls, evidence export, the audit log, API
 docs/assets/           README banner, diagrams, screenshots and GIFs
 ```
 </details>
@@ -1050,6 +1071,7 @@ Apart from the sign-in routes in the first row, every `/api` route needs a signe
 | `GET /api/monitors` · `status` · `POST /api/monitors/<rule>` · `channels` · `test` · `GET /api/alerts` | monitor rules and their state, channels, a test send, and recent alerts; see [docs/monitors.md](docs/monitors.md#api) |
 | `GET /api/agents/candidates` · `POST /api/agents/pause` · `resume` · `stop` | the processes that could be behind a session, and pausing, resuming or stopping one; see [docs/monitors.md](docs/monitors.md#agent-control) |
 | `GET /api/runtimes` · `/api/runtimes/config` · `POST /api/runtimes/start` · `stop` · `approve` · `save` · `delete` | local model servers: Start and Stop in AI Office and your own runtimes in Settings; see [docs/local-models.md](docs/local-models.md#api) |
+| `GET /api/governance/inventory` · `POST /api/governance/inventory` · `GET /api/governance/controls` · `GET /api/governance/evidence` | the AI inventory and its reviews, the compliance controls with their evidence, and the evidence export; see [docs/governance.md](docs/governance.md#inventory-and-compliance-api) |
 | `GET /api/governance/audit` · `export` · `verify` · `status` · `POST /api/governance/settings` | the governance audit log: entries, a CSV or JSON-lines download, a check of the chain, its state, and the retention; see [docs/governance.md](docs/governance.md#api) |
 | `POST /api/rescan` | re-index changed log files now |
 | `GET /api/integrations` | integration health, client registration and recent MCP tool calls |
@@ -1075,6 +1097,7 @@ Everything is editable in **Settings** and saved to `config.json`:
 | OpenTelemetry export (`otel`) | off; set in `config.json` only ([docs/otel.md](docs/otel.md)) |
 | Gateway guardrails (`gateway.guardrails`) | secrets `redact`, personal data `off`, prompt injection `log`, scope `external` ([docs/guardrails.md](docs/guardrails.md)) |
 | Audit log retention (`governance.audit.retentionMonths`) | 12 months, from 6 to 120 ([docs/governance.md](docs/governance.md#retention)) |
+| AI inventory reviews (`governance.inventory`) | none; set on **Governance → Inventory** ([docs/governance.md](docs/governance.md#reviews)) |
 
 Environment variables: `PORT` / `ZAAFPULSE_PORT` (default `4777`), `ZAAFPULSE_HOST`, `ZAAFPULSE_DATA`, `ZAAFPULSE_AUTH` (`local` by default on 127.0.0.1, `1` for password, `none` to turn sign-in off), `ZAAFPULSE_INDEX_WORKERS` (worker threads for the first index; `0` turns them off), `ZAAFPULSE_CONTENT` (`off` hides transcript text in the Trace explorer, and eval explanations; in server mode it is off unless `on`), `ZAAFPULSE_OLLAMA_URL` and `ZAAFPULSE_LMSTUDIO_URL` (move the local judge servers; for tests and unusual setups, see [docs/evals.md](docs/evals.md)), `ZAAFPULSE_CLAUDE_BIN` (the Claude Code CLI for the [Claude Code judge](docs/evals.md#claude-code), when it is not found on its own), the server-mode settings in [docs/install.md](docs/install.md), the standard `OTEL_*` variables ([docs/otel.md](docs/otel.md)), and `DEMO=1` for synthetic data. Demo mode never writes `config.json`, the Keychain or your coding tools, and fetches nothing: model calls are answered by a scripted model inside the process, and gateway data lives in a temporary folder. It uses the cached price list if one exists.
 </details>
