@@ -76,7 +76,7 @@ const { createTraceStore } = require('./lib/trace/store');
 const { createRecorder } = require('./lib/trace/recorder');
 const { createReceiver } = require('./lib/trace/otlp');
 const govContext = require('./lib/governance/context');
-const { requestEntry } = require('./lib/governance/events');
+const { requestEntry, controlEntry } = require('./lib/governance/events');
 const { createGovernanceAudit, keySource } = require('./lib/governance/audit');
 const { diff: govDiff } = require('./lib/governance/diff');
 
@@ -135,7 +135,13 @@ const { fullName, computerName } = platform;
 const HOSTNAME = DEMO ? demo.config.host : computerName();
 let auth;
 try {
-  auth = createAuth({ dataDir: DIR, host: HOST, demo: DEMO, headers: () => SECURITY_HEADERS });
+  auth = createAuth({
+    dataDir: DIR,
+    host: HOST,
+    demo: DEMO,
+    headers: () => SECURITY_HEADERS,
+    onEvent: (e) => govRecord(e), // sign-ins and sign-outs for the governance audit log
+  });
 } catch (err) {
   console.error(err.message);
   process.exit(78);
@@ -254,9 +260,16 @@ const governance = createGovernanceAudit({
   now: Date.now,
   getKey: keySource({ dir: govDir, store: DEMO ? null : require('./lib/secret-store').defaultStore(), now: Date.now }),
 });
+// An id from a request body as it may be kept in an entry (lib/governance/events.js keeps the same shape).
+const GOV_ID = /^[A-Za-z0-9_.:-]{1,80}$/;
 // An entry's actor: the one it names, else the request's (lib/governance/context.js), else the server's own.
+// Never throws (A6): whatever calls it goes ahead.
 function govRecord(entry) {
-  return governance.record({ ...entry, actor: entry.actor || govContext.actor() || { via: 'system' } });
+  try {
+    return governance.record({ ...entry, actor: entry.actor || govContext.actor() || { via: 'system' } });
+  } catch {
+    return null;
+  }
 }
 // Every config.json write, from either writer (saveConfigSections below, lib/integration-config.js), is one
 // config.change entry with its field-level changes, secrets masked (lib/governance/diff.js). A write that changed
@@ -462,6 +475,7 @@ const gateway = createGateway({
   publicUrl: process.env.ZAAFPULSE_PUBLIC_URL || '',
   trustProxy: process.env.ZAAFPULSE_TRUST_PROXY === '1',
   budgetGuard,
+  audit: (e) => govRecord(e), // key changes, run approvals and cancels
 });
 
 // Trace explorer: every log source behind opaque keys and ids. Content (prompts, replies, tool output) is off
@@ -703,7 +717,27 @@ const monitorChannels = createChannels({
 // Control also needs a dashboard sign-in, so ZAAFPULSE_AUTH=none turns it off too, except in demo (which never signals).
 const AGENTS_OFF =
   SERVER_MODE || auth.mode === 'password' ? 'server' : auth.mode === 'none' && !DEMO ? 'no-sign-in' : false;
-const agentControl = createAgentControl({ dataDir: monitorDir, serverMode: AGENTS_OFF, log: (m) => console.error(m) });
+// Agent and runtime control keep their own log (agent-audit.jsonl); each line is also a governance entry (A4(5)).
+function controlAudit(dir) {
+  const log = createAudit(path.join(dir, 'agent-audit.jsonl'));
+  return {
+    record(line) {
+      log.record(line);
+      try {
+        const e = controlEntry(line);
+        if (e) govRecord(e);
+      } catch {
+        /* the control line is written; an audit bug never fails the action (A6) */
+      }
+    },
+  };
+}
+const agentControl = createAgentControl({
+  dataDir: monitorDir,
+  serverMode: AGENTS_OFF,
+  log: (m) => console.error(m),
+  audit: controlAudit(monitorDir),
+});
 // daily_cost and month_projection became budgets (legacy-monthly): they are not evaluated, listed or changed, so
 // nothing alerts twice.
 const RETIRED_RULES = ['daily_cost', 'month_projection'];
@@ -822,6 +856,7 @@ const runtimeControl = createRuntimeControl({
   state: runtimeState,
   entries: runtimeEntries,
   dataDir: runtimeDir,
+  audit: controlAudit(runtimeDir),
   started: runtimeStarted,
   // The agents' rule: a runtime start runs a command, so it needs a sign-in just as pausing an agent does.
   serverMode: AGENTS_OFF,
@@ -1354,7 +1389,24 @@ const handler = async (req, res) => {
         if (index !== undefined && !Number.isInteger(index)) return send(res, 400, { error: 'mask index required' });
         if (offset !== undefined && !(Number.isInteger(offset) && offset >= 0))
           return send(res, 400, { error: 'bad offset' });
-        return send(res, 200, await trace.reveal(id, index, { offset }));
+        // A secret was shown (A4(6)): which content and which mask, never the value. An id that is not id-shaped
+        // (content ids are ci_<hex>) is not copied.
+        const target = { type: 'content', ...(typeof id === 'string' && GOV_ID.test(id) ? { id } : {}) };
+        let shown;
+        try {
+          shown = await trace.reveal(id, index, { offset });
+        } catch (err) {
+          const st = err && err.status;
+          govRecord({
+            action: 'trace.reveal',
+            target,
+            outcome: Number.isInteger(st) && st < 500 ? 'refused' : 'error',
+            ...(Number.isInteger(st) ? { status: st } : {}),
+          });
+          throw err;
+        }
+        govRecord({ action: 'trace.reveal', target, ...(index !== undefined ? { index } : {}) });
+        return send(res, 200, shown);
       } catch (err) {
         return traceError(res, err);
       }

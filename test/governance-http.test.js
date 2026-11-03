@@ -195,3 +195,102 @@ test('config changes: a diff that fails never fails the save that was already wr
   assert.equal(g.body.userName, 'New');
   assert.ok(s.alive());
 });
+
+test('keys, runs, reveal and control: the gateway key and the API key that acts are named', async (t) => {
+  const upstream = await fakeServer({
+    'POST /chat/completions': {
+      body: {
+        choices: [{ message: { role: 'assistant', content: 'ok' } }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      },
+    },
+    'GET /models': { body: { data: [{ id: 'm' }] } },
+  });
+  t.after(() => upstream.close());
+  const s = await startServer(t);
+  const admin = async (route, body) => (await call(s, `/api/gateway/${route}`, { method: 'POST', body })).body;
+  await admin('providers', { action: 'save', id: 'fake', preset: 'custom', baseUrl: upstream.url, tier: 'private' });
+  await admin('defaults', { model: 'fake/m', plannerModel: 'fake/m' });
+  await admin('workflows', {
+    action: 'save',
+    id: 'gated',
+    name: 'Gated',
+    steps: [
+      { agent: 'hr-finance', prompt: 'Review {{input}}' },
+      { agent: 'legal-compliance', prompt: 'Sign off {{step1}}', approve: true },
+    ],
+  });
+  const made = await admin('keys', { action: 'create', name: 'pipeline', scopes: ['agents', 'llm'] });
+  const auth = { authorization: `Bearer ${made.secret}` };
+  const run = await call(s, '/v1/workflows/gated/run', { method: 'POST', body: { input: 'x' }, headers: auth });
+  assert.equal(run.body.state, 'input-required');
+  const resume = (approve) =>
+    call(s, `/v1/runs/${run.body.id}/resume`, { method: 'POST', body: { approve }, headers: auth });
+  assert.equal((await resume(true)).status, 403);
+  assert.equal((await resume(false)).body.state, 'rejected');
+  assert.equal((await call(s, '/api/trace/reveal', { method: 'POST', body: { id: 'nope', index: 0 } })).status, 404);
+  const start = await call(s, '/api/runtimes/start', { method: 'POST', body: { id: 'ollama' } });
+  assert.equal(start.status, 403);
+  const all = entries(s);
+  const one = (action) => all.filter((e) => e.action === action);
+  assert.deepEqual(one('key.create')[0].target, { type: 'key', id: made.key.id, name: 'pipeline' });
+  assert.deepEqual(one('key.create')[0].actor, LOCAL);
+  const byKey = { via: 'apikey', keyId: made.key.id };
+  assert.deepEqual(
+    [...one('run.approve'), ...one('run.reject')].map((e) => [e.action, e.outcome, e.actor]),
+    [
+      ['run.approve', 'refused', byKey],
+      ['run.reject', 'ok', byKey],
+    ],
+  );
+  assert.deepEqual(
+    one('trace.reveal').map((e) => [e.target, e.outcome, e.status, e.actor]),
+    [[{ type: 'content', id: 'nope' }, 'refused', 404, LOCAL]],
+  );
+  assert.deepEqual(
+    one('runtime.start').map((e) => [e.target, e.outcome, e.status, e.actor]),
+    [[{ type: 'runtime', id: 'ollama' }, 'refused', 403, LOCAL]],
+  );
+  assert.ok(fs.existsSync(path.join(s.data, '.data', 'agent-audit.jsonl')), 'the control log stays');
+  assert.ok(!JSON.stringify(all).includes(made.secret));
+  assert.ok(s.alive());
+});
+
+test('sign-in: login, a change, logout, five failures and one lockout, with the device and address', async (t) => {
+  const s = await startServer(t, { ZAAFPULSE_AUTH: '1', ZAAFPULSE_ADMIN_PASSWORD: 'correct horse battery' });
+  const ok = await call(s, '/api/login', { method: 'POST', body: { password: 'correct horse battery' } });
+  assert.equal(ok.status, 200);
+  const cookie = ok.headers
+    .getSetCookie()
+    .map((c) => c.split(';')[0])
+    .join('; ');
+  const headers = { cookie, origin: s.base };
+  assert.equal((await call(s, '/api/config', { method: 'POST', body: { userName: 'Ana' }, headers })).status, 200);
+  assert.equal((await call(s, '/api/logout', { method: 'POST', body: {}, headers })).status, 200);
+  for (let i = 0; i < 5; i++)
+    assert.equal((await call(s, '/api/login', { method: 'POST', body: { password: `nope ${i}` } })).status, 401);
+  assert.equal((await call(s, '/api/login', { method: 'POST', body: { password: 'nope' } })).status, 429);
+  const all = entries(s).filter((e) => e.action !== 'audit.key_created');
+  assert.deepEqual(
+    all.map((e) => e.action),
+    [
+      'auth.login',
+      'config.change',
+      'POST /api/config',
+      'auth.logout',
+      'auth.login_failed',
+      'auth.login_failed',
+      'auth.login_failed',
+      'auth.login_failed',
+      'auth.login_failed',
+      'auth.lockout',
+    ],
+  );
+  const device = all[0].actor.device;
+  assert.ok(device);
+  for (const e of all.slice(0, 4))
+    assert.deepEqual(e.actor, { via: 'dashboard', mode: 'password', device, ip: '127.0.0.1' });
+  assert.deepEqual(all[4].actor, { via: 'dashboard', mode: 'password', device: null, ip: '127.0.0.1' });
+  assert.ok(!JSON.stringify(all).includes('nope') && !JSON.stringify(all).includes('horse'));
+  assert.ok(s.alive());
+});
