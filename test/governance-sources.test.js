@@ -19,12 +19,26 @@ test('runtimesOrThrow: a non-200 reply or a body that is not a list throws; a go
   assert.equal(runtimesOrThrow({ status: 200, body: list }), list);
 });
 
-test('indexReadyOrThrow: scanning or never scanned throws; a scanned idle index passes', () => {
-  assert.throws(() => indexReadyOrThrow({ indexing: true, lastScan: 5 }), /not ready/);
+test('indexReadyOrThrow: never scanned in this run throws; a scanned index passes, even during a later rescan', () => {
+  assert.throws(() => indexReadyOrThrow({ indexing: true, lastScan: null }), /not ready/);
   assert.throws(() => indexReadyOrThrow({ indexing: false, lastScan: null }), /not ready/);
   assert.throws(() => indexReadyOrThrow(null), /not ready/);
   const ok = { indexing: false, lastScan: 5 };
   assert.equal(indexReadyOrThrow(ok), ok);
+  // A rescan: the index still holds the previous scan, so the summary is not failed (no flicker, no re-alert).
+  const rescan = { indexing: true, lastScan: 5 };
+  assert.equal(indexReadyOrThrow(rescan), rescan);
+});
+
+test('server.js: the first inventory pass waits for the first index scan itself, not a second refresh', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  // A second indexer.refresh() while the first runs returns at once, so the pass must chain on the first promise.
+  assert.equal((src.match(/indexer\.refresh\(\)\.then\(inventoryPass/g) || []).length, 0);
+  const first = /const (\w+) = indexer\.refresh\(\);/.exec(src);
+  assert.ok(first, 'the first refresh is kept');
+  assert.ok(src.includes(`${first[1]}.then(inventoryPass, inventoryPass)`));
 });
 
 test('a first build while the index is scanning keeps the baseline open; after the scan it is done', () => {
