@@ -1,0 +1,204 @@
+// Governance inventory and compliance (AI Governance 3) through a spawned server.js: a temp data folder that is also
+// HOME (so the MCP scan reads fixture client files there, never this machine's), no network, no sign-in unless sign-in
+// is under test. Ports 10000-10199 are this file's own.
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const net = require('net');
+const os = require('os');
+const path = require('path');
+const { spawn } = require('child_process');
+const { NO_JUDGE_PORTS } = require('./helpers');
+
+const ROOT = path.join(__dirname, '..');
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const freePort = () =>
+  new Promise((resolve) => {
+    const s = net.createServer();
+    const port = 10000 + Math.floor(Math.random() * 200);
+    s.once('error', () => resolve(freePort()));
+    s.listen(port, '127.0.0.1', () => s.close(() => resolve(port)));
+  });
+
+// Starts server.js on a free port of the range (again when another test took the port first); stopped and its data
+// folder removed when the test ends. Every folder an AI client's config may be read from points into the data folder.
+// prepare(data) runs on the empty data folder before the server starts.
+async function startServer(t, env = {}, prepare = null) {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const port = await freePort();
+    const data = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-gov-inv-'));
+    if (prepare) prepare(data);
+    const child = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
+      env: {
+        ...process.env,
+        ZAAFPULSE_AUTH: 'none',
+        ZAAFPULSE_CONTENT: '',
+        DEMO: '',
+        ...NO_JUDGE_PORTS,
+        ...env,
+        ZAAFPULSE_PORT: String(port),
+        ZAAFPULSE_DATA: data,
+        HOME: data,
+        USERPROFILE: data,
+        CLAUDE_CONFIG_DIR: data,
+        CODEX_HOME: path.join(data, '.codex'),
+        XDG_CONFIG_HOME: path.join(data, '.config'),
+        APPDATA: path.join(data, 'AppData', 'Roaming'),
+      },
+      stdio: 'ignore',
+    });
+    let exited = false;
+    const gone = new Promise((r) => child.on('exit', () => r((exited = true))));
+    const stop = async () => {
+      if (!exited) child.kill();
+      await gone;
+      fs.rmSync(data, { recursive: true, force: true });
+    };
+    const base = `http://127.0.0.1:${port}`;
+    for (let i = 0; i < 80 && !exited; i++) {
+      try {
+        await fetch(`${base}/api/session`, { signal: AbortSignal.timeout(2000) });
+        await sleep(200);
+        if (!exited) {
+          t.after(stop);
+          return { base, data, alive: () => !exited };
+        }
+      } catch {
+        await sleep(150);
+      }
+    }
+    await stop();
+  }
+  throw new Error('could not start server.js on a free port');
+}
+// One request: JSON in and out (text when the answer is not JSON).
+async function call(s, p, { method = 'GET', body, headers = {} } = {}) {
+  const r = await fetch(s.base + p, {
+    method,
+    headers: { ...(body !== undefined ? { 'content-type': 'application/json' } : {}), ...headers },
+    body: body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body),
+    signal: AbortSignal.timeout(15000),
+  });
+  const text = await r.text();
+  let json = null;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    /* not JSON */
+  }
+  return { status: r.status, body: json === null ? text : json, text, headers: r.headers };
+}
+// Every governance audit entry the server wrote, oldest first.
+function entries(s) {
+  const dir = path.join(s.data, '.data', 'audit');
+  if (!fs.existsSync(dir)) return [];
+  return fs
+    .readdirSync(dir)
+    .filter((f) => /^governance-\d{4}-\d{2}\.jsonl$/.test(f))
+    .sort()
+    .flatMap((f) => fs.readFileSync(path.join(dir, f), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse));
+}
+const SECRETS = ['ghp_SECRET1abcdefghijklmnopqrstu', 'SECRET-HEADER-2', 'SECRET-QUERY-3', 'SECRET-ENV-4'];
+// A Claude Code file with a user-scope server (a token in its env), a remote server (a header and a query token) and a
+// project server; a gateway provider and an integration in config.json.
+function prepare(data) {
+  fs.writeFileSync(
+    path.join(data, '.claude.json'),
+    JSON.stringify({
+      mcpServers: {
+        github: {
+          command: 'npx',
+          args: ['-y', '@modelcontextprotocol/server-github'],
+          env: { GITHUB_TOKEN: 'ghp_SECRET1abcdefghijklmnopqrstu' },
+        },
+        remote: {
+          type: 'http',
+          url: 'https://mcp.example.com/mcp?token=SECRET-QUERY-3',
+          headers: { Authorization: 'Bearer SECRET-HEADER-2' },
+        },
+      },
+      projects: { [path.join(data, 'code', 'shop')]: { mcpServers: { db: { command: 'uvx', args: ['pg-mcp'] } } } },
+    }),
+  );
+  fs.writeFileSync(
+    path.join(data, 'config.json'),
+    JSON.stringify({
+      gateway: {
+        providers: [{ id: 'openai', preset: 'openai', baseUrl: 'https://api.openai.com/v1', apiKey: { env: 'X_KEY' } }],
+      },
+      integrations: {
+        dt: { type: 'dynatrace', url: 'https://abc.live.dynatrace.com', apiToken: { env: 'SECRET-ENV-4' } },
+      },
+    }),
+  );
+}
+
+test('inventory: the MCP servers of the client files, the gateway and the integrations, with no secret', async (t) => {
+  const s = await startServer(t, {}, prepare);
+  const r = await call(s, '/api/governance/inventory');
+  assert.equal(r.status, 200);
+  const by = Object.fromEntries(r.body.items.map((i) => [i.id, i]));
+  assert.deepEqual(
+    [by['mcp:github'].where, by['mcp:github'].command, by['mcp:github'].package, by['mcp:github'].state],
+    [['Claude Code config'], 'npx', '@modelcontextprotocol/server-github', 'configured'],
+  );
+  assert.deepEqual([by['mcp:remote'].transport, by['mcp:remote'].origin], ['http', 'https://mcp.example.com']);
+  assert.deepEqual(by['mcp:db'].projects, [`~${path.sep}code${path.sep}shop`]);
+  assert.equal(by['provider:openai'].vendor, 'OpenAI');
+  assert.equal(by['integration:dt'].origin, 'https://abc.live.dynatrace.com');
+  assert.ok(
+    r.body.items.some((i) => i.kind === 'agent'),
+    'the gateway agents',
+  );
+  assert.ok(
+    r.body.items.some((i) => i.kind === 'skill'),
+    'the ZAAFPulse skills',
+  );
+  assert.ok(r.body.clients.some((c) => c.client === 'claude' && c.state === 'ok' && c.file === '~/.claude.json'));
+  assert.deepEqual(r.body.failed, []);
+  for (const x of SECRETS) assert.ok(!r.text.includes(x), `${x} must not leave the server`);
+  assert.ok(!r.text.includes('systemPrompt'), 'an agent is read for its id, name and state only');
+  const seen = JSON.parse(fs.readFileSync(path.join(s.data, '.data', 'governance', 'seen.json'), 'utf8'));
+  assert.match(seen.items['mcp:github'].first, /^\d{4}-\d{2}-\d{2}$/);
+  assert.deepEqual(entries(s), [], 'a read writes no audit entry');
+  assert.ok(s.alive());
+});
+
+test('reviews: saved in config.json, recorded as config.change and as the request; a bad one is a 400', async (t) => {
+  const s = await startServer(t, {}, prepare);
+  const review = { id: 'mcp:github', owner: 'Ana', purpose: 'Issues', risk: 'limited', decision: 'approved' };
+  const ok = await call(s, '/api/governance/inventory', { method: 'POST', body: review });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.review.owner, 'Ana');
+  const cfg = JSON.parse(fs.readFileSync(path.join(s.data, 'config.json'), 'utf8'));
+  assert.equal(cfg.governance.inventory['mcp:github'].decision, 'approved');
+  assert.equal(cfg.gateway.providers[0].id, 'openai', 'the other sections stay');
+  const item = (await call(s, '/api/governance/inventory')).body.items.find((i) => i.id === 'mcp:github');
+  assert.equal(item.status, 'reviewed');
+  const all = entries(s);
+  const change = all.find((e) => e.action === 'config.change');
+  assert.deepEqual(change.target, { type: 'config', id: 'governance' });
+  assert.ok(change.changes.some((c) => c.path === 'governance.inventory.mcp:github.owner' && c.to === 'Ana'));
+  const req = all.find((e) => e.action === 'POST /api/governance/inventory');
+  assert.deepEqual([req.outcome, req.status, req.target], ['ok', 200, { type: 'governance', id: 'mcp:github' }]);
+  const bad = await call(s, '/api/governance/inventory', { method: 'POST', body: { id: 'mcp:github', risk: 'huge' } });
+  assert.deepEqual([bad.status, bad.body.error], [400, 'risk: minimal, limited, high, unacceptable or empty']);
+  assert.equal(entries(s).filter((e) => e.action === 'config.change').length, 1, 'nothing written');
+  assert.ok(s.alive());
+});
+
+test('inventory: for a dashboard session only; no sign-in or an API key is a 401', async (t) => {
+  const s = await startServer(t, { ZAAFPULSE_AUTH: '1', ZAAFPULSE_ADMIN_PASSWORD: 'correct horse battery' });
+  for (const headers of [{}, { authorization: 'Bearer zp_not_a_session' }]) {
+    assert.equal((await call(s, '/api/governance/inventory', { headers })).status, 401);
+    const post = { method: 'POST', body: { id: 'mcp:x', owner: 'x' }, headers };
+    assert.equal((await call(s, '/api/governance/inventory', post)).status, 401);
+  }
+  const ok = await call(s, '/api/login', { method: 'POST', body: { password: 'correct horse battery' } });
+  const cookie = ok.headers
+    .getSetCookie()
+    .map((c) => c.split(';')[0])
+    .join('; ');
+  assert.equal((await call(s, '/api/governance/inventory', { headers: { cookie } })).status, 200);
+  assert.ok(s.alive());
+});

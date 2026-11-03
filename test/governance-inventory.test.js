@@ -432,3 +432,40 @@ test('a reviewed item whose kind source failed is stale, not gone', () => {
   assert.equal(it['key:key_a1'].lastSeen, '2026-11-02', 'not refreshed: it was not seen');
   assert.equal(inv.counts.gone, 1);
 });
+
+test('seen store: write never throws; a folder that cannot be made gives false and the next write tries again', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-gov-seen-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'governance'), 'a file where the folder should be');
+  const file = path.join(dir, 'governance', 'seen.json');
+  const store = createSeenStore({ file });
+  const state = { baselineDone: true, map: { 'app:claude': { first: '2026-11-03', last: '2026-11-03' } } };
+  assert.equal(store.write(state), false);
+  fs.rmSync(path.join(dir, 'governance'));
+  assert.equal(store.write(state), true, 'the failed write was not remembered as done');
+});
+
+test('baseline: the time of the first write is kept, and 24 h later the baseline ends even if a source keeps failing', () => {
+  const down = { ...sources(), gateway: null };
+  const first = buildInventory(down, {}, { exists: false, baselineDone: false, map: {} }, NOW);
+  assert.deepEqual([first.nextSeen.baselineDone, first.nextSeen.baselineSince], [false, NOW]);
+  const soon = buildInventory(down, {}, { exists: true, ...first.nextSeen }, NOW + DAY - 1);
+  assert.deepEqual([soon.nextSeen.baselineDone, soon.nextSeen.baselineSince], [false, NOW], 'the first time stays');
+  const late = buildInventory(down, {}, { exists: true, ...first.nextSeen }, NOW + DAY);
+  assert.equal(late.nextSeen.baselineDone, true);
+  assert.equal(late.nextSeen.baselineSince, undefined, 'a finished baseline keeps no start time');
+  // The start time survives the file.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-gov-seen-'));
+  try {
+    const store = createSeenStore({ file: path.join(dir, 'seen.json') });
+    assert.equal(store.write(first.nextSeen), true);
+    assert.equal(createSeenStore({ file: path.join(dir, 'seen.json') }).read().baselineSince, NOW);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ids: U+2028 and U+2029 are stripped like other line breaks', () => {
+  const inv = buildInventory({ gateway: { keys: [{ id: 'a b c', name: 'k' }] } }, {}, done({}), NOW);
+  assert.ok(inv.items.some((i) => i.id === 'key:abc'));
+});
