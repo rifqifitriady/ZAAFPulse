@@ -262,14 +262,18 @@ function govRecord(entry) {
 // config.change entry with its field-level changes, secrets masked (lib/governance/diff.js). A write that changed
 // nothing is no entry.
 function configChanged(before, after) {
-  const d = govDiff(before, after);
-  if (!d.changes.length) return;
-  govRecord({
-    action: 'config.change',
-    target: { type: 'config', id: d.sections.join(',').slice(0, 80) },
-    changes: d.changes,
-    ...(d.truncated ? { truncated: d.truncated } : {}),
-  });
+  try {
+    const d = govDiff(before, after);
+    if (!d.changes.length) return;
+    govRecord({
+      action: 'config.change',
+      target: { type: 'config', id: d.sections.join(',').slice(0, 80) },
+      changes: d.changes,
+      ...(d.truncated ? { truncated: d.truncated } : {}),
+    });
+  } catch {
+    /* the save stands; an audit bug never fails it (A6) */
+  }
 }
 let rawCache = {
   mtime: -1,

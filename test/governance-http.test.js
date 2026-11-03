@@ -182,3 +182,16 @@ test('request bodies over 64 KiB lose only op and target in their entry', async 
   assert.equal(reqs[0].status, reqs[1].status);
   assert.ok(s.alive());
 });
+
+test('config changes: a diff that fails never fails the save that was already written', async (t) => {
+  // A value nested deeper than the diff can walk makes it throw; the save must still answer and show up on the next GET.
+  const deep = '['.repeat(3000) + ']'.repeat(3000);
+  const s = await startServer(t, {}, (data) => {
+    fs.writeFileSync(path.join(data, 'config.json'), `{"deep":${deep},"userName":"Old"}`);
+  });
+  const r = await call(s, '/api/config', { method: 'POST', body: { userName: 'New' } });
+  assert.equal(r.status, 200);
+  const g = await call(s, '/api/config');
+  assert.equal(g.body.userName, 'New');
+  assert.ok(s.alive());
+});
