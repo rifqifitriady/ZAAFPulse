@@ -323,6 +323,24 @@ test('pending: the CLI leaves an event, the server records it with the cli actor
   assert.equal(audit.importPending(), 0);
 });
 
+test('pending: an event is written under another name, then renamed, so a pass never reads half of one', (t) => {
+  const { dir, audit } = setup(t, { store: memStore() });
+  const written = [];
+  const real = fs.writeFileSync;
+  fs.writeFileSync = (p, ...rest) => (written.push(path.basename(String(p))), real(p, ...rest));
+  let made;
+  try {
+    made = A.queueEvent(dir, { action: 'auth.password_set' }, Date.UTC(2026, 10, 2, 9));
+  } finally {
+    fs.writeFileSync = real;
+  }
+  assert.equal(written.length, 1);
+  assert.doesNotMatch(written[0], /^\d{1,15}-[0-9a-f]{8}\.json$/); // not a name importPending reads
+  assert.match(path.basename(made[2]), /^\d{1,15}-[0-9a-f]{8}\.json$/);
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'pending')), [path.basename(made[2])]);
+  assert.equal(audit.importPending(), 1);
+});
+
 test('pending: a file whose time is no date is removed and not recorded; the files after it still are', (t) => {
   const { dir, audit } = setup(t, { store: memStore() });
   fs.mkdirSync(path.join(dir, 'pending'), { recursive: true });
@@ -480,6 +498,70 @@ test('key: a store that cannot be read while entries exist is not a lost key; th
   const back = make();
   assert.equal(back.record({ action: 'auth.logout', actor: dash }).keyed, 'file');
   assert.deepEqual(back.verify(), { ok: true, checked: 9, from: 1, to: 9 });
+});
+
+test('key: a store that cannot decrypt the key (ZAAFPULSE_MASTER_KEY changed) degrades and never rekeys', (t) => {
+  const { dir, make } = setup(t);
+  const fileStore = (k) =>
+    createSecretStore({ backend: 'file', dir: path.dirname(dir), env: { ZAAFPULSE_MASTER_KEY: k } });
+  const first = make(fileStore('first-master-key-0123456789'));
+  first.record({ action: 'auth.login', actor: dash });
+  first.record({ action: 'auth.logout', actor: dash });
+  // Restarted with another master key (a redeploy that lost the variable): the secret is there but does not decrypt.
+  const changed = make(fileStore('other-master-key-0123456789'));
+  assert.equal(changed.record({ action: 'config.change', actor: dash }), null);
+  assert.equal(changed.status().degraded.missed, 1);
+  assert.equal(fs.existsSync(path.join(dir, 'chain.key')), false);
+  assert.equal(changed.verify().reason, 'key missing');
+  // The master key restored: the whole chain checks, nothing unverified.
+  const restored = make(fileStore('first-master-key-0123456789'));
+  assert.deepEqual(restored.verify(), { ok: true, checked: 3, from: 1, to: 3 });
+});
+
+test('key: a store read that throws (before or after the probe) or a slot without a key never rekeys', (t) => {
+  const store = memStore();
+  const { dir, audit, make } = setup(t, { store });
+  audit.record({ action: 'auth.login', actor: dash });
+  const slot = store.items.get(A.SERVICE);
+  const readsOf = (answers) => ({
+    get: (k) => {
+      if (k !== A.SERVICE) return store.get(k);
+      const a = answers.length > 1 ? answers.shift() : answers[0];
+      if (a instanceof Error) throw a;
+      return a;
+    },
+    set: store.set,
+  });
+  const fails = new Error('secret "acc.audit-chain" cannot be decrypted');
+  for (const answers of [[fails], [null, fails], ['not a key']]) {
+    const later = make(readsOf(answers));
+    assert.equal(later.record({ action: 'config.change', actor: dash }), null, JSON.stringify(answers));
+    assert.equal(fs.existsSync(path.join(dir, 'chain.key')), false);
+    assert.equal(store.items.get(A.SERVICE), slot);
+  }
+  assert.deepEqual(make().verify(), { ok: true, checked: 2, from: 1, to: 2 });
+});
+
+test('key: once the key reads again after a failure, verify runs at once, so its last result clears', (t) => {
+  const store = flakyStore();
+  const { audit, make } = setup(t, { store });
+  audit.record({ action: 'auth.login', actor: dash });
+  store.down = true;
+  const locked = make();
+  assert.equal(locked.verify().reason, 'key missing'); // the daily pass while the store is locked
+  assert.equal(locked.record({ action: 'config.change', actor: dash }), null);
+  store.down = false;
+  assert.equal(locked.record({ action: 'auth.logout', actor: dash }).seq, 4); // 3 is the audit.gap
+  const { at, ...last } = locked.status().lastVerify;
+  assert.deepEqual(last, { ok: true, checked: 4, from: 1, to: 4 });
+  // A failure that was only degraded (no verify ran in between) is checked again too.
+  store.down = true;
+  const other = make();
+  assert.equal(other.record({ action: 'config.change', actor: dash }), null);
+  assert.equal(other.status().lastVerify, null);
+  store.down = false;
+  assert.equal(other.record({ action: 'auth.login', actor: dash }).seq, 6);
+  assert.equal(other.status().lastVerify.ok, true);
 });
 
 test('key: a chain keyed in chain.key stays on it when the store later answers with a key of its own', (t) => {
