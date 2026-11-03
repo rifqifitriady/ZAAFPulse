@@ -36,3 +36,27 @@ test('set-password: the event waits in pending/ and becomes an entry with the cl
   assert.deepEqual([e.action, e.actor, typeof e.occurredAt], ['auth.password_set', { via: 'cli' }, 'string']);
   assert.deepEqual(fs.readdirSync(path.join(dir, 'pending')), []);
 });
+
+test('set-password: an event that cannot be queued is one line on stderr; the password is still set', (t) => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-gov-cli-'));
+  t.after(() => fs.rmSync(data, { recursive: true, force: true }));
+  // .data/audit is a file, so pending/ cannot be made under it.
+  fs.mkdirSync(path.join(data, '.data'), { recursive: true });
+  fs.writeFileSync(path.join(data, '.data', 'audit'), '');
+  const r = spawnSync(
+    process.execPath,
+    [path.join(__dirname, '..', 'bin', 'zaafpulse.js'), 'set-password', '--stdin'],
+    {
+      input: 'correct horse battery\n',
+      env: { ...process.env, ZAAFPULSE_DATA: data, HOME: data, USERPROFILE: data },
+      encoding: 'utf8',
+      timeout: 30000,
+    },
+  );
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(
+    r.stderr.split('\n').filter((l) => l.includes('audit')),
+    ['could not queue the audit event'],
+  );
+  assert.ok(fs.existsSync(path.join(data, '.data', 'admin.json')));
+});

@@ -131,6 +131,7 @@ const commands = {
       // The governance audit log records it (actor: cli) when the server next starts or runs its daily pass; the CLI
       // never writes the chain itself.
       const queued = queueEvent(path.join(dir, '.data', 'audit'), { action: 'auth.password_set' });
+      if (!queued.length) console.error('could not queue the audit event');
       // A root-run CLI writes for the service user that owns the data folder (Linux system install).
       if (typeof process.getuid === 'function' && process.getuid() === 0) {
         const st = fs.statSync(dir);

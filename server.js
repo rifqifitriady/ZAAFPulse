@@ -1827,17 +1827,9 @@ server.listen(PORT, HOST, () => {
   keepTraces();
   setInterval(keepTraces, 5 * 60 * 1000).unref();
   // The governance audit log, now and once a day: the CLI's events, the whole months past the retention, and a check
-  // of the chain (the Monitors rules audit_degraded and audit_chain_broken read the result). The pass is the system's.
-  const auditDaily = () =>
-    govContext.runAs({ via: 'system' }, () => {
-      try {
-        governance.importPending();
-        governance.prune(governanceApi.retention());
-        governance.verify();
-      } catch {
-        console.error('audit: the daily pass failed');
-      }
-    });
+  // of the chain (the Monitors rules audit_degraded and audit_chain_broken read the result). The pass is the system's;
+  // each step runs on its own (lib/governance/api.js dailyPass).
+  const auditDaily = () => govContext.runAs({ via: 'system' }, () => governanceApi.dailyPass());
   auditDaily();
   setInterval(auditDaily, 24 * 3600 * 1000).unref();
   // Local model servers: remember what is loaded. Not in demo mode, server mode or Docker (control is off there), and

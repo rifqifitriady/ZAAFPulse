@@ -260,6 +260,22 @@ test('pending: the CLI leaves an event, the server records it with the cli actor
   assert.equal(audit.importPending(), 0);
 });
 
+test('pending: a file whose time is no date is removed and not recorded; the files after it still are', (t) => {
+  const { dir, audit } = setup(t, { store: memStore() });
+  fs.mkdirSync(path.join(dir, 'pending'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'pending', '1-0000000a.json'), '{"action":"auth.password_set","ts":1e20}');
+  A.queueEvent(dir, { action: 'auth.password_set' }, Date.UTC(2026, 10, 2, 9));
+  assert.equal(audit.importPending(), 1);
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'pending')), []);
+  assert.deepEqual(
+    audit.list({}).entries.map((e) => [e.action, e.occurredAt]),
+    [
+      ['auth.password_set', '2026-11-02T09:00:00.000Z'],
+      ['audit.key_created', undefined],
+    ],
+  );
+});
+
 // A store that can be locked (every read answers null, every write fails, as a locked Keychain does) or answer null
 // to a number of reads of the audit key (a timeout).
 const flakyStore = () => {
