@@ -111,9 +111,12 @@ a new key, which is kept in `.data/audit/chain.key`, never in the store. Each pa
 (`store` or `file`), so a part sealed with a key of someone's own vouches for nothing before it: the old part is
 still checked with the old key whenever that key can be read (it comes back to the store, say). Entries whose key
 cannot be read, including a part keyed in an older `chain.key` that a later rekey replaced, are counted as
-`unverified` and still checked for their order. Whenever the kept log holds a rekey, verify reports the latest one
-as `rekeyedAt` (its seq) and `rekeyedTs` (its time), and the page shows "The audit key was replaced at entry N (date).
-Entries before it are checked only when the old key can still be read."
+`unverified` and still checked for their order. The first part is checked with the store's key whenever that key
+reads, whatever `keyed` its entries carry: a new key after a rekey always goes to `chain.key`, so only the first part
+can be sealed with the store's key, and entries relabelled `"keyed": "file"` and sealed again with a key of someone's
+own show as `entry changed`. Whenever the kept log holds a rekey, verify reports the latest one as `rekeyedAt` (its
+seq) and `rekeyedTs` (the later of its time and the time of the entry before it), and the page shows "The audit
+key was replaced at entry N (date). Entries before it are checked only when the old key can still be read."
 
 A rekey always alerts, through `audit_chain_broken` (below), because it is the one change to the chain that someone
 who can write `.data/audit/` but not read the store can make look valid: a rekey of their own, sealed with a
@@ -190,14 +193,18 @@ A bad query value is a 400 that names it, as `limit: a whole number from 1 to 50
   an `audit.rekey` of their own, sealed with a `chain.key` of their own, and entries of their own after it. What comes
   before the cut is still checked with the store's key and cannot be changed unseen; what came after it can be
   replaced. Such a rekey alerts (`audit_chain_broken`, `rekeyed`) and shows on the page; one while the store still
-  holds its key is worth a look. The alert's 7 days count from the time the rekey entry gives, which its writer
-  chose.
+  holds its key is worth a look. The alert's 7 days count from `rekeyedTs`, which is never before the entry the rekey
+  follows; a rekey dated in the future keeps alerting until 7 days after that date.
 - Removing the whole log while the server is stopped is caught only by the rule for entry 1: a log written again by
   hand shows (its entry 1 is not `audit.key_created`, or is keyed in `chain.key` while the store holds a key). A folder
   emptied and left for the server to start over is not caught: the new log begins with its own `audit.key_created`,
   as a first start does. While the server runs, the last entry it wrote catches it.
-- A log whose first key went to `chain.key` because the store was locked at that moment, while the store held a key
-  (another data folder's), reports `chain broken` at entry 1 once the store answers: it looks like a rewrite.
+- Two rare cases look like a rewrite once the store's key reads, because the first part is then checked with it:
+  - a log whose first key went to `chain.key` (the store was locked or could not take it) while the store held a key
+    of its own (another data folder's): `chain broken` at entry 1, or `entry changed` at the first kept entry once
+    entry 1 has been pruned;
+  - a genuine rekey whose store-sealed months have all been pruned, when the old key later comes back to the store:
+    the first kept part was sealed with `chain.key`, so it shows as `entry changed`.
 - The degraded state (`since`, `missed`) is kept in memory: a restart while degraded loses it, so no `audit.gap`
   entry records the entries missed before the restart.
 - `zaafpulse set-password` leaves its event in `.data/audit/pending/`; it becomes an entry when the server starts or

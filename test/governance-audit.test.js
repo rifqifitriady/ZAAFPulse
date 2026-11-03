@@ -152,6 +152,54 @@ test('verify: a forged audit.rekey sealed with a chain.key of its own does not h
   assert.deepEqual(after.verify(), changed);
 });
 
+// A pruned log (the usual state after a year) rewritten by someone who can write the files but not read the store:
+// every kept entry relabelled keyed: "file" and sealed with a chain.key of their own, with or without a forged rekey
+// after them (the reviewer's relabel.js and relabel2.js).
+function relabelled(t, { rekey }) {
+  const store = memStore();
+  const { dir, clock, make } = setup(t, { store });
+  clock.t = Date.UTC(2025, 0, 10);
+  const audit = make();
+  audit.record({ action: 'old' });
+  clock.t = NOW;
+  audit.record({ action: 'POST /api/gateway/keys', op: 'create', target: { type: 'gateway.keys', name: 'evil' } });
+  assert.deepEqual(audit.prune(12), ['2025-01']);
+  audit.record({ action: 'config.change' });
+  assert.deepEqual(audit.verify(), { ok: true, checked: 3, from: 3, to: 5 });
+  const file = path.join(dir, 'governance-2026-11.jsonl');
+  const k = crypto.randomBytes(32);
+  let prev = linesIn(file)[0].prev;
+  const out = linesIn(file).map(({ mac, ...e }) => {
+    const target = e.action.startsWith('POST') ? { type: 'gateway.keys', name: 'harmless' } : e.target;
+    const x = seal(k, { ...e, ...(target ? { target } : {}), keyed: 'file', prev });
+    prev = x.mac;
+    return x;
+  });
+  const k2 = crypto.randomBytes(32);
+  forgeWith(dir, rekey ? k2 : k);
+  if (rekey)
+    out.push(
+      seal(k2, {
+        seq: 6,
+        ts: '2020-01-01T00:00:00.000Z', // backdated, past the alert's 7 days
+        action: 'audit.rekey',
+        actor: sys,
+        outcome: 'ok',
+        reason: 'key missing',
+        keyed: 'file',
+        prev: REKEYED,
+      }),
+    );
+  fs.writeFileSync(file, out.map((e) => JSON.stringify(e)).join('\n') + '\n');
+  return make(); // after a restart
+}
+
+test('verify: a pruned log relabelled keyed "file" and sealed again is checked with the store key', (t) => {
+  const changed = { ok: false, checked: 0, from: null, to: null, brokenAt: 3, reason: 'entry changed' };
+  assert.deepEqual(relabelled(t, { rekey: false }).verify(), changed);
+  assert.deepEqual(relabelled(t, { rekey: true }).verify(), changed);
+});
+
 test('verify: a log rebuilt from scratch shows at entry 1; a new log over a key the store holds still says so', (t) => {
   const store = memStore();
   const { dir, audit, make } = setup(t, { store });
@@ -559,7 +607,7 @@ test('key: a store read that throws (before or after the probe) or a slot withou
   assert.deepEqual(make().verify(), { ok: true, checked: 2, from: 1, to: 2 });
 });
 
-test('key: once the key reads again after a failure, verify runs at once, so its last result clears', (t) => {
+test('key: once the key reads again after a failure, verify runs right after that request, so its result clears', async (t) => {
   const store = flakyStore();
   const { audit, make } = setup(t, { store });
   audit.record({ action: 'auth.login', actor: dash });
@@ -569,6 +617,8 @@ test('key: once the key reads again after a failure, verify runs at once, so its
   assert.equal(locked.record({ action: 'config.change', actor: dash }), null);
   store.down = false;
   assert.equal(locked.record({ action: 'auth.logout', actor: dash }).seq, 4); // 3 is the audit.gap
+  assert.equal(locked.status().lastVerify.reason, 'key missing', 'not inside the request that recovered');
+  await new Promise(setImmediate);
   const { at, ...last } = locked.status().lastVerify;
   assert.deepEqual(last, { ok: true, checked: 4, from: 1, to: 4 });
   // A failure that was only degraded (no verify ran in between) is checked again too.
@@ -578,6 +628,9 @@ test('key: once the key reads again after a failure, verify runs at once, so its
   assert.equal(other.status().lastVerify, null);
   store.down = false;
   assert.equal(other.record({ action: 'auth.login', actor: dash }).seq, 6);
+  assert.equal(other.record({ action: 'auth.logout', actor: dash }).seq, 7);
+  assert.equal(other.status().lastVerify, null);
+  await new Promise(setImmediate);
   assert.equal(other.status().lastVerify.ok, true);
 });
 

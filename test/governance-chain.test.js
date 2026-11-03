@@ -90,7 +90,7 @@ test('verify: each part between rekeys is checked with its own key; a part whose
     to: 5,
     unverified: 3,
     rekeyedAt: 4,
-    rekeyedTs: fresh[0].ts,
+    rekeyedTs: old[2].ts, // the later of the rekey's time and the one before it
   });
   const tampered = [...old, fresh[0], { ...fresh[1], action: 'auth.login' }];
   assert.equal(verifyChain(tampered, keys(null)).brokenAt, 5);
@@ -101,7 +101,7 @@ test('verify: each part between rekeys is checked with its own key; a part whose
     from: 1,
     to: 5,
     rekeyedAt: 4,
-    rekeyedTs: fresh[0].ts,
+    rekeyedTs: old[2].ts, // the later of the rekey's time and the one before it
   });
   // An edit before the rekey shows, whatever key the part after it was sealed with.
   const edited = [old[0], { ...old[1], action: 'auth.login' }, old[2], ...fresh];
@@ -116,6 +116,15 @@ test('verify: each part between rekeys is checked with its own key; a part whose
   // A part whose key is gone is still checked for its order.
   assert.equal(verifyChain([old[0], old[2], ...fresh], keys(null)).reason, 'sequence broken');
   assert.equal(verifyChain([...old, { ...fresh[0], seq: 7 }, fresh[1]], keys(null)).brokenAt, 4);
+});
+
+test('verify: a rekey is reported with the later of its own time and the time of the entry before it', () => {
+  const old = chainOf(3, { key: Buffer.alloc(32, 1) }); // 2026-11-01 00:00 to 00:02
+  const rekey = seal(KEY, { seq: 4, ts: '2020-01-01T00:00:00.000Z', action: 'audit.rekey', prev: REKEYED });
+  const r = verifyChain([...old, rekey], (p) => (p.index === 0 ? null : KEY));
+  assert.deepEqual([r.ok, r.rekeyedAt, r.rekeyedTs], [true, 4, old[2].ts]);
+  const later = seal(KEY, { seq: 4, ts: '2026-11-02T00:00:00.000Z', action: 'audit.rekey', prev: REKEYED });
+  assert.equal(verifyChain([...old, later], (p) => (p.index === 0 ? null : KEY)).rekeyedTs, later.ts);
 });
 
 test('diff: field paths, secrets masked by key name and by reference, text cut to 120 characters', () => {
@@ -289,6 +298,7 @@ test('diff: a URL password with an @ in it is masked whole, and so are query val
     {},
     {
       a: 'https://admin:p@ss-W0rd@host/x',
+      e: 'https://host?email=a@b.com and https://h/p#to=x@y',
       b: 'https://h/v1?api_key=sk-live-123&x=1',
       c: 'wss://h/s?token=t0k&Sig=abc#frag',
       d: 'https://h/p?monkey=1&keys=2&access_token=zz&apikey=q&password=pw&auth=a&signature=s&secret=x&key=k',
@@ -301,6 +311,7 @@ test('diff: a URL password with an @ in it is masked whole, and so are query val
       'https://h/v1?api_key=‹changed›&x=1',
       'wss://h/s?token=‹changed›&Sig=‹changed›#frag',
       'https://h/p?monkey=1&keys=2&access_token=‹changed›&apikey=‹changed›&password=‹changed›&auth=‹changed›&signature=‹changed›&secret=‹changed›&key=‹changed›',
+      'https://host?email=a@b.com and https://h/p#to=x@y', // an @ after the host is not a password
     ].map((s) => (Array.from(s).length > 120 ? `${Array.from(s).slice(0, 119).join('')}…` : s)),
   );
   const text = JSON.stringify(changes);
