@@ -30,7 +30,6 @@ const GOV = {
   filters: { range: '7', actor: '', action: '', outcome: '' },
   rows: [],
   next: null,
-  verify: null,
   hooked: false,
 };
 
@@ -151,8 +150,9 @@ function govSize(st) {
   const size = b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
   return `${n} month${n === 1 ? '' : 's'} · ${size}`;
 }
-/** The status panel: degraded banner, retention form, size, verify and the export links. */
-function govStatusHtml(st, f, verify) {
+/** The status panel: degraded banner, retention form, size, verify and the export links. The verify line is the
+ * server's last result (st.lastVerify), which every verify updates: a Verify click and the daily one alike. */
+function govStatusHtml(st, f) {
   const banner = st.degraded
     ? `<div class="gov-banner">${esc(`Degraded since ${govTime(st.degraded.since)}: ${st.degraded.missed} audit ${st.degraded.missed === 1 ? 'entry' : 'entries'} could not be written. Changes still go ahead.`)}</div>`
     : '';
@@ -160,7 +160,7 @@ function govStatusHtml(st, f, verify) {
     <form id="gov-retention" class="gov-inline"><label>${esc('Keep months')}<input class="input" type="number" name="retentionMonths" min="6" max="120" step="1" value="${esc(st.retentionMonths)}"></label><button class="btn ghost" type="submit">${esc('Save')}</button></form>
     <span class="muted">${esc(govSize(st))}</span>
     <button class="btn ghost" type="button" data-gov-verify>${esc('Verify')}</button>
-    <span class="muted" id="gov-verify">${esc(govVerifyText(verify || st.lastVerify))}</span>
+    <span class="muted" id="gov-verify">${esc(govVerifyText(st.lastVerify))}</span>
     <a class="btn ghost" href="${esc(govExportHref(f, 'csv'))}" download>${esc('Export CSV')}</a>
     <a class="btn ghost" href="${esc(govExportHref(f, 'jsonl'))}" download>${esc('Export JSONL')}</a>
     <p class="muted gov-note">${esc('A lowered retention takes effect at the next daily pass or restart, and never below 6 months.')}</p>
@@ -190,7 +190,7 @@ async function govLoadStatus() {
   const el = $('#gov-status');
   if (!el) return;
   try {
-    el.innerHTML = govStatusHtml(await api('/api/governance/audit/status'), GOV.filters, GOV.verify);
+    el.innerHTML = govStatusHtml(await api('/api/governance/audit/status'), GOV.filters);
   } catch (e) {
     el.innerHTML = `<div class="gov-banner">${esc(`Could not read the audit log: ${e.message}`)}</div>`;
   }
@@ -254,9 +254,8 @@ function govInstallEvents() {
     const out = $('#gov-verify');
     if (out) out.textContent = 'Checking…';
     try {
-      GOV.verify = await api('/api/governance/audit/verify');
+      await api('/api/governance/audit/verify'); // the status read below shows its result
     } catch (err) {
-      GOV.verify = null;
       if (out) out.textContent = `Could not check: ${err.message}`;
       return;
     }

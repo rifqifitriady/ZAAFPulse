@@ -117,7 +117,7 @@ test('status: the degraded line, the retention, verify and the export links', ()
     degraded: { since: '2026-11-03T10:00:00.000Z', missed: 2 },
     lastVerify: { ok: true, checked: 0, from: null, to: null },
   };
-  const html = U.govStatusHtml(st, f, null);
+  const html = U.govStatusHtml(st, f);
   assert.match(
     html,
     /<div class="gov-banner">Degraded since \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}: 2 audit entries could not be written\./,
@@ -126,9 +126,9 @@ test('status: the degraded line, the retention, verify and the export links', ()
   assert.match(html, /Chain intact: no entries yet\./);
   assert.match(html, /href="\/api\/governance\/audit\/export\?format=csv" download>Export CSV</);
   assert.match(html, /href="\/api\/governance\/audit\/export\?format=jsonl" download>Export JSONL</);
-  assert.ok(!U.govStatusHtml({ ...st, degraded: null }, f, null).includes('gov-banner'));
+  assert.ok(!U.govStatusHtml({ ...st, degraded: null }, f).includes('gov-banner'));
   assert.match(
-    U.govStatusHtml(st, f, { ok: false, brokenAt: 9, reason: 'chain broken' }),
+    U.govStatusHtml({ ...st, lastVerify: { ok: false, brokenAt: 9, reason: 'chain broken' } }, f),
     /Broken at entry 9: chain broken\./,
   );
   const form = U.govFiltersHtml({ range: '30', actor: 'rule', action: '"><x', outcome: 'error' });
@@ -136,6 +136,16 @@ test('status: the degraded line, the retention, verify and the export links', ()
   assert.match(form, /<option value="rule" selected>Monitors rule<\/option>/);
   assert.match(form, /value="&quot;&gt;&lt;x"/);
   assert.match(U.govView(), /GOVERNANCE · AUDIT LOG\|Audit log\|/);
+});
+
+test('status: the verify line is the server’s last result, so a later daily verify is never hidden', () => {
+  const f = { range: 'all', actor: '', action: '', outcome: '' };
+  const st = { retentionMonths: 12, months: [], bytes: 0, degraded: null };
+  const broken = { ok: false, brokenAt: 9, reason: 'chain broken' };
+  const clicked = { ok: true, checked: 8, from: 1, to: 8 }; // what an earlier Verify click answered
+  assert.match(U.govStatusHtml({ ...st, lastVerify: broken }, f, clicked), /Broken at entry 9: chain broken\./);
+  assert.ok(!('verify' in U.GOV), 'the page keeps no verify result of its own');
+  assert.doesNotMatch(read('governanceview.js'), /GOV\.verify/);
 });
 
 test('wiring: the Governance menu, the script before app.js, the route and its mount', () => {
@@ -176,8 +186,8 @@ test('governanceview.js puts no server or owner text into markup unescaped (S1) 
   const filters = { range: x, actor: x, action: x, outcome: x };
   const html = [
     U.govRowsHtml([entry, ...others]),
-    U.govStatusHtml({ ...status, lastVerify: { ok: false, brokenAt: x, reason: x } }, filters, null),
-    U.govStatusHtml(status, filters, { ok: true, checked: 1, from: x, to: x, unverified: x }),
+    U.govStatusHtml({ ...status, lastVerify: { ok: false, brokenAt: x, reason: x } }, filters),
+    U.govStatusHtml({ ...status, lastVerify: { ok: true, checked: 1, from: x, to: x, unverified: x } }, filters),
     U.govFiltersHtml(filters),
   ].join('');
   assert.ok(!html.includes('<x>'), 'a field reached the markup unescaped');
