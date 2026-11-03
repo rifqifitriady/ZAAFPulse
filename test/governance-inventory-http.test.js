@@ -212,6 +212,8 @@ test('inventory: an oversize client file is unreadable; an agent prompt and a ke
   const PROMPT = 'PROMPT-TEXT-UNIQUE-91';
   await post('agents', { action: 'save', id: 'secret-agent', name: 'Secret agent', systemPrompt: PROMPT });
   const k = await post('keys', { action: 'create', name: 'inv-key' });
+  // The start-up build read the sources just before the agent was saved; they are kept for 5 s.
+  await new Promise((resolve) => setTimeout(resolve, 5100));
   const r = await call(s, '/api/governance/inventory');
   assert.equal(r.status, 200);
   assert.ok(r.body.items.some((i) => i.id === 'agent:secret-agent'));
