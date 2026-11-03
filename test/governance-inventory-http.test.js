@@ -193,11 +193,11 @@ test('reviews: saved in config.json, recorded as config.change and as the reques
   assert.ok(s.alive());
 });
 
-test('inventory: for a dashboard session only; no sign-in or an API key is a 401', async (t) => {
+test('inventory, controls and evidence: for a dashboard session only; no sign-in or an API key is a 401', async (t) => {
   const s = await startServer(t, { ZAAFPULSE_AUTH: '1', ZAAFPULSE_ADMIN_PASSWORD: 'correct horse battery' });
   for (const headers of [{}, { authorization: 'Bearer zp_not_a_session' }]) {
-    assert.equal((await call(s, '/api/governance/inventory', { headers })).status, 401);
-    assert.equal((await call(s, '/api/governance/controls', { headers })).status, 401);
+    for (const p of ['/api/governance/inventory', '/api/governance/controls', '/api/governance/evidence?format=md'])
+      assert.equal((await call(s, p, { headers })).status, 401, p);
     const post = { method: 'POST', body: { id: 'mcp:x', owner: 'x' }, headers };
     assert.equal((await call(s, '/api/governance/inventory', post)).status, 401);
   }
@@ -243,6 +243,39 @@ test('controls: seventeen controls from the live settings, OpenTelemetry and tra
   assert.equal(by.provider_approval.status, 'partial', 'the provider in config.json has no recorded approval');
   assert.equal(by.inventory_coverage.status, 'off');
   assert.ok(!r.text.includes('X_KEY') && !r.text.includes(s.data), 'no secret reference, no path');
+  assert.ok(s.alive());
+});
+
+test('evidence: a Markdown and a JSON download, each a governance.export entry by the dashboard', async (t) => {
+  const s = await startServer(t, {}, prepare);
+  const md = await call(s, '/api/governance/evidence?format=md');
+  assert.equal(md.status, 200);
+  assert.equal(md.headers.get('content-type'), 'text/markdown; charset=utf-8');
+  assert.match(
+    md.headers.get('content-disposition'),
+    /^attachment; filename="zaafpulse-evidence-\d{4}-\d{2}-\d{2}\.md"$/,
+  );
+  assert.match(md.text, /^# ZAAFPulse governance evidence\n\nGenerated .* by ZAAFPulse \d+\.\d+\.\d+\./);
+  assert.match(md.text, /\| github \(mcp:github\) \| mcp \|/);
+  const json = await call(s, '/api/governance/evidence?format=json');
+  assert.equal(json.headers.get('content-type'), 'application/json; charset=utf-8');
+  assert.equal(json.body.version, require('../package.json').version);
+  assert.equal(json.body.controls.length, 17);
+  assert.ok(json.body.inventory.items.some((i) => i.id === 'mcp:db' && !('projects' in i)));
+  for (const text of [md.text, json.text]) {
+    assert.ok(!text.includes(s.data), 'no path');
+    assert.ok(!text.includes('~/.claude.json') && !text.includes('code/shop'), 'no client file, no project folder');
+    for (const x of SECRETS) assert.ok(!text.includes(x), x);
+  }
+  assert.equal((await call(s, '/api/governance/evidence?format=pdf')).status, 400);
+  const exports = entries(s).filter((e) => e.action === 'governance.export');
+  assert.deepEqual(
+    exports.map((e) => [e.target, e.actor.via, e.outcome]),
+    [
+      [{ type: 'evidence', id: 'md' }, 'dashboard', 'ok'],
+      [{ type: 'evidence', id: 'json' }, 'dashboard', 'ok'],
+    ],
+  );
   assert.ok(s.alive());
 });
 

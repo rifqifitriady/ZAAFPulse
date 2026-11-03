@@ -302,6 +302,8 @@ const governanceApi = createGovernanceApi({
   settings: { get: () => rawConfig().governance, save: (g) => saveConfigSection('governance', g) },
   sources: () => inventorySources(),
   controlState: () => controlState(),
+  record: (e) => govRecord(e), // the evidence export (a GET), with the request's actor
+  version: require('./package.json').version,
   seen: createSeenStore({ file: path.join(DEMO ? demoDir : path.join(DIR, '.data'), 'governance', 'seen.json') }),
 });
 let rawCache = {
