@@ -78,7 +78,7 @@ async function setup(t) {
     });
     return { status: r.status, json: await r.json().catch(() => null) };
   };
-  return { gateway, seen, call, mcpCalls };
+  return { gateway, seen, call, mcpCalls, base };
 }
 // A run waiting for approval at its second step, started with `secret`.
 async function gatedRun(s, secret) {
@@ -169,6 +169,42 @@ test('runs: approvals, rejections and cancels name the key or the dashboard; a r
         by: { via: 'apikey', keyId: own.key.id },
       },
     ],
+  );
+});
+
+test('api keys: a document added to a knowledge base and a deleted session are entries naming the key', async (t) => {
+  const s = await setup(t);
+  s.gateway.knowledge.create({ id: 'policies', name: 'Policies' });
+  const { key, secret } = s.gateway.keys.create({ name: 'app', scopes: ['agents', 'rag'] });
+  const byKey = { via: 'apikey', keyId: key.id };
+  s.seen.length = 0;
+  const add = await s.call('/v1/knowledge/policies/documents', secret, { title: 'Leave', content: '12 days a year.' });
+  assert.equal(add.status, 200);
+  assert.equal((await s.call('/v1/knowledge/policies/documents', secret, { title: 'Empty' })).status, 400);
+  const ses = s.gateway.sessions.open(null, { keyId: key.id, agent: 'hr-finance' }).session;
+  const del = (id) =>
+    fetch(`${s.base}/v1/sessions/${id}`, { method: 'DELETE', headers: { authorization: `Bearer ${secret}` } });
+  assert.equal((await del(ses.id)).status, 200);
+  assert.equal((await del(ses.id)).status, 404); // already gone: no entry
+  assert.deepEqual(s.seen, [
+    { action: 'knowledge.ingest', target: { type: 'knowledge', id: 'policies' }, by: byKey },
+    { action: 'session.delete', target: { type: 'session', id: ses.id }, by: byKey },
+  ]);
+  assert.ok(!JSON.stringify(s.seen).includes('12 days'), 'no document text in an entry');
+});
+
+test('runs: a run id from a request body is kept only when it is id-shaped', async (t) => {
+  const s = await setup(t);
+  const { secret } = s.gateway.keys.create({ name: 'app', scopes: ['agents', 'llm'] });
+  s.seen.length = 0;
+  await s.gateway.admin('collab', 'POST', { action: 'cancel', id: { $where: 1 } });
+  await s.gateway.admin('collab', 'POST', { action: 'cancel', id: 'run 1<script>' });
+  await s.gateway.admin('collab', 'POST', { action: 'cancel', id: 'r'.repeat(81) });
+  await s.gateway.admin('collab', 'POST', { action: 'cancel', id: 'run_feed' });
+  await s.call('/a2a', secret, { jsonrpc: '2.0', id: 1, method: 'tasks/cancel', params: { id: 'a\nb' } });
+  assert.deepEqual(
+    s.seen.map((e) => e.target),
+    [{ type: 'run' }, { type: 'run' }, { type: 'run' }, { type: 'run', id: 'run_feed' }, { type: 'run' }],
   );
 });
 

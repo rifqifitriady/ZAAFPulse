@@ -73,6 +73,46 @@ test('password sign-in: login, logout, failures and the one lockout event, each 
   assert.equal(s.events.length, before);
 });
 
+test('logout: only a request that held a session is an event, not one without or with a made-up cookie', async (t) => {
+  const s = await setup(t, { ZAAFPULSE_AUTH: '1', ZAAFPULSE_ADMIN_PASSWORD: PASSWORD });
+  for (let i = 0; i < 3; i++) assert.equal((await s.post('/api/logout', {})).status, 200);
+  assert.equal((await s.post('/api/logout', {}, { cookie: 'zp_session=made-up' })).status, 200);
+  assert.deepEqual(s.events, []);
+  const ok = await s.post('/api/login', { password: PASSWORD });
+  const cookie = ok.headers
+    .getSetCookie()
+    .map((c) => c.split(';')[0])
+    .join('; ');
+  await s.post('/api/logout', {}, { cookie });
+  await s.post('/api/logout', {}, { cookie }); // the session is gone now
+  assert.deepEqual(
+    s.events.map((e) => e.action),
+    ['auth.login', 'auth.logout'],
+  );
+});
+
+test('events: an actor that cannot be worked out never changes the answer', async (t) => {
+  const events = [];
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-gov-auth-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const auth = createAuth({ dataDir, env: { ZAAFPULSE_AUTH: 'local' }, onEvent: (e) => events.push(e) });
+  const code = localLoginCode(dataDir);
+  // A request whose address throws when it is read: the sign-in still answers, without an event.
+  const req = {
+    method: 'GET',
+    headers: {},
+    socket: {
+      encrypted: false,
+      get remoteAddress() {
+        throw new Error('gone');
+      },
+    },
+  };
+  const res = { writeHead: () => {}, end: () => {}, setHeader: () => {} };
+  assert.equal(await auth.handle(req, res, new URL(`http://x/auth/local?code=${code}`)), true);
+  assert.deepEqual(events, []);
+});
+
 test('local sign-in: a code that works is an event; an expired or unknown one is not', async (t) => {
   const s = await setup(t, { ZAAFPULSE_AUTH: 'local' });
   const code = localLoginCode(s.dataDir);
