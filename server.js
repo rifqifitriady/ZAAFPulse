@@ -95,6 +95,9 @@ const {
   redactLogs,
   redactGatewayLogs,
   redactConfig,
+  redactOffice,
+  redactTimeline,
+  redactRuntimesConfig,
 } = require('./lib/users/policy');
 
 const PORT = Number(process.env.ZAAFPULSE_PORT || process.env.PORT) || 4777;
@@ -1766,6 +1769,9 @@ const handler = async (req, res) => {
         contentType: req.headers['content-type'],
         readBody: () => readBody(req),
       });
+      // A reviewer or a viewer: the entries without their command lines or health URLs, in every mode.
+      if (hit && url.pathname === '/api/runtimes/config' && hit.status === 200)
+        return send(res, 200, redactRuntimesConfig(hit.body, role));
       if (hit) return send(res, hit.status, hit.body);
     }
     // The cost ledger: rows, status, settings, price versions and restate, behind the same sign-in. No path out. An
@@ -1809,7 +1815,8 @@ const handler = async (req, res) => {
     }
     if (url.pathname === '/api/timeline') {
       const hours = Math.min(48, Math.max(1, parseInt(url.searchParams.get('hours'), 10) || 6));
-      return send(res, 200, DEMO ? timeline.demoTimeline(hours) : await timeline.timeline(hours));
+      // A reviewer or a viewer: the tools and their times, no file name, command or host.
+      return send(res, 200, redactTimeline(DEMO ? timeline.demoTimeline(hours) : await timeline.timeline(hours), role));
     }
     if (url.pathname === '/api/mcp-calls') {
       return send(res, 200, {
@@ -1821,7 +1828,8 @@ const handler = async (req, res) => {
       });
     }
     if (url.pathname === '/api/office') {
-      return send(res, 200, DEMO ? office.demoSnapshot() : office.snapshot());
+      // A reviewer or a viewer: states and tools, no git branch, file name, command or host.
+      return send(res, 200, redactOffice(DEMO ? office.demoSnapshot() : office.snapshot(), role));
     }
     // Endpoint → MCP server: register this MCP server in (or remove it from) Claude Code, Kiro or Antigravity.
     // Uses the same script as `npm run mcp:register`: backups first, only our own entry is touched.

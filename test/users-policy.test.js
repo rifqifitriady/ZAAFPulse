@@ -14,6 +14,9 @@ const {
   redactLogs,
   redactGatewayLogs,
   redactConfig,
+  redactOffice,
+  redactTimeline,
+  redactRuntimesConfig,
   VIEWER_READS,
   ANYONE,
   OPENROUTER_SECTIONS,
@@ -675,4 +678,128 @@ test('the config for a non-owner: user name, budget and pricing stay; no vault p
     assert.deepEqual(redactConfig(c, role), { userName: 'Ann', monthlyBudgetUSD: 50, pricing: { m: { input: 1 } } });
   assert.equal(redactConfig(c, 'owner'), c);
   assert.equal(redactConfig(null, 'viewer'), null);
+});
+
+test('the office for a non-owner: states, zones, tools and counts stay; no branch, no target, nothing unlisted', () => {
+  // The shape of lib/office.js snapshot(): agents with their activity and feed, and the floor's feed.
+  const agent = {
+    id: 'claude:abc',
+    kind: 'session',
+    parent: null,
+    project: 'shop',
+    branch: 'SECRET-BRANCH',
+    model: 'claude-x',
+    agentType: '',
+    lastTs: 2,
+    startTs: 1,
+    tool: 'claude',
+    state: 'working',
+    activity: { tool: 'Edit', target: 'SECRET-FILE.md' },
+    zone: 'code',
+    calls10m: 3,
+    zones10m: { code: 3 },
+    feed: [{ ts: 2, tool: 'Bash', target: 'SECRET-CMD', zone: 'terminal', extra: 'SECRET-NEW' }],
+    somethingNew: 'SECRET-NEW',
+  };
+  const body = {
+    ts: 9,
+    agents: [agent, { ...agent, id: 'claude:abc:a1', kind: 'subagent', activity: null }],
+    feed: [{ ts: 2, tool: 'WebFetch', target: 'SECRET-HOST', zone: 'web', agent: 'claude:abc' }],
+    perMinute: [0, 1],
+    somethingNew: 'SECRET-NEW',
+  };
+  for (const role of ['viewer', 'reviewer']) {
+    const r = redactOffice(body, role);
+    assert.ok(!/SECRET/.test(JSON.stringify(r)), JSON.stringify(r));
+    assert.deepEqual(r.agents[0].activity, { tool: 'Edit', target: '' });
+    assert.equal(r.agents[1].activity, null);
+    assert.deepEqual(r.agents[0].feed, [{ ts: 2, tool: 'Bash', target: '', zone: 'terminal' }]);
+    assert.deepEqual(r.feed, [{ ts: 2, tool: 'WebFetch', target: '', zone: 'web', agent: 'claude:abc' }]);
+    assert.deepEqual(
+      [r.ts, r.perMinute, r.agents[0].state, r.agents[0].zone, r.agents[0].project, r.agents[0].calls10m],
+      [9, [0, 1], 'working', 'code', 'shop', 3],
+    );
+    assert.ok(!('branch' in r.agents[0]));
+  }
+  assert.equal(redactOffice(body, 'owner'), body);
+  assert.equal(redactOffice(null, 'viewer'), null);
+});
+
+test('the timeline for a non-owner: lanes, times, zones and tools stay; every segment target is blank', () => {
+  // The shape of lib/timeline.js: a tool segment is [from, to, 'tool', zone, tool, target, ok].
+  const body = {
+    ts: 9,
+    start: 1,
+    hours: 6,
+    lanes: [
+      {
+        id: 'claude:abc',
+        tool: 'claude',
+        kind: 'session',
+        parent: null,
+        agentType: '',
+        project: 'shop',
+        model: 'claude-x',
+        first: 1,
+        last: 5,
+        segments: [
+          [1, 2, 'think'],
+          [2, 3, 'tool', 'code', 'Edit', 'SECRET-FILE.md', 1],
+          [3, 4, 'wait'],
+        ],
+        marks: [[4, 'error', 'Edit failed']],
+        somethingNew: 'SECRET-NEW',
+      },
+    ],
+    somethingNew: 'SECRET-NEW',
+  };
+  for (const role of ['viewer', 'reviewer']) {
+    const r = redactTimeline(body, role);
+    assert.ok(!/SECRET/.test(JSON.stringify(r)), JSON.stringify(r));
+    assert.deepEqual(r.lanes[0].segments, [
+      [1, 2, 'think'],
+      [2, 3, 'tool', 'code', 'Edit', '', 1],
+      [3, 4, 'wait'],
+    ]);
+    assert.deepEqual(r.lanes[0].marks, [[4, 'error', 'Edit failed']]);
+    assert.deepEqual([r.ts, r.start, r.hours, r.lanes[0].project, r.lanes[0].first], [9, 1, 6, 'shop', 1]);
+  }
+  assert.equal(redactTimeline(body, 'owner'), body);
+  assert.equal(redactTimeline(null, 'viewer'), null);
+});
+
+test('the local model entries for a non-owner: no command, no health URL, in every mode', () => {
+  const body = {
+    off: null,
+    entries: [
+      {
+        id: 'qwen',
+        name: 'Qwen',
+        command: ['~/bin/SECRET-SERVER', '-m', '~/SECRET-MODEL.gguf'],
+        port: 18082,
+        health: 'http://127.0.0.1:18082/health?tok=SECRET',
+        healthUsed: 'http://127.0.0.1:18082/health?tok=SECRET',
+        approved: true,
+        error: null,
+      },
+    ],
+    demo: false,
+  };
+  for (const role of ['viewer', 'reviewer']) {
+    const r = redactRuntimesConfig(body, role);
+    assert.ok(!/SECRET/.test(JSON.stringify(r)), JSON.stringify(r));
+    assert.deepEqual(r.entries[0], {
+      id: 'qwen',
+      name: 'Qwen',
+      command: null,
+      port: 18082,
+      health: null,
+      healthUsed: null,
+      approved: true,
+      error: null,
+    });
+    assert.deepEqual([r.off, r.demo], [null, false]);
+  }
+  assert.equal(redactRuntimesConfig(body, 'owner'), body);
+  assert.equal(redactRuntimesConfig(null, 'viewer'), null);
 });

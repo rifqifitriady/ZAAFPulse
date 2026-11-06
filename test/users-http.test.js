@@ -11,6 +11,8 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { NO_JUDGE_PORTS } = require('./helpers');
+const { createUserStore } = require('../lib/users/store');
+const { localLoginCode } = require('../lib/auth');
 
 const ROOT = path.join(__dirname, '..');
 const ADMIN = 'correct horse battery';
@@ -24,11 +26,13 @@ const freePort = () =>
   });
 
 // Starts server.js on a free port of the range (again when another test took the port first); stopped and its data
-// folder removed when the test ends.
-async function startServer(t, env = {}) {
+// folder removed when the test ends. `seed(data)` writes files into the data folder before the server starts; Claude
+// Code's logs are read from <data>/.claude/projects.
+async function startServer(t, env = {}, seed = null) {
   for (let attempt = 0; attempt < 6; attempt++) {
     const port = await freePort();
     const data = fs.mkdtempSync(path.join(os.tmpdir(), 'zp-users-http-'));
+    if (seed) seed(data);
     const child = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
       env: {
         ...process.env,
@@ -42,7 +46,7 @@ async function startServer(t, env = {}) {
         ZAAFPULSE_DATA: data,
         HOME: data,
         USERPROFILE: data,
-        CLAUDE_CONFIG_DIR: data,
+        CLAUDE_CONFIG_DIR: path.join(data, '.claude'),
         CODEX_HOME: path.join(data, '.codex'),
         XDG_CONFIG_HOME: path.join(data, '.config'),
         APPDATA: path.join(data, 'AppData', 'Roaming'),
@@ -337,5 +341,131 @@ test('without sign-in there are no accounts; the owner is everyone and the Users
   });
   const session = await call(s, '/api/session');
   assert.deepEqual([session.body.accounts, session.body.user, session.body.role], [false, 'owner', 'owner']);
+  assert.ok(s.alive());
+});
+
+// A Claude Code session of a minute ago in <data>/.claude/projects: a prompt, a shell command run, then a file edit
+// still waiting for its result (the office and the timeline show it as the current activity). Every value a viewer
+// must never see is in SEEDED; the owner sees them where each view carries one.
+const SEEDED = {
+  branch: 'fix/acme-breach-cve',
+  file: 'acme-merger-plan.md',
+  command: 'deploy-acme.sh',
+  prompt: 'the acme merger prompt',
+  runtime: 'llama-acme-server',
+  token: 'tok=acme1234',
+};
+function seedLogs(data) {
+  const dir = path.join(data, '.claude', 'projects', '-work-shop');
+  fs.mkdirSync(dir, { recursive: true });
+  const t0 = Date.now() - 60e3;
+  const at = (s) => new Date(t0 + s * 1000).toISOString();
+  const meta = { cwd: path.join(data, 'work', 'shop'), gitBranch: SEEDED.branch, sessionId: 'sess-1' };
+  const usage = { input_tokens: 10, output_tokens: 5 };
+  const use = (id, name, input) => ({ type: 'tool_use', id, name, input });
+  const lines = [
+    { ...meta, type: 'user', uuid: 'u1', timestamp: at(0), message: { role: 'user', content: SEEDED.prompt } },
+    {
+      ...meta,
+      type: 'assistant',
+      uuid: 'a1',
+      timestamp: at(1),
+      message: {
+        id: 'm1',
+        model: 'claude-x',
+        stop_reason: 'tool_use',
+        usage,
+        content: [use('t1', 'Bash', { command: `/opt/bin/${SEEDED.command} --now` })],
+      },
+    },
+    {
+      ...meta,
+      type: 'user',
+      uuid: 'u2',
+      timestamp: at(2),
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] },
+    },
+    {
+      ...meta,
+      type: 'assistant',
+      uuid: 'a2',
+      timestamp: at(3),
+      message: {
+        id: 'm2',
+        model: 'claude-x',
+        stop_reason: 'tool_use',
+        usage,
+        content: [use('t2', 'Edit', { file_path: path.join(data, 'work', 'shop', SEEDED.file) })],
+      },
+    },
+  ];
+  fs.writeFileSync(path.join(dir, 'sess-1.jsonl'), lines.map((o) => JSON.stringify(o)).join('\n') + '\n');
+  const runtime = {
+    id: 'qwen',
+    command: [path.join(data, 'bin', SEEDED.runtime), '--port', '18082'],
+    port: 18082,
+    health: `http://127.0.0.1:18082/health?${SEEDED.token}`,
+  };
+  fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ localRuntimes: [runtime] }));
+}
+const leaks = (text) =>
+  Object.entries(SEEDED)
+    .filter(([, v]) => text.includes(v))
+    .map(([k]) => k);
+const VIEWS = [
+  '/api/office',
+  '/api/timeline',
+  '/api/summary',
+  '/api/logs',
+  '/api/trace/sessions',
+  '/api/runtimes/config',
+];
+
+test("a viewer's live views carry no branch, file name, command, prompt or token; the owner's do", async (t) => {
+  const s = await startServer(t, {}, seedLogs);
+  const owner = await signIn(s, { password: ADMIN });
+  const made = { action: 'create', name: 'vera', role: 'viewer', password: 'vera first 0001' };
+  assert.equal((await call(s, '/api/users', { method: 'POST', body: made, as: owner })).status, 200);
+  const vera = await signIn(s, { name: 'vera', password: 'vera first 0001' });
+  const change = { current: 'vera first 0001', next: VERA };
+  assert.equal((await call(s, '/api/account/password', { method: 'POST', body: change, as: vera })).status, 200);
+  const seen = {};
+  for (const p of VIEWS) {
+    const [mine, hers] = [await call(s, p, { as: owner }), await call(s, p, { as: vera })];
+    assert.deepEqual([mine.status, hers.status], [200, 200], p);
+    assert.deepEqual(leaks(hers.text), [], `${p}: ${hers.text.slice(0, 400)}`);
+    seen[p] = leaks(mine.text);
+  }
+  // The owner's views: the branch and the file in the office, the file and the command in the timeline and the logs,
+  // the health URL's token in the runtimes (server mode shows no command line).
+  assert.deepEqual(seen['/api/office'].sort(), ['branch', 'command', 'file']);
+  assert.deepEqual(seen['/api/timeline'].sort(), ['command', 'file']);
+  assert.deepEqual(seen['/api/logs'].sort(), ['command', 'file']);
+  assert.ok(seen['/api/summary'].includes('branch'), String(seen['/api/summary']));
+  assert.deepEqual(seen['/api/runtimes/config'], ['token']);
+  assert.ok(s.alive());
+});
+
+test("local mode: a viewer's local model entries carry no command line or health URL; the owner's do", async (t) => {
+  const s = await startServer(t, { ZAAFPULSE_AUTH: 'local', ZAAFPULSE_ADMIN_PASSWORD: '' }, (data) => {
+    seedLogs(data);
+    const store = createUserStore({ file: path.join(data, '.data', 'users.json') });
+    store.create({ name: 'vera', role: 'viewer', password: 'vera first 0001' });
+    store.changePassword('vera', VERA);
+  });
+  const local = await fetch(`${s.base}/auth/local?code=${localLoginCode(s.data)}`, { redirect: 'manual' });
+  assert.equal(local.status, 200);
+  const owner = local.headers.get('set-cookie').split(';')[0];
+  const vera = await signIn(s, { name: 'vera', password: VERA });
+  const seen = {};
+  for (const p of VIEWS) {
+    const [mine, hers] = [await call(s, p, { as: owner }), await call(s, p, { as: vera })];
+    assert.deepEqual([mine.status, hers.status], [200, 200], p);
+    assert.deepEqual(leaks(hers.text), [], `${p}: ${hers.text.slice(0, 400)}`);
+    seen[p] = leaks(mine.text);
+  }
+  assert.deepEqual(seen['/api/runtimes/config'].sort(), ['runtime', 'token']);
+  const entry = (await call(s, '/api/runtimes/config', { as: vera })).body.entries[0];
+  assert.deepEqual([entry.id, entry.command, entry.health, entry.healthUsed], ['qwen', null, null, null]);
   assert.ok(s.alive());
 });
