@@ -652,7 +652,17 @@ test('the gateway request log for a non-owner: no error text, no run or session 
         error: 'SECRET-UPSTREAM-ERROR /Users/me',
         sessionId: 'SECRET-SES',
         runId: 'SECRET-RUN',
-        guard: { action: 'redacted', hits: ['secrets'], error: true, text: 'SECRET-GUARD' },
+        // The shape of lib/gateway/guardrails.js: a hit is { check, label, count } with a fixed label.
+        guard: {
+          action: 'redacted',
+          hits: [
+            { check: 'secrets', label: 'API key', count: 2, value: 'SECRET-VALUE' },
+            { check: 'pii', label: 'Email', count: 1 },
+            'SECRET-STRING',
+          ],
+          error: true,
+          text: 'SECRET-GUARD',
+        },
         somethingNew: 'SECRET-NEW',
       },
     ],
@@ -663,7 +673,10 @@ test('the gateway request log for a non-owner: no error text, no run or session 
     assert.equal(r.entries[0].model, 'gpt-5');
     assert.equal(r.entries[0].status, 599);
     assert.equal(r.entries[0].guard.action, 'redacted');
-    assert.deepEqual(r.entries[0].guard.hits, ['secrets']);
+    assert.deepEqual(r.entries[0].guard.hits, [
+      { check: 'secrets', label: 'API key', count: 2 },
+      { check: 'pii', label: 'Email', count: 1 },
+    ]);
   }
   assert.equal(redactGatewayLogs(body, 'owner'), body);
   assert.equal(redactGatewayLogs(null, 'viewer'), null);
