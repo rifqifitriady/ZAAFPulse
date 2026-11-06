@@ -62,8 +62,18 @@ test('password sign-in: login, logout, failures and the one lockout event, each 
   const device = s.events[0].actor.device;
   assert.match(device, /^[A-Za-z0-9_-]{16}$/);
   assert.ok(known.includes(device), 'the device is the id the known-device cookie carries');
-  assert.deepEqual(s.events[1].actor, { via: 'dashboard', mode: 'password', device, ip: '127.0.0.1' });
-  assert.deepEqual(s.events[2].actor, { via: 'dashboard', mode: 'password', device: null, ip: '127.0.0.1' });
+  const owner = { via: 'dashboard', user: 'owner', role: 'owner', mode: 'password', device, ip: '127.0.0.1' };
+  assert.deepEqual(s.events[0].actor, owner);
+  assert.deepEqual(s.events[1].actor, owner);
+  assert.deepEqual(s.events[2].actor, {
+    via: 'dashboard',
+    user: null,
+    role: null,
+    mode: 'password',
+    device: null,
+    ip: '127.0.0.1',
+  });
+  assert.deepEqual(s.events[2].target, { type: 'user', id: 'owner' });
   assert.equal(s.events[7].seconds, 30);
   const text = JSON.stringify(s.events);
   assert.ok(!text.includes('wrong') && !text.includes(PASSWORD) && !text.includes('zp_session'));
@@ -123,9 +133,16 @@ test('local sign-in: a code that works is an event; an expired or unknown one is
       action: 'auth.local_code',
       outcome: 'ok',
       status: 200,
-      actor: { via: 'dashboard', mode: 'local', device: null, ip: '127.0.0.1' },
+      actor: { via: 'dashboard', user: 'owner', role: 'owner', mode: 'local', device: null, ip: '127.0.0.1' },
     },
   ]);
   const req = { headers: { cookie: 'zp_known=x.y.z' }, socket: { remoteAddress: '::ffff:10.1.2.3' } };
-  assert.deepEqual(s.auth.actorOf(req), { via: 'dashboard', mode: 'local', device: null, ip: '10.1.2.3' });
+  assert.deepEqual(s.auth.actorOf(req), {
+    via: 'dashboard',
+    user: null,
+    role: null,
+    mode: 'local',
+    device: null,
+    ip: '10.1.2.3',
+  });
 });
