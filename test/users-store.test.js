@@ -142,3 +142,64 @@ test('an unreadable file: nobody in it signs in, it is never written over, and t
   fs.writeFileSync(saved.file, JSON.stringify({ users: [d.users[0], d.users[0]] }));
   assert.equal(saved.store.state(), 'unreadable');
 });
+
+test('a hash or salt of the wrong size, an odd id or a repeated id makes the file unreadable and signs nobody in', async (t) => {
+  const { checkPassword } = require('../lib/auth');
+  const s = setup(t);
+  s.store.create({ name: 'bo', role: 'viewer', password: PW });
+  const d = JSON.parse(fs.readFileSync(s.file, 'utf8'));
+  const good = d.users[0];
+  const variants = [
+    { hash: '' },
+    { hash: '!!!!' },
+    { hash: 'AA==' },
+    { salt: '' },
+    { salt: 'AA==' },
+    { hash: `${good.hash}=` },
+    { id: 'usr_xyz' },
+    { id: 'USR_0123456789ab' },
+  ];
+  for (const v of variants) {
+    fs.writeFileSync(s.file, JSON.stringify({ users: [{ ...good, ...v }] }));
+    assert.equal(s.store.state(), 'unreadable', JSON.stringify(v));
+    assert.equal(await s.store.verify('bo', 'anything at all 123'), null, JSON.stringify(v));
+  }
+  fs.writeFileSync(s.file, JSON.stringify({ users: [good, { ...good, name: 'cy' }] }));
+  assert.equal(s.store.state(), 'unreadable', 'the same id twice');
+  // The check itself refuses a hash of the wrong size, so a hand-edited admin.json cannot accept any password.
+  for (const hash of ['', '!!!!', 'AA==', undefined])
+    assert.equal(await checkPassword('anything at all 123', { ...good, algo: 'scrypt', ...SCRYPT, hash }), false);
+  assert.equal(await checkPassword(PW, { ...good, algo: 'scrypt', ...SCRYPT }), true);
+});
+
+test('verify: an account disabled or reset while its password is being checked does not sign in', async (t) => {
+  const s = setup(t);
+  s.store.create({ name: 'bo', role: 'viewer', password: PW });
+  const pending = s.store.verify('bo', PW);
+  s.store.update('bo', { disabled: true });
+  assert.equal(await pending, null, 'disabled meanwhile');
+  s.store.update('bo', { disabled: false });
+  const second = s.store.verify('bo', PW);
+  s.store.resetPassword('bo', 'another password 3');
+  assert.equal(await second, null, 'reset meanwhile');
+  assert.equal((await s.store.verify('bo', 'another password 3')).name, 'bo');
+});
+
+test('a write keeps only the file fields; display names are NFC and carry no control or invisible characters', (t) => {
+  const s = setup(t);
+  s.store.create({ name: 'bo', role: 'viewer', password: PW });
+  const d = JSON.parse(fs.readFileSync(s.file, 'utf8'));
+  d.users[0].extra = 'dropped';
+  fs.writeFileSync(s.file, JSON.stringify(d).replace('"extra"', '"__proto__":{"isAdmin":true},"extra"'));
+  s.store.update('bo', { role: 'reviewer' });
+  const keys = Object.keys(JSON.parse(fs.readFileSync(s.file, 'utf8')).users[0]);
+  assert.deepEqual(keys, [
+    ...['id', 'name', 'display', 'role', 'salt', 'hash', 'createdAt'],
+    ...['updatedAt', 'disabled', 'mustChange', 'lastLoginAt'],
+  ]);
+  assert.equal({}.isAdmin, undefined);
+  assert.equal(s.store.update('bo', { display: 'Café' }).user.display, 'Café');
+  for (const bad of ['a‮b', 'a​b', 'a\nb', 'a\u0000b', 'a⁦b', 'a﻿b'])
+    assert.throws(() => s.store.update('bo', { display: bad }), /display: text of at most 60 characters/, bad);
+  assert.throws(() => s.store.create({ name: 'cy', display: 'x​y', role: 'viewer', password: PW }), /display:/);
+});
