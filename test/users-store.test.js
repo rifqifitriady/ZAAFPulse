@@ -203,3 +203,29 @@ test('a write keeps only the file fields; display names are NFC and carry no con
     assert.throws(() => s.store.update('bo', { display: bad }), /display: text of at most 60 characters/, bad);
   assert.throws(() => s.store.create({ name: 'cy', display: 'x​y', role: 'viewer', password: PW }), /display:/);
 });
+
+test('display names: a zero-width joiner or non-joiner only between two visible characters, with its own message', (t) => {
+  const s = setup(t);
+  s.store.create({ name: 'bo', role: 'viewer', password: PW });
+  // Emoji sequences and Persian words use them; both stay as typed.
+  for (const ok of ['Dev 👩‍💻', 'می‌خواهم', 'Ana‍B'])
+    assert.equal(s.store.update('bo', { display: ok }).user.display, ok, JSON.stringify(ok));
+  const JOINER = 'display: a zero-width joiner or non-joiner only between two visible characters';
+  for (const bad of ['‍Ana', 'Ana‌', 'A‍‍B', 'A ‍B', 'A‍ B', '‌'])
+    assert.throws(() => s.store.update('bo', { display: bad }), { message: JOINER }, JSON.stringify(bad));
+  // Line and paragraph separators and the Hangul fillers are invisible too.
+  for (const bad of ['a b', 'a b', 'aㅤb', 'aᅟb', 'aᅠb', 'aﾠb'])
+    assert.throws(() => s.store.update('bo', { display: bad }), /display: text of at most 60 characters/, bad);
+});
+
+test('a stored display name the form would refuse makes the file unreadable', (t) => {
+  const s = setup(t);
+  s.store.create({ name: 'bo', role: 'viewer', password: PW });
+  const d = JSON.parse(fs.readFileSync(s.file, 'utf8'));
+  for (const display of ['a‮b', 'x'.repeat(61), '‍Ana']) {
+    fs.writeFileSync(s.file, JSON.stringify({ users: [{ ...d.users[0], display }] }));
+    assert.equal(s.store.state(), 'unreadable', JSON.stringify(display));
+  }
+  fs.writeFileSync(s.file, JSON.stringify({ users: [{ ...d.users[0], display: 'Bo 👩‍💻' }] }));
+  assert.equal(s.store.state(), 'ok');
+});
