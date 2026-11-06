@@ -862,7 +862,9 @@ test('the integrations for a non-owner: states and counts stay; no MCP command l
         ['n8n', 'error', 0, false],
       ],
     );
-    assert.deepEqual([r.clients, r.calls], [body.clients, body.calls]);
+    // The AI clients without their config file's path; the calls as they are.
+    assert.deepEqual(r.clients, [{ id: 'claude', name: 'Claude Code', registered: true, detected: true }]);
+    assert.deepEqual(r.calls, body.calls);
   }
   assert.equal(redactIntegrations(body, 'owner'), body);
   assert.equal(redactIntegrations(null, 'viewer'), null);
