@@ -28,11 +28,15 @@
       <div class="mark"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4cc3d9" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2-5 4 10 2-5h6"/></svg></div>
       <div><div class="name">ZAAF<span>Pulse</span></div><div class="sub">AI COMMAND CENTER</div></div>
     </div>
-    <label for="pw">Admin password</label>
-    <input id="pw" name="password" type="password" autocomplete="current-password" required autofocus>
+    <div id="fields">
+      <label for="nm">Name</label>
+      <input id="nm" name="name" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="32" placeholder="Empty for the admin password" autofocus>
+      <label for="pw" style="margin-top:12px">Password</label>
+      <input id="pw" name="password" type="password" autocomplete="current-password" required>
+    </div>
     <button id="go" type="submit">Sign in</button>
     <div class="err" id="err" role="alert"></div>
-    <p class="note">This ZAAFPulse runs in server mode. Forgot the password? Run <code>zaafpulse set-password</code> on the server.</p>
+    <p class="note" id="note">This ZAAFPulse runs in server mode. Leave the name empty to sign in with the admin password; forgot it? Run <code>zaafpulse set-password</code> on the server. Your own account's password is reset by the owner.</p>
   </form>
   <script src="login.js"></script>
 </body>
