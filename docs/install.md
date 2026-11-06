@@ -132,7 +132,7 @@ There are three sign-in modes. ZAAFPulse picks one by itself:
 
 | Mode | When | How you get in |
 |---|---|---|
-| **local** | 127.0.0.1, on every OS (the default) | `zaafpulse open`, or `zaafpulse start --open`. Other accounts on the machine and their programs cannot get in. |
+| **local** | 127.0.0.1, on every OS (the default) | `zaafpulse open`, or `zaafpulse start --open`. Other OS accounts on the machine and their programs cannot get in, unless the owner gave them a dashboard account: those sign in with a name and a password ([docs/users.md](users.md)). |
 | **password** | Any address but 127.0.0.1, a reverse proxy (`ZAAFPULSE_TRUST_PROXY`, `ZAAFPULSE_PUBLIC_URL` or `ZAAFPULSE_ALLOWED_HOSTS`), or `ZAAFPULSE_AUTH=1` | The admin password |
 | **none** | Only with `ZAAFPULSE_AUTH=none` on 127.0.0.1, and demo mode (`--demo`) on a single-user machine | Open http://localhost:4777 |
 
