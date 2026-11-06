@@ -17,6 +17,9 @@ const {
   redactOffice,
   redactTimeline,
   redactRuntimesConfig,
+  redactIntegrations,
+  redactRouterProxy,
+  redactInventory,
   VIEWER_READS,
   ANYONE,
   OPENROUTER_SECTIONS,
@@ -802,4 +805,122 @@ test('the local model entries for a non-owner: no command, no health URL, in eve
   }
   assert.equal(redactRuntimesConfig(body, 'owner'), body);
   assert.equal(redactRuntimesConfig(null, 'viewer'), null);
+});
+
+test('the integrations for a non-owner: states and counts stay; no MCP command line, no error text', () => {
+  const body = {
+    integrations: [
+      {
+        id: 'dt',
+        type: 'dynatrace',
+        enabled: true,
+        allowWrite: false,
+        tools: 4,
+        writeTools: 0,
+        state: 'ok',
+        latencyMs: 9,
+      },
+      {
+        id: 'n8n',
+        type: 'n8n',
+        enabled: true,
+        allowWrite: true,
+        tools: 0,
+        writeTools: 0,
+        state: 'error',
+        latencyMs: 3,
+        error: 'SECRET-ERROR https://n8n.internal/SECRET',
+        somethingNew: 'SECRET-NEW',
+      },
+    ],
+    clients: [{ id: 'claude', name: 'Claude Code', file: '~/.claude.json', registered: true, detected: true }],
+    calls: [{ ts: 1, integration: 'dt', tool: 'query', args: ['q'], ok: true, ms: 5 }],
+    mcpCommand: '/Users/me/SECRET/node /Users/me/SECRET/mcp.js',
+  };
+  for (const role of ['viewer', 'reviewer']) {
+    const r = redactIntegrations(body, role);
+    assert.ok(!/SECRET/.test(JSON.stringify(r)), JSON.stringify(r));
+    assert.ok(!('mcpCommand' in r));
+    assert.deepEqual(
+      r.integrations.map((i) => [i.id, i.state, i.tools, 'error' in i]),
+      [
+        ['dt', 'ok', 4, false],
+        ['n8n', 'error', 0, false],
+      ],
+    );
+    assert.deepEqual([r.clients, r.calls], [body.clients, body.calls]);
+  }
+  assert.equal(redactIntegrations(body, 'owner'), body);
+  assert.equal(redactIntegrations(null, 'viewer'), null);
+});
+
+test("the router's proxy log for a non-owner: status, provider and timings stay; no target URL, no error text", () => {
+  const row = {
+    id: 'p1',
+    ts: 1,
+    status: 'error',
+    level: 'direct',
+    proxy: 'configured',
+    provider: 'openai',
+    target: 'https://SECRET-HOST/v1?key=SECRET',
+    latencyMs: 30,
+    upstreamStatus: 502,
+    attempt: 1,
+    error: 'SECRET-ERROR',
+    account: 'ab12',
+    tls: false,
+    somethingNew: 'SECRET-NEW',
+  };
+  const body = { configured: true, id: 'omniroute', data: [row] };
+  for (const role of ['viewer', 'reviewer']) {
+    const r = redactRouterProxy(body, role);
+    assert.ok(!/SECRET/.test(JSON.stringify(r)), JSON.stringify(r));
+    assert.deepEqual(
+      [r.configured, r.id, r.data[0].provider, r.data[0].status, r.data[0].latencyMs],
+      [true, 'omniroute', 'openai', 'error', 30],
+    );
+    const failed = redactRouterProxy({ configured: true, id: 'omniroute', data: { error: 'SECRET-HOST down' } }, role);
+    assert.deepEqual(failed, { configured: true, id: 'omniroute', data: { error: 'the router could not be read' } });
+    assert.deepEqual(redactRouterProxy({ configured: false }, role), { configured: false });
+  }
+  assert.equal(redactRouterProxy(body, 'owner'), body);
+  assert.equal(redactRouterProxy(null, 'viewer'), null);
+});
+
+test('the inventory for a non-owner: items, names and counts stay; no project folder, no client file', () => {
+  const body = {
+    generatedAt: '2026-11-07T00:00:00.000Z',
+    items: [
+      {
+        id: 'mcp:github',
+        kind: 'mcp',
+        name: 'github',
+        vendor: null,
+        where: ['Claude Code config'],
+        state: 'configured',
+        transport: 'stdio',
+        command: 'npx',
+        clients: ['Claude Code'],
+        projects: ['~/work/SECRET-PROJECT'],
+        firstSeen: '2026-11-01',
+        lastSeen: '2026-11-07',
+        review: { owner: 'Ann', risk: 'limited' },
+        status: 'reviewed',
+        somethingNew: 'SECRET-NEW',
+      },
+    ],
+    counts: { total: 1 },
+    failed: [],
+    clients: [{ client: 'claude', name: 'Claude Code', file: '~/SECRET/.claude.json', state: 'ok', servers: 1 }],
+  };
+  for (const role of ['viewer', 'reviewer']) {
+    const r = redactInventory(body, role);
+    assert.ok(!/SECRET/.test(JSON.stringify(r)), JSON.stringify(r));
+    assert.deepEqual(r.clients, [{ client: 'claude', name: 'Claude Code', state: 'ok', servers: 1 }]);
+    const { projects, somethingNew, ...kept } = body.items[0];
+    assert.deepEqual(r.items, [kept]);
+    assert.deepEqual([r.generatedAt, r.counts, r.failed], [body.generatedAt, body.counts, body.failed]);
+  }
+  assert.equal(redactInventory(body, 'owner'), body);
+  assert.equal(redactInventory(null, 'viewer'), null);
 });

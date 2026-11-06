@@ -407,6 +407,10 @@ function seedLogs(data) {
     health: `http://127.0.0.1:18082/health?${SEEDED.token}`,
   };
   fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify({ localRuntimes: [runtime] }));
+  // Claude Code's own config: an MCP server set up for one project folder (the inventory names the folder).
+  const folder = path.join(data, 'work', 'acme-client-folder');
+  const claudeJson = { projects: { [folder]: { mcpServers: { github: { command: 'npx', args: ['github-mcp'] } } } } };
+  fs.writeFileSync(path.join(data, '.claude', '.claude.json'), JSON.stringify(claudeJson));
 }
 const leaks = (text) =>
   Object.entries(SEEDED)
@@ -443,6 +447,24 @@ test("a viewer's live views carry no branch, file name, command, prompt or token
   assert.deepEqual(seen['/api/logs'].sort(), ['command', 'file']);
   assert.ok(seen['/api/summary'].includes('branch'), String(seen['/api/summary']));
   assert.deepEqual(seen['/api/runtimes/config'], ['token']);
+  // The integrations without the MCP command line; the inventory without the AI clients' file paths.
+  const integrations = [
+    await call(s, '/api/integrations', { as: owner }),
+    await call(s, '/api/integrations', { as: vera }),
+  ];
+  assert.deepEqual(
+    integrations.map((r) => [r.status, typeof r.body.mcpCommand]),
+    [
+      [200, 'string'],
+      [200, 'undefined'],
+    ],
+  );
+  const inventory = [await call(s, '/api/governance/inventory', { as: owner })];
+  inventory.push(await call(s, '/api/governance/inventory', { as: vera }));
+  const where = (r) => ['acme-client-folder', '.claude.json'].filter((x) => r.text.includes(x));
+  assert.deepEqual(inventory.map(where), [['acme-client-folder', '.claude.json'], []]);
+  const github = inventory.map((r) => r.body.items.find((i) => i.id === 'mcp:github'));
+  assert.deepEqual([github[1].name, github[1].clients, github[1].command], ['github', ['Claude Code'], 'npx']);
   assert.ok(s.alive());
 });
 

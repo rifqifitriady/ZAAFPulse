@@ -98,6 +98,9 @@ const {
   redactOffice,
   redactTimeline,
   redactRuntimesConfig,
+  redactIntegrations,
+  redactRouterProxy,
+  redactInventory,
 } = require('./lib/users/policy');
 
 const PORT = Number(process.env.ZAAFPULSE_PORT || process.env.PORT) || 4777;
@@ -1620,13 +1623,19 @@ const handler = async (req, res) => {
       return send(res, 200, getInsights(r === 'all' ? 'all' : Math.min(365, Math.max(1, parseInt(r, 10) || 30))));
     }
     if (url.pathname === '/api/topology') return send(res, 200, DEMO ? demo.topologyDemo() : await topology());
+    // A reviewer or a viewer: the proxy log without its target URLs or error text.
+    const routerView = (body) => (url.searchParams.get('section') === 'proxy' ? redactRouterProxy(body, role) : body);
     if (url.pathname === '/api/router' && DEMO) {
       const section = url.searchParams.get('section');
-      return send(res, 200, {
-        configured: true,
-        id: 'omniroute (demo)',
-        data: require('./lib/omniroute').demoRouter(section),
-      });
+      return send(
+        res,
+        200,
+        routerView({
+          configured: true,
+          id: 'omniroute (demo)',
+          data: require('./lib/omniroute').demoRouter(section),
+        }),
+      );
     }
     if (url.pathname === '/api/router') {
       if (!router.configured()) return send(res, 200, { configured: false });
@@ -1642,7 +1651,7 @@ const handler = async (req, res) => {
         proxy: router.proxyLogs,
       }[url.searchParams.get('section')];
       if (!fn) return send(res, 404, { error: 'unknown section' });
-      return send(res, 200, { configured: true, id: router.id(), data: await fn() });
+      return send(res, 200, routerView({ configured: true, id: router.id(), data: await fn() }));
     }
     // Trace & Session Explorer: sessions of every source, one session as spans, and their text on request.
     // Behind the sign-in above, so a gateway API key never reaches it. Ids are opaque; no path leaves here.
@@ -1796,6 +1805,9 @@ const handler = async (req, res) => {
         contentType: req.headers['content-type'],
         readBody: () => readBody(req),
       });
+      // A reviewer or a viewer: the inventory without project folders or the AI clients' file paths.
+      if (hit && url.pathname === '/api/governance/inventory' && req.method === 'GET' && hit.status === 200)
+        return send(res, 200, redactInventory(hit.body, role));
       if (hit) return send(res, hit.status, hit.body, hit.type || 'application/json', hit.headers);
     }
     // The dashboard accounts (AI Governance 4).
@@ -2046,15 +2058,13 @@ const handler = async (req, res) => {
       return send(res, 200, { id: r.id, status });
     }
     if (url.pathname === '/api/integrations' && req.method === 'GET') {
-      if (DEMO) return send(res, 200, demo.integrations());
-      return send(res, 200, {
-        integrations: await getIntegrations().status(),
-        clients: clientRows(),
-        calls: audit.tail(100),
-        mcpCommand: (({ command, args }) => [command, ...args].map((x) => (/\s/.test(x) ? `"${x}"` : x)).join(' '))(
-          platform.mcpCommand(),
-        ),
-      });
+      // A reviewer or a viewer: no MCP command line and no error text.
+      if (DEMO) return send(res, 200, redactIntegrations(demo.integrations(), role));
+      const { command, args } = platform.mcpCommand();
+      const mcpCommand = [command, ...args].map((x) => (/\s/.test(x) ? `"${x}"` : x)).join(' ');
+      const integrations = await getIntegrations().status();
+      const body = { integrations, clients: clientRows(), calls: audit.tail(100), mcpCommand };
+      return send(res, 200, redactIntegrations(body, role));
     }
     if (url.pathname === '/api/integrations/test' && req.method === 'POST') {
       if (!(req.headers['content-type'] || '').startsWith('application/json'))
