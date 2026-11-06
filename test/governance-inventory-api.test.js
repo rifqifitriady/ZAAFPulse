@@ -48,7 +48,8 @@ function setup({ governance = { audit: { retentionMonths: 24 } }, seenWrite } = 
     log: (m) => st.logs.push(m),
   });
   const call = (p, { method = 'GET', body, contentType = 'application/json' } = {}) =>
-    api.route({ role: 'owner',
+    api.route({
+      role: 'owner',
       method,
       path: p,
       query: new URLSearchParams(),
@@ -212,7 +213,9 @@ test('GET inventory: a source that failed is listed, its reviewed items are stal
     seen: { read: () => s.st.seen, write: (x) => ((s.st.seen = x), true) },
     now: () => NOW,
   });
-  const r = (await api.route({ role: 'owner', method: 'GET', path: '/api/governance/inventory', query: new URLSearchParams() })).body;
+  const r = (
+    await api.route({ role: 'owner', method: 'GET', path: '/api/governance/inventory', query: new URLSearchParams() })
+  ).body;
   assert.ok(r.failed.includes('live'));
   const claude = r.items.find((i) => i.id === 'app:claude');
   assert.equal(claude.stale, true);
@@ -234,4 +237,28 @@ test('invalidateInventory: the next build reads the sources again, within the 5 
   api.invalidateInventory();
   await api.inventory();
   assert.equal(n, 2, 'read again');
+});
+
+test('POST inventory: a save identical to the stored review is a no-op; a changed field saves and moves reviewedAt', async () => {
+  const s = setup();
+  const post = (body) => s.call('/api/governance/inventory', { method: 'POST', body });
+  const review = { id: 'mcp:github', owner: 'Ana', purpose: 'Issues', risk: 'limited', decision: 'approved', note: '' };
+  const first = await post(review);
+  assert.equal(first.body.review.reviewedAt, '2026-11-03T12:00:00.000Z');
+  const saves = s.st.saved.length;
+  s.st.t += 60e3;
+  // The same values again (text trimmed as on save, absent fields empty): nothing is written, the time stays.
+  const same = await post({ ...review, owner: '  Ana ' });
+  assert.deepEqual(same, first);
+  assert.equal(s.st.saved.length, saves, 'config.json is not written');
+  assert.deepEqual(
+    await post({ id: 'mcp:github', owner: 'Ana', purpose: 'Issues', risk: 'limited', decision: 'approved' }),
+    first,
+  );
+  assert.equal(s.st.saved.length, saves);
+  // One field changes: saved, with a new time.
+  const changed = await post({ ...review, note: 'checked again' });
+  assert.deepEqual([changed.status, changed.body.review.note], [200, 'checked again']);
+  assert.equal(changed.body.review.reviewedAt, '2026-11-03T12:01:00.000Z');
+  assert.equal(s.st.saved.length, saves + 1);
 });

@@ -549,3 +549,30 @@ test("a viewer's allowed but repeated calls are capped too: bad password changes
   assert.equal(of('vera', (e) => e.action === 'account.password_change').length, 1);
   assert.ok(s.alive());
 });
+
+test("a reviewer's identical review saves change nothing and are capped; a changed one is always recorded", async (t) => {
+  const s = await startServer(t);
+  const owner = await signIn(s, { password: ADMIN });
+  const made = { action: 'create', name: 'rex', role: 'reviewer', password: 'rex first 00001' };
+  assert.equal((await call(s, '/api/users', { method: 'POST', body: made, as: owner })).status, 200);
+  const rex = await signIn(s, { name: 'rex', password: 'rex first 00001' });
+  const change = { current: 'rex first 00001', next: REX };
+  assert.equal((await call(s, '/api/account/password', { method: 'POST', body: change, as: rex })).status, 200);
+  const review = { id: 'app:claude', owner: 'Rex', risk: 'limited' };
+  const times = [];
+  for (let i = 0; i < 40; i++) {
+    const r = await call(s, '/api/governance/inventory', { method: 'POST', body: review, as: rex });
+    assert.equal(r.status, 200);
+    times.push(r.body.review.reviewedAt);
+  }
+  assert.equal(new Set(times).size, 1, 'an identical save keeps the review time');
+  const changed = { ...review, note: 'checked' };
+  assert.equal((await call(s, '/api/governance/inventory', { method: 'POST', body: changed, as: rex })).status, 200);
+  const all = entries(s).filter((e) => e.actor.user === 'rex');
+  const saves = all.filter((e) => e.action === 'POST /api/governance/inventory');
+  const configs = all.filter((e) => e.action === 'config.change');
+  // The first save and the changed one are changes (each with its config.change); 30 of the 39 identical ones are kept.
+  assert.equal(configs.length, 2);
+  assert.equal(saves.length, 32);
+  assert.ok(s.alive());
+});
