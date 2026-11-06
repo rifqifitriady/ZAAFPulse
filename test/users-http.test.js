@@ -465,6 +465,19 @@ test("a viewer's live views carry no branch, file name, command, prompt or token
   assert.deepEqual(inventory.map(where), [['acme-client-folder', '.claude.json'], []]);
   const github = inventory.map((r) => r.body.items.find((i) => i.id === 'mcp:github'));
   assert.deepEqual([github[1].name, github[1].clients, github[1].command], ['github', ['Claude Code'], 'npx']);
+  // A change's values are the owner's: the viewer's audit list and export name the setting only.
+  const rename = { method: 'POST', body: { userName: 'Acme Owner Name' }, as: owner };
+  assert.equal((await call(s, '/api/config', rename)).status, 200);
+  const audit = (p, as) => call(s, p, { as });
+  const lists = [await audit('/api/governance/audit?action=config.change', owner)];
+  lists.push(await audit('/api/governance/audit?action=config.change', vera));
+  assert.deepEqual(
+    lists.map((r) => r.body.entries[0].changes.find((c) => c.path === 'userName')),
+    [{ path: 'userName', from: null, to: 'Acme Owner Name' }, { path: 'userName' }],
+  );
+  const csv = await audit('/api/governance/audit/export?format=csv&user=owner', vera);
+  assert.ok(csv.text.includes('config.change') && !csv.text.includes('Acme Owner Name'), csv.text);
+  assert.ok((await audit('/api/governance/audit/export?format=csv', owner)).text.includes('Acme Owner Name'));
   assert.ok(s.alive());
 });
 
