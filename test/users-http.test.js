@@ -264,6 +264,13 @@ test('owner, viewer and reviewer: what each may do, the mustChange gate, and eve
   const text = JSON.stringify(all);
   for (const secret of [VERA, REX, 'vera first 0001', 'rex first 00001', ADMIN])
     assert.ok(!text.includes(secret), secret);
+  // The Compliance page counts the accounts that may sign in (no name).
+  const controls = await call(s, '/api/governance/controls', { as: owner });
+  const roles = controls.body.controls.find((c) => c.id === 'access_roles');
+  assert.deepEqual(
+    [roles.status, roles.evidence],
+    ['in place', ['the owner and 1 account (0 reviewers, 1 viewer)', '1 account disabled']],
+  );
   // The audit list by account.
   const byRex = await call(s, '/api/governance/audit?user=rex&limit=500', { as: owner });
   assert.equal(byRex.status, 200);
