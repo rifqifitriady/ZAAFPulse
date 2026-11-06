@@ -711,6 +711,11 @@ async function monLoadTarget(t) {
   t.loading = true;
   t.error = '';
   try {
+    // Agent control is the owner's: a reviewer or a viewer asks for no candidates (the request would be refused).
+    if (!isOwner()) {
+      t.off = true;
+      return;
+    }
     const st = await monLoadStatus().catch(() => null);
     if (st && st.agents && st.agents.available === false) {
       t.off = true;
@@ -944,7 +949,7 @@ async function monStripAct(action, pid, startTime) {
   if (!p || MON.strip.busy) return;
   let c = { pid, startTime, app: p.app, cwd: null };
   // The confirmation names the folder; the paused list has none, the candidates of its session do.
-  if (action === 'stop' && p.sessionKey) {
+  if (action === 'stop' && p.sessionKey && isOwner()) {
     try {
       const r = await monApi(`/api/agents/candidates?key=${encodeURIComponent(p.sessionKey)}`);
       const m = (r.candidates || []).find((x) => monSameProc(x, { pid, startTime }));
