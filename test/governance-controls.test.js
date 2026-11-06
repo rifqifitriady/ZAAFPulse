@@ -44,6 +44,7 @@ const good = () => ({
   budgets: [{ enforce: 'block' }, { enforce: 'none' }],
   secretStore: { id: 'keychain', label: 'macOS Keychain' },
   signIn: { mode: 'local', serverMode: false, tls: false },
+  accounts: { mode: 'local', state: 'ok', users: [] },
   content: { otelCapture: false, traceContentOff: false },
   otel: { enabled: true, error: false, failed: 0, origin: 'https://otel.example.com', protocol: 'http/protobuf' },
   traces: { store: true, enabled: true, retentionDays: 190, maxBytes: 500 * 1048576 },
@@ -61,7 +62,7 @@ const good = () => ({
 const statusOf = (state) => Object.fromEntries(controls(state).map((c) => [c.id, c.status]));
 const one = (state, id) => controls(state).find((c) => c.id === id);
 
-test('the catalogue: seventeen controls in a fixed order, each with a link and at least one clause', () => {
+test('the catalogue: eighteen controls in a fixed order, each with a link and at least one clause', () => {
   assert.deepEqual(
     CATALOGUE.map((c) => c.id),
     [
@@ -78,6 +79,7 @@ test('the catalogue: seventeen controls in a fixed order, each with a link and a
       'cost_budgets',
       'secret_store',
       'sign_in',
+      'access_roles',
       'content_capture',
       'otel_export',
       'trace_retention',
@@ -107,14 +109,14 @@ test('the catalogue: seventeen controls in a fixed order, each with a link and a
   );
   assert.deepEqual(
     CLAUSES.filter((c) => c.framework === 'eu-ai-act').map((c) => c.ref),
-    ['Art. 12', 'Art. 14', 'Art. 26', 'Art. 50'],
+    ['Art. 12', 'Art. 14', 'Art. 26', 'Art. 26(2)', 'Art. 50'],
   );
   assert.deepEqual(
     CLAUSES.filter((c) => c.framework === 'iso-42001').map((c) => c.ref),
-    ['A.2', 'A.4', 'A.5', 'A.6', 'A.7', 'A.8', 'A.9', 'A.10'],
+    ['A.2', 'A.3', 'A.4', 'A.5', 'A.6', 'A.7', 'A.8', 'A.9', 'A.10'],
   );
   for (const c of CLAUSES.filter((x) => x.framework === 'nist-ai-rmf'))
-    assert.match(c.ref, /^(GOVERN 1|MAP 1|MEASURE 2|MANAGE 2|MANAGE 4)\.\d+$/);
+    assert.match(c.ref, /^(GOVERN 1|GOVERN 2|MAP 1|MEASURE 2|MANAGE 2|MANAGE 4)\.\d+$/);
 });
 
 test('wording: the framework versions, "not a certification", and never "compliant"', () => {
@@ -367,6 +369,7 @@ test('off: everything switched off, degraded or broken; unknown: a part that can
   s.datasets = { count: 0, experiments: [] };
   s.budgets = [];
   s.signIn = { mode: 'none', serverMode: false, tls: false };
+  s.accounts = { mode: 'none', state: 'ok', users: [] };
   s.content = { otelCapture: true, traceContentOff: true };
   s.otel = { enabled: false };
   s.traces = { store: true, enabled: false, retentionDays: 14, maxBytes: 1 };
@@ -409,7 +412,7 @@ test('GET /api/governance/controls: the controls with the audit state and the in
   const r = await api.route({ method: 'GET', path: '/api/governance/controls', query: new URLSearchParams() });
   assert.equal(r.status, 200);
   assert.deepEqual(Object.keys(r.body), ['generatedAt', 'notice', 'frameworks', 'clauses', 'controls']);
-  assert.equal(r.body.controls.length, 17);
+  assert.equal(r.body.controls.length, 18);
   const by = Object.fromEntries(r.body.controls.map((c) => [c.id, c]));
   assert.equal(by.audit_log.evidence[0], 'kept 24 months (at least 6)');
   assert.deepEqual(

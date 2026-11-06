@@ -1266,6 +1266,21 @@ async function controlState() {
       return { id: s.id, label: s.label };
     },
     signIn: () => ({ mode: auth.mode, serverMode: SERVER_MODE, tls: !!TLS }),
+    // AI Governance 4: the accounts' roles and last sign-ins (no name leaves the control).
+    accounts: () => {
+      if (auth.mode === 'none' || !userStore) return { mode: auth.mode, state: 'ok', users: [] };
+      const r = userStore.list();
+      return {
+        mode: auth.mode,
+        state: r.state,
+        users: r.users.map((u) => ({
+          role: u.role,
+          disabled: u.disabled,
+          createdAt: u.createdAt,
+          lastLoginAt: u.lastLoginAt,
+        })),
+      };
+    },
     content: () => ({ otelCapture: otel.status().captureContent === true, traceContentOff: contentOff }),
     otel: () => {
       const o = otel.status();

@@ -68,7 +68,7 @@ test('the report: what it holds, and no project folder or client file', () => {
     'audit',
     'inventory',
   ]);
-  assert.deepEqual([r.version, r.generatedAt, r.controls.length], ['1.0.4', '2026-11-03T12:00:00.000Z', 17]);
+  assert.deepEqual([r.version, r.generatedAt, r.controls.length], ['1.0.4', '2026-11-03T12:00:00.000Z', 18]);
   assert.deepEqual(r.audit, audit);
   assert.deepEqual(r.inventory.failed, ['trace']);
   assert.equal(r.inventory.items[0].review.risk, 'high');
