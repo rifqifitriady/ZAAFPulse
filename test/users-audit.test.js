@@ -26,7 +26,13 @@ function setup(t) {
   const audit = createGovernanceAudit({ dir, now: () => NOW, getKey: keySource({ dir }) });
   const api = createGovernanceApi({ audit, settings: { get: () => undefined, save: () => {} }, now: () => NOW });
   const call = (q) =>
-    api.route({ method: 'GET', path: '/api/governance/audit', query: new URLSearchParams(q), contentType: '' });
+    api.route({
+      role: 'owner',
+      method: 'GET',
+      path: '/api/governance/audit',
+      query: new URLSearchParams(q),
+      contentType: '',
+    });
   return { audit, api, call };
 }
 
@@ -157,4 +163,26 @@ test("a change's values are the owner's: reviewers and viewers get the changed p
   const owner = await get('/api/governance/audit', '', 'owner');
   assert.deepEqual(owner.body.entries.find((e) => e.action === 'config.change').changes, changes);
   assert.match((await get('/api/governance/audit/export', 'format=csv', 'owner')).body, /userName: Ann → SECRET-NAME/);
+});
+
+test('fail closed: a call without a role, or with an unknown one, is a viewer and sees no change values', async (t) => {
+  const s = setup(t);
+  const changes = [{ path: 'userName', from: 'SECRET-OLD', to: 'SECRET-NEW' }];
+  s.audit.record({ action: 'config.change', actor: actor('owner', 'owner'), changes });
+  for (const role of [undefined, null, '', 'admin', 'OWNER']) {
+    const req = (p, q) => ({ method: 'GET', path: p, query: new URLSearchParams(q), contentType: '', role });
+    const list = await s.api.route(req('/api/governance/audit', ''));
+    assert.deepEqual(list.body.entries.find((e) => e.action === 'config.change').changes, [{ path: 'userName' }]);
+    const csv = await s.api.route(req('/api/governance/audit/export', 'format=csv'));
+    assert.equal(csv.status, 200);
+    assert.ok(!csv.body.includes('SECRET'), String(role));
+  }
+  const owner = await s.api.route({
+    method: 'GET',
+    path: '/api/governance/audit',
+    query: new URLSearchParams(),
+    contentType: '',
+    role: 'owner',
+  });
+  assert.deepEqual(owner.body.entries.find((e) => e.action === 'config.change').changes, changes);
 });
