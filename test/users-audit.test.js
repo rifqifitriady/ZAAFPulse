@@ -186,3 +186,27 @@ test('fail closed: a call without a role, or with an unknown one, is a viewer an
   });
   assert.deepEqual(owner.body.entries.find((e) => e.action === 'config.change').changes, changes);
 });
+
+test('a hidden change reads "path: (hidden)" on the page and in the CSV, not as empty values', async (t) => {
+  const s = setup(t);
+  s.audit.record({
+    action: 'config.change',
+    actor: actor('owner', 'owner'),
+    changes: [
+      { path: 'userName', from: 'Ann', to: 'Bo' },
+      { path: 'budget', to: 5 },
+    ],
+  });
+  const csv = await s.api.route({
+    method: 'GET',
+    path: '/api/governance/audit/export',
+    query: new URLSearchParams('format=csv'),
+    contentType: '',
+    role: 'viewer',
+  });
+  assert.match(csv.body, /,userName: \(hidden\); budget: \(hidden\),/);
+  assert.match(s.audit.export({ format: 'csv' }).body, /,userName: Ann → Bo; budget: ∅ → 5,/);
+  const html = U.govChangesHtml({ changes: [{ path: 'userName' }, { path: 'budget', from: null, to: 5 }] });
+  assert.match(html, /<li><code>userName<\/code>: \(hidden\)<\/li>/);
+  assert.match(html, /<li><code>budget<\/code>: ∅ → 5<\/li>/);
+});
