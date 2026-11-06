@@ -323,7 +323,8 @@ test(
     });
     const t0 = Date.now();
     const r = await call(s, '/api/governance/inventory');
-    assert.ok(Date.now() - t0 < 1000, 'answered within a second');
+    // Never waited on: a FIFO read blocks for good; the bound leaves room for a loaded machine (the whole suite).
+    assert.ok(Date.now() - t0 < 1800, 'answered within 1.8 s');
     assert.equal(r.status, 200);
     const c = r.body.clients.find((x) => x.client === 'cursor');
     assert.deepEqual([c.state, c.servers], ['unreadable', 0]);
