@@ -48,7 +48,7 @@ function setup({ governance = { audit: { retentionMonths: 24 } }, seenWrite } = 
     log: (m) => st.logs.push(m),
   });
   const call = (p, { method = 'GET', body, contentType = 'application/json' } = {}) =>
-    api.route({
+    api.route({ role: 'owner',
       method,
       path: p,
       query: new URLSearchParams(),
@@ -212,7 +212,7 @@ test('GET inventory: a source that failed is listed, its reviewed items are stal
     seen: { read: () => s.st.seen, write: (x) => ((s.st.seen = x), true) },
     now: () => NOW,
   });
-  const r = (await api.route({ method: 'GET', path: '/api/governance/inventory', query: new URLSearchParams() })).body;
+  const r = (await api.route({ role: 'owner', method: 'GET', path: '/api/governance/inventory', query: new URLSearchParams() })).body;
   assert.ok(r.failed.includes('live'));
   const claude = r.items.find((i) => i.id === 'app:claude');
   assert.equal(claude.stale, true);
