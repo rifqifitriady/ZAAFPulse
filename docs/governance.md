@@ -9,7 +9,9 @@ three pages:
   clauses they map to, and an evidence export.
 - **Audit log** (`#governance/audit`): every change made by a person or an API key ([below](#audit-log)).
 
-Everything stays on this machine. The Compliance page is evidence for your assessment, not a certification.
+Everything stays on this machine. The Compliance page is evidence for your assessment, not a certification. Other
+people can read these pages with an account of their own ([docs/users.md](users.md)): a viewer reads and exports, a
+reviewer also saves reviews.
 
 ## Inventory
 
@@ -73,6 +75,10 @@ review whose item is no longer seen is kept and shown as **gone**; **Clear revie
 
 The decision is a record: blocking a system stays with API keys and the guardrails.
 
+Only the owner and reviewers review ([docs/users.md](users.md)); a viewer sees the reviews without the **Review**
+button. The owner field suggests the display names of the owner and the dashboard accounts, and any text is still
+allowed.
+
 ### First and last seen
 
 `.data/governance/seen.json` holds, for each item id, the first and the last day (UTC) the inventory saw it, and
@@ -104,10 +110,10 @@ The page lists a fixed set of controls, each with a status worked out from your 
 tables are grouped by framework, clause by clause:
 
 - **EU AI Act**, Regulation (EU) 2024/1689 as amended by Regulation (EU) 2026/1744: Art. 12 (record-keeping), Art. 14
-  (human oversight), Art. 26 (deployer obligations: logs kept at least 6 months, oversight assigned, monitoring) and
-  Art. 50 (transparency, where your use applies).
-- **NIST AI RMF 1.0**: GOVERN 1.4 and 1.6, MAP 1.1, MEASURE 2.1, 2.3, 2.4, 2.7 and 2.10, MANAGE 2.4 and 4.1.
-- **ISO/IEC 42001:2023**, Annex A: A.2, A.4, A.5, A.6, A.7, A.8, A.9 and A.10.
+  (human oversight), Art. 26 (deployer obligations: logs kept at least 6 months, oversight assigned, monitoring), Art.
+  26(2) (human oversight assigned to competent persons) and Art. 50 (transparency, where your use applies).
+- **NIST AI RMF 1.0**: GOVERN 1.4, 1.6 and 2.1, MAP 1.1, MEASURE 2.1, 2.3, 2.4, 2.7 and 2.10, MANAGE 2.4 and 4.1.
+- **ISO/IEC 42001:2023**, Annex A: A.2, A.3, A.4, A.5, A.6, A.7, A.8, A.9 and A.10.
 
 It is evidence for your assessment, not a certification: a status says what ZAAFPulse does here, not whether your use
 of AI meets a law or a standard.
@@ -129,6 +135,7 @@ of AI meets a law or a standard.
 | Budgets that block or pause | a budget blocks, or pauses while agent control is on | budgets only alert (a pause budget counts for nothing while agent control is off or could not be read) | no budget |
 | Secrets in the OS store (A.4) | the Keychain or the keyring | the encrypted secret file | |
 | Dashboard sign-in | this OS account (local) or a password | | no sign-in |
+| Dashboard roles and access reviews (Art. 26(2), GOVERN 2.1, A.3) | sign-in is required and no account that may sign in has gone unused for over 90 days (or there is none) | one has: an access review is due (the count, never a name) | no sign-in |
 | Content capture off | the OpenTelemetry export sends no prompt or reply | | it does (`otel.captureContent`) |
 | OpenTelemetry export | spans are exported | the exporter reports failed exports since start | not set up |
 | Trace retention | traces are kept at least 183 days (6 months) | they are kept less | tracing is off |
@@ -185,7 +192,9 @@ Open it under **Governance → Audit log** (`#governance/audit`) in the sidebar.
 |---|---|---|
 | Every change made from the dashboard (`POST`, `PUT`, `PATCH`, `DELETE` under `/api/`) | `POST /api/gateway/keys`, `POST /api/monitors/:id` … | the route with ids as `:id`, the body's `action`/`op` word (`op`), the target's id and name, the outcome and the HTTP status |
 | Every write of `config.json`, from any settings page or the integrations editor | `config.change` | the changed fields as `{ path, from, to }`, secrets masked |
-| Sign-in | `auth.login`, `auth.login_failed`, `auth.lockout`, `auth.logout`, `auth.local_code`, `auth.password_set` | the browser's known-device id (password mode) and its address; never a password or a cookie; `auth.logout` only when the request held a session |
+| Sign-in | `auth.login`, `auth.login_failed`, `auth.lockout`, `auth.logout`, `auth.local_code`, `auth.password_set` | the account and its role, the browser's known-device id (password mode) and its address; a failure names the account it was for as its target when that account exists (`owner` for the admin password); never a password or a cookie; `auth.logout` only when the request held a session |
+| Dashboard accounts ([docs/users.md](users.md)) | `user.create`, `user.update`, `user.password_reset`, `user.delete`, `account.password_change` | the account as the target; an update lists the role, display name or disabled as `changes`; never a password |
+| A request a reviewer's or a viewer's role does not allow | the route, as `GET /api/trace/content` or `POST /api/config` | refused, 403, reads included |
 | API keys | `key.create`, `key.update`, `key.revoke`, `key.delete` | the key's id and name; an update lists the fields that changed |
 | Collaboration runs | `run.approve`, `run.reject`, `run.cancel` | from the dashboard, `/v1/runs/<id>/resume|cancel` and A2A, with the key that asked; an approval a key may not give is recorded as refused; a run id that is not id-shaped (`A-Z a-z 0-9 _ . : -`, at most 80) is left out of the target |
 | Knowledge and sessions, with an API key | `knowledge.ingest`, `session.delete` | a document added through `POST /v1/knowledge/<kb>/documents` (the base's id, never the text) and a session deleted through `DELETE /v1/sessions/<id>`, with the key |
@@ -216,7 +225,7 @@ every route but `logs`, so a read cannot change anything there.
 
 | `actor.via` | Fields | When |
 |---|---|---|
-| `dashboard` | `mode` (`local`, `password` or `none`), `device` (password mode: the browser's known-device id), `ip` | a signed-in dashboard request |
+| `dashboard` | `user` (the account, `owner` for the owner; `null` before sign-in), `role` (`owner`, `reviewer` or `viewer`), `mode` (`local`, `password` or `none`), `device` (password mode: the browser's known-device id), `ip` | a signed-in dashboard request, and sign-in itself |
 | `apikey` | `keyId` | a gateway request with a ZAAFPulse API key, and everything it starts |
 | `cli` | none | `zaafpulse set-password` (recorded when the server next starts) |
 | `system` | none | ZAAFPulse itself: retention, the key, a gap, background work |
@@ -227,7 +236,7 @@ every route but `logs`, so a read cannot change anything there.
 One JSON object per line, for example:
 
 ```json
-{"seq":42,"ts":"2026-11-03T09:12:40.118Z","action":"config.change","actor":{"via":"dashboard","mode":"local","device":null,"ip":"127.0.0.1"},"outcome":"ok","target":{"type":"config","id":"gateway"},"changes":[{"path":"gateway.guardrails.secrets","from":"redact","to":"block"}],"prev":"5f0c…","mac":"a91e…"}
+{"seq":42,"ts":"2026-11-03T09:12:40.118Z","action":"config.change","actor":{"via":"dashboard","user":"owner","role":"owner","mode":"local","device":null,"ip":"127.0.0.1"},"outcome":"ok","target":{"type":"config","id":"gateway"},"changes":[{"path":"gateway.guardrails.secrets","from":"redact","to":"block"}],"prev":"5f0c…","mac":"a91e…"}
 ```
 
 `outcome` is `ok`, `refused` (a 4xx, or an admin answer with `errors`) or `error` (a 5xx). A change list holds at most
@@ -319,7 +328,8 @@ code only. A pending file that is not valid is dropped without being recorded.
 **Export CSV** and **Export JSONL** download the entries of the chosen range (`GET
 /api/governance/audit/export?from&to&format=csv|jsonl`), oldest first. JSONL lines are byte for byte what the log
 holds, so a copy can be verified with the same key. The CSV has one line per entry (`seq, time, actor, actor_id, ip,
-action, op, target_type, target_id, target_name, outcome, status, changes, prev, mac`); a cell that starts with `=`,
+action, op, target_type, target_id, target_name, outcome, status, changes, prev, mac`; `actor_id` is the account of a
+dashboard entry, else the key, the rule or the device); a cell that starts with `=`,
 `+`, `-`, `@`, a tab or a carriage return gets a leading `'`, as the cost export does. At most 100,000 entries per
 export (413 beyond: narrow the range).
 
@@ -348,7 +358,7 @@ All behind the dashboard sign-in; no gateway key or MCP client reaches them.
 
 | Route | What |
 |---|---|
-| `GET /api/governance/audit?from&to&actor&action&outcome&limit&before` | entries, newest first, at most 500 per page (default 100); `from`/`to` are `YYYY-MM-DD` (a UTC day; `to` is the end of it) or ISO times with a zone (`Z` or `+07:00`), `actor` a kind (`dashboard`, `apikey`, `cli`, `system`, `rule`) or a key id, `action` text found in the action or its `op`; the answer is `{ entries, next, skipped }` (`next` is the `before` of the next page, `skipped` counts unreadable lines) |
+| `GET /api/governance/audit?from&to&actor&user&action&outcome&limit&before` | entries, newest first, at most 500 per page (default 100); `from`/`to` are `YYYY-MM-DD` (a UTC day; `to` is the end of it) or ISO times with a zone (`Z` or `+07:00`), `actor` a kind (`dashboard`, `apikey`, `cli`, `system`, `rule`) or a key id, `user` an account name (`owner` included), `action` text found in the action or its `op`; the answer is `{ entries, next, skipped }` (`next` is the `before` of the next page, `skipped` counts unreadable lines) |
 | `GET /api/governance/audit/export?from&to&format=jsonl\|csv` | a download |
 | `GET /api/governance/audit/verify` | `{ ok, checked, from, to, brokenAt?, reason?, unverified?, rekeyedAt?, rekeyedTs? }` |
 | `GET /api/governance/audit/status` | `{ retentionMonths, months: [{ month, bytes }], bytes, degraded, lastVerify }` |
@@ -358,8 +368,8 @@ A bad query value is a 400 that names it, as `limit: a whole number from 1 to 50
 
 ### Known limits
 
-- One person per dashboard: entries say `dashboard`, the sign-in mode, the device and the address, not a name.
-  Named users come with a later sub-project.
+- Entries from before dashboard accounts ([docs/users.md](users.md)) have no `user` or `role`: they say `dashboard`,
+  the sign-in mode, the device and the address.
 - The chain is anchored nowhere outside this machine. Someone with the key and the files can rewrite both.
 - Someone who can write `.data/audit/` but not read the store can still cut the chain at an entry of their choosing:
   an `audit.rekey` of their own, sealed with a `chain.key` of their own, and entries of their own after it. What comes

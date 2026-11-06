@@ -181,6 +181,8 @@ ZAAFPulse listens on `127.0.0.1` unless told otherwise. Any other address, or a 
   - When 50 failures come from all addresses within 15 minutes, every address gets one free try instead of five. This slows a distributed attack down. It never refuses a fresh address its first try, so you can still sign in with the right password while someone else is guessing.
   - A browser that signed in before gets a signed "known browser" cookie (180 days). It has its own count, so guesses from its address (a shared office or carrier connection) or from everywhere at once do not lock it out.
   - Behind a proxy, the address is the right-most `X-Forwarded-For` entry.
+  - Each dashboard account (not the owner) has a budget of its own: after 10 failures for one account name, from any addresses, a fresh browser waits before it tries that account again ([docs/users.md](users.md#signing-in-and-passwords)).
+- **Other people:** give them an account of their own, with a role, under **Settings → Users** ([docs/users.md](users.md)). They sign in with a name and a password; an empty name is the admin password.
 - **Apps:** `/v1`, `/mcp` and `/a2a` need ZAAFPulse API keys, as they always have.
 - **Host names:** with sign-in on, any host name is accepted. To restrict it, set `ZAAFPULSE_ALLOWED_HOSTS=ai.example.com,10.0.0.5`.
 - **Browser protection:** every dashboard response carries a strict Content-Security-Policy, `X-Frame-Options: DENY` and `Referrer-Policy: no-referrer`.
