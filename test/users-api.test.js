@@ -260,3 +260,19 @@ test('a refused read is an entry when asked for (always), with no body field but
     status: 403,
   });
 });
+
+test('an empty or invalid password-change body counts against the session as a wrong password does', async (t) => {
+  const s = setup(t);
+  s.store.create({ name: 'vera', role: 'viewer', password: PW });
+  s.st.who = { user: 'vera', role: 'viewer', mustChange: false };
+  const own = (body) => s.call('/api/account/password', { method: 'POST', body });
+  const bad = [{}, { current: 1 }, { current: PW, nope: 1 }, 'not json', '[]'];
+  const got = [];
+  for (const body of bad) got.push((await own(body)).status);
+  assert.deepEqual(got, [400, 400, 400, 400, 400]);
+  const held = await own({ current: PW, next: 'my new password 3' });
+  assert.deepEqual([held.status, held.body], [429, { error: 'too many wrong passwords; try again in 15 min' }]);
+  // The owner is not an account: its answer stays the same, never held.
+  s.st.who = { user: 'owner', role: 'owner' };
+  for (let i = 0; i < 6; i++) assert.equal((await own({})).status, 400);
+});

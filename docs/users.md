@@ -76,8 +76,11 @@ What a reviewer or a viewer does see that is more than a count:
   server talks to (an inventory fact, never a path or a query);
 - project names (a folder's last part) and model and tool names everywhere.
 
-Refused requests are recorded, but at most 30 per account a minute: past that, the refusals of that minute are counted
-and, once the minute is over, one `audit.refused_dropped` entry names the account and the count. The dashboard does
+A reviewer's or a viewer's entries that can be repeated at will (refused requests, errors, evidence exports and
+requests that changed nothing) are recorded at most 30 per account a minute: past that, the entries of that minute are
+counted and, once the minute is over, one `audit.refused_dropped` entry names the account and the count. Changes
+(`config.change`, a password change, a run approval, and the request that made one) are always recorded, and so is
+everything the owner does. The dashboard does
 not ask for owner-only data while it draws a page for a reviewer or a viewer (no titles or feedback marks in the
 Trace explorer, no agent candidates, no OpenRouter account; the Second Brain page says it is the owner's).
 
@@ -137,8 +140,8 @@ Until a new account has chosen its own password, every route but the password ch
 answers `403 change your password first`, and the dashboard sends the person to the change-password step. Any account
 changes its own password with **Change password** in the top bar (`POST /api/account/password { current, next }`): at
 least 12 characters and not the current one. The account's other sessions end; this one goes on. A wrong current
-password is limited to 5 per session in 15 minutes, then `429` for 15 minutes (recorded as refused). The owner's own
-password stays with `zaafpulse set-password` on the server.
+password, or a body that is not a password change, is limited to 5 per session in 15 minutes, then `429` for 15
+minutes (recorded as refused). The owner's own password stays with `zaafpulse set-password` on the server.
 
 The top bar shows who is signed in and their role, with **Change password** (accounts only) and **Sign out**. A
 reviewer or a viewer also sees a one-line banner ("Signed in as Vera · Viewer · read-only", or "· reviews and
@@ -180,7 +183,7 @@ lockout (`auth.lockout`) carry a target: the account they were for, when it exis
 | `user.password_reset` | the owner sets a new password |
 | `user.delete` | the owner deletes an account (with its role) |
 | `account.password_change` | an account changes its own password |
-| `audit.refused_dropped` | an account had more than 30 refused requests in a minute (with `dropped`, the count left out) |
+| `audit.refused_dropped` | an account had more than 30 repeatable entries (refused, errors, exports, requests that changed nothing) in a minute (with `dropped`, the count left out) |
 
 **Governance → Audit log** filters by account (**User**; `GET /api/governance/audit?user=vera`, `owner` included); the
 export takes the same filter (`GET /api/governance/audit/export?user=vera`, and the page's export links carry it), and
