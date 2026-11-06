@@ -504,3 +504,19 @@ test("local mode: a viewer's local model entries carry no command line or health
   assert.deepEqual([entry.id, entry.command, entry.health, entry.healthUsed], ['qwen', null, null, null]);
   assert.ok(s.alive());
 });
+
+test("a viewer's refused requests: at most 30 entries a minute, the answer is a 403 every time", async (t) => {
+  const s = await startServer(t);
+  const owner = await signIn(s, { password: ADMIN });
+  const made = { action: 'create', name: 'vera', role: 'viewer', password: 'vera first 0001' };
+  assert.equal((await call(s, '/api/users', { method: 'POST', body: made, as: owner })).status, 200);
+  const vera = await signIn(s, { name: 'vera', password: 'vera first 0001' });
+  const change = { current: 'vera first 0001', next: VERA };
+  assert.equal((await call(s, '/api/account/password', { method: 'POST', body: change, as: vera })).status, 200);
+  for (let i = 0; i < 40; i++) assert.equal((await call(s, `/api/brain/graph?i=${i}`, { as: vera })).status, 403);
+  const refused = entries(s).filter((e) => e.actor.user === 'vera' && e.outcome === 'refused');
+  assert.equal(refused.filter((e) => e.action === 'GET /api/brain/graph').length, 30);
+  // The owner is never counted: the owner's requests are not refused.
+  assert.equal((await call(s, '/api/users', { as: owner })).status, 200);
+  assert.ok(s.alive());
+});

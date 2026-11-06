@@ -87,6 +87,7 @@ const { cleanPolicy: guardPolicy } = require('./lib/gateway/guardrails');
 const { RULES: MONITOR_RULES } = require('./lib/monitors/rules');
 const { createUserStore } = require('./lib/users/store');
 const { createUsersApi } = require('./lib/users/api');
+const { createRefusalLog } = require('./lib/users/refusals');
 const {
   allowed: roleAllows,
   redactGateway,
@@ -335,6 +336,9 @@ const usersApi = createUsersApi({
   record: (e) => govRecord(e),
   ownerName: () => config.userName,
 });
+// A reviewer's or a viewer's refused requests: at most 30 entries per account a minute, then one
+// audit.refused_dropped entry with the count (lib/users/refusals.js).
+const refusals = createRefusalLog({ record: (e) => govRecord(e) });
 let rawCache = {
   mtime: -1,
   value: DEMO ? { gateway: demoGw.CONFIG, brain: { sources: demoGw.BRAIN_SOURCES(path.join(demoDir, 'brain')) } } : {},
@@ -1547,7 +1551,7 @@ const handler = async (req, res) => {
               body: bodies.get(req),
               always: true,
             });
-            if (e) govRecord(e);
+            if (e) refusals.refused(signedAs ? signedAs.user : null, e, auth.actorOf(req));
           } catch {
             /* an audit bug never changes the answer (A6) */
           }
@@ -2163,6 +2167,8 @@ server.listen(PORT, HOST, () => {
   const auditDaily = () => govContext.runAs({ via: 'system' }, () => governanceApi.dailyPass());
   auditDaily();
   setInterval(auditDaily, 24 * 3600 * 1000).unref();
+  // The counts of refused requests left out of the log, once their minute is over.
+  setInterval(() => refusals.flush(), 60 * 1000).unref();
   // The AI inventory, now and every 10 minutes, so inventory_unreviewed sees new systems without the page open (a
   // read of the page builds it too). The pass is the system's; a failure is logged and the next one tries again.
   const inventoryPass = () =>
