@@ -218,3 +218,13 @@ test('a page a reviewer or a viewer can open makes no request the role policy wo
   assert.ok(app.indexOf("state.route === 'brain' && !isOwner()") < app.indexOf('mountBrain().catch'));
   assert.match(read('governanceview.js'), /if \(govCanReview\(govRole\(\)\)\)\s*GOV\.inv\.names = /);
 });
+
+test("the change step's Sign out is a plain text button, not a second full-width accent button", () => {
+  const html = read('login.html');
+  assert.match(
+    html,
+    /button\.link \{ width: auto; margin-top: 10px; padding: 0; border: 0; background: none; color: var\(--muted\); font-weight: 400; text-decoration: underline; \}/,
+  );
+  const js = read('login.js');
+  assert.match(js, /out\.className = 'link';/);
+});

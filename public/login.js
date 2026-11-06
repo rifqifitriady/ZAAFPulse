@@ -23,7 +23,7 @@ function showChange(forced) {
     : 'At least 12 characters. Your other sessions end; this one goes on.';
   const out = document.createElement('button');
   out.type = 'button';
-  out.className = 'note';
+  out.className = 'link';
   out.id = 'co';
   out.textContent = 'Sign out';
   out.addEventListener('click', async () => {
