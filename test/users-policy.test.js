@@ -385,12 +385,13 @@ test('the gateway view for a non-owner: no prompt, note text, title, task, key s
   assert.equal(redactGateway(null, 'viewer'), null);
 });
 
-test('the trace session list for a non-owner: no title (the first prompt)', () => {
+test('the trace session list for a non-owner: no title (the first prompt), and nothing but the sessions', () => {
   const body = {
     sessions: [
       { key: 'claude.ab', title: 'SECRET-PROMPT-1', branch: 'SECRET-BRANCH', tokens: 9 },
       { key: 'codex.cd', title: null },
     ],
+    somethingNew: 'SECRET-NEW',
   };
   for (const role of ['viewer', 'reviewer'])
     assert.deepEqual(redactTraceSessions(body, role), {
