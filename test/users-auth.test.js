@@ -346,3 +346,53 @@ test('none mode: everyone is the owner, and there is no sign-in', async (t) => {
   const s = await h.call('GET', '/api/session');
   assert.deepEqual([s.json.required, s.json.accounts, s.json.user, s.json.role], [false, false, 'owner', 'owner']);
 });
+
+test('sessions: a sign-in sweeps the expired ones; each person keeps at most 20, the oldest end first', async (t) => {
+  const h = harness(t);
+  h.store.create({ name: 'bo', role: 'viewer', password: PW });
+  const bo = cookiesOf(await h.login({ name: 'bo', password: PW }, '198.51.100.1'));
+  h.advance(13 * 3600e3); // past the 12 h idle limit
+  await h.login({ password: ADMIN }, '198.51.100.2');
+  assert.equal(h.auth.sessionCount(), 1, "bo's expired session is gone, not only refused");
+  assert.equal(h.auth.check(asReq(bo)), false);
+  // The owner too: the 21st sign-in ends the first of the 20 before it.
+  const owner = [];
+  for (let i = 0; i < 21; i++) owner.push(cookiesOf(await h.login({ password: ADMIN }, '198.51.100.3')));
+  assert.equal(h.auth.sessionCount(), 20);
+  assert.deepEqual(
+    [owner[0], owner[1], owner[20]].map((c) => h.auth.check(asReq(c))),
+    [false, true, true],
+  );
+  // An account's cap is its own: bo's sign-ins never end the owner's sessions.
+  const mine = [];
+  for (let i = 0; i < 21; i++) mine.push(cookiesOf(await h.login({ name: 'bo', password: PW }, '198.51.100.4')));
+  assert.equal(h.auth.sessionCount(), 40);
+  assert.deepEqual(
+    [mine[0], mine[1], owner[1]].map((c) => h.auth.check(asReq(c))),
+    [false, true, true],
+  );
+});
+
+test("an account's success in its own known browser starts that browser's budget over; other budgets as before", async (t) => {
+  const h = harness(t);
+  h.store.create({ name: 'bo', role: 'viewer', password: PW });
+  const known = cookiesOf(await h.login({ name: 'bo', password: PW }, '198.51.100.1'))
+    .split('; ')
+    .find((c) => c.startsWith('zp_known='));
+  // Four typos and the right password in bo's own browser: the browser's count is back to nothing.
+  for (let i = 0; i < 4; i++)
+    assert.equal((await h.login({ name: 'bo', password: `typo ${i}` }, '192.0.2.1', known)).status, 401);
+  assert.equal((await h.login({ name: 'bo', password: PW }, '192.0.2.1', known)).status, 200);
+  for (let i = 0; i < 4; i++)
+    assert.equal((await h.login({ name: 'bo', password: `typo ${i}` }, '192.0.2.1', known)).status, 401);
+  assert.equal(
+    (await h.login({ name: 'bo', password: PW }, '192.0.2.1', known)).status,
+    200,
+    'not locked out by its own typos',
+  );
+  // Without the cookie the address budget is spent as before: an account's success takes back only its own attempt.
+  for (let i = 0; i < 4; i++) assert.equal((await h.login({ password: `guess ${i}` }, '192.0.2.9')).status, 401);
+  assert.equal((await h.login({ name: 'bo', password: PW }, '192.0.2.9')).status, 200);
+  assert.equal((await h.login({ password: 'guess 4' }, '192.0.2.9')).status, 401);
+  assert.equal((await h.login({ password: ADMIN }, '192.0.2.9')).status, 429);
+});
