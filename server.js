@@ -85,6 +85,17 @@ const { liveOrThrow, runtimesOrThrow, indexReadyOrThrow } = require('./lib/gover
 const { createSeenStore } = require('./lib/governance/seen');
 const { cleanPolicy: guardPolicy } = require('./lib/gateway/guardrails');
 const { RULES: MONITOR_RULES } = require('./lib/monitors/rules');
+const { createUserStore } = require('./lib/users/store');
+const { createUsersApi } = require('./lib/users/api');
+const {
+  allowed: roleAllows,
+  redactGateway,
+  redactTraceSessions,
+  redactSummary,
+  redactLogs,
+  redactGatewayLogs,
+  redactConfig,
+} = require('./lib/users/policy');
 
 const PORT = Number(process.env.ZAAFPULSE_PORT || process.env.PORT) || 4777;
 const HOST = process.env.ZAAFPULSE_HOST || process.env.HOST || '127.0.0.1';
@@ -139,6 +150,8 @@ const demo = DEMO ? require('./lib/demo') : null;
 
 const { fullName, computerName } = platform;
 const HOSTNAME = DEMO ? demo.config.host : computerName();
+// Dashboard accounts (AI Governance 4): the owner's other people, in .data/users.json. None in demo mode.
+const userStore = DEMO ? null : createUserStore({ file: path.join(DIR, '.data', 'users.json') });
 let auth;
 try {
   auth = createAuth({
@@ -147,6 +160,8 @@ try {
     demo: DEMO,
     headers: () => SECURITY_HEADERS,
     onEvent: (e) => govRecord(e), // sign-ins and sign-outs for the governance audit log
+    accounts: userStore,
+    ownerName: () => config.userName,
   });
 } catch (err) {
   console.error(err.message);
@@ -305,6 +320,14 @@ const governanceApi = createGovernanceApi({
   record: (e) => govRecord(e), // the evidence export (a GET), with the request's actor
   version: require('./package.json').version,
   seen: createSeenStore({ file: path.join(DEMO ? demoDir : path.join(DIR, '.data'), 'governance', 'seen.json') }),
+});
+// /api/users (the owner's), /api/users/names and /api/account/password (AI Governance 4); each change is a governance
+// entry with the request's actor.
+const usersApi = createUsersApi({
+  store: userStore,
+  auth,
+  record: (e) => govRecord(e),
+  ownerName: () => config.userName,
 });
 let rawCache = {
   mtime: -1,
@@ -1334,7 +1357,19 @@ const wholeParam = (v) => (v == null || v === '' ? undefined : /^\d{1,15}$/.test
 // The text each request sent, as read, for the audit entry of a dashboard change (send() keeps its short fields only).
 const bodies = new WeakMap();
 const AUDIT_BODY_MAX = 64 * 1024;
+// A body is read once: the role check reads a gateway admin body for its action, and the route reads it again here.
+const reads = new WeakMap();
 function readBody(req, max = 1e6) {
+  if (!reads.has(req)) reads.set(req, readOnce(req, max));
+  return reads.get(req);
+}
+// The body parsed once, so the role check and the gateway admin route act on the same object (its action).
+const parsed = new WeakMap();
+function jsonBody(req) {
+  if (!parsed.has(req)) parsed.set(req, readBody(req).then(JSON.parse));
+  return parsed.get(req);
+}
+function readOnce(req, max) {
   return new Promise((resolve, reject) => {
     let data = '';
     req.on('data', (c) => {
@@ -1455,9 +1490,49 @@ const handler = async (req, res) => {
       res.writeHead(302, { location: '/login.html', ...SECURITY_HEADERS });
       return res.end();
     }
+    // Who signed in, for the role check and the redacted views (a reviewer's or a viewer's; the owner sees it all).
+    const signedAs = signedIn ? auth.sessionOf(req, false) : null;
+    const role = signedAs ? signedAs.role : 'viewer';
     if (signedIn) {
       // The governance audit log: who this request acts as, and one entry for each change it makes (A4(1)).
       govContext.setActor(auth.actorOf(req));
+      // Roles (AI Governance 4): a reviewer's or a viewer's request is checked against lib/users/policy.js before
+      // anything runs, with the path, query values and body action the routes below use (a gateway admin route by its
+      // body's action). A refusal is a 403 and one refused entry, a read included.
+      if (role !== 'owner') {
+        let action = null;
+        if (req.method === 'POST' && /^\/api\/gateway\/[a-z]+$/.test(url.pathname))
+          try {
+            const b = await jsonBody(req);
+            if (b && typeof b === 'object' && typeof b.action === 'string') action = b.action;
+          } catch {
+            /* no action: refused below */
+          }
+        const verdict = roleAllows({
+          role,
+          method: req.method,
+          path: url.pathname,
+          action,
+          mustChange: !!(signedAs && signedAs.mustChange),
+          section: url.searchParams.get('section'),
+          q: url.searchParams.get('q'),
+        });
+        if (!verdict.ok) {
+          try {
+            const e = requestEntry({
+              method: req.method,
+              path: url.pathname,
+              status: 403,
+              body: bodies.get(req),
+              always: true,
+            });
+            if (e) govRecord(e);
+          } catch {
+            /* an audit bug never changes the answer (A6) */
+          }
+          return send(res, 403, { error: verdict.reason });
+        }
+      }
       if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && url.pathname.startsWith('/api/'))
         pendingAudit.set(res, { req, path: url.pathname });
     }
@@ -1480,7 +1555,9 @@ const handler = async (req, res) => {
         version: require('./package.json').version,
       });
     }
-    if (url.pathname === '/api/gateway' && req.method === 'GET') return send(res, 200, await gateway.admin('', 'GET'));
+    // A reviewer or a viewer gets the redacted view: no prompt, note, title, task or secret reference.
+    if (url.pathname === '/api/gateway' && req.method === 'GET')
+      return send(res, 200, redactGateway(await gateway.admin('', 'GET'), role));
     const gwAdmin = url.pathname.match(/^\/api\/gateway\/([a-z]+)$/);
     if (gwAdmin) {
       // Only the request log is read with GET. Every other admin route writes (defaults, settings), spends tokens
@@ -1488,14 +1565,14 @@ const handler = async (req, res) => {
       // POST.
       if (req.method === 'GET')
         return gwAdmin[1] === 'logs'
-          ? send(res, 200, await gateway.admin('logs', 'GET'))
+          ? send(res, 200, redactGatewayLogs(await gateway.admin('logs', 'GET'), role))
           : send(res, 405, { error: 'method not allowed' });
       if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
       if (!(req.headers['content-type'] || '').startsWith('application/json'))
         return send(res, 415, { error: 'json only' });
       try {
         // A refused guardrails setting (badRequest) is a 400; every other admin answer keeps its 200, errors included.
-        const out = await gateway.admin(gwAdmin[1], 'POST', JSON.parse(await readBody(req)));
+        const out = await gateway.admin(gwAdmin[1], 'POST', await jsonBody(req));
         return send(res, out && out.badRequest === true ? 400 : 200, out);
       } catch (err) {
         return send(res, 200, { errors: [err.message] });
@@ -1504,11 +1581,13 @@ const handler = async (req, res) => {
     if (url.pathname === '/api/summary') {
       const r = url.searchParams.get('range') || '30';
       const range = r === 'all' ? 'all' : Math.min(365, Math.max(1, parseInt(r, 10) || 30));
-      return send(res, 200, {
+      const summary = {
         ...getSummary(range),
         config: { userName: config.userName, monthlyBudgetUSD: costBudgets.monthly().monthlyBudgetUSD, host: HOSTNAME },
         index: indexer.state,
-      });
+      };
+      // A reviewer or a viewer: counts, costs, model and tool names, no event text or path.
+      return send(res, 200, redactSummary(summary, role));
     }
     if (url.pathname === '/api/live') {
       return send(res, 200, {
@@ -1579,7 +1658,8 @@ const handler = async (req, res) => {
             minMs: Number.isFinite(minMs) && minMs > 0 ? minMs : undefined,
             minCost: Number.isFinite(minCost) && minCost > 0 ? minCost : undefined,
           });
-          return send(res, 200, { sessions: rows });
+          // A reviewer or a viewer gets the list without titles (the first prompt).
+          return send(res, 200, redactTraceSessions({ sessions: rows }, role));
         }
         if (route === 'deps') {
           const days = parseInt(q.get('range'), 10);
@@ -1697,8 +1777,20 @@ const handler = async (req, res) => {
       });
       if (hit) return send(res, hit.status, hit.body, hit.type || 'application/json', hit.headers);
     }
+    // The dashboard accounts (AI Governance 4).
+    {
+      const hit = await usersApi.route({
+        method: req.method,
+        path: url.pathname,
+        contentType: req.headers['content-type'],
+        readBody: () => readBody(req),
+        req,
+      });
+      if (hit) return send(res, hit.status, hit.body);
+    }
     if (url.pathname === '/api/logs') {
-      return send(res, 200, DEMO ? reqlogs.demoLogs() : reqlogs.logs());
+      // A reviewer or a viewer: types, sizes and counts, no error text or tool target.
+      return send(res, 200, redactLogs(DEMO ? reqlogs.demoLogs() : reqlogs.logs(), role));
     }
     if (url.pathname === '/api/timeline') {
       const hours = Math.min(48, Math.max(1, parseInt(url.searchParams.get('hours'), 10) || 6));
@@ -1757,7 +1849,8 @@ const handler = async (req, res) => {
     }
     if (url.pathname === '/api/config' && req.method === 'GET') {
       const { integrations, ...rest } = config;
-      return send(res, 200, { ...rest, ...costBudgets.monthly() });
+      // A reviewer or a viewer: the name, the monthly budget and the pricing only.
+      return send(res, 200, redactConfig({ ...rest, ...costBudgets.monthly() }, role));
     }
     if (url.pathname === '/api/config' && req.method === 'POST') {
       if (!(req.headers['content-type'] || '').startsWith('application/json'))
@@ -1800,7 +1893,7 @@ const handler = async (req, res) => {
       memo.clear();
       budgetsChanged();
       const { integrations, ...rest } = config;
-      return send(res, 200, { ...rest, ...costBudgets.monthly() });
+      return send(res, 200, redactConfig({ ...rest, ...costBudgets.monthly() }, role));
     }
     if (url.pathname === '/api/openrouter') {
       const fn = {
