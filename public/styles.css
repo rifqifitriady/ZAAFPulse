@@ -10057,6 +10057,11 @@ label.mon-cand.on {
   color: var(--warn-ink);
   font-size: 12.5px;
 }
+.topbar-who[hidden],
+nav a[hidden],
+.icon-btn[hidden] {
+  display: none;
+}
 .usr-actions {
   display: flex;
   flex-wrap: wrap;

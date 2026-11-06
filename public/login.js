@@ -21,6 +21,18 @@ function showChange(forced) {
   $id('note').textContent = forced
     ? 'Choose your own password before you go on: at least 12 characters.'
     : 'At least 12 characters. Your other sessions end; this one goes on.';
+  const out = document.createElement('button');
+  out.type = 'button';
+  out.className = 'note';
+  out.id = 'co';
+  out.textContent = 'Sign out';
+  out.addEventListener('click', async () => {
+    await fetch('/api/logout', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }).catch(
+      () => {},
+    );
+    location.replace('/login.html');
+  });
+  $id('note').after(out);
   $id('cur').focus();
 }
 
@@ -57,10 +69,12 @@ form.addEventListener('submit', async (e) => {
   const err = $id('err');
   go.disabled = true;
   err.textContent = '';
+  let mismatch = false;
   try {
     if (step === 'change') {
       if ($id('nx').value !== $id('nx2').value) {
         err.textContent = 'The new passwords do not match.';
+        mismatch = true;
       } else {
         const r = await fetch('/api/account/password', {
           method: 'POST',
@@ -86,6 +100,7 @@ form.addEventListener('submit', async (e) => {
     err.textContent = 'The server did not answer.';
   }
   // A password never stays in the page after it was sent.
-  for (const i of form.querySelectorAll('input[type="password"]')) i.value = '';
+  // (After a mismatch only the new-password fields are cleared; the name is never cleared.)
+  for (const i of form.querySelectorAll('input[type="password"]')) if (!(mismatch && i.id === 'cur')) i.value = '';
   go.disabled = false;
 });

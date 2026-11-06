@@ -754,7 +754,7 @@ const SETTINGS_BUDGETS_DOC = 'https://github.com/rifqifitriady/ZAAFPulse/blob/ma
 async function viewSettings(el) {
   const cfg = await api('/api/config');
   const theme = store.get('theme', 'system');
-  el.innerHTML = `<div class="holo-deck"><div class="hero"><div><div class="eyebrow">SETTINGS</div><h1>Preferences</h1><p>Stored in config.json next to the app. Model prices stay current from the providers' list prices.</p></div></div>
+  el.innerHTML = `<div class="holo-deck">${subTabs('settings')}<div class="hero"><div><div class="eyebrow">SETTINGS</div><h1>Preferences</h1><p>Stored in config.json next to the app. Model prices stay current from the providers' list prices.</p></div></div>
   <div class="grid two" style="margin-top:0">
     <div class="card"><div class="card-head"><h3>Profile & budget</h3></div>
       <form class="form" id="profile-form">
@@ -1336,10 +1336,11 @@ function applyTheme() {
     $('#sign-out')?.addEventListener('click', signOut);
     // The top bar: who is signed in, their role, a sign-out link and (for an account) the password page.
     const who = $('#topbar-who');
-    if (who && ZP.me && ZP.me.signedIn) {
+    const bar = usrWhoBar(ZP.me, ZP.auth);
+    if (who && bar.show) {
       who.hidden = false;
-      $('#who-text').textContent = usrWhoText(ZP.me);
-      $('#who-password').hidden = isOwner();
+      $('#who-text').textContent = bar.text;
+      $('#who-password').hidden = !bar.password;
       $('#who-out').addEventListener('click', signOut);
     }
     // A reviewer or a viewer: the role banner, and no Settings, Users or Rescan.
