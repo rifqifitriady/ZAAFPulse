@@ -73,11 +73,16 @@ function govQuery(f, { before = null, now = Date.now() } = {}) {
   if (before) q.set('before', String(before));
   return q.toString();
 }
-/** The export link for the filters' range: format csv or jsonl. */
+/** The export link for the filters' range and account: format csv or jsonl. */
 function govExportHref(f, format, now = Date.now()) {
   const q = new URLSearchParams();
   const from = govFrom(f.range, now);
   if (from) q.set('from', from);
+  const user = String(f.user || '')
+    .trim()
+    .toLowerCase()
+    .slice(0, 32);
+  if (user) q.set('user', user);
   q.set('format', format);
   return `/api/governance/audit/export?${q}`;
 }

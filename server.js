@@ -1796,7 +1796,7 @@ const handler = async (req, res) => {
       if (hit) return send(res, hit.status, hit.body, hit.type || 'application/json', hit.headers);
     }
     // The governance audit log: entries, export (a download), verify, status and the retention setting. Behind the
-    // same sign-in; no gateway key or MCP client reaches it.
+    // same sign-in; no gateway key or MCP client reaches it. A reviewer or a viewer sees no change's values.
     {
       const hit = await governanceApi.route({
         method: req.method,
@@ -1804,6 +1804,7 @@ const handler = async (req, res) => {
         query: url.searchParams,
         contentType: req.headers['content-type'],
         readBody: () => readBody(req),
+        role,
       });
       // A reviewer or a viewer: the inventory without project folders or the AI clients' file paths.
       if (hit && url.pathname === '/api/governance/inventory' && req.method === 'GET' && hit.status === 200)
