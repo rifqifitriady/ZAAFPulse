@@ -76,8 +76,8 @@ review whose item is no longer seen is kept and shown as **gone**; **Clear revie
 The decision is a record: blocking a system stays with API keys and the guardrails.
 
 Only the owner and reviewers review ([docs/users.md](users.md)); a viewer sees the reviews without the **Review**
-button. The owner field suggests the display names of the owner and the dashboard accounts, and any text is still
-allowed.
+button. The owner field suggests the display names of the owner and the enabled dashboard accounts, and any text is
+still allowed.
 
 ### First and last seen
 
@@ -171,7 +171,8 @@ All behind the dashboard sign-in; no gateway key or MCP client reaches them.
 
 ### Known limits of the inventory
 
-- An owner is free text until named users arrive (a later sub-project).
+- An owner is free text: the field suggests the display names of the owner and the enabled accounts
+  ([docs/users.md](users.md)), but any text is kept as typed, not linked to an account.
 - Only the client files listed above are read; a project's own `.mcp.json` or `.cursor/mcp.json` is not.
 - The package is the first argument that looks like one, so `docker run …` shows `run`, and a plain flag's value can
   be taken for it (`--port 8080` shows `8080`); only flags whose name looks secret skip the argument after them.

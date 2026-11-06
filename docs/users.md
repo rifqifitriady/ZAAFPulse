@@ -2,8 +2,8 @@
 
 The owner can give other people their own sign-in to the dashboard: an auditor who reads the Governance pages and
 exports evidence, a manager who reviews the AI inventory and approves agent runs. Nobody shares the admin password, and
-every change is recorded under the person who made it. Accounts are local to this ZAAFPulse: there is no single
-sign-on and no second factor.
+every change made from the dashboard is recorded under the person who made it. Accounts are local to this ZAAFPulse:
+there is no single sign-on and no second factor.
 
 ## Roles
 
@@ -11,7 +11,7 @@ sign-on and no second factor.
 |---|---|
 | **owner** | everything, as before. The admin password signs in as the owner. |
 | **reviewer** | everything a viewer may, plus inventory reviews (**Governance → Inventory**, `POST /api/governance/inventory`), the owner suggestions for them (`GET /api/users/names`) and collaboration run approvals (`POST /api/gateway/collab` with `action` `get`, `list` or `resume`). |
-| **viewer** | read-only, metadata only: the Overview, costs, quality, the logs, the Trace explorer's session list (without titles), the evals' summary, status, evaluators and settings, the dataset and experiment lists, monitors and alerts, runtimes, the integrations' status, the gateway (redacted, below), the OpenRouter model catalogue, and the Governance pages with the audit log, its export and verification, the inventory, the controls and the evidence export. |
+| **viewer** | read-only: counts, costs, states, names and settings, never a transcript, a prompt, a note or a secret (the exceptions are listed below). The Overview, costs, quality, the logs, the Trace explorer's session list (without titles), the evals' summary, status, evaluators and settings, the dataset and experiment lists, monitors and alerts, runtimes, the integrations' status, the gateway (redacted, below), the OpenRouter model catalogue, and the Governance pages with the audit log, its export and verification, the inventory, the controls and the evidence export. |
 
 Only the owner may do these, for a reviewer and a viewer alike:
 
@@ -48,8 +48,36 @@ These views are rebuilt from an allow-list of fields, so a field added later sta
 - **Gateway logs** (`/api/gateway/logs`): no error text and no ids of runs or sessions.
 - **Config** (`/api/config`): the name, the monthly budget and the pricing, without the vault folders.
 - **Trace sessions**: no titles, no branches, and no title search.
+- **AI Office** (`/api/office`): each agent's state, zone, tool, project name, model and counts; its current activity
+  and its feed by tool only (no file name, command or host), and no git branch.
+- **Timeline** (`/api/timeline`): the lanes with their times, zones and tools; every tool segment's target (a file
+  name, a command or a host) is blank.
+- **Local models** (`/api/runtimes/config`): each entry's name, port and state; `command`, `health` and `healthUsed`
+  are `null` in every sign-in mode (a command line or a health URL can hold a path or a token).
+- **Integrations** (`/api/integrations`): each integration's state, counts and latency, without its error text, and no
+  MCP command line.
+- **Router proxy log** (`/api/router?section=proxy`): status, provider and timings, without the target URL or the
+  error text.
+- **Inventory** (`GET /api/governance/inventory`): the items, their names, reviews and counts, without the project
+  folders an MCP server is set up in or the AI clients' file paths.
+- **Audit log** (the list and the CSV and JSON lines exports): a change names the setting's `path` only, never its
+  `from` or `to` value (a `config.change` or a `user.update`). An exported line with no value to hide is the line as
+  written; one whose values were hidden is written again, so it no longer verifies against the chain (the owner's
+  export does).
 
-Viewers (and reviewers) do see the addresses and the device ids in the audit log: an auditor needs them.
+What a reviewer or a viewer does see that is more than a count:
+
+- the addresses and the device ids in the audit log (an auditor needs them);
+- in the cost reads (`/api/cost/*`), the project folders as `~` paths and the owner's folder rules;
+- in `/api/live`, the folders the logs are read from, as `~` paths;
+- in `/api/mcp-calls` (and the integrations' calls), the tool names and the names of their arguments (never their
+  values);
+- project names (a folder's last part) and model and tool names everywhere.
+
+Refused requests are recorded, but at most 30 per account a minute: past that, the refusals of that minute are counted
+and, once the minute is over, one `audit.refused_dropped` entry names the account and the count. The dashboard does
+not ask for owner-only data while it draws a page for a reviewer or a viewer (no titles or feedback marks in the
+Trace explorer, no agent candidates, no OpenRouter account; the Second Brain page says it is the owner's).
 
 ## Where accounts work
 
@@ -57,9 +85,11 @@ Viewers (and reviewers) do see the addresses and the device ids in the audit log
   empty name, or `owner`, is the admin password, so a script that posts `{ "password": … }` keeps working.
 - **Local sign-in** (the default on 127.0.0.1): the owner still opens the dashboard with `zaafpulse open`. The sign-in
   page also takes a name and a password, for someone else using this machine; a name of `owner` (or none) there is
-  refused and points to `zaafpulse open`. An account's sign-in replaces the owner's cookie in that browser, and
-  `zaafpulse open` replaces an account's session, so one browser is one person; an account signing out does not sign
-  the owner out anywhere.
+  refused and points to `zaafpulse open`. `POST /api/login` answers in local mode whenever the accounts file can be
+  kept (not in demo mode), also before the first account exists (then every name is a wrong one). Every local sign-in
+  comes from 127.0.0.1, so the local accounts share that one address's budget (below). An account's sign-in replaces
+  the owner's cookie in that browser, and `zaafpulse open` replaces an account's session, so one browser is one person;
+  an account signing out does not sign the owner out anywhere.
 - **No sign-in** (`ZAAFPULSE_AUTH=none`): there are no accounts. Everyone who reaches the dashboard is the owner, and
   the Users page says so.
 
@@ -88,12 +118,13 @@ name or password`), and an unknown name takes as long to check as a wrong passwo
   minutes ("pressure"), every address gets 1 free try (4 for a /56). A quiet day (24 h) forgets the failures.
 - Each account name (not the owner) has a budget of its own: after 10 wrong passwords for one account, from any number
   of addresses, new tries for that account wait (30 s, doubling up to an hour).
-- Behind a shared address (an office, a carrier NAT), typing mistakes of different people add up in that address's
-  budget until an owner sign-in clears it or 24 hours pass. An account's own successful sign-in takes back only its own
-  attempt and never gives the owner's budget fresh guesses.
+- Behind a shared address (an office, a carrier NAT, or 127.0.0.1 for every local sign-in), typing mistakes of
+  different people add up in that address's budget until an owner sign-in clears it or 24 hours pass. An account's own
+  successful sign-in takes back only its own attempt and never gives the owner's budget fresh guesses.
 - A browser that signed in before holds a signed "known browser" cookie (180 days), bound to the person who signed in:
   the owner's cookie exempts only the owner's sign-ins from the address, /56, pressure and account budgets; an
-  account's cookie exempts only that account's. The browser keeps its own count either way.
+  account's cookie exempts only that account's. The browser keeps its own count either way, and a successful sign-in
+  there by the person it is bound to starts that count over.
 - The owner has no per-name budget: a flood of guesses must never lock the owner out of a fresh browser.
 
 Disabling an account, changing its role, resetting its password and deleting it end its sessions at once. A display
@@ -127,14 +158,18 @@ The file is strict. One bad entry (the wrong shape, a name twice, an id twice, a
 of the right length, an unknown role) makes the whole file unreadable: **no account signs in**, the owner still can,
 the Users page says so, and the file is never written over until you fix or move it. A malformed hash never signs in.
 
-Sessions live in memory: a restart signs every account out, as it does the owner in password mode.
+Sessions live in memory: a restart signs every account out, as it does the owner in password mode. Each person (the
+owner too) keeps at most 20 sessions: a sign-in beyond that ends that person's oldest one, and every sign-in clears the
+sessions that have expired.
 
 ## Audit log
 
 A dashboard entry's actor names the account and its role: `{ "via": "dashboard", "user": "vera", "role": "viewer",
 "mode": "password", "device": "…", "ip": "…" }` (`user` and `role` are `null` before sign-in, `owner` for the owner,
-also in local and no-sign-in mode). Sign-in events name the account they were for as their target when it exists
-(`{ "type": "user", "id": "vera" }`, `owner` for the admin password), never the password. New entries:
+also in local and no-sign-in mode). A sign-in (`auth.login`), a sign-out (`auth.logout`) and a local code
+(`auth.local_code`) name the account and its role in their actor. Only a failed sign-in (`auth.login_failed`) and a
+lockout (`auth.lockout`) carry a target: the account they were for, when it exists (`{ "type": "user", "id": "vera" }`,
+`owner` for the admin password). No entry holds a password. New entries:
 
 | Action | When |
 |---|---|
@@ -143,8 +178,10 @@ also in local and no-sign-in mode). Sign-in events name the account they were fo
 | `user.password_reset` | the owner sets a new password |
 | `user.delete` | the owner deletes an account (with its role) |
 | `account.password_change` | an account changes its own password |
+| `audit.refused_dropped` | an account had more than 30 refused requests in a minute (with `dropped`, the count left out) |
 
-**Governance → Audit log** filters by account (**User**; `GET /api/governance/audit?user=vera`, `owner` included), and
+**Governance → Audit log** filters by account (**User**; `GET /api/governance/audit?user=vera`, `owner` included); the
+export takes the same filter (`GET /api/governance/audit/export?user=vera`, and the page's export links carry it), and
 the CSV export's `actor_id` is the account for dashboard entries (the device for entries from before accounts).
 
 ## Compliance
