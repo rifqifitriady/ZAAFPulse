@@ -54,8 +54,8 @@ These views are rebuilt from an allow-list of fields, so a field added later sta
   name, a command or a host) is blank.
 - **Local models** (`/api/runtimes/config`): each entry's name, port and state; `command`, `health` and `healthUsed`
   are `null` in every sign-in mode (a command line or a health URL can hold a path or a token).
-- **Integrations** (`/api/integrations`): each integration's state, counts and latency, without its error text, and no
-  MCP command line.
+- **Integrations** (`/api/integrations`): each integration's state, counts and latency, without its error text; the AI
+  clients without their config file's path; no MCP command line.
 - **Router proxy log** (`/api/router?section=proxy`): status, provider and timings, without the target URL or the
   error text.
 - **Inventory** (`GET /api/governance/inventory`): the items, their names, reviews and counts, without the project
@@ -72,6 +72,8 @@ What a reviewer or a viewer does see that is more than a count:
 - in `/api/live`, the folders the logs are read from, as `~` paths;
 - in `/api/mcp-calls` (and the integrations' calls), the tool names and the names of their arguments (never their
   values);
+- in the inventory, an item's `origin`: the scheme, host name and port an agent, a provider, an integration or an MCP
+  server talks to (an inventory fact, never a path or a query);
 - project names (a folder's last part) and model and tool names everywhere.
 
 Refused requests are recorded, but at most 30 per account a minute: past that, the refusals of that minute are counted
