@@ -183,3 +183,38 @@ test('hidden is not defeated by author CSS, and the identity block shows only wh
   assert.match(js, /out\.textContent = 'Sign out'/);
   assert.match(js, /mismatch && i\.id === 'cur'/);
 });
+
+test('a page a reviewer or a viewer can open makes no request the role policy would refuse', () => {
+  const { allowed } = require('../lib/users/policy');
+  const viewer = (p, section = null) => allowed({ role: 'viewer', method: 'GET', path: p, section }).ok;
+  // The owner-only reads these pages make, refused for a viewer (so each must be skipped for one).
+  for (const p of [
+    '/api/trace/title',
+    '/api/feedback/sessions',
+    '/api/agents/candidates',
+    '/api/brain',
+    '/api/brain/graph',
+  ])
+    assert.equal(viewer(p), false, p);
+  assert.equal(viewer('/api/openrouter', 'account'), false);
+  const trace = read('traceview.js');
+  assert.match(trace, /function wantTitle\(key\) \{\s*if \(!key \|\| !isOwner\(\) \|\|/);
+  assert.match(trace, /function wantMarks\(keys\) \{\s*if \(!isOwner\(\)\) return;/);
+  const mon = read('monitorsview.js');
+  assert.match(
+    mon,
+    /async function monLoadTarget\(t\) \{[^}]*try \{\s*\/\/[^\n]*\n\s*if \(!isOwner\(\)\) \{\s*t\.off = true;\s*return;/,
+  );
+  assert.match(mon, /if \(action === 'stop' && p\.sessionKey && isOwner\(\)\) \{/);
+  assert.equal((mon.match(/\/api\/agents\/candidates/g) || []).length, 2);
+  const or = read('openrouterview.js');
+  assert.match(or, /const account = isOwner\(\) \? \['account'\] : \[\];/);
+  assert.ok(!/section=account|'rankings', 'account'/.test(or));
+  const app = read('app.js');
+  assert.match(
+    app,
+    /if \(state\.route === 'brain' && !isOwner\(\)\) \{\s*el\.innerHTML = holoEmpty\('The Second Brain is for the owner of this dashboard\.'\);\s*return;/,
+  );
+  assert.ok(app.indexOf("state.route === 'brain' && !isOwner()") < app.indexOf('mountBrain().catch'));
+  assert.match(read('governanceview.js'), /if \(govCanReview\(govRole\(\)\)\)\s*GOV\.inv\.names = /);
+});

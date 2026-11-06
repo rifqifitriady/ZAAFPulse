@@ -857,8 +857,9 @@ function mountTrace() {
 
   const titleQueue = new Set();
   let titleBusy = 0;
+  // A reviewer or a viewer is shown no title (the first prompt) and no feedback mark: no request is made for either.
   function wantTitle(key) {
-    if (!key || S.titles.has(key) || titleQueue.has(key)) return;
+    if (!key || !isOwner() || S.titles.has(key) || titleQueue.has(key)) return;
     titleQueue.add(key);
     pumpTitles();
   }
@@ -913,6 +914,7 @@ function mountTrace() {
   const marks = trMarkQueue();
   let markBusy = false;
   function wantMarks(keys) {
+    if (!isOwner()) return;
     marks.want(keys, (k) => S.marks.has(k));
     pumpMarks();
   }

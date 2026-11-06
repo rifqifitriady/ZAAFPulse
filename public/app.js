@@ -1176,6 +1176,11 @@ function render(animate = true) {
     }
     return state.sub === 'users' ? usrMount(el) : viewSettings(el);
   }
+  // The Second Brain reads the owner's notes: a reviewer or a viewer gets this line and no request that would be refused.
+  if (state.route === 'brain' && !isOwner()) {
+    el.innerHTML = holoEmpty('The Second Brain is for the owner of this dashboard.');
+    return;
+  }
   // The Governance pages (Inventory, Compliance, Audit log) load their own data (public/governanceview.js): they never
   // wait for the summary.
   if (state.route === 'governance') {
