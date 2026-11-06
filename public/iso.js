@@ -600,6 +600,11 @@ const SUBPAGES = {
     ['proxy', 'Proxy logs'],
     ['time', 'Time'],
   ],
+  // Preferences and, for the owner, the dashboard accounts (public/usersview.js).
+  settings: [
+    ['', 'Preferences'],
+    ['users', 'Users'],
+  ],
   // The inventory is the default page; the audit log moved to #governance/audit (public/governanceview.js).
   governance: [
     ['', 'Inventory'],
