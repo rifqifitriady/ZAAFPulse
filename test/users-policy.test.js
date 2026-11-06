@@ -12,13 +12,18 @@ const {
   redactTraceSessions,
   redactSummary,
   redactLogs,
+  redactGatewayLogs,
+  redactConfig,
   VIEWER_READS,
+  ANYONE,
+  OPENROUTER_SECTIONS,
   REVIEWER_EXTRA,
   GATEWAY_PARTS,
 } = require('../lib/users/policy');
 
 const ROOT = path.join(__dirname, '..');
-const may = (role, method, p, action, mustChange = false) => allowed({ role, method, path: p, action, mustChange });
+const may = (role, method, p, action, mustChange = false) =>
+  allowed({ role, method, path: p, action, mustChange, section: p === '/api/openrouter' ? 'models' : null });
 
 test('a viewer reads the metadata routes, a reviewer too; the list is exactly these', () => {
   assert.deepEqual(VIEWER_READS, [
@@ -51,7 +56,6 @@ test('a viewer reads the metadata routes, a reviewer too; the list is exactly th
     '/api/monitors',
     '/api/monitors/status',
     '/api/alerts',
-    '/api/agents/candidates',
     '/api/runtimes',
     '/api/runtimes/config',
     '/api/cost/ledger',
@@ -167,6 +171,7 @@ test('never for a non-owner: content, secrets and previews; every write; the own
     ['POST', '/api/mcp/register'],
     ['GET', '/api/users'],
     ['POST', '/api/users', 'create'],
+    ['GET', '/api/agents/candidates'],
     ['GET', '/api/something-new'],
   ];
   for (const [m, p, action] of ownerOnly) {
@@ -207,6 +212,8 @@ test("a reviewer's extras: inventory reviews and run approvals (get, list, resum
   assert.equal(may('reviewer', 'GET', '/api/gateway/collab', 'get').ok, false);
 });
 
+test('ANYONE is exactly the password route', () => assert.deepEqual(ANYONE, ['POST /api/account/password']));
+
 test('the password route is for anyone signed in; until then every other route says "change your password first"', () => {
   for (const role of ['owner', 'reviewer', 'viewer']) {
     assert.equal(may(role, 'POST', '/api/account/password').ok, true);
@@ -228,7 +235,17 @@ test('the gateway view for a non-owner: no prompt, note text, title, task, key s
         id: 'openai',
         baseUrl: 'https://api.openai.com/v1',
         apiKey: { keychain: 'SECRET-REF-1' },
-        auth: { type: 'oauth2', clientId: 'SECRET-CLIENT-2', tokenUrl: 'https://t' },
+        auth: {
+          type: 'oauth2',
+          clientId: 'SECRET-CLIENT-2',
+          tokenUrl: 'https://t',
+          scope: 'SECRET-SCOPE',
+          grant: 'SECRET-G',
+        },
+        models: ['gpt-5'],
+        enabled: true,
+        tier: 'external',
+        extra: 'SECRET-PROV-EXTRA',
       },
       { id: 'local', apiKey: null },
     ],
@@ -248,11 +265,53 @@ test('the gateway view for a non-owner: no prompt, note text, title, task, key s
         secret: 'zp_SECRET4',
       },
     ],
-    agents: [{ id: 'sre', name: 'SRE', systemPrompt: 'SECRET-PROMPT-5' }],
+    agents: [
+      {
+        id: 'sre',
+        name: 'SRE',
+        domain: 'ops',
+        description: 'd',
+        keywords: ['k'],
+        tools: ['t'],
+        model: 'm',
+        enabled: true,
+        template: false,
+        knowledge: ['kb'],
+        collaborate: true,
+        systemPrompt: 'SECRET-PROMPT-5',
+        remoteUrl: 'https://SECRET-REMOTE',
+        remoteTokenEnv: 'SECRET-ENV',
+        remoteTokenOrigin: 'SECRET-ORIGIN',
+        anything: 'SECRET-ANY',
+      },
+    ],
+    workflows: [
+      {
+        id: 'wf',
+        name: 'W',
+        category: 'Custom',
+        tier: 'R1',
+        builtin: true,
+        steps: [{ agent: 'sre', prompt: 'SECRET-STEP-PROMPT', approve: true }],
+        sampleInput: 'SECRET-SAMPLE',
+      },
+    ],
+    skillRoots: { claude: '/Users/me/SECRET-ROOT' },
+    skills: [{ name: 'sk', description: 'ds', claude: 'installed', agents: 'missing', path: '/skills/sk/SKILL.md' }],
+    defaults: { model: 'm', plannerModel: 'p', codeModel: 'c', hidden: 'SECRET-DEF' },
+    settings: { tokenSaver: true, modelMap: [], guardrails: { scope: 'external' }, other: 'SECRET-SET' },
+    knowledge: [{ id: 'kb', name: 'KB', documents: 2, path: '/Users/me/SECRET-KB' }],
+    routes: [{ name: 'router/fast', targets: ['a/b'], apiKey: 'SECRET-ROUTE' }],
     sessions: [{ id: 'ses_1', title: 'SECRET-TITLE-6', messages: 2 }],
-    memory: [{ id: 'mem_1', text: 'SECRET-NOTE-7', scope: 'global' }],
+    memory: [{ id: 'mem_1', text: 'SECRET-NOTE-7', scope: 'global', tags: ['SECRET-TAG'] }],
     runs: [
-      { id: 'run_1', title: 'SECRET-TASK-8', error: 'SECRET-ERROR-9', pending: { step: 2, question: 'SECRET-Q-10' } },
+      {
+        id: 'run_1',
+        title: 'SECRET-TASK-8',
+        error: 'SECRET-ERROR-9',
+        stop: 'SECRET-STOP',
+        pending: { step: 2, question: 'SECRET-Q-10' },
+      },
       { id: 'run_2', title: 'x', pending: null, state: 'done' },
     ],
     quota: [{ id: 'openai', token: 'SECRET-QUOTA-11' }],
@@ -263,7 +322,14 @@ test('the gateway view for a non-owner: no prompt, note text, title, task, key s
     const r = redactGateway(g, role);
     assert.ok(!/SECRET/.test(JSON.stringify(r)), JSON.stringify(r));
     assert.deepEqual(r.providers, [
-      { id: 'openai', baseUrl: 'https://api.openai.com/v1', auth: { type: 'oauth2' } },
+      {
+        id: 'openai',
+        baseUrl: 'https://api.openai.com/v1',
+        models: ['gpt-5'],
+        enabled: true,
+        tier: 'external',
+        auth: { type: 'oauth2' },
+      },
       { id: 'local', auth: { type: 'key' } },
     ]);
     assert.deepEqual(Object.keys(r.keys[0]), [
@@ -277,7 +343,28 @@ test('the gateway view for a non-owner: no prompt, note text, title, task, key s
       'lastUsedAt',
       'revokedAt',
     ]);
-    assert.deepEqual(r.agents, [{ id: 'sre', name: 'SRE' }]);
+    assert.deepEqual(Object.keys(r.agents[0]), [
+      'id',
+      'name',
+      'domain',
+      'description',
+      'keywords',
+      'tools',
+      'model',
+      'enabled',
+      'template',
+      'knowledge',
+      'collaborate',
+    ]);
+    assert.deepEqual(r.workflows, [
+      { id: 'wf', name: 'W', category: 'Custom', tier: 'R1', builtin: true, steps: [{ agent: 'sre', approve: true }] },
+    ]);
+    assert.ok(!('skillRoots' in r));
+    assert.deepEqual(r.skills, [{ name: 'sk', description: 'ds', claude: 'installed', agents: 'missing' }]);
+    assert.deepEqual(r.defaults, { model: 'm', plannerModel: 'p', codeModel: 'c' });
+    assert.deepEqual(r.settings, { tokenSaver: true, modelMap: [], guardrails: { scope: 'external' } });
+    assert.deepEqual(r.knowledge, [{ id: 'kb', name: 'KB', documents: 2 }]);
+    assert.deepEqual(r.routes, [{ name: 'router/fast', targets: ['a/b'] }]);
     assert.deepEqual(r.sessions, [{ id: 'ses_1', messages: 2 }]);
     assert.deepEqual(r.memory, [{ id: 'mem_1', scope: 'global' }]);
     assert.deepEqual(r.runs, [
@@ -295,7 +382,7 @@ test('the gateway view for a non-owner: no prompt, note text, title, task, key s
 test('the trace session list for a non-owner: no title (the first prompt)', () => {
   const body = {
     sessions: [
-      { key: 'claude.ab', title: 'SECRET-PROMPT-1', tokens: 9 },
+      { key: 'claude.ab', title: 'SECRET-PROMPT-1', branch: 'SECRET-BRANCH', tokens: 9 },
       { key: 'codex.cd', title: null },
     ],
   };
@@ -307,17 +394,63 @@ test('the trace session list for a non-owner: no title (the first prompt)', () =
   assert.equal(redactTraceSessions(null, 'viewer'), null);
 });
 
-test("/api/openrouter?section=account is the owner's; the other sections are viewer reads", () => {
+test("/api/openrouter: only the listed sections are viewer reads; account, a missing or odd section is the owner's", () => {
+  assert.deepEqual(OPENROUTER_SECTIONS, ['models', 'providers', 'rankings']);
   const sec = (role, section) => allowed({ role, method: 'GET', path: '/api/openrouter', section });
   for (const role of ['viewer', 'reviewer']) {
-    assert.equal(sec(role, undefined).ok, true);
-    assert.equal(sec(role, 'usage').ok, true);
-    for (const s of ['account', 'Account', ' account ', ['account'], { a: 1 }, 5])
+    for (const s of OPENROUTER_SECTIONS) assert.equal(sec(role, s).ok, true, s);
+    for (const s of ['account', 'Account', ' account ', 'usage', '', undefined, null, ['models'], { a: 1 }, 5])
       assert.deepEqual(sec(role, s), { ok: false, reason: 'your role cannot do this' }, JSON.stringify(s));
-    // Other routes ignore the section.
     assert.equal(allowed({ role, method: 'GET', path: '/api/summary', section: 'account' }).ok, true);
   }
   assert.equal(sec('owner', 'account').ok, true);
+  assert.equal(sec('owner', undefined).ok, true);
+});
+
+test('the trace session list: a title search (q) is refused for a non-owner, the plain list is not', () => {
+  const q = (role, v) => allowed({ role, method: 'GET', path: '/api/trace/sessions', q: v });
+  for (const role of ['viewer', 'reviewer']) {
+    for (const v of [undefined, null, '']) assert.equal(q(role, v).ok, true, JSON.stringify(v));
+    for (const v of ['a', ' ', 'secret title', ['a'], { x: 1 }, 0])
+      assert.deepEqual(q(role, v), { ok: false, reason: 'your role cannot do this' }, JSON.stringify(v));
+  }
+  assert.equal(q('owner', 'secret title').ok, true);
+  assert.equal(allowed({ role: 'viewer', method: 'GET', path: '/api/summary', q: 'x' }).ok, true);
+});
+
+test('a path that is not canonical is refused for a non-owner; the owner is not asked', () => {
+  const bad = [
+    'http://localhost/api/summary',
+    'https://x/api/summary',
+    'api/summary',
+    '/API/summary',
+    '/Api/summary',
+    '/api/summary/',
+    '/api//summary',
+    '//api/summary',
+    '/api/summary?x=1',
+    '/api/summary#x',
+    '/api/summary ',
+    ' /api/summary',
+    '/api/gateway/collab get',
+    '/api/summary\n',
+    '/api\\summary',
+    '/API',
+    '',
+    undefined,
+    null,
+    5,
+    ['/api/summary'],
+  ];
+  for (const p of bad) {
+    for (const role of ['viewer', 'reviewer'])
+      assert.deepEqual(
+        allowed({ role, method: 'GET', path: p }),
+        { ok: false, reason: 'your role cannot do this' },
+        `${role} ${JSON.stringify(p)}`,
+      );
+    assert.equal(allowed({ role: 'owner', method: 'GET', path: p }).ok, true);
+  }
 });
 
 const SECRETS = /SECRET|\/Users\/|\/home\//;
@@ -377,6 +510,7 @@ test('the summary for a non-owner: counts, costs and names stay; no quality text
     quality: {
       accuracy: 0.9,
       calls: 4,
+      somethingNew: 'SECRET-Q',
       tools: [{ tool: 'Bash', calls: 9 }],
       events: {
         correction: [ev({ kind: 'correction', label: 'Correction prompt' })],
@@ -386,6 +520,8 @@ test('the summary for a non-owner: counts, costs and names stay; no quality text
       feed: [ev({ kind: 'error', category: 'hallucination', label: 'x' })],
     },
     codexLimits: null,
+    config: { userName: 'Ann', monthlyBudgetUSD: 50, host: 'mac', vaultPaths: ['/Users/me/SECRET-VAULT'] },
+    index: { indexing: false, total: 3, done: 3, lastScan: 1, lastDurationMs: 5, errors: 0, workers: 0 },
     somethingNew: 'SECRET-NEW',
   };
   for (const role of ['viewer', 'reviewer']) {
@@ -403,7 +539,10 @@ test('the summary for a non-owner: counts, costs and names stay; no quality text
     assert.equal(r.sessions[0].project, 'app');
     assert.equal(r.sessions[0].model, 'claude-sonnet-5');
     assert.equal(r.tools[0].name, 'Claude Code');
+    assert.deepEqual(r.config, { userName: 'Ann', monthlyBudgetUSD: 50, host: 'mac' });
+    assert.equal(r.index.total, 3);
     assert.ok(!('somethingNew' in r));
+    assert.ok(!('somethingNew' in r.quality));
   }
   assert.equal(redactSummary(s, 'owner'), s);
   assert.equal(redactSummary(null, 'viewer'), null);
@@ -488,4 +627,52 @@ test('the request log for a non-owner: types, sizes, counts and times; no error 
   }
   assert.equal(redactLogs(l, 'owner'), l);
   assert.equal(redactLogs(null, 'viewer'), null);
+});
+
+test('the gateway request log for a non-owner: no error text, no run or session id; the guard keeps action and checks', () => {
+  const body = {
+    entries: [
+      {
+        ts: 1,
+        keyId: 'key_1',
+        provider: 'openai',
+        model: 'gpt-5',
+        status: 599,
+        ms: 90,
+        input: 5,
+        output: 6,
+        cost: 0.1,
+        kind: 'chat',
+        error: 'SECRET-UPSTREAM-ERROR /Users/me',
+        sessionId: 'SECRET-SES',
+        runId: 'SECRET-RUN',
+        guard: { action: 'redacted', hits: ['secrets'], error: true, text: 'SECRET-GUARD' },
+        somethingNew: 'SECRET-NEW',
+      },
+    ],
+  };
+  for (const role of ['viewer', 'reviewer']) {
+    const r = redactGatewayLogs(body, role);
+    assert.ok(!/SECRET|\/Users\//.test(JSON.stringify(r)), JSON.stringify(r));
+    assert.equal(r.entries[0].model, 'gpt-5');
+    assert.equal(r.entries[0].status, 599);
+    assert.equal(r.entries[0].guard.action, 'redacted');
+    assert.deepEqual(r.entries[0].guard.hits, ['secrets']);
+  }
+  assert.equal(redactGatewayLogs(body, 'owner'), body);
+  assert.equal(redactGatewayLogs(null, 'viewer'), null);
+});
+
+test('the config for a non-owner: user name, budget and pricing stay; no vault path, nothing unlisted', () => {
+  const c = {
+    userName: 'Ann',
+    monthlyBudgetUSD: 50,
+    pricing: { m: { input: 1 } },
+    vaultPaths: ['/Users/me/SECRET-VAULT'],
+    somethingNew: 'SECRET-NEW',
+  };
+  for (const role of ['viewer', 'reviewer'])
+    assert.deepEqual(redactConfig(c, role), { userName: 'Ann', monthlyBudgetUSD: 50, pricing: { m: { input: 1 } } });
+  assert.equal(redactConfig(c, 'owner'), c);
+  assert.equal(redactConfig(null, 'viewer'), null);
 });
