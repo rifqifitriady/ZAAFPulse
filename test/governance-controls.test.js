@@ -409,7 +409,12 @@ test('GET /api/governance/controls: the controls with the audit state and the in
     },
     now: () => NOW,
   });
-  const r = await api.route({ role: 'owner', method: 'GET', path: '/api/governance/controls', query: new URLSearchParams() });
+  const r = await api.route({
+    role: 'owner',
+    method: 'GET',
+    path: '/api/governance/controls',
+    query: new URLSearchParams(),
+  });
   assert.equal(r.status, 200);
   assert.deepEqual(Object.keys(r.body), ['generatedAt', 'notice', 'frameworks', 'clauses', 'controls']);
   assert.equal(r.body.controls.length, 18);
@@ -437,7 +442,12 @@ test('GET /api/governance/controls: a rejecting server part or inventory only ma
       now: () => NOW,
       ...extra,
     });
-  const r = await mk({}).route({ role: 'owner', method: 'GET', path: '/api/governance/controls', query: new URLSearchParams() });
+  const r = await mk({}).route({
+    role: 'owner',
+    method: 'GET',
+    path: '/api/governance/controls',
+    query: new URLSearchParams(),
+  });
   assert.equal(r.status, 200);
   const by = Object.fromEntries(r.body.controls.map((c) => [c.id, c]));
   assert.equal(by.guardrails.status, 'unknown');

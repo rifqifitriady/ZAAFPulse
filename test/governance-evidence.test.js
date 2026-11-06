@@ -132,7 +132,8 @@ test('GET evidence: JSON or Markdown as a download, recorded as governance.expor
     version: '1.0.4',
     now: () => NOW,
   });
-  const get = (q) => api.route({ role: 'owner', method: 'GET', path: '/api/governance/evidence', query: new URLSearchParams(q) });
+  const get = (q) =>
+    api.route({ role: 'owner', method: 'GET', path: '/api/governance/evidence', query: new URLSearchParams(q) });
   const json = await get('');
   assert.equal(json.status, 200);
   assert.equal(json.type, 'application/json; charset=utf-8');
@@ -177,7 +178,8 @@ test('privacy: no absolute project folder, home path or secret-looking value in 
     version: '1.0.4',
     now: () => NOW,
   });
-  const get = (q) => api.route({ role: 'owner', method: 'GET', path: '/api/governance/evidence', query: new URLSearchParams(q) });
+  const get = (q) =>
+    api.route({ role: 'owner', method: 'GET', path: '/api/governance/evidence', query: new URLSearchParams(q) });
   const json = await get('format=json');
   const md = await get('format=md');
   assert.ok(JSON.parse(json.body).inventory.items.some((i) => i.id === 'mcp:db'));
@@ -281,7 +283,8 @@ test('GET evidence: an audit log that throws never stops the export', async () =
     now: () => NOW,
   });
   for (const format of ['json', 'md']) {
-    const r = await api.route({ role: 'owner',
+    const r = await api.route({
+      role: 'owner',
       method: 'GET',
       path: '/api/governance/evidence',
       query: new URLSearchParams({ format }),
