@@ -45,6 +45,12 @@ function usrBannerText(me) {
 }
 /** The identity line in the top bar: "Vera · Viewer". */
 const usrWhoText = (me) => (me && me.role ? `${me.display || me.user} · ${usrRoleLabel(me.role)}` : '');
+/** The top bar's identity block: shown only with sign-in on and someone signed in; the owner's password is set with the
+ * CLI, so only an account gets the Change password link. */
+const usrWhoBar = (me, authOn) =>
+  authOn && me && me.signedIn && me.role
+    ? { show: true, text: usrWhoText(me), password: me.role !== 'owner' }
+    : { show: false, text: '', password: false };
 /** An account's state in words. */
 const usrStateTag = (u) =>
   u.disabled
@@ -201,6 +207,7 @@ if (typeof module !== 'undefined')
     usrWhen,
     usrBannerText,
     usrWhoText,
+    usrWhoBar,
     usrStateTag,
     usrRowsHtml,
     usrAddFormHtml,

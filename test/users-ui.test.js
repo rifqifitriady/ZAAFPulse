@@ -168,3 +168,18 @@ test('usersview.js puts no server or owner text into markup unescaped (S1) and l
     assert.match(m[1], /^(usr|USR)/, m[1]);
   assert.equal(typeof document, 'undefined', 'loaded above with no DOM at all');
 });
+
+test('hidden is not defeated by author CSS, and the identity block shows only where it should', () => {
+  const css = read('styles.css');
+  assert.match(css, /\.topbar-who\[hidden\],\s*nav a\[hidden\],\s*\.icon-btn\[hidden\]\s*\{\s*display: none;\s*\}/);
+  const me = (role) => ({ signedIn: true, user: 'u', role, display: 'U' });
+  assert.deepEqual(U.usrWhoBar(me('owner'), true), { show: true, text: 'U · Owner', password: false }); // local or password mode
+  assert.deepEqual(U.usrWhoBar(me('viewer'), true), { show: true, text: 'U · Viewer', password: true });
+  assert.equal(U.usrWhoBar(me('owner'), false).show, false, 'none mode: no identity, no Sign out');
+  assert.equal(U.usrWhoBar(null, true).show, false);
+  assert.equal(U.usrWhoBar({ signedIn: false }, true).show, false);
+  assert.match(read('app.js'), /<div class="holo-deck">\$\{subTabs\('settings'\)\}<div class="hero">/);
+  const js = read('login.js');
+  assert.match(js, /out\.textContent = 'Sign out'/);
+  assert.match(js, /mismatch && i\.id === 'cur'/);
+});
