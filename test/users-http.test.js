@@ -520,3 +520,32 @@ test("a viewer's refused requests: at most 30 entries a minute, the answer is a 
   assert.equal((await call(s, '/api/users', { as: owner })).status, 200);
   assert.ok(s.alive());
 });
+
+test("a viewer's allowed but repeated calls are capped too: bad password changes and evidence exports", async (t) => {
+  const s = await startServer(t);
+  const owner = await signIn(s, { password: ADMIN });
+  const made = { action: 'create', name: 'vera', role: 'viewer', password: 'vera first 0001' };
+  assert.equal((await call(s, '/api/users', { method: 'POST', body: made, as: owner })).status, 200);
+  const vera = await signIn(s, { name: 'vera', password: 'vera first 0001' });
+  const change = { current: 'vera first 0001', next: VERA };
+  assert.equal((await call(s, '/api/account/password', { method: 'POST', body: change, as: vera })).status, 200);
+  const statuses = [];
+  for (let i = 0; i < 40; i++)
+    statuses.push((await call(s, '/api/account/password', { method: 'POST', body: {}, as: vera })).status);
+  // The empty bodies count against the session: five 400s, then it is held.
+  assert.deepEqual(statuses, [...Array(5).fill(400), ...Array(35).fill(429)]);
+  for (let i = 0; i < 40; i++)
+    assert.equal((await call(s, '/api/governance/evidence?format=json', { as: vera })).status, 200);
+  for (let i = 0; i < 40; i++)
+    assert.equal((await call(s, '/api/governance/evidence?format=json', { as: owner })).status, 200);
+  const all = entries(s);
+  const of = (user, test) => all.filter((e) => e.actor.user === user && test(e));
+  const bad = of('vera', (e) => e.action === 'POST /api/account/password' && e.outcome === 'refused');
+  const exports = of('vera', (e) => e.action === 'governance.export');
+  // One limit per account a minute: 30 entries in all, the password posts first.
+  assert.deepEqual([bad.length, exports.length], [30, 0]);
+  // The owner's exports are all recorded; the viewer's password change (a change) is never capped.
+  assert.equal(of('owner', (e) => e.action === 'governance.export').length, 40);
+  assert.equal(of('vera', (e) => e.action === 'account.password_change').length, 1);
+  assert.ok(s.alive());
+});

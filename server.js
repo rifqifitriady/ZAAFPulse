@@ -293,9 +293,32 @@ const governance = createGovernanceAudit({
 const GOV_ID = /^[A-Za-z0-9_.:-]{1,80}$/;
 // An entry's actor: the one it names, else the request's (lib/governance/context.js), else the server's own.
 // Never throws (A6): whatever calls it goes ahead.
-function govRecord(entry) {
+function govWrite(entry) {
   try {
     return governance.record({ ...entry, actor: entry.actor || govContext.actor() || { via: 'system' } });
+  } catch {
+    return null;
+  }
+}
+// A reviewer's or a viewer's entries that can be repeated at will: refused requests, errors, evidence exports and
+// requests that changed nothing go through the per-account limit (30 a minute, then one audit.refused_dropped entry
+// with the count; lib/users/refusals.js). A change (config.change, a password change, a run approval, the request that
+// made one) is always written. The owner's entries and those of keys, the CLI and the system are never limited.
+const refusals = createRefusalLog({ record: govWrite });
+const REQUEST_ACTION = /^[A-Z]+ \//;
+function govRecord(entry) {
+  try {
+    const actor = entry.actor || govContext.actor() || { via: 'system' };
+    const e = { ...entry, actor };
+    const account = actor.via === 'dashboard' && typeof actor.user === 'string' && actor.role !== 'owner';
+    const repeatable =
+      e.outcome === 'refused' ||
+      e.outcome === 'error' ||
+      e.action === 'governance.export' ||
+      (REQUEST_ACTION.test(String(e.action)) && !govContext.changed());
+    if (account && repeatable) return refusals.refused(actor.user, e);
+    if (account) govContext.noteChange();
+    return govWrite(e);
   } catch {
     return null;
   }
@@ -337,9 +360,6 @@ const usersApi = createUsersApi({
   record: (e) => govRecord(e),
   ownerName: () => config.userName,
 });
-// A reviewer's or a viewer's refused requests: at most 30 entries per account a minute, then one
-// audit.refused_dropped entry with the count (lib/users/refusals.js).
-const refusals = createRefusalLog({ record: (e) => govRecord(e) });
 let rawCache = {
   mtime: -1,
   value: DEMO ? { gateway: demoGw.CONFIG, brain: { sources: demoGw.BRAIN_SOURCES(path.join(demoDir, 'brain')) } } : {},
@@ -1529,7 +1549,7 @@ const handler = async (req, res) => {
               body: bodies.get(req),
               always: true,
             });
-            if (e) refusals.refused(signedAs ? signedAs.user : null, e, auth.actorOf(req));
+            if (e) govRecord(e); // limited per account (govRecord)
           } catch {
             /* an audit bug never changes the answer (A6) */
           }
