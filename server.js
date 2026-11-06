@@ -88,6 +88,7 @@ const { RULES: MONITOR_RULES } = require('./lib/monitors/rules');
 const { createUserStore } = require('./lib/users/store');
 const { createUsersApi } = require('./lib/users/api');
 const { createRefusalLog } = require('./lib/users/refusals');
+const { createBodyReader } = require('./lib/request-body');
 const {
   allowed: roleAllows,
   redactGateway,
@@ -1382,34 +1383,11 @@ const wholeParam = (v) => (v == null || v === '' ? undefined : /^\d{1,15}$/.test
 // The text each request sent, as read, for the audit entry of a dashboard change (send() keeps its short fields only).
 const bodies = new WeakMap();
 const AUDIT_BODY_MAX = 64 * 1024;
-// A body is read once: the role check reads a gateway admin body for its action, and the route reads it again here.
-const reads = new WeakMap();
-function readBody(req, max = 1e6) {
-  if (!reads.has(req)) reads.set(req, readOnce(req, max));
-  return reads.get(req);
-}
-// The body parsed once, so the role check and the gateway admin route act on the same object (its action).
-const parsed = new WeakMap();
-function jsonBody(req) {
-  if (!parsed.has(req)) parsed.set(req, readBody(req).then(JSON.parse));
-  return parsed.get(req);
-}
-function readOnce(req, max) {
-  return new Promise((resolve, reject) => {
-    let data = '';
-    req.on('data', (c) => {
-      data += c;
-      if (data.length > max) {
-        req.destroy();
-        reject(new Error('too large'));
-      }
-    });
-    req.on('end', () => {
-      if (data.length <= AUDIT_BODY_MAX) bodies.set(req, data); // a bigger body loses only op/target in its entry
-      resolve(data);
-    });
-  });
-}
+// A body is read once (lib/request-body.js): the role check reads a gateway admin body for its action, and the route
+// reads it again; a bigger body than AUDIT_BODY_MAX loses only op/target in its entry.
+const { readBody, jsonBody } = createBodyReader({
+  keep: (req, data) => data.length <= AUDIT_BODY_MAX && bodies.set(req, data),
+});
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
