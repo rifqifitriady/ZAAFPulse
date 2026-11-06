@@ -264,6 +264,10 @@ test('owner, viewer and reviewer: what each may do, the mustChange gate, and eve
   const text = JSON.stringify(all);
   for (const secret of [VERA, REX, 'vera first 0001', 'rex first 00001', ADMIN])
     assert.ok(!text.includes(secret), secret);
+  // The audit list by account.
+  const byRex = await call(s, '/api/governance/audit?user=rex&limit=500', { as: owner });
+  assert.equal(byRex.status, 200);
+  assert.ok(byRex.body.entries.length > 0 && byRex.body.entries.every((e) => e.actor.user === 'rex'));
   assert.ok(s.alive());
 });
 

@@ -6,8 +6,8 @@
    - Compliance (#governance/compliance): the controls from GET /api/governance/controls, one table per framework, and
      the evidence export (GET /api/governance/evidence?format=md|json).
    - Audit log (#governance/audit): every change made to ZAAFPulse by a person or an API key, from GET
-     /api/governance/audit (newest first, a page at a time). Filters: the range, the kind of actor, action text and the
-     outcome. Each row's field changes open in a <details>. Verify checks the chain (GET …/audit/verify), the export
+     /api/governance/audit (newest first, a page at a time). Filters: the range, the kind of actor, the account, action text
+     and the outcome. Each row's field changes open in a <details>. Verify checks the chain (GET …/audit/verify), the export
      links download CSV or JSON lines, and the retention is saved with POST /api/governance/settings.
    Events are delegated (the CSP allows no inline handler); pure helpers are exported for Node tests, and nothing here
    touches the DOM at load time. Every server or owner string reaches the markup through esc(). */
@@ -33,7 +33,7 @@ const GOV_OUTCOMES = [
   ['error', 'Error'],
 ];
 const GOV = {
-  filters: { range: '7', actor: '', action: '', outcome: '' },
+  filters: { range: '7', actor: '', user: '', action: '', outcome: '' },
   rows: [],
   next: null,
   hooked: false,
@@ -65,6 +65,7 @@ function govQuery(f, { before = null, now = Date.now() } = {}) {
   const from = govFrom(f.range, now);
   if (from) q.set('from', from);
   if (f.actor) q.set('actor', f.actor);
+  if (f.user) q.set('user', String(f.user).trim().toLowerCase().slice(0, 32));
   if (f.action) q.set('action', String(f.action).slice(0, 80));
   if (f.outcome) q.set('outcome', f.outcome);
   q.set('limit', '100');
@@ -87,11 +88,20 @@ function govTime(ts) {
   const day = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   return `${day} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
-/** Who acted, in words: "Dashboard · password · 10.0.0.2", "API key key_ab12", "Monitors rule tool_loop" … */
+/** Who acted, in words: "Dashboard · vera (viewer) · password · 10.0.0.2", "API key key_ab12", "Monitors rule
+ * tool_loop" … */
 function govActorLabel(a) {
   if (!a || typeof a !== 'object') return 'Unknown';
   if (a.via === 'dashboard')
-    return ['Dashboard', a.mode, a.device ? `device ${a.device}` : '', a.ip].filter(Boolean).join(' · ');
+    return [
+      'Dashboard',
+      a.user ? `${a.user}${a.role && a.role !== a.user ? ` (${a.role})` : ''}` : '',
+      a.mode,
+      a.device ? `device ${a.device}` : '',
+      a.ip,
+    ]
+      .filter(Boolean)
+      .join(' · ');
   if (a.via === 'apikey') return `API key ${a.keyId || ''}`.trim();
   if (a.via === 'rule') return `Monitors rule ${a.rule || ''}`.trim();
   if (a.via === 'cli') return 'Command line';
@@ -186,6 +196,7 @@ function govFiltersHtml(f) {
   return `<form id="gov-filters" class="gov-bar">
     <label>${esc('Range')}${select('range', GOV_RANGES)}</label>
     <label>${esc('Actor')}${select('actor', GOV_ACTORS)}</label>
+    <label>${esc('User')}<input class="input" name="user" maxlength="32" placeholder="owner, an account…" value="${esc(f.user || '')}"></label>
     <label>${esc('Action')}<input class="input" name="action" maxlength="80" placeholder="config.change, keys…" value="${esc(f.action)}"></label>
     <label>${esc('Outcome')}${select('outcome', GOV_OUTCOMES)}</label>
     <button class="btn" type="submit">${esc('Apply')}</button>
@@ -509,6 +520,7 @@ function govInstallEvents() {
       GOV.filters = {
         range: String(data.get('range') || '7'),
         actor: String(data.get('actor') || ''),
+        user: String(data.get('user') || '').trim(),
         action: String(data.get('action') || '').trim(),
         outcome: String(data.get('outcome') || ''),
       };
