@@ -123,6 +123,9 @@ function govTargetLabel(t) {
 }
 /** A change's value as text: absent is an empty set sign. */
 const govValue = (v) => (v === null || v === undefined ? '∅' : typeof v === 'string' ? v : JSON.stringify(v));
+/** A change's values in words; "(hidden)" when it names its path only (a reviewer's or a viewer's view). */
+const govChangeText = (c) =>
+  c && typeof c === 'object' && !('from' in c) && !('to' in c) ? '(hidden)' : `${govValue(c.from)} → ${govValue(c.to)}`;
 /** The field changes of an entry in a <details>, or '' when it has none. */
 function govChangesHtml(e) {
   const list = Array.isArray(e.changes) ? e.changes : [];
@@ -130,7 +133,7 @@ function govChangesHtml(e) {
   const more = e.truncated > 0 ? `<li class="muted">${esc(`and ${e.truncated} more`)}</li>` : '';
   const n = list.length + (e.truncated > 0 ? e.truncated : 0);
   return `<details class="gov-changes"><summary>${esc(`${n} field${n === 1 ? '' : 's'} changed`)}</summary><ul>${list
-    .map((c) => `<li><code>${esc(c.path)}</code>: ${esc(govValue(c.from))} → ${esc(govValue(c.to))}</li>`)
+    .map((c) => `<li><code>${esc(c.path)}</code>: ${esc(govChangeText(c))}</li>`)
     .join('')}${more}</ul></details>`;
 }
 /** The outcome as a tag; a refusal or an error names its HTTP status. */
