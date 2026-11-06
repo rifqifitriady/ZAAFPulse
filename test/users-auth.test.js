@@ -7,9 +7,10 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { Readable } = require('stream');
-const { createAuth, localLoginCode } = require('../lib/auth');
-const { createUserStore } = require('../lib/users/store');
+const { createAuth, localLoginCode, ACCOUNT_NAME } = require('../lib/auth');
+const { createUserStore, NAME } = require('../lib/users/store');
 
 const ADMIN = 'correct-horse-battery';
 const PW = 'viewer password 1';
@@ -209,6 +210,98 @@ test("a known browser is exempt only for the account that signed in there, not f
   const id = h.events[h.events.length - 1].actor.device;
   assert.ok(k1.includes(id));
   assert.equal(h.auth.actorOf(asReq(k1)).device, id);
+});
+
+test("an account's sign-in takes back only its own attempt: it never gives an address more guesses at the owner", async (t) => {
+  const h = harness(t);
+  h.store.create({ name: 'bo', role: 'viewer', password: PW });
+  const ip = '198.51.100.9';
+  for (let i = 0; i < 4; i++) assert.equal((await h.login({ password: `guess ${i}` }, ip)).status, 401);
+  assert.equal((await h.login({ name: 'bo', password: PW }, ip)).status, 200);
+  assert.equal((await h.login({ password: 'guess 4' }, ip)).status, 401, "the address's fifth and last free guess");
+  assert.equal((await h.login({ password: ADMIN }, ip)).status, 429, "bo's sign-in did not reset the address");
+  assert.equal((await h.login({ name: 'bo', password: PW }, ip)).status, 429);
+  // The owner's own sign-in still starts the address over, as before.
+  h.advance(31e3);
+  assert.equal((await h.login({ password: ADMIN }, ip)).status, 200);
+  for (let i = 0; i < 4; i++) assert.equal((await h.login({ password: `again ${i}` }, ip)).status, 401);
+});
+
+test("pressure mode: an account's cookie exempts no one else, and account sign-ins never lower it", async (t) => {
+  const h = harness(t);
+  h.store.create({ name: 'bo', role: 'viewer', password: PW });
+  h.store.create({ name: 'cy', role: 'viewer', password: PW });
+  const k = cookiesOf(await h.login({ name: 'bo', password: PW }, '198.51.100.1'))
+    .split('; ')
+    .find((c) => c.startsWith('zp_known='));
+  // Fifty failures from fifty addresses: distributed guessing, one free try per fresh address.
+  for (let a = 1; a <= 50; a++) assert.equal((await h.login({ password: 5 }, `203.0.113.${a}`)).status, 401);
+  for (const [name, ip] of [
+    [undefined, '192.0.2.80'],
+    ['cy', '192.0.2.81'],
+  ]) {
+    assert.equal((await h.login({ name, password: 'wrong' }, ip, k)).status, 401);
+    assert.equal(
+      (await h.login({ name, password: 'wrong' }, ip, k)).status,
+      429,
+      `${name || 'owner'} with bo's cookie`,
+    );
+  }
+  // bo's own browser is exempt; bo's sign-ins from fresh addresses do not end the pressure.
+  assert.equal((await h.login({ name: 'bo', password: 'wrong' }, '192.0.2.82', k)).status, 401);
+  assert.equal((await h.login({ name: 'bo', password: PW }, '192.0.2.82', k)).status, 200);
+  for (let a = 1; a <= 5; a++)
+    assert.equal((await h.login({ name: 'bo', password: PW }, `192.0.2.${100 + a}`)).status, 200);
+  assert.equal((await h.login({ password: 'wrong' }, '192.0.2.90')).status, 401);
+  assert.equal((await h.login({ password: 'wrong' }, '192.0.2.90')).status, 429, 'still one free try');
+});
+
+test("an owner's known-device cookie of the old format (before accounts) still exempts the owner", async (t) => {
+  const h = harness(t);
+  await h.login({ password: ADMIN }, '198.51.100.1'); // makes the signing key
+  const key = Buffer.from(fs.readFileSync(path.join(h.dataDir, '.data', 'local-auth.key'), 'utf8').trim(), 'base64');
+  const id = 'AbCdEfGhIjKlMnOp';
+  const body = `${id}.${Date.UTC(2027, 0, 1)}`;
+  const old = `zp_known=${body}.${crypto.createHmac('sha256', key).update(`known:${body}`).digest('base64url')}`;
+  const ip = '198.51.100.20';
+  for (let i = 0; i < 5; i++) assert.equal((await h.login({ password: `wrong ${i}` }, ip)).status, 401);
+  assert.equal((await h.login({ password: ADMIN }, ip)).status, 429);
+  const r = await h.login({ password: ADMIN }, ip, old);
+  assert.equal(r.status, 200, 'the old cookie gets the owner in');
+  assert.equal(h.events[h.events.length - 1].actor.device, id);
+  assert.ok(cookiesOf(r).includes(`zp_known=${id}.`), 'the browser keeps its id');
+});
+
+test('a sign-in ends the session the browser held before; a body that is not an object is a wrong password', async (t) => {
+  const h = harness(t);
+  h.store.create({ name: 'bo', role: 'viewer', password: PW });
+  h.store.create({ name: 'cy', role: 'viewer', password: PW });
+  const bo = cookiesOf(await h.login({ name: 'bo', password: PW }, '10.0.0.1'));
+  const cy = await h.login({ name: 'cy', password: PW }, '10.0.0.1', bo);
+  assert.equal(cy.status, 200);
+  assert.equal(h.auth.check(asReq(bo)), false, "bo's token is gone from the server");
+  assert.equal(h.auth.sessionOf(asReq(cookiesOf(cy))).user, 'cy');
+  let n = 0;
+  for (const body of [null, [], 'x', 5, true]) {
+    const r = await h.login(body, `10.0.1.${++n}`);
+    assert.deepEqual([r.status, r.json], [401, { error: 'wrong name or password' }], JSON.stringify(body));
+  }
+});
+
+test('a name that can never be an account has no lockout budget of its own; one that could has', async (t) => {
+  assert.equal(ACCOUNT_NAME.source, NAME.source, 'the same name rule as lib/users/store.js');
+  const h = harness(t);
+  for (let a = 1; a <= 10; a++) await h.login({ name: 'not a name!', password: PW }, `203.0.113.${a}`);
+  for (let a = 1; a <= 10; a++) await h.login({ name: 'x'.repeat(40), password: PW }, `203.0.114.${a}`);
+  assert.deepEqual(
+    h.events.filter((e) => e.action === 'auth.lockout'),
+    [],
+  );
+  for (let a = 1; a <= 10; a++) await h.login({ name: 'nobody', password: PW }, `203.0.115.${a}`);
+  assert.deepEqual(
+    h.events.filter((e) => e.action === 'auth.lockout').map((e) => [e.seconds, e.target || null]),
+    [[30, null]],
+  );
 });
 
 test('local mode: accounts sign in with a name, the owner with `zaafpulse open`; neither sign-out ends the other', async (t) => {
