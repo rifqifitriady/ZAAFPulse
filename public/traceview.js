@@ -1391,7 +1391,7 @@ function mountTrace() {
       color: err ? TR_COLOR.error : trOwn(TR_COLOR, n.kind, TR_COLOR.unknown),
       title: p.title,
       meta: p.meta || '',
-      dur: Number.isFinite(n.start) && Number.isFinite(n.end) ? fmtDur(n.end - n.start) : '',
+      dur: Number.isFinite(n.start) && Number.isFinite(n.end) ? fmtDur(n.end - n.start).replace(/^—$/, '') : '',
       cost: Number.isFinite(n.cost) && n.cost > 0 ? trUsd(n.cost) : '',
       err,
       loop: n.count,
@@ -1470,7 +1470,7 @@ function mountTrace() {
     const n = S.nodes[ni];
     if (!n) return;
     const p = nodeParts(n, ni);
-    const d = Number.isFinite(n.start) && Number.isFinite(n.end) ? fmtDur(n.end - n.start) : '';
+    const d = Number.isFinite(n.start) && Number.isFinite(n.end) ? fmtDur(n.end - n.start).replace(/^—$/, '') : '';
     const facts = [p.title, n.status === 'error' ? 'failed' : '', d].filter(Boolean).join(', ');
     $('#tr-live').textContent = `Station ${ni + 1} of ${S.nodes.length}: ${facts}`;
   }

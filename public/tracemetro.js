@@ -487,11 +487,18 @@ function trMetro(canvas, opts = {}) {
     // The labels: placed by priority, a lower one only where it clears the placed ones (focus, selection and hover
     // always stay); drawn far to near so nearer ones paint on top; only drawn ones can be clicked.
     const kept = [];
+    // The focus orb is kept clear: a label of rank 3 or lower waits for another place rather than cover it.
+    const fp = st.pts[focus];
+    const orb = [];
+    if (fp) {
+      const kc = Math.min(fp[2], 3);
+      orb.push({ X: fp[0] - 34 * kc, Y: fp[1] - 60 * kc, W: 68 * kc, H: 74 * kc });
+    }
     const hit = (a, b) => a.X < b.X + b.W && b.X < a.X + a.W && a.Y < b.Y + b.H && b.Y < a.Y + a.H;
     asks.sort((a, b) => a.rank - b.rank);
     for (const r of asks) {
       const b = place(r, w);
-      if (r.rank <= 2 || !kept.some((o) => hit(o, b))) kept.push(b);
+      if (r.rank <= 2 || !(kept.some((o) => hit(o, b)) || orb.some((o) => hit(o, b)))) kept.push(b);
     }
     kept.sort((a, b) => b.dz - a.dz).forEach(label);
 
@@ -563,6 +570,7 @@ function trMetro(canvas, opts = {}) {
       if (!st.nodes.length) return;
       const t = now();
       const dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? st.H : 1); // pixels, lines or pages
+      if (!dy) return; // a sideways wheel is the page's
       const at = cameraAt(t).p;
       if ((dy < 0 && at <= 0) || (dy > 0 && at >= st.nodes.length - 1)) return; // at an end: let the page scroll
       e.preventDefault();
@@ -643,8 +651,9 @@ function trMetro(canvas, opts = {}) {
     },
     // The selection. fly: the camera flies there and the ride waits 10 s; without it the station is only marked.
     select(i, { fly = false } = {}) {
+      const prev = st.sel;
       st.sel = Number.isInteger(i) && i >= 0 && i < st.nodes.length ? i : -1;
-      if ((fly || !st.ride) && st.sel >= 0) {
+      if ((fly || (!st.ride && st.sel !== prev)) && st.sel >= 0) {
         const t = now();
         st.fly = { from: cameraAt(t).p, to: st.sel, t0: t, ms: 600 };
         st.riding = false;

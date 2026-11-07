@@ -611,6 +611,64 @@ test('trMetro: a stopped ride keeps a wheeled camera on a live repaint, and foll
   h.m.destroy();
 });
 
+test('trMetro: a stopped, wheeled camera stays on a live repaint with fly off, and flies to a new selection', () => {
+  const h = harness();
+  const nodes = demoNodes();
+  h.m.setNodes(nodes, nodes.map(part), 1, { restart: true });
+  h.m.tour(false);
+  h.step(0);
+  h.step(700);
+  h.listeners.wheel({ deltaY: 900, deltaMode: 0, preventDefault() {} });
+  h.step(710);
+  const wheeled = h.lastP();
+  assert.ok(Math.abs(wheeled - 4) < 0.1, `wheeled to about 4: ${wheeled}`);
+  h.m.setNodes(nodes, nodes.map(part), 1, { restart: false });
+  h.m.select(1, { fly: false });
+  h.step(720);
+  h.step(1500);
+  assert.equal(h.lastP(), wheeled, 'same selection: the camera stays');
+  h.m.select(2, { fly: false });
+  h.step(1510);
+  h.step(2500);
+  assert.equal(h.lastP(), 2, 'a changed selection flies');
+  h.m.destroy();
+});
+
+test('trMetro: a sideways wheel (deltaY 0) is left to the page and does not pause the ride', () => {
+  const h = harness();
+  const nodes = demoNodes();
+  h.m.setNodes(nodes, nodes.map(part), -1, { restart: true });
+  h.step(0);
+  h.step(500);
+  let prevented = 0;
+  h.listeners.wheel({ deltaX: 80, deltaY: 0, deltaMode: 0, preventDefault: () => prevented++ });
+  assert.equal(prevented, 0);
+  h.step(3000);
+  h.step(6000);
+  assert.ok(h.lastP() > 2, `the ride went on: ${h.lastP()}`);
+  h.m.destroy();
+});
+
+test('trMetro: a label of lower priority never covers the focus orb', () => {
+  const nodes = demoNodes();
+  const { calls } = frameAt(nodes.length - 1, { sel: nodes.length - 1 });
+  // The focus is the Answer station: its floor rings are the 34:24 pair, whose centre is the orb's floor point.
+  const ell = calls.filter((c) => c[0] === 'ellipse');
+  const wide = ell.find((x) =>
+    ell.some((y) => y[1] === x[1] && y[2] === x[2] && Math.abs(x[3] / y[3] - 34 / 24) < 1e-6),
+  );
+  assert.ok(wide, 'the Answer rings are drawn');
+  const kc = wide[3] / 34;
+  const orb = { X: wide[1] - 34 * kc, W: 68 * kc, Y: wide[2] - 60 * kc, H: 74 * kc };
+  const boxes = labelBoxes(calls);
+  const others = boxes.filter((b) => !(b.Y + b.H <= wide[2] - 60 * kc)); // the focus label stands above the orb
+  assert.ok(boxes.length > others.length, 'the focus label is drawn above the orb');
+  assert.ok(
+    others.length === 0 || others.every((b) => !overlap(b, orb)),
+    `a label covers the orb: ${JSON.stringify(others)}`,
+  );
+});
+
 test('trMetro: the pointer moving over the map pauses the ride even without an enter event', () => {
   const h = harness();
   const nodes = demoNodes();
@@ -664,12 +722,9 @@ test('trMetro: the Answer station has a second, wider floor ring', () => {
   assert.equal(last.kind, 'answer');
   // The floor disc is 24*k wide; the extra ring is 34*k, in the same flat ratio.
   const wide = h.calls.filter(kinds).filter((c) => c[3] > 0 && c[5] !== undefined);
-  const disc = wide.find((c) => c[3] > 10);
-  assert.ok(disc, 'ellipses are drawn');
-  const kk = wide.filter((c) => Math.abs(c[3] / 24 - Math.round((c[3] / 24) * 1000) / 1000) < 1e-9);
   assert.ok(
     wide.some((x) => wide.some((y) => Math.abs(x[3] / y[3] - 34 / 24) < 1e-6)),
-    `a 34:24 ring pair: ${kk.length}`,
+    'a 34:24 ring pair',
   );
   h.m.destroy();
 });
