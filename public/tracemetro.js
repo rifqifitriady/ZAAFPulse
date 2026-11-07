@@ -235,7 +235,8 @@ function trMetro(canvas, opts = {}) {
     }
   }
 
-  // A label request becomes a box inside the map: too wide for it, the label shrinks; then it is slid in, 6 px from the edges.
+  // A label request becomes a box inside the map: too wide for it, the label shrinks; then it is slid in,
+  // 6 px from the edges.
   function place(r, w) {
     const M = 6;
     let sc = r.sc;
@@ -378,8 +379,7 @@ function trMetro(canvas, opts = {}) {
     const labelled = metroLabelled(n, focus, st.sel);
     if (st.hover >= 0) labelled.add(st.hover);
     const asks = [];
-    const order = st.nodes.map((_, i) => i).sort((a, b) => st.lay[b].z - st.lay[a].z);
-    for (const i of order) {
+    for (let i = n - 1; i >= 0; i--) {
       const L = st.lay[i];
       const part = st.parts[i] || {};
       const col = part.color || '#8f98cc';
@@ -399,6 +399,14 @@ function trMetro(canvas, opts = {}) {
       ctx.beginPath();
       ctx.ellipse(g[0], g[1], rx, rx * 0.31, 0, 0, Math.PI * 2);
       ctx.fill();
+      if (kind === 'answer') {
+        // The terminal station: a second, wider ring.
+        ctx.strokeStyle = rgba(col, isF ? 0.9 : 0.6);
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.ellipse(g[0], g[1], 34 * kc, 34 * kc * 0.31, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
       if (i === st.sel) {
         ctx.strokeStyle = 'rgba(255,255,255,.9)';
         ctx.lineWidth = 2;
@@ -456,7 +464,7 @@ function trMetro(canvas, opts = {}) {
       }
       const pulse = part.err && !calm ? 1 + 0.15 * Math.sin(s * 6) : 1;
       ctx.shadowColor = col;
-      ctx.shadowBlur = calm ? 0 : isF ? 26 : 12;
+      ctx.shadowBlur = calm ? 0 : isF ? 26 + 6 * Math.sin((s * Math.PI * 2) / 1.6) : 12;
       ctx.fillStyle = col;
       ctx.beginPath();
       ctx.arc(g[0], g[1] - 4 * kc, (isF ? 9 : 6) * kc * pulse, 0, Math.PI * 2);
@@ -466,7 +474,7 @@ function trMetro(canvas, opts = {}) {
       if (labelled.has(i)) {
         const at = pr(L.x, 64, L.z);
         if (at) {
-          const sc = Math.max(0.55, Math.min(1.1, k * 0.95)) * (isF ? 1.1 : 1);
+          const sc = Math.max(0.75, Math.min(1.1, k * 0.95)) * (isF ? 1.1 : 1);
           const side = isF ? 0 : L.x >= c.x ? 1 : -1;
           const alpha = fade * (isF ? 1 : i === focus - 1 ? 0.5 : 0.8);
           const rank =
@@ -537,6 +545,7 @@ function trMetro(canvas, opts = {}) {
     kick();
   });
   on(canvas, 'pointermove', (e) => {
+    st.inside = true;
     const i = hitAt(pointAt(e));
     if (i === st.hover) return;
     st.hover = i;
@@ -552,10 +561,12 @@ function trMetro(canvas, opts = {}) {
     'wheel',
     (e) => {
       if (!st.nodes.length) return;
-      e.preventDefault();
       const t = now();
       const dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? st.H : 1); // pixels, lines or pages
-      st.hold = Math.max(0, Math.min(st.nodes.length - 1, cameraAt(t).p + dy / 300));
+      const at = cameraAt(t).p;
+      if ((dy < 0 && at <= 0) || (dy > 0 && at >= st.nodes.length - 1)) return; // at an end: let the page scroll
+      e.preventDefault();
+      st.hold = Math.max(0, Math.min(st.nodes.length - 1, at + dy / 300));
       st.fly = null;
       st.riding = false;
       st.until = t + METRO_PAUSE;
@@ -605,6 +616,7 @@ function trMetro(canvas, opts = {}) {
       st.parts = Array.isArray(parts) ? parts : [];
       st.lay = metroLayout(st.nodes);
       st.born = st.nodes.map((_, i) => (restart || i < prev ? 0 : t));
+      const sel0 = st.sel;
       st.sel = Number.isInteger(sel) && sel >= 0 && sel < st.nodes.length ? sel : -1;
       st.hover = -1;
       if (restart) {
@@ -612,8 +624,12 @@ function trMetro(canvas, opts = {}) {
         st.hold = 0;
         st.until = 0;
         st.riding = false;
-      } else st.hold = Math.min(st.hold, Math.max(0, st.nodes.length - 1));
-      if (!st.ride && st.sel >= 0) st.hold = st.sel;
+      } else {
+        st.hold = Math.min(st.hold, Math.max(0, st.nodes.length - 1));
+        // The ride clock's phase depends on the count: resume from where the camera stands.
+        if (st.nodes.length !== prev) st.riding = false;
+      }
+      if (!st.ride && st.sel >= 0 && (restart || st.sel !== sel0)) st.hold = st.sel;
       st.last = '';
       kick();
     },
