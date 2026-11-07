@@ -1078,12 +1078,12 @@ const TOPO_TTL_MS = 5000;
 const TOPO_SOURCE_MS = 2000;
 const topoCache = { at: 0, value: null, pending: null };
 const topoLogs = { at: 0, value: null };
-async function topoSource(fn, empty = null) {
+async function topoSource(fn, empty = null, ms = TOPO_SOURCE_MS) {
   let timer;
   try {
     return await Promise.race([
       Promise.resolve().then(fn),
-      new Promise((_, reject) => (timer = setTimeout(() => reject(new Error('timed out')), TOPO_SOURCE_MS))),
+      new Promise((_, reject) => (timer = setTimeout(() => reject(new Error('timed out')), ms))),
     ]);
   } catch (err) {
     return empty === null ? { error: err.message } : empty;
@@ -1143,13 +1143,15 @@ async function topology() {
       .finally(() => (topoCache.pending = null));
   return topoCache.pending;
 }
-// The AI inventory's sources (lib/governance/inventory.js buildInventory): each one capped at 2 s, and null when it
+// The AI inventory's sources (lib/governance/inventory.js buildInventory): each one capped at 6 s (a cold process list
+// on Windows can take several seconds, and a source that misses the cap counts as failed), and null when it
 // failed (the page names it). Only what an item shows is read: gateway agents by id, name, state and remote address,
 // never a system prompt; keys by id, name and dates, never a secret. The MCP scan reads the AI clients' own config
 // files (lib/governance/mcp-scan.js); demo mode never reads them.
 const INV_FAILED = Symbol('failed');
+const INV_SOURCE_MS = 6000;
 const invSource = async (fn) => {
-  const v = await topoSource(fn, INV_FAILED);
+  const v = await topoSource(fn, INV_FAILED, INV_SOURCE_MS);
   return v === INV_FAILED ? null : v;
 };
 // An AI client's config file: its text, or null when it is not there. It is opened (without waiting on a pipe) and must
