@@ -189,6 +189,7 @@ test('metroRideAt: the ride time at which the camera rests at station k', () => 
 });
 
 // ---- the renderer, on a fake canvas: no browser, a hand-driven clock and frame queue ----
+const { after } = require('node:test');
 const { trMetro, metroProject: project, metroCamera: camera, metroLayout: layout } = require('../public/tracemetro.js');
 
 function fakeCanvas({ ctx = true } = {}) {
@@ -227,10 +228,33 @@ function fakeCanvas({ ctx = true } = {}) {
   return { canvas, calls, listeners };
 }
 
+// The browser globals the renderer tests replace, put back when the file is done.
+const realGlobals = ['requestAnimationFrame', 'cancelAnimationFrame', 'matchMedia'].map((k) => [
+  k,
+  Object.prototype.hasOwnProperty.call(global, k),
+  global[k],
+]);
+after(() => {
+  for (const [k, had, v] of realGlobals) {
+    if (had) global[k] = v;
+    else delete global[k];
+  }
+});
+
 function harness(opts = {}) {
-  const queue = [];
-  global.requestAnimationFrame = (fn) => queue.push(fn);
-  global.cancelAnimationFrame = () => {};
+  const queue = []; // { id, fn }
+  let nextId = 1;
+  global.requestAnimationFrame = (fn) => {
+    const id = nextId++;
+    queue.push({ id, fn });
+    return id;
+  };
+  global.cancelAnimationFrame = (id) => {
+    const at = queue.findIndex((q) => q.id === id);
+    if (at >= 0) queue.splice(at, 1);
+  };
+  if (opts.reduced) global.matchMedia = () => ({ matches: true });
+  else delete global.matchMedia;
   const clock = { t: 0 };
   const seen = { picks: [], frames: [], toggles: 0, enters: 0 };
   const fake = fakeCanvas(opts);
@@ -244,10 +268,10 @@ function harness(opts = {}) {
   const step = (t) => {
     clock.t = t;
     const fns = queue.splice(0);
-    fns.forEach((f) => f());
+    fns.forEach((q) => q.fn());
   };
   const lastP = () => seen.frames[seen.frames.length - 1];
-  return { m, step, seen, lastP, queue, ...fake };
+  return { m, step, seen, lastP, queue, clock, ...fake };
 }
 
 const part = (n) => ({
@@ -382,4 +406,111 @@ test('trMetro: hidden or destroyed, no frame is asked for', () => {
   h.m.destroy();
   h.step(200);
   assert.equal(h.queue.length, 0);
+});
+
+test('trMetro: the ▶ button resumes the ride at once, even inside the pause after a selection', () => {
+  const h = harness();
+  const nodes = demoNodes();
+  h.m.setNodes(nodes, nodes.map(part), -1, { restart: true });
+  h.step(0);
+  h.m.select(3, { fly: true });
+  h.step(700);
+  assert.equal(h.lastP(), 3);
+  h.m.tour(false);
+  h.m.tour(true);
+  h.step(800);
+  h.step(1400);
+  h.step(2500);
+  assert.ok(h.lastP() > 3, `riding again: ${h.lastP()}`);
+  h.m.destroy();
+});
+
+test('trMetro: the wheel moves the camera about one station per notch and holds it for 10 s', () => {
+  const h = harness();
+  const nodes = demoNodes();
+  h.m.setNodes(nodes, nodes.map(part), -1, { restart: true });
+  h.step(0);
+  h.step(100);
+  let prevented = 0;
+  h.listeners.wheel({ deltaY: 300, deltaMode: 0, preventDefault: () => prevented++ });
+  assert.equal(prevented, 1);
+  h.step(200);
+  const held = h.lastP();
+  assert.ok(Math.abs(held - 1) < 0.1, `about one station on: ${held}`);
+  h.step(5000);
+  assert.equal(h.lastP(), held, 'held');
+  h.step(10000);
+  assert.equal(h.lastP(), held, 'still held before METRO_PAUSE has elapsed');
+  h.step(10200);
+  h.step(12000);
+  assert.ok(h.lastP() > 1.5, `riding on: ${h.lastP()}`);
+  h.m.destroy();
+});
+
+test('trMetro: the wheel reads lines and pages as well as pixels', () => {
+  const h = harness();
+  const nodes = demoNodes();
+  h.m.setNodes(nodes, nodes.map(part), -1, { restart: true });
+  h.m.tour(false);
+  h.step(0);
+  h.listeners.wheel({ deltaY: 3, deltaMode: 1, preventDefault() {} }); // 3 lines = 48 px
+  h.step(10);
+  assert.ok(Math.abs(h.lastP() - 0.16) < 0.01, `lines: ${h.lastP()}`);
+  h.listeners.wheel({ deltaY: -1, deltaMode: 2, preventDefault() {} }); // a page up: 400 px back to the start
+  h.step(20);
+  assert.equal(h.lastP(), 0);
+  h.m.destroy();
+});
+
+test('trMetro: the pointer over the map stops the ride, leaving lets it go on', () => {
+  const h = harness();
+  const nodes = demoNodes();
+  h.m.setNodes(nodes, nodes.map(part), -1, { restart: true });
+  h.step(0);
+  h.step(500);
+  h.listeners.pointerenter();
+  h.step(1000);
+  const held = h.lastP();
+  h.step(1500);
+  h.step(8000);
+  assert.equal(h.lastP(), held, 'p stays put while the pointer is over the map');
+  h.listeners.pointerleave();
+  h.step(8100);
+  h.step(9100);
+  assert.ok(h.lastP() !== held, `riding again: ${h.lastP()}`);
+  h.m.destroy();
+});
+
+test('trMetro: reduced motion shows a station added at the end at once, with no fade-in', () => {
+  const h = harness({ reduced: true });
+  const nodes = demoNodes();
+  const parts = nodes.map(part);
+  h.m.tour(false);
+  h.m.setNodes(nodes, parts, -1, { restart: true });
+  h.step(0);
+  const more = nodes.concat([{ ...nodes[1] }]);
+  h.clock.t = 10;
+  h.m.setNodes(more, parts.concat([{ ...part(nodes[1]), title: 'Newcomer' }]), more.length - 1, { restart: false });
+  h.step(10);
+  assert.ok(
+    h.calls.some((c) => c[0] === 'fillText' && String(c[1]).includes('Newcomer')),
+    'the new station is drawn and labelled in the first frame',
+  );
+  h.m.destroy();
+});
+
+test('trMetro: reduced motion rides only by whole stations, and only when started', () => {
+  const h = harness({ reduced: true });
+  const nodes = demoNodes();
+  h.m.setNodes(nodes, nodes.map(part), -1, { restart: true });
+  h.m.tour(true);
+  let top = 0;
+  for (let t = 0; t <= 20000; t += 500) {
+    h.m.show(true); // the 250 ms redraw timer is real; nudge a frame by hand
+    h.step(t);
+    assert.ok(Number.isInteger(h.lastP()), `whole station at ${t}: ${h.lastP()}`);
+    top = Math.max(top, h.lastP());
+  }
+  assert.ok(top >= 2, `it did step along: ${top}`);
+  h.m.destroy();
 });
