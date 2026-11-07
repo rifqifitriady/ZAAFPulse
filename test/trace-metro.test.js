@@ -568,3 +568,108 @@ test('trMetro: near the camera the track and the orbs keep a capped size', () =>
     }
   }
 });
+
+// ---- final review fixes ----
+const inFade = (calls) =>
+  calls.some((c) => c[0] === 'set' && c[1] === 'fillStyle' && String(c[2]).startsWith('rgba(7,10,31'));
+
+for (const grown of [true, false]) {
+  test(`trMetro: a live repaint after the ride has looped keeps the camera in place (${grown ? 'one station added' : 'same count'})`, () => {
+    const h = harness();
+    const nodes = demoNodes().slice(0, 5);
+    h.m.setNodes(nodes, nodes.map(part), -1, { restart: true });
+    for (let t = 0; t <= 12000; t += 100) h.step(t);
+    const before = h.lastP();
+    const more = grown ? nodes.concat([{ ...nodes[1] }]) : nodes.slice();
+    h.m.setNodes(more, more.map(part), -1, { restart: false });
+    h.calls.length = 0;
+    h.step(12100);
+    assert.ok(Math.abs(h.lastP() - before) < 0.6, `camera jumped: ${before} -> ${h.lastP()}`);
+    assert.ok(!inFade(h.calls), 'not in a fade');
+    h.m.destroy();
+  });
+}
+
+test('trMetro: a stopped ride keeps a wheeled camera on a live repaint, and follows a changed selection', () => {
+  const h = harness();
+  const nodes = demoNodes();
+  h.m.setNodes(nodes, nodes.map(part), 1, { restart: true });
+  h.m.tour(false);
+  h.step(0);
+  h.step(700);
+  h.listeners.wheel({ deltaY: 900, deltaMode: 0, preventDefault() {} });
+  h.step(710);
+  const wheeled = h.lastP();
+  assert.ok(wheeled > 3, `wheeled on: ${wheeled}`);
+  h.m.setNodes(nodes, nodes.map(part), 1, { restart: false });
+  h.step(720);
+  assert.equal(h.lastP(), wheeled, 'same selection: the camera stays');
+  h.m.setNodes(nodes, nodes.map(part), 2, { restart: false });
+  h.step(730);
+  h.step(1500);
+  assert.equal(h.lastP(), 2, 'a new selection pulls the camera');
+  h.m.destroy();
+});
+
+test('trMetro: the pointer moving over the map pauses the ride even without an enter event', () => {
+  const h = harness();
+  const nodes = demoNodes();
+  h.m.setNodes(nodes, nodes.map(part), -1, { restart: true });
+  h.step(0);
+  h.step(500);
+  h.listeners.pointermove({ clientX: 1, clientY: 1 });
+  h.step(1000);
+  const held = h.lastP();
+  h.step(6000);
+  assert.equal(h.lastP(), held);
+  h.m.destroy();
+});
+
+test('trMetro: the wheel at either end lets the page scroll; in the middle it is taken', () => {
+  const h = harness();
+  const nodes = demoNodes();
+  h.m.setNodes(nodes, nodes.map(part), -1, { restart: true });
+  h.m.tour(false);
+  h.step(0);
+  let prevented = 0;
+  const wheel = (dy) => h.listeners.wheel({ deltaY: dy, deltaMode: 0, preventDefault: () => prevented++ });
+  wheel(-100);
+  assert.equal(prevented, 0, 'first station, scrolling up');
+  wheel(100);
+  assert.equal(prevented, 1, 'first station, scrolling down moves the camera');
+  wheel(-100);
+  assert.equal(prevented, 2, 'in the middle');
+  wheel(nodes.length * 300);
+  h.step(10);
+  assert.equal(h.lastP(), nodes.length - 1);
+  const before = prevented;
+  wheel(100);
+  assert.equal(prevented, before, 'last station, scrolling down');
+  wheel(-100);
+  assert.equal(prevented, before + 1, 'last station, scrolling up moves the camera');
+  h.m.destroy();
+});
+
+test('trMetro: the Answer station has a second, wider floor ring', () => {
+  const h = harness();
+  const nodes = demoNodes();
+  const kinds = (c) => c[0] === 'ellipse';
+  h.m.setNodes(nodes, nodes.map(part), -1, { restart: true });
+  h.m.tour(false);
+  h.step(0);
+  h.listeners.wheel({ deltaY: (nodes.length - 1) * 300, deltaMode: 0, preventDefault() {} });
+  h.calls.length = 0;
+  h.step(10);
+  const last = nodes[nodes.length - 1];
+  assert.equal(last.kind, 'answer');
+  // The floor disc is 24*k wide; the extra ring is 34*k, in the same flat ratio.
+  const wide = h.calls.filter(kinds).filter((c) => c[3] > 0 && c[5] !== undefined);
+  const disc = wide.find((c) => c[3] > 10);
+  assert.ok(disc, 'ellipses are drawn');
+  const kk = wide.filter((c) => Math.abs(c[3] / 24 - Math.round((c[3] / 24) * 1000) / 1000) < 1e-9);
+  assert.ok(
+    wide.some((x) => wide.some((y) => Math.abs(x[3] / y[3] - 34 / 24) < 1e-6)),
+    `a 34:24 ring pair: ${kk.length}`,
+  );
+  h.m.destroy();
+});

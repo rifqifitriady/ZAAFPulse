@@ -711,6 +711,7 @@ function mountTrace() {
     metroKey: null, // the session and turn the metro shows: a new one restarts the ride
     ride: false, // whether the camera rides the line on its own
     hudAt: -1, // the station the HUD shows
+    markAt: '', // the time bar marker's last left value
     barAt: [], // each station's place on the time bar, 0..1
     spans: new Map(),
     cursor: undefined,
@@ -1418,6 +1419,7 @@ function mountTrace() {
     S.barAt = at.map((v) => (v == null ? last : (last = v)));
     const mark = document.createElement('i');
     mark.id = 'tr-bar-mark';
+    S.markAt = ''; // a new marker has no left yet
     frag.appendChild(mark);
     bar.replaceChildren(frag);
     markBar(trNodeIndex(S.sel));
@@ -1427,12 +1429,17 @@ function mountTrace() {
   }
   // After each metro frame: the time bar's marker follows the camera; the HUD names the station it stands at.
   function paintHud(p) {
+    if (!S.nodes.length) return;
     const at = S.barAt;
     if (at.length) {
       const i0 = Math.max(0, Math.min(at.length - 1, Math.floor(p)));
       const i1 = Math.min(at.length - 1, i0 + 1);
       const mark = $('#tr-bar-mark');
-      if (mark) mark.style.left = `${((at[i0] + (at[i1] - at[i0]) * (p - i0)) * 100).toFixed(2)}%`;
+      const left = `${((at[i0] + (at[i1] - at[i0]) * (p - i0)) * 100).toFixed(2)}%`;
+      if (mark && left !== S.markAt) {
+        S.markAt = left;
+        mark.style.left = left;
+      }
     }
     const i = Math.round(p);
     if (i === S.hudAt) return;
@@ -1458,7 +1465,7 @@ function mountTrace() {
     if (cost > 0) out.push(trUsd(cost));
     return out.join(' · ');
   }
-  // The screen-reader line: selections only, never the ride's steps.
+  // The screen-reader line: picks made on the map or the time bar, never the ride's steps or tree clicks.
   function announce(ni) {
     const n = S.nodes[ni];
     if (!n) return;
@@ -1470,7 +1477,9 @@ function mountTrace() {
   // A station picked on the map (click, ←/→, Home/End) or on the time bar selects its span.
   function pickNode(i) {
     const n = S.nodes[i];
-    if (n) select(n.id, { scroll: 'tree' });
+    if (!n) return;
+    select(n.id, { scroll: 'tree' });
+    announce(i);
   }
   function setRide(on) {
     S.ride = !!on;
@@ -1523,7 +1532,6 @@ function mountTrace() {
     const ni = trNodeIndex(id);
     if (metro) metro.select(ni, { fly: !auto && scroll !== 'none' });
     markBar(ni);
-    if (!same && !auto) announce(ni);
     if (scroll === 'both' || scroll === 'tree') scrollRow(id);
     if (!same || force) paintDetail();
   }
