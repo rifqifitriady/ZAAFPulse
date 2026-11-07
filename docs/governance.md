@@ -40,7 +40,7 @@ the gateway's usage this month, a key's last use), `configured`, then `idle` (in
 revoked or expired). The vendor is shown where it is known. An agent is read for its id, name, state and remote
 address only, never its system prompt; a key for its id, name and dates, never its secret.
 
-A source that fails, or takes longer than 2 seconds, is named on the page and the list is built from the rest. So is an
+A source that fails, or takes longer than 6 seconds, is named on the page and the list is built from the rest. So is an
 AI client file that could not be read (by the client's name; the page also shows its `~` path).
 
 ### MCP servers in your AI clients
