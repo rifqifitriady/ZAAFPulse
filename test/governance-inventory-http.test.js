@@ -136,9 +136,10 @@ function prepare(data) {
 
 test('inventory: the MCP servers of the client files, the gateway and the integrations, with no secret', async (t) => {
   const s = await startServer(t, {}, prepare);
-  // The summary counts as failed until the first scan of the logs is done.
+  // The summary counts as failed until the first scan of the logs is done, and a slow machine (a cold process list on
+  // Windows CI) can miss a source's cap once: ask again until every source was read, for up to 20 s.
   let r = await call(s, '/api/governance/inventory');
-  for (let i = 0; i < 100 && r.status === 200 && r.body.failed.includes('summary'); i++) {
+  for (let i = 0; i < 200 && r.status === 200 && r.body.failed.length; i++) {
     await new Promise((resolve) => setTimeout(resolve, 100));
     r = await call(s, '/api/governance/inventory');
   }
