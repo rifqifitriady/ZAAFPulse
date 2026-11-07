@@ -16,7 +16,9 @@ Replace that card map with a 3D metro line drawn on a canvas:
 
 - The turn is one glowing track that runs away from the viewer towards the horizon.
 - Every map node is a station on the track.
-- The camera sits on the line and flies to the selected station.
+- The camera rides the line on its own, like a train, stopping briefly at each station. This is the owner's choice.
+- The ride moves the camera only and never changes the selection.
+- Selecting a station flies the camera there and pauses the ride for a while.
 - Only the stations near the camera carry labels. Stations further away fade into the distance, so the panel is
   never full however long the turn is.
 
@@ -43,7 +45,8 @@ Selection stays shared with the tree and the detail panel, exactly as today.
 - **Travelled and future track.** Track the camera has passed is bright and glowing; track ahead is dim.
 - **Station.**
   - A glowing disc on the floor, a light pillar, and an orb in the colour of its kind, from `TR_COLOR`.
-  - The selected station is larger, has a stronger glow and a filled disc.
+  - The focus station (where the camera stands) is larger, has a stronger glow and a filled disc.
+  - The selected station always carries a white ring on the floor, wherever the camera is.
   - Session is a wider "depot" disc, and Turn is a gate arch that the track passes under.
   - Answer is a green terminal disc.
 - **Error.** A red station that sends an expanding red ring across the floor.
@@ -53,8 +56,9 @@ Selection stays shared with the tree and the detail panel, exactly as today.
 
 ### Labels
 
-- The selected station and the next two stations get a label card standing on top of the pillar. The previous
-  station also gets one, dimmed.
+- The focus station and the next two stations get a label card standing on top of the pillar. The previous station
+  also gets one, dimmed.
+- The selected station keeps its label whenever it is in view, with a white border.
 - Card contents:
   - The kind colour as an edge stripe.
   - Title and meta from `nodeParts()`.
@@ -62,7 +66,7 @@ Selection stays shared with the tree and the detail panel, exactly as today.
   - `✕` for an error and `↻` for repeated calls.
   - A small red dot when the node has a failing eval badge.
   - For the Turn station, the turn's prompt preview cut to 48 characters.
-- The selected station's card is centred over its pillar. Other cards open towards the outside of the track: to the
+- The focus station's card is centred over its pillar. Other cards open towards the outside of the track: to the
   right when the station is right of the camera, to the left otherwise. This keeps neighbouring cards from covering
   each other.
 - Hovering an unlabelled station shows its label card while the pointer stays on it.
@@ -70,21 +74,32 @@ Selection stays shared with the tree and the detail panel, exactly as today.
 
 ### Camera and motion
 
-- **Follow.** The camera follows the selected station: it sits 190 units behind it and 110 above the floor, looks
-  down the line, and leans 55% towards the station's x.
-- **Selection change.** The camera flies to the new station over 600 ms, eased with smoothstep. While it flies, a
-  white "train" light runs along the track between the two stations.
-- **Wheel.** The mouse wheel or a trackpad scroll slides the camera along the line without changing the selection.
-  A click on a station, or any selection change, brings the camera back to the selected station.
-- **Replay.** A ▶ Replay button runs a replay. It selects each station from the first to the last, one every
-  1.6 s, so the tree and the detail panel follow along. Replay stops at the last station, on ■, on any click,
-  keypress or wheel in the map, and on a turn or session change.
+- **Position.** The camera stands 190 units behind its focus station and 110 above the floor. It looks down the line
+  and leans 55% towards the station's x.
+- **Auto ride (the tour).** This is on by default.
+  - The camera moves from station to station. Each move takes 1.1 s, eased with smoothstep, and the camera then
+    rests 0.9 s, so a full step is 2.0 s.
+  - While it moves, a white "train" light runs along the track between the two stations.
+  - At the last station it rests 2 s, the scene fades out and in over 0.5 s, and the ride starts again at the first
+    station.
+  - A new turn or session starts the ride at the first station.
+- **Selection.**
+  - Any selection, from the tree, a station click, the time bar or the keys, flies the camera to the selected station
+    in 600 ms.
+  - The ride then pauses for 10 s after the last interaction and resumes from the selected station.
+  - The ride also pauses while the pointer is over the canvas.
+- **Wheel.** A mouse wheel or trackpad scroll slides the camera along the line and counts as an interaction, so it
+  pauses the ride for 10 s.
+- **Pause button.** A ⏸/▶ button in the HUD stops or resumes the ride for good.
+  - Its state is remembered in `store` under `trace.tour`.
+  - When stopped, the camera stays on the selected station and follows the selection only.
 - **Ambient motion.** Error rings, the rotating rings of repeated calls, a light pulse along the travelled track and
-  the glow of the selected orb.
+  the glow of the focus orb.
 - **Reduced motion** (`prefers-reduced-motion: reduce`):
-  - no ambient motion and no train;
-  - the camera jumps instead of flying;
-  - replay steps every 1.6 s with jumps;
+  - the ride starts stopped, and the ▶ button can still start it;
+  - while it runs, the camera jumps from station to station every 2 s instead of flying;
+  - there is no ambient motion and no train;
+  - the camera jumps to a new selection;
   - the canvas draws only when something changes.
 
 ### Panel layout
@@ -93,14 +108,15 @@ Inside `#tr-map`, from top to bottom:
 
 1. **HUD.** A DOM overlay at the top left of the canvas:
    - Turn N and the turn title;
-   - "Station i / n";
-   - elapsed time and cost up to the selected station.
+   - "Station i / n" for the focus station;
+   - elapsed time and cost up to the focus station.
 
-   It also carries the ▶ Replay button. The existing `.tr-legend` stays above the map.
+   It also carries the ⏸/▶ ride button. The existing `.tr-legend` stays above the map.
 2. **Canvas.** Full width, `height: clamp(360px, 64vh, 760px)`.
 3. **Time bar.** A DOM strip under the canvas:
    - one segment per step, placed and sized by its start and end within the turn;
-   - a white marker at the selected station;
+   - a white marker that moves with the camera;
+   - a white outline on the selected station's segment;
    - clicking a segment selects that station.
 
    Session and Turn have no segment because they span the whole turn.
@@ -109,20 +125,22 @@ Inside `#tr-map`, from top to bottom:
 ### Keyboard and accessibility
 
 - The canvas is focusable (`tabindex="0"`, `role="group"`) with
-  `aria-label="Session map · arrow keys move between stations, Space plays the replay"`.
+  `aria-label="Session map · arrow keys move between stations, Space pauses the ride"`.
 - Keys while the canvas has focus:
   - ←/→ select the previous or next station;
   - Home/End select the first or last station;
   - Enter moves focus to the detail text, as a map node does today;
-  - Space starts or stops the replay.
-- The HUD's station line is an `aria-live="polite"` region. It reads, for example,
-  "Station 5 of 12: Tool · Bash, failed, 1.0 s".
+  - Space stops or resumes the ride.
+- A separate visually hidden `aria-live="polite"` line announces selection changes only, for example
+  "Station 5 of 12: Tool · Bash, failed, 1.0 s". The ride's steps are never announced.
 - The tree remains the full accessible list of spans.
 
 ### Live sessions and repaints
 
 - `paintMap()` keeps its call sites: turn paint, eval badge changes and live repaint.
-- It hands the new node list to the metro, which keeps the camera where it is when the selected station still exists.
+- It hands the new node list to the metro.
+- When the turn is the same, the camera and the ride keep their place. Only a new turn or session restarts the ride
+  at the first station.
 - A station that appears at the end of the line fades in over 400 ms.
 
 ### Lifecycle and cost
@@ -131,6 +149,7 @@ Inside `#tr-map`, from top to bottom:
   - the map view is shown (`S.view === 'map'`);
   - the page is visible;
   - the motion is not reduced, or a change is waiting to be drawn.
+- Under reduced motion the ride's 2 s steps use a timer, not a frame loop.
 - `onUnmount` cancels the loop and disconnects the ResizeObserver.
 - The canvas uses a device pixel ratio capped at 2, like `isoStage`.
 
@@ -145,8 +164,13 @@ tests). Pure helpers, with no DOM:
   smoothstep on x.
 - `metroProject(cam, pt, view)` returns `[sx, sy, k, dz]`, or `null` behind the near plane. `view` is
   `{ w, h, f: 380, height: 110, horizon: 0.27 }`.
-- `metroLabelled(n, sel)` returns the set of station indexes that carry a label: `sel - 1` through `sel + 2`,
-  clamped to the line.
+- `metroLabelled(n, focus, sel)` returns the set of station indexes that carry a label: `focus - 1` through
+  `focus + 2`, clamped to the line, plus `sel` when it is a valid index. Whether `sel` is in view is decided at draw
+  time.
+- `metroTour(ms, n)` returns the camera's float station index at `ms` milliseconds into a ride over `n` stations,
+  and the fade (0–1) of the restart. The timings are a 1100 ms move, a 900 ms rest, a 2000 ms rest at the end and a
+  250 ms fade out followed by a 250 ms fade in. The ride is a pure function of elapsed time, so it is testable without
+  a clock.
 - `metroHit(points, x, y)` returns the index of the nearest projected station within 22 px, scaled by `k`, or -1.
   The nearest one is chosen when stations overlap.
 - `metroBar(nodes)` returns `[{ i, left, width }]` as fractions of the turn's time, for step nodes with a finite
@@ -154,10 +178,13 @@ tests). Pure helpers, with no DOM:
 
 `trMetro(canvas, { onPick, onHover })` is the renderer. It returns:
 
-- `{ setNodes(nodes, parts, sel), select(i), play(), stop(), show(on), destroy() }`
+- `{ setNodes(nodes, parts, sel, { restart }), select(i), tour(on), show(on), destroy() }`
 
-where `parts[i]` is `{ title, meta, dur, cost, err, loop, evalFail, preview }`. It owns the loop, the
-ResizeObserver, the pointer and wheel handlers and the replay timer.
+where `parts[i]` is `{ title, meta, dur, cost, err, loop, evalFail, preview }`. It owns:
+
+- the frame loop and the ResizeObserver;
+- the pointer and wheel handlers;
+- the ride clock, the 10 s pause after an interaction and the hover pause.
 
 **`public/traceview.js`**:
 
@@ -197,7 +224,14 @@ ResizeObserver, the pointer and wheel handlers and the replay timer.
 - `metroCamera`: integer and fractional positions; clamping past either end.
 - `metroProject`: a point straight ahead lands on the centre column; a point behind the near plane returns `null`;
   `k` shrinks with distance.
-- `metroLabelled`: the window at the start, the middle and the end of the line.
+- `metroLabelled`: the window at the start, the middle and the end of the line, plus a selection outside the window.
+- `metroTour`:
+  - index 0 at 0 ms;
+  - halfway through the first move at 550 ms;
+  - resting at station 1 from 1100 to 2000 ms;
+  - the end rest and the fade at the end of the line;
+  - a wrap back to 0;
+  - one station rests at 0 with no NaN.
 - `metroHit`: a hit inside the radius, a miss outside, and the nearest of two overlapping stations.
 - `metroBar`:
   - fractions add up for the demo turn (`traceDemo`);
@@ -211,13 +245,18 @@ ResizeObserver, the pointer and wheel handlers and the replay timer.
 
 **Browser check** (manual, recorded in the PR) on the demo server at 1600 and 1280 px:
 
-- selection from the tree flies the camera;
+- the ride runs on its own;
+- selection from the tree flies the camera and pauses the ride;
+- the ride resumes after 10 s;
 - a station click selects the tree row;
-- replay, wheel, keyboard and reduced motion behave as described;
+- the ⏸/▶ button, the wheel, the keyboard and reduced motion behave as described;
 - no console errors.
 
 ## Acceptance
 
-- The map shows the selected station and at most four labels, plus the label of a hovered station. No cards, side notes or SVG wires remain.
+- The camera rides the line on its own, and a selection takes over the ride for 10 s.
+- The map shows at most four labels around the camera, plus the selected station's label and a hovered station's
+  label.
+- No cards, side notes or SVG wires remain.
 - Tree, map and detail stay in step in both directions.
 - `npm test` passes, and CI is green on macOS, Linux and Windows.
