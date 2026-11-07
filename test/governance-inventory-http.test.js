@@ -213,12 +213,12 @@ test('inventory, controls and evidence: for a dashboard session only; no sign-in
   assert.ok(s.alive());
 });
 
-test('controls: seventeen controls from the live settings, OpenTelemetry and trace retention included', async (t) => {
+test('controls: eighteen controls from the live settings, OpenTelemetry and trace retention included', async (t) => {
   const s = await startServer(t, {}, prepare);
   const r = await call(s, '/api/governance/controls');
   assert.equal(r.status, 200);
   assert.match(r.body.notice, /^Evidence for your assessment, not a certification\./);
-  assert.equal(r.body.controls.length, 17);
+  assert.equal(r.body.controls.length, 18);
   const by = Object.fromEntries(r.body.controls.map((c) => [c.id, c]));
   for (const c of r.body.controls) assert.ok(STATUSES.includes(c.status), c.id);
   assert.deepEqual(by.guardrails.evidence, [
@@ -229,6 +229,10 @@ test('controls: seventeen controls from the live settings, OpenTelemetry and tra
   ]);
   assert.equal(by.guardrails.status, 'partial');
   assert.deepEqual([by.sign_in.status, by.sign_in.evidence[0]], ['off', 'sign-in: no sign-in']);
+  assert.deepEqual(
+    [by.access_roles.status, by.access_roles.evidence],
+    ['off', ['sign-in: no sign-in, so no accounts or roles']],
+  );
   assert.deepEqual([by.otel_export.status, by.otel_export.evidence], ['off', ['not set up (see docs/otel.md)']]);
   assert.deepEqual(
     [by.trace_retention.status, by.trace_retention.evidence[0]],
@@ -262,7 +266,7 @@ test('evidence: a Markdown and a JSON download, each a governance.export entry b
   const json = await call(s, '/api/governance/evidence?format=json');
   assert.equal(json.headers.get('content-type'), 'application/json; charset=utf-8');
   assert.equal(json.body.version, require('../package.json').version);
-  assert.equal(json.body.controls.length, 17);
+  assert.equal(json.body.controls.length, 18);
   assert.ok(json.body.inventory.items.some((i) => i.id === 'mcp:db' && !('projects' in i)));
   for (const text of [md.text, json.text]) {
     assert.ok(!text.includes(s.data), 'no path');
@@ -319,7 +323,8 @@ test(
     });
     const t0 = Date.now();
     const r = await call(s, '/api/governance/inventory');
-    assert.ok(Date.now() - t0 < 1000, 'answered within a second');
+    // Never waited on: a FIFO read blocks for good; the bound leaves room for a loaded machine (the whole suite).
+    assert.ok(Date.now() - t0 < 1800, 'answered within 1.8 s');
     assert.equal(r.status, 200);
     const c = r.body.clients.find((x) => x.client === 'cursor');
     assert.deepEqual([c.state, c.servers], ['unreadable', 0]);

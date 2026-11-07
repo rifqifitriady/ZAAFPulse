@@ -85,6 +85,25 @@ const { liveOrThrow, runtimesOrThrow, indexReadyOrThrow } = require('./lib/gover
 const { createSeenStore } = require('./lib/governance/seen');
 const { cleanPolicy: guardPolicy } = require('./lib/gateway/guardrails');
 const { RULES: MONITOR_RULES } = require('./lib/monitors/rules');
+const { createUserStore } = require('./lib/users/store');
+const { createUsersApi } = require('./lib/users/api');
+const { createRefusalLog } = require('./lib/users/refusals');
+const { createBodyReader } = require('./lib/request-body');
+const {
+  allowed: roleAllows,
+  redactGateway,
+  redactTraceSessions,
+  redactSummary,
+  redactLogs,
+  redactGatewayLogs,
+  redactConfig,
+  redactOffice,
+  redactTimeline,
+  redactRuntimesConfig,
+  redactIntegrations,
+  redactRouterProxy,
+  redactInventory,
+} = require('./lib/users/policy');
 
 const PORT = Number(process.env.ZAAFPULSE_PORT || process.env.PORT) || 4777;
 const HOST = process.env.ZAAFPULSE_HOST || process.env.HOST || '127.0.0.1';
@@ -139,6 +158,8 @@ const demo = DEMO ? require('./lib/demo') : null;
 
 const { fullName, computerName } = platform;
 const HOSTNAME = DEMO ? demo.config.host : computerName();
+// Dashboard accounts (AI Governance 4): the owner's other people, in .data/users.json. None in demo mode.
+const userStore = DEMO ? null : createUserStore({ file: path.join(DIR, '.data', 'users.json') });
 let auth;
 try {
   auth = createAuth({
@@ -147,6 +168,8 @@ try {
     demo: DEMO,
     headers: () => SECURITY_HEADERS,
     onEvent: (e) => govRecord(e), // sign-ins and sign-outs for the governance audit log
+    accounts: userStore,
+    ownerName: () => config.userName,
   });
 } catch (err) {
   console.error(err.message);
@@ -270,9 +293,32 @@ const governance = createGovernanceAudit({
 const GOV_ID = /^[A-Za-z0-9_.:-]{1,80}$/;
 // An entry's actor: the one it names, else the request's (lib/governance/context.js), else the server's own.
 // Never throws (A6): whatever calls it goes ahead.
-function govRecord(entry) {
+function govWrite(entry) {
   try {
     return governance.record({ ...entry, actor: entry.actor || govContext.actor() || { via: 'system' } });
+  } catch {
+    return null;
+  }
+}
+// A reviewer's or a viewer's entries that can be repeated at will: refused requests, errors, evidence exports and
+// requests that changed nothing go through the per-account limit (30 a minute, then one audit.refused_dropped entry
+// with the count; lib/users/refusals.js). A change (config.change, a password change, a run approval, the request that
+// made one) is always written. The owner's entries and those of keys, the CLI and the system are never limited.
+const refusals = createRefusalLog({ record: govWrite });
+const REQUEST_ACTION = /^[A-Z]+ \//;
+function govRecord(entry) {
+  try {
+    const actor = entry.actor || govContext.actor() || { via: 'system' };
+    const e = { ...entry, actor };
+    const account = actor.via === 'dashboard' && typeof actor.user === 'string' && actor.role !== 'owner';
+    const repeatable =
+      e.outcome === 'refused' ||
+      e.outcome === 'error' ||
+      e.action === 'governance.export' ||
+      (REQUEST_ACTION.test(String(e.action)) && !govContext.changed());
+    if (account && repeatable) return refusals.refused(actor.user, e);
+    if (account) govContext.noteChange();
+    return govWrite(e);
   } catch {
     return null;
   }
@@ -305,6 +351,14 @@ const governanceApi = createGovernanceApi({
   record: (e) => govRecord(e), // the evidence export (a GET), with the request's actor
   version: require('./package.json').version,
   seen: createSeenStore({ file: path.join(DEMO ? demoDir : path.join(DIR, '.data'), 'governance', 'seen.json') }),
+});
+// /api/users (the owner's), /api/users/names and /api/account/password (AI Governance 4); each change is a governance
+// entry with the request's actor.
+const usersApi = createUsersApi({
+  store: userStore,
+  auth,
+  record: (e) => govRecord(e),
+  ownerName: () => config.userName,
 });
 let rawCache = {
   mtime: -1,
@@ -1243,6 +1297,21 @@ async function controlState() {
       return { id: s.id, label: s.label };
     },
     signIn: () => ({ mode: auth.mode, serverMode: SERVER_MODE, tls: !!TLS }),
+    // AI Governance 4: the accounts' roles and last sign-ins (no name leaves the control).
+    accounts: () => {
+      if (auth.mode === 'none' || !userStore) return { mode: auth.mode, state: 'ok', users: [] };
+      const r = userStore.list();
+      return {
+        mode: auth.mode,
+        state: r.state,
+        users: r.users.map((u) => ({
+          role: u.role,
+          disabled: u.disabled,
+          createdAt: u.createdAt,
+          lastLoginAt: u.lastLoginAt,
+        })),
+      };
+    },
     content: () => ({ otelCapture: otel.status().captureContent === true, traceContentOff: contentOff }),
     otel: () => {
       const o = otel.status();
@@ -1334,22 +1403,11 @@ const wholeParam = (v) => (v == null || v === '' ? undefined : /^\d{1,15}$/.test
 // The text each request sent, as read, for the audit entry of a dashboard change (send() keeps its short fields only).
 const bodies = new WeakMap();
 const AUDIT_BODY_MAX = 64 * 1024;
-function readBody(req, max = 1e6) {
-  return new Promise((resolve, reject) => {
-    let data = '';
-    req.on('data', (c) => {
-      data += c;
-      if (data.length > max) {
-        req.destroy();
-        reject(new Error('too large'));
-      }
-    });
-    req.on('end', () => {
-      if (data.length <= AUDIT_BODY_MAX) bodies.set(req, data); // a bigger body loses only op/target in its entry
-      resolve(data);
-    });
-  });
-}
+// A body is read once (lib/request-body.js): the role check reads a gateway admin body for its action, and the route
+// reads it again; a bigger body than AUDIT_BODY_MAX loses only op/target in its entry.
+const { readBody, jsonBody } = createBodyReader({
+  keep: (req, data) => data.length <= AUDIT_BODY_MAX && bodies.set(req, data),
+});
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -1455,9 +1513,49 @@ const handler = async (req, res) => {
       res.writeHead(302, { location: '/login.html', ...SECURITY_HEADERS });
       return res.end();
     }
+    // Who signed in, for the role check and the redacted views (a reviewer's or a viewer's; the owner sees it all).
+    const signedAs = signedIn ? auth.sessionOf(req, false) : null;
+    const role = signedAs ? signedAs.role : 'viewer';
     if (signedIn) {
       // The governance audit log: who this request acts as, and one entry for each change it makes (A4(1)).
       govContext.setActor(auth.actorOf(req));
+      // Roles (AI Governance 4): a reviewer's or a viewer's request is checked against lib/users/policy.js before
+      // anything runs, with the path, query values and body action the routes below use (a gateway admin route by its
+      // body's action). A refusal is a 403 and one refused entry, a read included.
+      if (role !== 'owner') {
+        let action = null;
+        if (req.method === 'POST' && /^\/api\/gateway\/[a-z]+$/.test(url.pathname))
+          try {
+            const b = await jsonBody(req);
+            if (b && typeof b === 'object' && typeof b.action === 'string') action = b.action;
+          } catch {
+            /* no action: refused below */
+          }
+        const verdict = roleAllows({
+          role,
+          method: req.method,
+          path: url.pathname,
+          action,
+          mustChange: !!(signedAs && signedAs.mustChange),
+          section: url.searchParams.get('section'),
+          q: url.searchParams.get('q'),
+        });
+        if (!verdict.ok) {
+          try {
+            const e = requestEntry({
+              method: req.method,
+              path: url.pathname,
+              status: 403,
+              body: bodies.get(req),
+              always: true,
+            });
+            if (e) govRecord(e); // limited per account (govRecord)
+          } catch {
+            /* an audit bug never changes the answer (A6) */
+          }
+          return send(res, 403, { error: verdict.reason });
+        }
+      }
       if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && url.pathname.startsWith('/api/'))
         pendingAudit.set(res, { req, path: url.pathname });
     }
@@ -1480,7 +1578,9 @@ const handler = async (req, res) => {
         version: require('./package.json').version,
       });
     }
-    if (url.pathname === '/api/gateway' && req.method === 'GET') return send(res, 200, await gateway.admin('', 'GET'));
+    // A reviewer or a viewer gets the redacted view: no prompt, note, title, task or secret reference.
+    if (url.pathname === '/api/gateway' && req.method === 'GET')
+      return send(res, 200, redactGateway(await gateway.admin('', 'GET'), role));
     const gwAdmin = url.pathname.match(/^\/api\/gateway\/([a-z]+)$/);
     if (gwAdmin) {
       // Only the request log is read with GET. Every other admin route writes (defaults, settings), spends tokens
@@ -1488,14 +1588,14 @@ const handler = async (req, res) => {
       // POST.
       if (req.method === 'GET')
         return gwAdmin[1] === 'logs'
-          ? send(res, 200, await gateway.admin('logs', 'GET'))
+          ? send(res, 200, redactGatewayLogs(await gateway.admin('logs', 'GET'), role))
           : send(res, 405, { error: 'method not allowed' });
       if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' });
       if (!(req.headers['content-type'] || '').startsWith('application/json'))
         return send(res, 415, { error: 'json only' });
       try {
         // A refused guardrails setting (badRequest) is a 400; every other admin answer keeps its 200, errors included.
-        const out = await gateway.admin(gwAdmin[1], 'POST', JSON.parse(await readBody(req)));
+        const out = await gateway.admin(gwAdmin[1], 'POST', await jsonBody(req));
         return send(res, out && out.badRequest === true ? 400 : 200, out);
       } catch (err) {
         return send(res, 200, { errors: [err.message] });
@@ -1504,11 +1604,13 @@ const handler = async (req, res) => {
     if (url.pathname === '/api/summary') {
       const r = url.searchParams.get('range') || '30';
       const range = r === 'all' ? 'all' : Math.min(365, Math.max(1, parseInt(r, 10) || 30));
-      return send(res, 200, {
+      const summary = {
         ...getSummary(range),
         config: { userName: config.userName, monthlyBudgetUSD: costBudgets.monthly().monthlyBudgetUSD, host: HOSTNAME },
         index: indexer.state,
-      });
+      };
+      // A reviewer or a viewer: counts, costs, model and tool names, no event text or path.
+      return send(res, 200, redactSummary(summary, role));
     }
     if (url.pathname === '/api/live') {
       return send(res, 200, {
@@ -1523,13 +1625,19 @@ const handler = async (req, res) => {
       return send(res, 200, getInsights(r === 'all' ? 'all' : Math.min(365, Math.max(1, parseInt(r, 10) || 30))));
     }
     if (url.pathname === '/api/topology') return send(res, 200, DEMO ? demo.topologyDemo() : await topology());
+    // A reviewer or a viewer: the proxy log without its target URLs or error text.
+    const routerView = (body) => (url.searchParams.get('section') === 'proxy' ? redactRouterProxy(body, role) : body);
     if (url.pathname === '/api/router' && DEMO) {
       const section = url.searchParams.get('section');
-      return send(res, 200, {
-        configured: true,
-        id: 'omniroute (demo)',
-        data: require('./lib/omniroute').demoRouter(section),
-      });
+      return send(
+        res,
+        200,
+        routerView({
+          configured: true,
+          id: 'omniroute (demo)',
+          data: require('./lib/omniroute').demoRouter(section),
+        }),
+      );
     }
     if (url.pathname === '/api/router') {
       if (!router.configured()) return send(res, 200, { configured: false });
@@ -1545,7 +1653,7 @@ const handler = async (req, res) => {
         proxy: router.proxyLogs,
       }[url.searchParams.get('section')];
       if (!fn) return send(res, 404, { error: 'unknown section' });
-      return send(res, 200, { configured: true, id: router.id(), data: await fn() });
+      return send(res, 200, routerView({ configured: true, id: router.id(), data: await fn() }));
     }
     // Trace & Session Explorer: sessions of every source, one session as spans, and their text on request.
     // Behind the sign-in above, so a gateway API key never reaches it. Ids are opaque; no path leaves here.
@@ -1579,7 +1687,8 @@ const handler = async (req, res) => {
             minMs: Number.isFinite(minMs) && minMs > 0 ? minMs : undefined,
             minCost: Number.isFinite(minCost) && minCost > 0 ? minCost : undefined,
           });
-          return send(res, 200, { sessions: rows });
+          // A reviewer or a viewer gets the list without titles (the first prompt).
+          return send(res, 200, redactTraceSessions({ sessions: rows }, role));
         }
         if (route === 'deps') {
           const days = parseInt(q.get('range'), 10);
@@ -1671,6 +1780,9 @@ const handler = async (req, res) => {
         contentType: req.headers['content-type'],
         readBody: () => readBody(req),
       });
+      // A reviewer or a viewer: the entries without their command lines or health URLs, in every mode.
+      if (hit && url.pathname === '/api/runtimes/config' && hit.status === 200)
+        return send(res, 200, redactRuntimesConfig(hit.body, role));
       if (hit) return send(res, hit.status, hit.body);
     }
     // The cost ledger: rows, status, settings, price versions and restate, behind the same sign-in. No path out. An
@@ -1686,7 +1798,7 @@ const handler = async (req, res) => {
       if (hit) return send(res, hit.status, hit.body, hit.type || 'application/json', hit.headers);
     }
     // The governance audit log: entries, export (a download), verify, status and the retention setting. Behind the
-    // same sign-in; no gateway key or MCP client reaches it.
+    // same sign-in; no gateway key or MCP client reaches it. A reviewer or a viewer sees no change's values.
     {
       const hit = await governanceApi.route({
         method: req.method,
@@ -1694,15 +1806,32 @@ const handler = async (req, res) => {
         query: url.searchParams,
         contentType: req.headers['content-type'],
         readBody: () => readBody(req),
+        role,
       });
+      // A reviewer or a viewer: the inventory without project folders or the AI clients' file paths.
+      if (hit && url.pathname === '/api/governance/inventory' && req.method === 'GET' && hit.status === 200)
+        return send(res, 200, redactInventory(hit.body, role));
       if (hit) return send(res, hit.status, hit.body, hit.type || 'application/json', hit.headers);
     }
+    // The dashboard accounts (AI Governance 4).
+    {
+      const hit = await usersApi.route({
+        method: req.method,
+        path: url.pathname,
+        contentType: req.headers['content-type'],
+        readBody: () => readBody(req),
+        req,
+      });
+      if (hit) return send(res, hit.status, hit.body);
+    }
     if (url.pathname === '/api/logs') {
-      return send(res, 200, DEMO ? reqlogs.demoLogs() : reqlogs.logs());
+      // A reviewer or a viewer: types, sizes and counts, no error text or tool target.
+      return send(res, 200, redactLogs(DEMO ? reqlogs.demoLogs() : reqlogs.logs(), role));
     }
     if (url.pathname === '/api/timeline') {
       const hours = Math.min(48, Math.max(1, parseInt(url.searchParams.get('hours'), 10) || 6));
-      return send(res, 200, DEMO ? timeline.demoTimeline(hours) : await timeline.timeline(hours));
+      // A reviewer or a viewer: the tools and their times, no file name, command or host.
+      return send(res, 200, redactTimeline(DEMO ? timeline.demoTimeline(hours) : await timeline.timeline(hours), role));
     }
     if (url.pathname === '/api/mcp-calls') {
       return send(res, 200, {
@@ -1714,7 +1843,8 @@ const handler = async (req, res) => {
       });
     }
     if (url.pathname === '/api/office') {
-      return send(res, 200, DEMO ? office.demoSnapshot() : office.snapshot());
+      // A reviewer or a viewer: states and tools, no git branch, file name, command or host.
+      return send(res, 200, redactOffice(DEMO ? office.demoSnapshot() : office.snapshot(), role));
     }
     // Endpoint → MCP server: register this MCP server in (or remove it from) Claude Code, Kiro or Antigravity.
     // Uses the same script as `npm run mcp:register`: backups first, only our own entry is touched.
@@ -1757,7 +1887,8 @@ const handler = async (req, res) => {
     }
     if (url.pathname === '/api/config' && req.method === 'GET') {
       const { integrations, ...rest } = config;
-      return send(res, 200, { ...rest, ...costBudgets.monthly() });
+      // A reviewer or a viewer: the name, the monthly budget and the pricing only.
+      return send(res, 200, redactConfig({ ...rest, ...costBudgets.monthly() }, role));
     }
     if (url.pathname === '/api/config' && req.method === 'POST') {
       if (!(req.headers['content-type'] || '').startsWith('application/json'))
@@ -1800,7 +1931,7 @@ const handler = async (req, res) => {
       memo.clear();
       budgetsChanged();
       const { integrations, ...rest } = config;
-      return send(res, 200, { ...rest, ...costBudgets.monthly() });
+      return send(res, 200, redactConfig({ ...rest, ...costBudgets.monthly() }, role));
     }
     if (url.pathname === '/api/openrouter') {
       const fn = {
@@ -1930,15 +2061,13 @@ const handler = async (req, res) => {
       return send(res, 200, { id: r.id, status });
     }
     if (url.pathname === '/api/integrations' && req.method === 'GET') {
-      if (DEMO) return send(res, 200, demo.integrations());
-      return send(res, 200, {
-        integrations: await getIntegrations().status(),
-        clients: clientRows(),
-        calls: audit.tail(100),
-        mcpCommand: (({ command, args }) => [command, ...args].map((x) => (/\s/.test(x) ? `"${x}"` : x)).join(' '))(
-          platform.mcpCommand(),
-        ),
-      });
+      // A reviewer or a viewer: no MCP command line and no error text.
+      if (DEMO) return send(res, 200, redactIntegrations(demo.integrations(), role));
+      const { command, args } = platform.mcpCommand();
+      const mcpCommand = [command, ...args].map((x) => (/\s/.test(x) ? `"${x}"` : x)).join(' ');
+      const integrations = await getIntegrations().status();
+      const body = { integrations, clients: clientRows(), calls: audit.tail(100), mcpCommand };
+      return send(res, 200, redactIntegrations(body, role));
     }
     if (url.pathname === '/api/integrations/test' && req.method === 'POST') {
       if (!(req.headers['content-type'] || '').startsWith('application/json'))
@@ -2036,6 +2165,8 @@ server.listen(PORT, HOST, () => {
   const auditDaily = () => govContext.runAs({ via: 'system' }, () => governanceApi.dailyPass());
   auditDaily();
   setInterval(auditDaily, 24 * 3600 * 1000).unref();
+  // The counts of refused requests left out of the log, once their minute is over.
+  setInterval(() => refusals.flush(), 60 * 1000).unref();
   // The AI inventory, now and every 10 minutes, so inventory_unreviewed sees new systems without the page open (a
   // read of the page builds it too). The pass is the system's; a failure is logged and the next one tries again.
   const inventoryPass = () =>

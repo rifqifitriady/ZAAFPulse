@@ -81,8 +81,10 @@
         <a class="nav-sub" href="#governance" data-route="governance/">Inventory</a>
         <a class="nav-sub" href="#governance/compliance" data-route="governance/compliance">Compliance</a>
         <a class="nav-sub" href="#governance/audit" data-route="governance/audit">Audit log</a>
-        <div class="nav-label">PREFERENCES</div>
+        <div class="nav-label" id="nav-prefs">PREFERENCES</div>
         <a href="#settings" data-route="settings"><span data-icon="gear"></span>Settings</a>
+        <a class="nav-sub" href="#settings" data-route="settings/">Preferences</a>
+        <a class="nav-sub" href="#settings/users" data-route="settings/users">Users</a>
       </nav>
 
       <div class="sidebar-foot">
@@ -107,9 +109,11 @@
             <input id="search" type="search" placeholder="Search sessions, projects…" autocomplete="off">
           </label>
           <button class="icon-btn" id="rescan" title="Rescan logs now" aria-label="Rescan logs now"><span data-icon="refresh"></span></button>
+          <div class="topbar-who" id="topbar-who" hidden><span id="who-text"></span> <a class="link-btn" id="who-password" href="/login.html?change=1">Change password</a> <button class="link-btn" type="button" id="who-out">Sign out</button></div>
         </div>
       </header>
 
+      <div class="role-banner" id="role-banner" role="status" hidden></div>
       <div class="content" id="view" aria-live="polite"></div>
     </main>
   </div>
@@ -151,6 +155,7 @@
   <script src="costsettings.js"></script>
   <script src="costreports.js"></script>
   <script src="governanceview.js"></script>
+  <script src="usersview.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
