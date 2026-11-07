@@ -6244,6 +6244,9 @@ a.trace-link:focus-visible b {
   box-shadow: 0 0 6px var(--c);
 }
 /* The session map: a 3D metro line on a canvas (tracemetro.js), its HUD, the ride button and the time bar. */
+.tr-map {
+  position: relative;
+}
 .tr-metro {
   position: relative;
   height: clamp(360px, 64vh, 760px);
