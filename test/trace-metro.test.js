@@ -187,3 +187,199 @@ test('metroRideAt: the ride time at which the camera rests at station k', () => 
   assert.equal(metroRideAt(3), 5100);
   for (const k of [1, 2, 3]) assert.equal(metroTour(metroRideAt(k), 5).p, k);
 });
+
+// ---- the renderer, on a fake canvas: no browser, a hand-driven clock and frame queue ----
+const { trMetro, metroProject: project, metroCamera: camera, metroLayout: layout } = require('../public/tracemetro.js');
+
+function fakeCanvas({ ctx = true } = {}) {
+  const calls = [];
+  const store = {};
+  const c2d = new Proxy(store, {
+    get(t, k) {
+      if (k in t) return t[k];
+      if (k === 'measureText') return (s) => ({ width: String(s).length * 6 });
+      if (k === 'createLinearGradient' || k === 'createRadialGradient') return () => ({ addColorStop() {} });
+      return (...a) => {
+        calls.push([k, ...a]);
+      };
+    },
+    set(t, k, v) {
+      t[k] = v;
+      return true;
+    },
+  });
+  const listeners = {};
+  const canvas = {
+    clientWidth: 600,
+    clientHeight: 400,
+    width: 0,
+    height: 0,
+    style: {},
+    getContext: () => (ctx ? c2d : null),
+    addEventListener: (type, fn) => {
+      listeners[type] = fn;
+    },
+    removeEventListener: (type) => {
+      delete listeners[type];
+    },
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 600, height: 400 }),
+  };
+  return { canvas, calls, listeners };
+}
+
+function harness(opts = {}) {
+  const queue = [];
+  global.requestAnimationFrame = (fn) => queue.push(fn);
+  global.cancelAnimationFrame = () => {};
+  const clock = { t: 0 };
+  const seen = { picks: [], frames: [], toggles: 0, enters: 0 };
+  const fake = fakeCanvas(opts);
+  const m = trMetro(fake.canvas, {
+    clock: () => clock.t,
+    onPick: (i) => seen.picks.push(i),
+    onFrame: (p) => seen.frames.push(p),
+    onToggle: () => seen.toggles++,
+    onEnter: () => seen.enters++,
+  });
+  const step = (t) => {
+    clock.t = t;
+    const fns = queue.splice(0);
+    fns.forEach((f) => f());
+  };
+  const lastP = () => seen.frames[seen.frames.length - 1];
+  return { m, step, seen, lastP, queue, ...fake };
+}
+
+const part = (n) => ({
+  color: '#4de8ff',
+  title: `Step ${n.kind}`,
+  meta: 'meta',
+  dur: '1.0 s',
+  cost: '',
+  err: n.status === 'error',
+  loop: n.count || 1,
+  evalFail: false,
+  preview: '',
+});
+
+test('trMetro: no 2D context gives null', () => {
+  const { canvas } = fakeCanvas({ ctx: false });
+  assert.equal(trMetro(canvas, {}), null);
+});
+
+test('trMetro: draws the demo turn and rides the line on its own', () => {
+  const h = harness();
+  const nodes = demoNodes();
+  h.m.setNodes(nodes, nodes.map(part), -1, { restart: true });
+  h.step(0);
+  assert.equal(h.lastP(), 0);
+  assert.ok(
+    h.calls.some((c) => c[0] === 'fillText'),
+    'labels are drawn with fillText',
+  );
+  h.step(3000);
+  assert.ok(h.lastP() > 1 && h.lastP() < 2, `riding: ${h.lastP()}`);
+  h.m.destroy();
+});
+
+test('trMetro: an empty turn says so', () => {
+  const h = harness();
+  h.m.setNodes([], [], -1, { restart: true });
+  h.step(0);
+  assert.ok(h.calls.some((c) => c[0] === 'fillText' && c[1] === 'No steps in this turn'));
+  h.m.destroy();
+});
+
+test('trMetro: a selection flies the camera there, pauses the ride 10 s, then the ride resumes from it', () => {
+  const h = harness();
+  const nodes = demoNodes();
+  h.m.setNodes(nodes, nodes.map(part), -1, { restart: true });
+  h.step(0);
+  h.m.select(3, { fly: true });
+  h.step(300);
+  assert.ok(h.lastP() > 0 && h.lastP() < 3, `in flight: ${h.lastP()}`);
+  h.step(700);
+  assert.equal(h.lastP(), 3);
+  h.step(9000);
+  assert.equal(h.lastP(), 3, 'still paused');
+  h.step(10500);
+  assert.equal(h.lastP(), 3, 'resumes resting at the selected station');
+  h.step(12000);
+  assert.ok(h.lastP() > 3, `riding on from it: ${h.lastP()}`);
+  h.m.destroy();
+});
+
+test('trMetro: a selection without fly only marks it; the ride goes on', () => {
+  const h = harness();
+  const nodes = demoNodes();
+  h.m.setNodes(nodes, nodes.map(part), -1, { restart: true });
+  h.step(0);
+  h.m.select(4, { fly: false });
+  h.step(3000);
+  assert.ok(h.lastP() > 1 && h.lastP() < 2);
+  h.m.destroy();
+});
+
+test('trMetro: a stopped ride stays put and follows the selection', () => {
+  const h = harness();
+  const nodes = demoNodes();
+  h.m.setNodes(nodes, nodes.map(part), 2, { restart: true });
+  h.m.tour(false);
+  h.step(0);
+  h.step(700);
+  assert.equal(h.lastP(), 2, 'flies to the selection when stopped');
+  h.step(30000);
+  assert.equal(h.lastP(), 2);
+  h.m.tour(true);
+  h.step(30100);
+  h.step(31600);
+  assert.ok(h.lastP() > 2);
+  h.m.destroy();
+});
+
+test('trMetro: a click on a station picks it; keys pick, toggle and enter', () => {
+  const h = harness();
+  const nodes = demoNodes();
+  h.m.setNodes(nodes, nodes.map(part), 1, { restart: true });
+  h.m.tour(false);
+  h.step(0);
+  h.step(700); // the camera rests at station 1
+  const lay = layout(nodes);
+  const g = project(
+    camera(lay, 1),
+    { x: lay[1].x, y: 0, z: lay[1].z },
+    { w: 600, h: 400, f: 380, height: 110, horizon: 0.27 },
+  );
+  h.listeners.click({ clientX: g[0], clientY: g[1] });
+  assert.deepEqual(h.seen.picks, [1]);
+  let prevented = 0;
+  const key = (k) => h.listeners.keydown({ key: k, preventDefault: () => prevented++ });
+  key('ArrowRight');
+  key('ArrowLeft');
+  key('Home');
+  key('End');
+  assert.deepEqual(h.seen.picks, [1, 2, 0, 0, nodes.length - 1]);
+  key(' ');
+  key('Enter');
+  assert.equal(h.seen.toggles, 1);
+  assert.equal(h.seen.enters, 1);
+  assert.equal(prevented, 6);
+  key('x');
+  assert.equal(prevented, 6, 'other keys pass through');
+  h.m.destroy();
+});
+
+test('trMetro: hidden or destroyed, no frame is asked for', () => {
+  const h = harness();
+  const nodes = demoNodes();
+  h.m.setNodes(nodes, nodes.map(part), -1, { restart: true });
+  h.step(0);
+  h.m.show(false);
+  h.step(100);
+  assert.equal(h.queue.length, 0);
+  h.m.show(true);
+  assert.equal(h.queue.length, 1);
+  h.m.destroy();
+  h.step(200);
+  assert.equal(h.queue.length, 0);
+});
