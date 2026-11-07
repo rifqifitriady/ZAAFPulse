@@ -2,12 +2,13 @@
 /* The Governance menu's three pages (AI Governance 2 and 3).
    - Inventory (#governance): every AI system ZAAFPulse can see, from GET /api/governance/inventory, filtered by kind,
      state and review in the page; a drawer records an item's owner, purpose, risk and decision (POST
-     /api/governance/inventory).
+     /api/governance/inventory). Only the owner and reviewers review (AI Governance 4); the owner field suggests the
+     dashboard accounts' display names (GET /api/users/names).
    - Compliance (#governance/compliance): the controls from GET /api/governance/controls, one table per framework, and
      the evidence export (GET /api/governance/evidence?format=md|json).
    - Audit log (#governance/audit): every change made to ZAAFPulse by a person or an API key, from GET
-     /api/governance/audit (newest first, a page at a time). Filters: the range, the kind of actor, action text and the
-     outcome. Each row's field changes open in a <details>. Verify checks the chain (GET …/audit/verify), the export
+     /api/governance/audit (newest first, a page at a time). Filters: the range, the kind of actor, the account, action text
+     and the outcome. Each row's field changes open in a <details>. Verify checks the chain (GET …/audit/verify), the export
      links download CSV or JSON lines, and the retention is saved with POST /api/governance/settings.
    Events are delegated (the CSP allows no inline handler); pure helpers are exported for Node tests, and nothing here
    touches the DOM at load time. Every server or owner string reaches the markup through esc(). */
@@ -33,11 +34,11 @@ const GOV_OUTCOMES = [
   ['error', 'Error'],
 ];
 const GOV = {
-  filters: { range: '7', actor: '', action: '', outcome: '' },
+  filters: { range: '7', actor: '', user: '', action: '', outcome: '' },
   rows: [],
   next: null,
   hooked: false,
-  inv: { filters: { kind: '', state: '', review: '' }, data: null, open: null },
+  inv: { filters: { kind: '', state: '', review: '' }, data: null, open: null, names: [] },
 };
 
 /* ---------- pure helpers (exported) ---------- */
@@ -65,17 +66,23 @@ function govQuery(f, { before = null, now = Date.now() } = {}) {
   const from = govFrom(f.range, now);
   if (from) q.set('from', from);
   if (f.actor) q.set('actor', f.actor);
+  if (f.user) q.set('user', String(f.user).trim().toLowerCase().slice(0, 32));
   if (f.action) q.set('action', String(f.action).slice(0, 80));
   if (f.outcome) q.set('outcome', f.outcome);
   q.set('limit', '100');
   if (before) q.set('before', String(before));
   return q.toString();
 }
-/** The export link for the filters' range: format csv or jsonl. */
+/** The export link for the filters' range and account: format csv or jsonl. */
 function govExportHref(f, format, now = Date.now()) {
   const q = new URLSearchParams();
   const from = govFrom(f.range, now);
   if (from) q.set('from', from);
+  const user = String(f.user || '')
+    .trim()
+    .toLowerCase()
+    .slice(0, 32);
+  if (user) q.set('user', user);
   q.set('format', format);
   return `/api/governance/audit/export?${q}`;
 }
@@ -87,11 +94,20 @@ function govTime(ts) {
   const day = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   return `${day} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
-/** Who acted, in words: "Dashboard · password · 10.0.0.2", "API key key_ab12", "Monitors rule tool_loop" … */
+/** Who acted, in words: "Dashboard · vera (viewer) · password · 10.0.0.2", "API key key_ab12", "Monitors rule
+ * tool_loop" … */
 function govActorLabel(a) {
   if (!a || typeof a !== 'object') return 'Unknown';
   if (a.via === 'dashboard')
-    return ['Dashboard', a.mode, a.device ? `device ${a.device}` : '', a.ip].filter(Boolean).join(' · ');
+    return [
+      'Dashboard',
+      a.user ? `${a.user}${a.role && a.role !== a.user ? ` (${a.role})` : ''}` : '',
+      a.mode,
+      a.device ? `device ${a.device}` : '',
+      a.ip,
+    ]
+      .filter(Boolean)
+      .join(' · ');
   if (a.via === 'apikey') return `API key ${a.keyId || ''}`.trim();
   if (a.via === 'rule') return `Monitors rule ${a.rule || ''}`.trim();
   if (a.via === 'cli') return 'Command line';
@@ -107,6 +123,9 @@ function govTargetLabel(t) {
 }
 /** A change's value as text: absent is an empty set sign. */
 const govValue = (v) => (v === null || v === undefined ? '∅' : typeof v === 'string' ? v : JSON.stringify(v));
+/** A change's values in words; "(hidden)" when it names its path only (a reviewer's or a viewer's view). */
+const govChangeText = (c) =>
+  c && typeof c === 'object' && !('from' in c) && !('to' in c) ? '(hidden)' : `${govValue(c.from)} → ${govValue(c.to)}`;
 /** The field changes of an entry in a <details>, or '' when it has none. */
 function govChangesHtml(e) {
   const list = Array.isArray(e.changes) ? e.changes : [];
@@ -114,7 +133,7 @@ function govChangesHtml(e) {
   const more = e.truncated > 0 ? `<li class="muted">${esc(`and ${e.truncated} more`)}</li>` : '';
   const n = list.length + (e.truncated > 0 ? e.truncated : 0);
   return `<details class="gov-changes"><summary>${esc(`${n} field${n === 1 ? '' : 's'} changed`)}</summary><ul>${list
-    .map((c) => `<li><code>${esc(c.path)}</code>: ${esc(govValue(c.from))} → ${esc(govValue(c.to))}</li>`)
+    .map((c) => `<li><code>${esc(c.path)}</code>: ${esc(govChangeText(c))}</li>`)
     .join('')}${more}</ul></details>`;
 }
 /** The outcome as a tag; a refusal or an error names its HTTP status. */
@@ -186,6 +205,7 @@ function govFiltersHtml(f) {
   return `<form id="gov-filters" class="gov-bar">
     <label>${esc('Range')}${select('range', GOV_RANGES)}</label>
     <label>${esc('Actor')}${select('actor', GOV_ACTORS)}</label>
+    <label>${esc('User')}<input class="input" name="user" maxlength="32" placeholder="owner, an account…" value="${esc(f.user || '')}"></label>
     <label>${esc('Action')}<input class="input" name="action" maxlength="80" placeholder="config.change, keys…" value="${esc(f.action)}"></label>
     <label>${esc('Outcome')}${select('outcome', GOV_OUTCOMES)}</label>
     <button class="btn" type="submit">${esc('Apply')}</button>
@@ -269,8 +289,12 @@ function govReviewTag(i) {
   const text = i.status === 'gone' ? ['Gone', words].filter(Boolean).join(' · ') : words || 'Reviewed';
   return `<span class="tag${i.status === 'gone' ? ' warn' : ''}">${esc(text)}</span>`;
 }
-/** The inventory's rows. */
-function govInvRowsHtml(items) {
+/** Whether a role may review inventory items: the owner and reviewers (no role: no sign-in, the owner). */
+const govCanReview = (role) => !role || role === 'owner' || role === 'reviewer';
+/** The signed-in role, from the page chrome (public/app.js ZP.me); null when unknown. */
+const govRole = () => (typeof ZP !== 'undefined' && ZP.me && ZP.me.role) || null;
+/** The inventory's rows; the Review button only for a role that may review. */
+function govInvRowsHtml(items, canReview = true) {
   if (!items.length) return `<tr><td colspan="7" class="muted">${esc('No items for these filters.')}</td></tr>`;
   return items
     .map((i) => {
@@ -278,7 +302,7 @@ function govInvRowsHtml(items) {
       const owner = i.review && i.review.owner ? `<div class="muted">${esc(i.review.owner)}</div>` : '';
       // A source failed this build: the item is kept as it was last seen, not confirmed.
       const stale = i.stale ? `<div class="muted">${esc('not confirmed this build')}</div>` : '';
-      return `<tr><td><b>${esc(i.name)}</b><div class="muted mono gov-id">${esc(i.id)}</div>${detail ? `<div class="muted">${esc(detail)}</div>` : ''}</td><td>${esc(govLabel(GOV_KINDS, i.kind))}</td><td>${esc((i.where || []).join(', ') || '—')}</td><td>${esc(govLabel(GOV_STATES, i.state))}</td><td class="mono">${esc(i.firstSeen || '—')}<br>${esc(i.lastSeen || '—')}</td><td>${govReviewTag(i)}${owner}${stale}</td><td><button class="btn ghost" type="button" data-gov-review="${esc(i.id)}">${esc(i.status === 'unreviewed' ? 'Review' : 'Edit')}</button></td></tr>`;
+      return `<tr><td><b>${esc(i.name)}</b><div class="muted mono gov-id">${esc(i.id)}</div>${detail ? `<div class="muted">${esc(detail)}</div>` : ''}</td><td>${esc(govLabel(GOV_KINDS, i.kind))}</td><td>${esc((i.where || []).join(', ') || '—')}</td><td>${esc(govLabel(GOV_STATES, i.state))}</td><td class="mono">${esc(i.firstSeen || '—')}<br>${esc(i.lastSeen || '—')}</td><td>${govReviewTag(i)}${owner}${stale}</td><td>${canReview ? `<button class="btn ghost" type="button" data-gov-review="${esc(i.id)}">${esc(i.status === 'unreviewed' ? 'Review' : 'Edit')}</button>` : ''}</td></tr>`;
     })
     .join('');
 }
@@ -306,8 +330,9 @@ function govInvFiltersHtml(f) {
     <label>${esc('Review')}${select('review', 'Any review', GOV_REVIEWS)}</label>
   </form>`;
 }
-/** The review drawer of one item: what is known of it, then owner, purpose, risk, decision and note. */
-function govReviewFormHtml(i) {
+/** The review drawer of one item: what is known of it, then owner (with the accounts' names suggested), purpose, risk,
+ * decision and note. */
+function govReviewFormHtml(i, names = []) {
   const r = i.review || {};
   const opt = (list, v) =>
     list
@@ -334,7 +359,8 @@ function govReviewFormHtml(i) {
       <div class="cost-drawer-head"><h2 id="gov-review-title">${esc(i.name)}</h2><button type="button" class="btn ghost" data-gov-close aria-label="Close">×</button></div>
       <p class="muted mono">${esc(i.id)}</p>
       <dl class="gov-facts">${facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
-      <label>${esc('Owner')}<input class="input" name="owner" maxlength="200" value="${esc(r.owner || '')}" autocomplete="off"></label>
+      <label>${esc('Owner')}<input class="input" name="owner" maxlength="200" value="${esc(r.owner || '')}" autocomplete="off" list="gov-owner-names"></label>
+      <datalist id="gov-owner-names">${(Array.isArray(names) ? names : []).map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
       <label>${esc('Purpose')}<input class="input" name="purpose" maxlength="200" value="${esc(r.purpose || '')}" autocomplete="off"></label>
       <div class="cost-row"><label>${esc('Risk (EU AI Act tier)')}<select class="input" name="risk">${opt(GOV_RISKS, r.risk)}</select></label><label>${esc('Decision')}<select class="input" name="decision">${opt(GOV_DECISIONS, r.decision)}</select></label></div>
       <label>${esc('Note')}<textarea class="input" name="note" maxlength="200" rows="3">${esc(r.note || '')}</textarea></label>
@@ -435,6 +461,9 @@ async function govLoadInv() {
   if (!body) return;
   try {
     GOV.inv.data = await api('/api/governance/inventory');
+    // The owner field's suggestions; a failure only leaves them out.
+    if (govCanReview(govRole()))
+      GOV.inv.names = (await api('/api/users/names').catch(() => ({ names: [] }))).names || [];
     govPaintInv();
   } catch (e) {
     body.innerHTML = `<tr><td colspan="7">${esc(`Could not read the inventory: ${e.message}`)}</td></tr>`;
@@ -446,7 +475,7 @@ function govPaintInv() {
   const sum = $('#gov-inv-summary');
   if (sum) sum.innerHTML = govInvSummaryHtml(d);
   const body = $('#gov-inv-rows');
-  if (body) body.innerHTML = govInvRowsHtml(govInvFilter(d.items, GOV.inv.filters));
+  if (body) body.innerHTML = govInvRowsHtml(govInvFilter(d.items, GOV.inv.filters), govCanReview(govRole()));
 }
 async function govLoadComp() {
   const el = $('#gov-comp');
@@ -460,9 +489,9 @@ async function govLoadComp() {
 function govOpenReview(id) {
   const host = $('#gov-review-host');
   const item = GOV.inv.data && GOV.inv.data.items.find((i) => i.id === id);
-  if (!host || !item) return;
+  if (!host || !item || !govCanReview(govRole())) return;
   GOV.inv.open = id;
-  host.innerHTML = govReviewFormHtml(item);
+  host.innerHTML = govReviewFormHtml(item, GOV.inv.names);
   const first = host.querySelector('input[name="owner"]');
   if (first) first.focus();
 }
@@ -509,6 +538,7 @@ function govInstallEvents() {
       GOV.filters = {
         range: String(data.get('range') || '7'),
         actor: String(data.get('actor') || ''),
+        user: String(data.get('user') || '').trim(),
         action: String(data.get('action') || '').trim(),
         outcome: String(data.get('outcome') || ''),
       };
@@ -594,6 +624,7 @@ if (typeof module !== 'undefined')
     govInvFilter,
     govReviewTag,
     govInvRowsHtml,
+    govCanReview,
     govInvSummaryHtml,
     govInvFiltersHtml,
     govReviewFormHtml,

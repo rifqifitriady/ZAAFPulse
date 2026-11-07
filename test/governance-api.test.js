@@ -22,6 +22,7 @@ function setup(t) {
   const call = (p, { method = 'GET', body, contentType = 'application/json' } = {}) => {
     const u = new URL(p, 'http://x');
     return api.route({
+      role: 'owner',
       method,
       path: u.pathname,
       query: u.searchParams,

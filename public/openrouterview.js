@@ -96,7 +96,9 @@ const freshness = (v, label) =>
 async function mountOpenRouterPage(sub) {
   const el = $('#qp-body');
   if (!el) return;
-  await loadOpenRouter(sub === 'models' ? ['models', 'rankings', 'account'] : ['rankings', 'models']);
+  // The account section (the owner's key and balance) is the owner's: no request for it from anyone else.
+  const account = isOwner() ? ['account'] : [];
+  await loadOpenRouter(sub === 'models' ? ['models', 'rankings', ...account] : ['rankings', 'models']);
   if (state.sub !== sub || !$('#qp-body')) return;
   if (sub === 'models') {
     paintModels();

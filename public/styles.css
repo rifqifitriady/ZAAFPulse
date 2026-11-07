@@ -10037,3 +10037,33 @@ label.mon-cand.on {
   margin: 0;
   overflow-wrap: anywhere;
 }
+
+/* Dashboard users and roles (AI Governance 4): who is signed in, the role banner, the Users page. */
+.topbar-who {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.topbar-who .link-btn {
+  color: var(--text-2);
+  font-size: 12px;
+}
+.role-banner {
+  padding: 8px 28px;
+  border-bottom: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+  font-size: 12.5px;
+}
+.topbar-who[hidden],
+nav a[hidden],
+.icon-btn[hidden] {
+  display: none;
+}
+.usr-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}

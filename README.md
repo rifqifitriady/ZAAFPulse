@@ -264,7 +264,7 @@ AI coding agents now run for hours, read thousands of files and call hundreds of
 <td valign="top">
 
 **AI governance**<br>
-<sub>An inventory of every AI system here (apps, the MCP servers in your AI clients, providers, models, agents, keys) with its owner, purpose, risk and your decision; seventeen controls mapped to the EU AI Act, the NIST AI RMF and ISO/IEC 42001 with their evidence, exportable as Markdown or JSON; and an audit log of every change made by a person or an API key, chained so an edited or deleted line shows when you verify. <a href="docs/governance.md">docs/governance.md</a></sub>
+<sub>An inventory of every AI system here (apps, the MCP servers in your AI clients, providers, models, agents, keys) with its owner, purpose, risk and your decision; eighteen controls mapped to the EU AI Act, the NIST AI RMF and ISO/IEC 42001 with their evidence, exportable as Markdown or JSON; an audit log of every change made by a person or an API key, chained so an edited or deleted line shows when you verify; and sign-ins of their own for auditors (viewers) and reviewers, each change recorded under their name. <a href="docs/governance.md">docs/governance.md</a> · <a href="docs/users.md">docs/users.md</a></sub>
 
 </td>
 </tr>
@@ -515,11 +515,16 @@ The first start indexes your logs: about 30 seconds for 2 GB with worker threads
 
 Sign-in is on by default, on every OS:
 
-- **Local sign-in** (the default on 127.0.0.1): only your OS account can open the dashboard. Open it with `zaafpulse open`, or start with `zaafpulse start --open`. The browser is signed in with a one-time code that is kept off the command line, so other accounts on the machine never see it.
+- **Local sign-in** (the default on 127.0.0.1): only your OS account can open the dashboard as the owner. Open it with `zaafpulse open`, or start with `zaafpulse start --open`. Accounts you add under **Settings → Users** can also sign in there with a name and a password ([docs/users.md](docs/users.md)). The browser is signed in with a one-time code that is kept off the command line, so other accounts on the machine never see it.
 - **Password** in server mode or behind a reverse proxy (below).
 - **None** only when you ask for it with `ZAAFPULSE_AUTH=none`, and in demo mode on a single-user machine (its data is synthetic). Without sign-in, any program or other account on the machine could use the dashboard as you.
 
 Details, including the autostart opener and Windows: [docs/install.md](docs/install.md#who-can-open-the-dashboard).
+
+Other people can have their own sign-in, with a role: a **viewer** reads (metadata only, never transcripts or
+secrets), a **reviewer** also reviews the AI inventory and approves agent runs. Add them under **Settings → Users**;
+they sign in with a name and a password in password and local sign-in, and the admin password stays yours. Roles, what
+each may read, passwords and the audit entries: **[docs/users.md](docs/users.md)**.
 
 ### Server mode
 
@@ -758,8 +763,8 @@ found, its state and the days it was first and last seen.
   looks like a token. The package is the first other package-looking argument, so it can be a plain flag's value
   (`--port 8080`).
 
-**Governance → Compliance** shows seventeen controls (the guardrails, the audit log, approvals, keys, agent control,
-the Monitors, evals, budgets, sign-in, retention, the inventory itself …) with their status from your settings and
+**Governance → Compliance** shows eighteen controls (the guardrails, the audit log, approvals, keys, agent control,
+the Monitors, evals, budgets, sign-in, roles and access reviews, retention, the inventory itself …) with their status from your settings and
 their evidence, mapped to the EU AI Act, the NIST AI RMF 1.0 and ISO/IEC 42001:2023. **Export** the inventory, the
 controls and the audit log's state as Markdown or JSON. It is evidence for your assessment, not a certification.
 
@@ -770,7 +775,8 @@ What is listed, the reviews, every control and the API: **[docs/governance.md](d
 **Governance → Audit log** lists every change made to ZAAFPulse by a person or an API key: dashboard changes with
 their route and outcome, every `config.json` write with its changed fields (secrets masked), sign-ins and lockouts, API
 key changes, approvals and cancels of collaboration runs (with the key that asked), agent and runtime control, and
-each secret shown in the Trace explorer.
+each secret shown in the Trace explorer. Each dashboard entry names the account and its role
+([docs/users.md](docs/users.md)); the list filters by account.
 
 - **Kept** in monthly files under `.data/audit/` for 12 months by default (6 to 120), then deleted by whole months.
 - **Chained:** each entry carries an HMAC of the one before it, with a key in the OS secret store. **Verify** shows
@@ -941,7 +947,7 @@ Nothing else: no telemetry, no update checks, no accounts. Demo mode fetches not
 
 - The office, logs and timeline read transcript tails on demand and keep only tool names, sizes, file and command names, hostnames, timing and state; message text is never shown.
 - Message text from your logs is never stored. The cache keeps token counts, metadata and, for flagged quality or safety items only, a masked snippet of up to 160 characters. Secret values are never kept.
-- Sign-in is on by default on every OS: local sign-in on 127.0.0.1 lets only your OS account in (open it with `zaafpulse open` or `zaafpulse start --open`), and server mode or a reverse proxy requires the admin password (at least 10 characters). There is no sign-in only with `ZAAFPULSE_AUTH=none`, which you set yourself, or in demo mode on a single-user machine. Every dashboard response carries a strict Content-Security-Policy and refuses to be framed. See [docs/install.md](docs/install.md#who-can-open-the-dashboard) and [SECURITY.md](SECURITY.md).
+- Sign-in is on by default on every OS: local sign-in on 127.0.0.1 lets only your OS account in as the owner (open it with `zaafpulse open` or `zaafpulse start --open`; the accounts you add sign in with a name and a password, see [docs/users.md](docs/users.md)), and server mode or a reverse proxy requires the admin password (at least 10 characters). There is no sign-in only with `ZAAFPULSE_AUTH=none`, which you set yourself, or in demo mode on a single-user machine. Every dashboard response carries a strict Content-Security-Policy and refuses to be framed. See [docs/install.md](docs/install.md#who-can-open-the-dashboard) and [SECURITY.md](SECURITY.md).
 - Agents run only the integration tools they are allowed, and tools that change something run only in a workflow step a person approved. A stored secret is only ever sent to the address it was saved for. URLs given to the RAG service cannot reach this machine or private networks.
 - The Agent Gateway listens on 127.0.0.1 unless you choose server mode, which requires a dashboard password; API keys are stored as hashes, provider keys in the OS secret store (macOS Keychain, Linux keyring, or an AES-256-GCM encrypted file on servers and Windows, its key sealed with DPAPI there), and sessions and memory (which hold conversation text you send to agents) stay in `.data/` on this machine.
 - Second-brain sources are read with the token you give each one (kept in the OS secret store), only from that source's own API or files; the map keeps titles and links, never note text. Vector databases are sampled read-only (240 records at most), and Postgres is only sent `SELECT`s.
@@ -965,7 +971,8 @@ lib/secret-binding.js  keeps a stored secret bound to the addresses it was saved
 lib/net.js             guarded fetch for addresses someone else typed (no loopback, private or metadata addresses)
 lib/platform.js        OS differences: data folder, machine and user name, Obsidian config, open URL, MCP command
 lib/auth.js            dashboard sign-in: local one-time-code sign-in (default), server-mode password (scrypt,
-                       sessions, per-address throttling)
+                       sessions, per-address throttling), accounts by name with their role
+lib/users/             dashboard accounts: the accounts file, the role policy (deny by default), /api/users
 lib/service.js         background service: LaunchAgent, systemd, Startup folder or Task Scheduler
 lib/audit.js           tool-call log (.cache/mcp-audit.jsonl)
 lib/local.js           dashboard data for the acc connector
@@ -1035,6 +1042,7 @@ docs/topology.md       the Overview's provider topology: layers, colours, source
 docs/cost.md           cost ledger: who counts what, frozen cost, billing, cost centers, restate, the Cost Control menu, API, limits
 docs/guardrails.md     gateway guardrails: the checks, modes, scope, per-key policy, what is recorded, reading a block
 docs/governance.md     governance: the AI inventory and reviews, compliance controls, evidence export, the audit log, API
+docs/users.md          dashboard users and roles: owner, reviewer, viewer, what each may do, passwords, audit, API
 docs/assets/           README banner, diagrams, screenshots and GIFs
 ```
 </details>
@@ -1042,11 +1050,12 @@ docs/assets/           README banner, diagrams, screenshots and GIFs
 <details>
 <summary><b>HTTP API</b></summary>
 
-Apart from the sign-in routes in the first row, every `/api` route needs a signed-in dashboard session, unless sign-in is off.
+Apart from the sign-in routes in the first row, every `/api` route needs a signed-in dashboard session, unless sign-in is off. A reviewer's or a viewer's session reaches only the routes its role allows ([docs/users.md](docs/users.md#roles)).
 
 | Route | Returns |
 |---|---|
-| `GET /api/session` · `POST /api/login` · `POST /api/logout` · `GET /auth/local` | sign-in state and mode; password sign-in (server mode); sign out; the one-time-code exchange that `zaafpulse open` uses |
+| `GET /api/session` · `POST /api/login` · `POST /api/logout` · `GET /auth/local` | sign-in state, mode and who is signed in; sign-in with a name and a password (or the admin password alone); sign out; the one-time-code exchange that `zaafpulse open` uses |
+| `GET /api/users` · `POST /api/users` · `GET /api/users/names` · `POST /api/account/password` | the dashboard accounts (the owner's), the names the inventory review suggests, an account's own password; see [docs/users.md](docs/users.md#api) |
 | `GET /api/platform` | OS and the secret store in use |
 | `GET /api/summary?range=7\|30\|90\|all` | usage, cost, sessions, projects, models and quality for the range |
 | `GET /api/live` | running AI apps, system load and used memory, indexer status |

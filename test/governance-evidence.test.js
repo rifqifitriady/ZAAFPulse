@@ -68,7 +68,7 @@ test('the report: what it holds, and no project folder or client file', () => {
     'audit',
     'inventory',
   ]);
-  assert.deepEqual([r.version, r.generatedAt, r.controls.length], ['1.0.4', '2026-11-03T12:00:00.000Z', 17]);
+  assert.deepEqual([r.version, r.generatedAt, r.controls.length], ['1.0.4', '2026-11-03T12:00:00.000Z', 18]);
   assert.deepEqual(r.audit, audit);
   assert.deepEqual(r.inventory.failed, ['trace']);
   assert.equal(r.inventory.items[0].review.risk, 'high');
@@ -132,7 +132,8 @@ test('GET evidence: JSON or Markdown as a download, recorded as governance.expor
     version: '1.0.4',
     now: () => NOW,
   });
-  const get = (q) => api.route({ method: 'GET', path: '/api/governance/evidence', query: new URLSearchParams(q) });
+  const get = (q) =>
+    api.route({ role: 'owner', method: 'GET', path: '/api/governance/evidence', query: new URLSearchParams(q) });
   const json = await get('');
   assert.equal(json.status, 200);
   assert.equal(json.type, 'application/json; charset=utf-8');
@@ -177,7 +178,8 @@ test('privacy: no absolute project folder, home path or secret-looking value in 
     version: '1.0.4',
     now: () => NOW,
   });
-  const get = (q) => api.route({ method: 'GET', path: '/api/governance/evidence', query: new URLSearchParams(q) });
+  const get = (q) =>
+    api.route({ role: 'owner', method: 'GET', path: '/api/governance/evidence', query: new URLSearchParams(q) });
   const json = await get('format=json');
   const md = await get('format=md');
   assert.ok(JSON.parse(json.body).inventory.items.some((i) => i.id === 'mcp:db'));
@@ -282,6 +284,7 @@ test('GET evidence: an audit log that throws never stops the export', async () =
   });
   for (const format of ['json', 'md']) {
     const r = await api.route({
+      role: 'owner',
       method: 'GET',
       path: '/api/governance/evidence',
       query: new URLSearchParams({ format }),

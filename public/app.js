@@ -246,6 +246,22 @@ async function api(path, opts) {
     location.href = '/login.html';
     throw new Error('signed out');
   } // server mode: session ended
+  if (r.status === 403) {
+    // The role policy (AI Governance 4): a new password first, or a request this role may not make.
+    const text = await r.text();
+    let error = '';
+    try {
+      error = JSON.parse(text).error || '';
+    } catch {
+      /* not JSON */
+    }
+    if (error === 'change your password first') {
+      location.href = '/login.html';
+      throw new Error('Change your password first');
+    }
+    if (error === 'your role cannot do this') throw new Error('Your role cannot do this');
+    throw new Error(`403 ${text}`);
+  }
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
   return r.json();
 }
@@ -257,7 +273,10 @@ const ZP = {
   serverMode: false,
   auth: false,
   baseUrl: location.origin,
+  me: null, // who is signed in (GET /api/session): { user, role, display }
 };
+// The owner may do everything; a reviewer or a viewer sees no Settings, Users or Rescan (the server is the authority).
+const isOwner = () => !ZP.me || !ZP.me.role || ZP.me.role === 'owner';
 const storeName = () => ({ keychain: 'Keychain', libsecret: 'keyring' })[ZP.secretStore.id] || 'secret file';
 const storeLong = () => ZP.secretStore.label || 'secret store';
 const localOnlyLabel = () => (ZP.serverMode ? 'server mode · sign-in' : '127.0.0.1 only');
@@ -295,8 +314,9 @@ function paintChrome() {
   const d = state.data;
   const live = state.live;
   if (d) {
-    $('#user-name').textContent = d.config.userName;
-    $('#user-initials').textContent = initials(d.config.userName);
+    const shown = isOwner() ? d.config.userName : ZP.me.display || ZP.me.user;
+    $('#user-name').textContent = shown;
+    $('#user-initials').textContent = initials(shown);
     $('#ws-host').textContent = d.config.host || 'This laptop';
     $('#ws-initials').textContent = initials((d.config.host || 'ML').replace(/[-_]/g, ' '));
     $('#b-sessions').textContent = d.kpis.sessions || '';
@@ -734,7 +754,7 @@ const SETTINGS_BUDGETS_DOC = 'https://github.com/rifqifitriady/ZAAFPulse/blob/ma
 async function viewSettings(el) {
   const cfg = await api('/api/config');
   const theme = store.get('theme', 'system');
-  el.innerHTML = `<div class="holo-deck"><div class="hero"><div><div class="eyebrow">SETTINGS</div><h1>Preferences</h1><p>Stored in config.json next to the app. Model prices stay current from the providers' list prices.</p></div></div>
+  el.innerHTML = `<div class="holo-deck">${subTabs('settings')}<div class="hero"><div><div class="eyebrow">SETTINGS</div><h1>Preferences</h1><p>Stored in config.json next to the app. Model prices stay current from the providers' list prices.</p></div></div>
   <div class="grid two" style="margin-top:0">
     <div class="card"><div class="card-head"><h3>Profile & budget</h3></div>
       <form class="form" id="profile-form">
@@ -1136,7 +1156,9 @@ function render(animate = true) {
         : a.dataset.route === state.route,
     );
   // Sub-pages show only under the section you are in, so the whole menu fits without scrolling.
-  for (const a of $$('nav a.nav-sub')) a.hidden = a.dataset.route.split('/')[0] !== state.route;
+  // A reviewer or a viewer never sees the Settings sub-links (AI Governance 4).
+  for (const a of $$('nav a.nav-sub'))
+    a.hidden = a.dataset.route.split('/')[0] !== state.route || (!isOwner() && a.dataset.route.startsWith('settings'));
   for (const a of $$('nav a:not(.nav-sub)'))
     a.classList.toggle(
       'open',
@@ -1147,7 +1169,18 @@ function render(animate = true) {
   el.classList.toggle('animate', animate && !reduceMotion.matches);
   unmountBrain();
   unmountStages();
-  if (state.route === 'settings') return viewSettings(el);
+  if (state.route === 'settings') {
+    if (!isOwner()) {
+      el.innerHTML = holoEmpty('Settings and Users are for the owner of this dashboard.');
+      return;
+    }
+    return state.sub === 'users' ? usrMount(el) : viewSettings(el);
+  }
+  // The Second Brain reads the owner's notes: a reviewer or a viewer gets this line and no request that would be refused.
+  if (state.route === 'brain' && !isOwner()) {
+    el.innerHTML = holoEmpty('The Second Brain is for the owner of this dashboard.');
+    return;
+  }
   // The Governance pages (Inventory, Compliance, Audit log) load their own data (public/governanceview.js): they never
   // wait for the summary.
   if (state.route === 'governance') {
@@ -1298,10 +1331,30 @@ function applyTheme() {
 
 (async function boot() {
   Object.assign(ZP, await api('/api/platform').catch(() => ({})));
+  ZP.me = await fetch('/api/session')
+    .then((r) => r.json())
+    .catch(() => null);
   if (ZP.auth) {
     const role = $('.user-role');
-    if (role) role.innerHTML = '<button class="link-btn" type="button" id="sign-out">Admin · sign out</button>';
+    if (role)
+      role.innerHTML = `<button class="link-btn" type="button" id="sign-out">${esc(`${usrRoleLabel((ZP.me && ZP.me.role) || 'owner')} · sign out`)}</button>`;
     $('#sign-out')?.addEventListener('click', signOut);
+    // The top bar: who is signed in, their role, a sign-out link and (for an account) the password page.
+    const who = $('#topbar-who');
+    const bar = usrWhoBar(ZP.me, ZP.auth);
+    if (who && bar.show) {
+      who.hidden = false;
+      $('#who-text').textContent = bar.text;
+      $('#who-password').hidden = !bar.password;
+      $('#who-out').addEventListener('click', signOut);
+    }
+    // A reviewer or a viewer: the role banner, and no Settings, Users or Rescan.
+    const banner = $('#role-banner');
+    if (banner && !isOwner()) {
+      banner.textContent = usrBannerText(ZP.me);
+      banner.hidden = false;
+      for (const el of $$('nav a[data-route^="settings"], #nav-prefs, #rescan')) el.hidden = true;
+    }
   } else if (ZP.os !== 'macos') {
     const role = $('.user-role');
     if (role) role.textContent = `${ZP.osLabel} · local`;

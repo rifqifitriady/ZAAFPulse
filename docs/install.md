@@ -132,7 +132,7 @@ There are three sign-in modes. ZAAFPulse picks one by itself:
 
 | Mode | When | How you get in |
 |---|---|---|
-| **local** | 127.0.0.1, on every OS (the default) | `zaafpulse open`, or `zaafpulse start --open`. Other accounts on the machine and their programs cannot get in. |
+| **local** | 127.0.0.1, on every OS (the default) | `zaafpulse open`, or `zaafpulse start --open`. Other OS accounts on the machine and their programs cannot get in, unless the owner gave them a dashboard account: those sign in with a name and a password ([docs/users.md](users.md)). |
 | **password** | Any address but 127.0.0.1, a reverse proxy (`ZAAFPULSE_TRUST_PROXY`, `ZAAFPULSE_PUBLIC_URL` or `ZAAFPULSE_ALLOWED_HOSTS`), or `ZAAFPULSE_AUTH=1` | The admin password |
 | **none** | Only with `ZAAFPULSE_AUTH=none` on 127.0.0.1, and demo mode (`--demo`) on a single-user machine | Open http://localhost:4777 |
 
@@ -181,6 +181,8 @@ ZAAFPulse listens on `127.0.0.1` unless told otherwise. Any other address, or a 
   - When 50 failures come from all addresses within 15 minutes, every address gets one free try instead of five. This slows a distributed attack down. It never refuses a fresh address its first try, so you can still sign in with the right password while someone else is guessing.
   - A browser that signed in before gets a signed "known browser" cookie (180 days). It has its own count, so guesses from its address (a shared office or carrier connection) or from everywhere at once do not lock it out.
   - Behind a proxy, the address is the right-most `X-Forwarded-For` entry.
+  - Each dashboard account (not the owner) has a budget of its own: after 10 failures for one account name, from any addresses, a fresh browser waits before it tries that account again ([docs/users.md](users.md#signing-in-and-passwords)).
+- **Other people:** give them an account of their own, with a role, under **Settings → Users** ([docs/users.md](users.md)). They sign in with a name and a password; an empty name is the admin password.
 - **Apps:** `/v1`, `/mcp` and `/a2a` need ZAAFPulse API keys, as they always have.
 - **Host names:** with sign-in on, any host name is accepted. To restrict it, set `ZAAFPULSE_ALLOWED_HOSTS=ai.example.com,10.0.0.5`.
 - **Browser protection:** every dashboard response carries a strict Content-Security-Policy, `X-Frame-Options: DENY` and `Referrer-Policy: no-referrer`.

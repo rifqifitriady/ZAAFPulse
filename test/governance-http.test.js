@@ -95,7 +95,7 @@ function entries(s) {
     .sort()
     .flatMap((f) => fs.readFileSync(path.join(dir, f), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse));
 }
-const LOCAL = { via: 'dashboard', mode: 'none', device: null, ip: '127.0.0.1' };
+const LOCAL = { via: 'dashboard', user: 'owner', role: 'owner', mode: 'none', device: null, ip: '127.0.0.1' };
 
 test('dashboard changes: one entry each, with the dashboard actor and the outcome; reads are not entries', async (t) => {
   const s = await startServer(t);
@@ -295,8 +295,22 @@ test('sign-in: login, a change, logout, five failures and one lockout, with the 
   const device = all[0].actor.device;
   assert.ok(device);
   for (const e of all.slice(0, 4))
-    assert.deepEqual(e.actor, { via: 'dashboard', mode: 'password', device, ip: '127.0.0.1' });
-  assert.deepEqual(all[4].actor, { via: 'dashboard', mode: 'password', device: null, ip: '127.0.0.1' });
+    assert.deepEqual(e.actor, {
+      via: 'dashboard',
+      user: 'owner',
+      role: 'owner',
+      mode: 'password',
+      device,
+      ip: '127.0.0.1',
+    });
+  assert.deepEqual(all[4].actor, {
+    via: 'dashboard',
+    user: null,
+    role: null,
+    mode: 'password',
+    device: null,
+    ip: '127.0.0.1',
+  });
   assert.ok(!JSON.stringify(all).includes('nope') && !JSON.stringify(all).includes('horse'));
   assert.ok(s.alive());
 });
