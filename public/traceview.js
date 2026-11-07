@@ -626,7 +626,15 @@ function viewTrace() {
       <div class="tr-stepper"><button type="button" class="tr-icon-btn" id="tr-prev" aria-label="Previous turn">◀</button><span class="tr-muted" id="tr-step">– / –</span><button type="button" class="tr-icon-btn" id="tr-next" aria-label="Next turn">▶</button></div>
     </div>
     <div class="tr-legend">${legend}</div>
-    <div class="tr-map" id="tr-map"><svg class="tr-wires" id="tr-wires" aria-hidden="true"></svg></div>
+    <div class="tr-map" id="tr-map">
+      <div class="tr-metro">
+        <canvas id="tr-metro" tabindex="0" role="group" aria-label="Session map · arrow keys move between stations, Space pauses the ride"></canvas>
+        <div class="tr-hud" aria-hidden="true"><div class="tr-hud-t" id="tr-hud-t"></div><div class="tr-hud-s" id="tr-hud-s"></div><div class="tr-hud-more" id="tr-hud-more" hidden></div></div>
+        <button type="button" class="tr-icon-btn tr-ride" id="tr-ride" aria-label="Pause the ride" title="Pause the ride (Space)">⏸</button>
+      </div>
+      <div class="tr-bar" id="tr-bar" aria-hidden="true"></div>
+      <div class="tr-sr" id="tr-live" aria-live="polite"></div>
+    </div>
     <div class="tr-deps" id="tr-deps" tabindex="0" aria-label="Dependencies between agents, models, tools and remote services" hidden></div>
   </section>
 </div></div>`;
@@ -700,6 +708,10 @@ function mountTrace() {
     rows: [],
     nodes: [],
     nodeOf: new Map(),
+    metroKey: null, // the session and turn the metro shows: a new one restarts the ride
+    ride: false, // whether the camera rides the line on its own
+    hudAt: -1, // the station the HUD shows
+    barAt: [], // each station's place on the time bar, 0..1
     spans: new Map(),
     cursor: undefined,
     preview: '',
@@ -707,7 +719,6 @@ function mountTrace() {
     creq: 0,
     dreq: 0,
     poll: 0,
-    frame: 0,
     listReq: 0,
     // Local evals and feedback. Results and ratings are read per session and kept for that session only.
     evs: [], // the evaluator list: titles, labels, pass label
@@ -744,6 +755,7 @@ function mountTrace() {
   const rowsBox = $('#tr-rows');
   const list = $('#tr-list');
   const txt = $('#tr-txt');
+  let metro = null; // the session map's renderer (tracemetro.js); null without canvas support
   const body = $('#tr-body');
   // Datasets (datasetview.js): Ctrl/Cmd-click or Space picks turns; "Add to dataset" and "Replay turn".
   const ds = typeof dsTraceMount === 'function' ? dsTraceMount(app, S, rowsBox) : null;
@@ -1031,7 +1043,14 @@ function mountTrace() {
     m.className = 'tr-empty';
     m.textContent = msg;
     rowsBox.appendChild(m);
-    $('#tr-map').replaceChildren($('#tr-wires') || document.createElementNS('http://www.w3.org/2000/svg', 'svg'));
+    if (metro) metro.setNodes([], [], -1, { restart: true });
+    S.metroKey = null;
+    S.barAt = [];
+    S.hudAt = -1;
+    $('#tr-bar').replaceChildren();
+    $('#tr-hud-t').textContent = '';
+    $('#tr-hud-s').textContent = '';
+    $('#tr-hud-more').hidden = true;
     $('#tr-turn').textContent = 'No turn shown';
     $('#tr-sum').textContent = '';
     $('#tr-step').textContent = '– / –';
@@ -1089,10 +1108,10 @@ function mountTrace() {
     }
   }
   const fillPreviews = () => {
-    for (const el of $$('[data-tpreview]', app)) {
+    for (const el of $$('[data-tpreview]', app))
       el.textContent = S.preview ? `${el.dataset.tpreview === 'row' ? ' · ' : ''}${S.preview}` : '';
-      if (S.preview && el.dataset.tpreview === 'node') el.classList.add('has');
-    }
+    if (metro) metro.setPreview(S.preview || '');
+    S.hudAt = -1; // the HUD's turn line carries the preview
   };
 
   function buildRows() {
@@ -1184,6 +1203,7 @@ function mountTrace() {
     $('#tr-map').hidden = S.view !== 'map';
     $('.tr-legend', app).hidden = S.view !== 'map';
     $('#tr-deps').hidden = S.view !== 'deps';
+    if (metro) metro.show(S.view === 'map');
     if (S.view === 'deps') loadDeps();
   }
   async function loadDeps() {
@@ -1344,98 +1364,127 @@ function mountTrace() {
     }
   }
 
+  // The session map: the turn's nodes as stations on the metro line (tracemetro.js), the time bar under it, and
+  // the HUD. A new session or turn restarts the ride; a live repaint keeps the camera where it is.
   function paintMap() {
-    const map = $('#tr-map');
     const all = mapNodes(S.sk.spans);
     const nodes = all.slice(0, TR_MAP_MAX);
     S.nodes = nodes;
     S.nodeOf = new Map();
     nodes.forEach((n, i) => n.ids.forEach((id) => S.nodeOf.set(id, i)));
-    const sel = trNodeIndex(S.sel);
-    let html = '<svg class="tr-wires" id="tr-wires" aria-hidden="true"></svg>';
-    nodes.forEach((n, i) => {
-      const p = nodeParts(n, i);
-      const c = n.status === 'error' ? TR_COLOR.error : trOwn(TR_COLOR, n.kind, TR_COLOR.unknown);
-      const side = i % 2 ? 'r' : 'l';
-      const num = String(i + 1).padStart(2, '0');
-      const noteHtml = `<div class="tr-note ${side}" style="--c:${c}"><span class="n">${num} · ${esc(p.note[0])}</span>${esc(p.note[1])}</div>`;
-      const meta = p.preview
-        ? `<span class="m"><span class="tr-pvn" data-tpreview="node"></span><span class="tr-pvd">${esc(p.meta)}</span></span>`
-        : `<span class="m">${esc(p.meta)}</span>`;
-      const nb = spanEvalBadges(n, S.turnEv, S.evs);
-      const nodeHtml = `<div class="tr-node${i === sel ? ' on' : ''}${n.status === 'error' ? ' err' : ''}" role="button" tabindex="0" data-tspan="${esc(n.id)}" data-ni="${i}" data-c="${c}" style="--c:${c}" aria-label="${esc(`${p.title}${p.meta ? `, ${p.meta}` : ''}`)}"><span class="tr-ring${[...p.ring].length === 1 ? ' g' : ''}">${esc(p.ring)}</span><div class="tr-ntext"><b>${esc(p.title)}</b>${meta}</div>${nb.length ? `<span class="tr-nev">${trRowBadges(nb)}</span>` : ''}</div>`;
-      html += side === 'l' ? noteHtml + nodeHtml : nodeHtml + noteHtml;
-      if (i < nodes.length - 1) html += '<div class="tr-gap"></div>';
-    });
-    if (all.length > nodes.length)
-      html += `<div class="tr-gap"></div><div class="tr-more-steps">${all.length - nodes.length} more steps · see the tree</div>`;
-    map.innerHTML = html;
-    fillPreviews();
-    queueWires();
+    const more = $('#tr-hud-more');
+    more.hidden = all.length <= nodes.length;
+    more.textContent = more.hidden ? '' : `${all.length - nodes.length} more steps · see the tree`;
+    paintBar();
+    S.hudAt = -1;
+    if (!metro) return;
+    const key = `${S.skKey}|${S.turn}`;
+    metro.setNodes(nodes, nodes.map(metroPart), trNodeIndex(S.sel), { restart: key !== S.metroKey });
+    S.metroKey = key;
   }
-
-  // The glowing S-curves between consecutive nodes and the packet that travels the chain. Built with
-  // createElementNS from numbers and fixed colours only.
-  function drawWires() {
-    S.frame = 0;
-    const map = $('#tr-map');
-    const svg = $('#tr-wires');
-    if (!map || !svg) return;
-    svg.replaceChildren();
-    const nodes = $$('.tr-node', map);
-    if (nodes.length < 2 || getComputedStyle(svg).display === 'none') return;
-    const box = map.getBoundingClientRect();
-    if (!box.width) return;
-    const NS = 'http://www.w3.org/2000/svg';
-    const mk = (tag, attrs, parent = svg) => {
-      const el = document.createElementNS(NS, tag);
-      for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, String(v));
-      parent.appendChild(el);
-      return el;
+  // What a station's label says, from the same facts the old map node showed.
+  function metroPart(n, i) {
+    const p = nodeParts(n, i);
+    const err = n.status === 'error';
+    return {
+      color: err ? TR_COLOR.error : trOwn(TR_COLOR, n.kind, TR_COLOR.unknown),
+      title: p.title,
+      meta: p.meta || '',
+      dur: Number.isFinite(n.start) && Number.isFinite(n.end) ? fmtDur(n.end - n.start) : '',
+      cost: Number.isFinite(n.cost) && n.cost > 0 ? trUsd(n.cost) : '',
+      err,
+      loop: n.count,
+      evalFail: spanEvalBadges(n, S.turnEv, S.evs).some((b) => b.tone === 'bad'),
+      preview: n.kind === 'turn' ? S.preview || '' : '',
     };
-    const defs = mk('defs');
-    const f = mk(
-      'filter',
-      {
-        id: 'tr-glow',
-        filterUnits: 'userSpaceOnUse',
-        x: -60,
-        y: -60,
-        width: box.width + 120,
-        height: box.height + 120,
-      },
-      defs,
-    );
-    mk('feGaussianBlur', { stdDeviation: 2.4, result: 'b' }, f);
-    const merge = mk('feMerge', {}, f);
-    mk('feMergeNode', { in: 'b' }, merge);
-    mk('feMergeNode', { in: 'SourceGraphic' }, merge);
-    const pt = (el, side) => {
-      const r = el.getBoundingClientRect();
-      return [r.left + r.width / 2 - box.left, (side === 't' ? r.top : r.bottom) - box.top];
-    };
-    let chain = '';
-    for (let i = 0; i < nodes.length - 1; i++) {
-      const [x1, y1] = pt(nodes[i], 'b');
-      const [x2, y2] = pt(nodes[i + 1], 't');
-      const off = (i % 2 ? -1 : 1) * Math.min(120, box.width / 6);
-      const mid = (y1 + y2) / 2;
-      const d = `M${x1},${y1} C${x1},${mid} ${x1 + off},${mid} ${x1 + off / 2},${mid} S${x2},${mid} ${x2},${y2}`;
-      chain += (i ? ' ' : '') + d;
-      const c = nodes[i + 1].dataset.c || TR_COLOR.unknown;
-      mk('path', { class: 'tr-wire', d, stroke: c, 'stroke-opacity': 0.25 });
-      mk('path', { class: 'tr-wire tr-flow', d, stroke: c, filter: 'url(#tr-glow)', style: `animation-delay:${-i * 0.2}s` });
+  }
+  // The time bar: one segment per timed step, a marker that moves with the camera, the selection outlined.
+  function paintBar() {
+    const bar = $('#tr-bar');
+    const segs = metroBar(S.nodes);
+    const frag = document.createDocumentFragment();
+    const at = new Array(S.nodes.length).fill(null);
+    for (const s of segs) {
+      const n = S.nodes[s.i];
+      at[s.i] = s.left;
+      const el = document.createElement('span');
+      el.dataset.tbar = String(s.i);
+      el.style.left = `${(s.left * 100).toFixed(3)}%`;
+      el.style.width = `${(s.width * 100).toFixed(3)}%`;
+      el.style.background = n.status === 'error' ? TR_COLOR.error : trOwn(TR_COLOR, n.kind, TR_COLOR.unknown);
+      frag.appendChild(el);
     }
-    if (trReduce()) return; // no packet under reduced motion
-    mk('path', { id: 'tr-chain', d: chain, fill: 'none', stroke: 'none' });
-    const dot = mk('circle', { class: 'tr-packet', r: 4.5, fill: '#fff', filter: 'url(#tr-glow)' });
-    const am = mk('animateMotion', { dur: `${Math.max(5, nodes.length * 0.7)}s`, repeatCount: 'indefinite' }, dot);
-    mk('mpath', { href: '#tr-chain' }, am);
+    let last = 0;
+    S.barAt = at.map((v) => (v == null ? last : (last = v)));
+    const mark = document.createElement('i');
+    mark.id = 'tr-bar-mark';
+    frag.appendChild(mark);
+    bar.replaceChildren(frag);
+    markBar(trNodeIndex(S.sel));
   }
-  const queueWires = () => {
-    if (!S.frame) S.frame = requestAnimationFrame(drawWires);
-  };
-
+  function markBar(ni) {
+    for (const el of $$('[data-tbar]', $('#tr-bar'))) el.classList.toggle('on', Number(el.dataset.tbar) === ni);
+  }
+  // After each metro frame: the time bar's marker follows the camera; the HUD names the station it stands at.
+  function paintHud(p) {
+    const at = S.barAt;
+    if (at.length) {
+      const i0 = Math.max(0, Math.min(at.length - 1, Math.floor(p)));
+      const i1 = Math.min(at.length - 1, i0 + 1);
+      const mark = $('#tr-bar-mark');
+      if (mark) mark.style.left = `${((at[i0] + (at[i1] - at[i0]) * (p - i0)) * 100).toFixed(2)}%`;
+    }
+    const i = Math.round(p);
+    if (i === S.hudAt) return;
+    S.hudAt = i;
+    $('#tr-hud-t').textContent = `Turn ${S.turn + 1}${S.preview ? ` · ${S.preview}` : ''}`;
+    $('#tr-hud-s').textContent = S.nodes[i] ? stationLine(i) : '';
+  }
+  // "Station 4 / 12 · 9.2 s · $0.10": the time since the turn began and the cost of the steps so far.
+  function stationLine(i) {
+    const nodes = S.nodes;
+    const out = [`Station ${i + 1} / ${nodes.length}`];
+    const n = nodes[i];
+    if (n.kind === 'session' || n.kind === 'turn') return out.join(' · ');
+    const turn = nodes.find((x) => x.kind === 'turn');
+    const t0 = turn && Number.isFinite(turn.start) ? turn.start : null;
+    const end = Number.isFinite(n.end) ? n.end : n.start;
+    if (t0 != null && Number.isFinite(end) && end >= t0) out.push(fmtDur(end - t0));
+    let cost = 0;
+    for (let k = 0; k <= i; k++) {
+      const x = nodes[k];
+      if (x.kind !== 'session' && x.kind !== 'turn' && Number.isFinite(x.cost)) cost += x.cost;
+    }
+    if (cost > 0) out.push(trUsd(cost));
+    return out.join(' · ');
+  }
+  // The screen-reader line: selections only, never the ride's steps.
+  function announce(ni) {
+    const n = S.nodes[ni];
+    if (!n) return;
+    const p = nodeParts(n, ni);
+    const d = Number.isFinite(n.start) && Number.isFinite(n.end) ? fmtDur(n.end - n.start) : '';
+    const facts = [p.title, n.status === 'error' ? 'failed' : '', d].filter(Boolean).join(', ');
+    $('#tr-live').textContent = `Station ${ni + 1} of ${S.nodes.length}: ${facts}`;
+  }
+  // A station picked on the map (click, ←/→, Home/End) or on the time bar selects its span.
+  function pickNode(i) {
+    const n = S.nodes[i];
+    if (n) select(n.id, { scroll: 'tree' });
+  }
+  function setRide(on) {
+    S.ride = !!on;
+    if (metro) metro.tour(S.ride);
+    if (!trReduce()) store.set('trace.tour', S.ride ? '1' : '0');
+    paintRide();
+  }
+  function paintRide() {
+    const b = $('#tr-ride');
+    const what = S.ride ? 'Pause the ride' : 'Start the ride';
+    b.textContent = S.ride ? '⏸' : '▶';
+    b.setAttribute('aria-label', what);
+    b.title = `${what} (Space)`;
+  }
   // The map node of a span: its own, or the nearest ancestor's (a subagent's spans live in its node).
   function trNodeIndex(id) {
     let cur = id;
@@ -1458,10 +1507,11 @@ function mountTrace() {
       spans[0];
     const pick = keep || (auto && auto.id);
     // The map opens at its top (Session, Turn), as in the mockup; the tree shows the chosen row.
-    select(pick || null, { scroll: keep ? 'none' : 'tree', force: true });
+    select(pick || null, { scroll: keep ? 'none' : 'tree', force: true, auto: true });
   }
 
-  function select(id, { scroll = 'both', force = false } = {}) {
+  // auto: the page chose the span (a new turn's first pick), so the metro marks it and keeps riding.
+  function select(id, { scroll = 'both', force = false, auto = false } = {}) {
     if (!S.sk) return;
     const same = id === S.sel;
     S.sel = id;
@@ -1471,9 +1521,10 @@ function mountTrace() {
       el.setAttribute('aria-selected', String(on));
     }
     const ni = trNodeIndex(id);
-    for (const el of $$('.tr-node', $('#tr-map'))) el.classList.toggle('on', Number(el.dataset.ni) === ni);
+    if (metro) metro.select(ni, { fly: !auto && scroll !== 'none' });
+    markBar(ni);
+    if (!same && !auto) announce(ni);
     if (scroll === 'both' || scroll === 'tree') scrollRow(id);
-    if (scroll === 'both' || scroll === 'map') scrollNode(ni);
     if (!same || force) paintDetail();
   }
 
@@ -1490,20 +1541,6 @@ function mountTrace() {
       rowsBox.scrollTop = next;
       if (S.rows.length > TR_WINDOW_AT) paintRows();
     }
-  }
-  function scrollNode(ni) {
-    const right = $('#tr-right');
-    const node = $(`.tr-node[data-ni="${ni}"]`, $('#tr-map'));
-    const scrolls =
-      right && right.scrollHeight > right.clientHeight + 1 && getComputedStyle(right).overflowY !== 'visible';
-    if (!node || !scrolls) return;
-    const r = node.getBoundingClientRect();
-    const rr = right.getBoundingClientRect();
-    if (r.top < rr.top + 110 || r.bottom > rr.bottom - 16)
-      right.scrollTo({
-        top: right.scrollTop + r.top - rr.top - rr.height / 3,
-        behavior: trReduce() ? 'auto' : 'smooth',
-      });
   }
 
   /* ---- detail ---- */
@@ -2132,8 +2169,9 @@ function mountTrace() {
       return void toggleNode(el.dataset.ttoggle);
     }
     if ((el = q('[data-tturn]'))) return void loadSkeleton(Number(el.dataset.tturn));
-    if ((el = q('[data-tspan]')))
-      return void select(el.dataset.tspan, { scroll: el.classList.contains('tr-node') ? 'tree' : 'map' });
+    if ((el = q('[data-tspan]'))) return void select(el.dataset.tspan, { scroll: 'map' });
+    if ((el = q('[data-tbar]'))) return void pickNode(Number(el.dataset.tbar));
+    if (q('#tr-ride')) return void setRide(!S.ride);
     if ((el = q('[data-trate]'))) return void rate(el.dataset.trate);
     if (q('#tr-addnote')) return void openNote();
     if (q('#tr-note-save')) return void saveNote();
@@ -2207,11 +2245,10 @@ function mountTrace() {
       return;
     }
     if ((e.key === 'Enter' || e.key === ' ') && inApp) {
-      const el = t.closest('[data-tkey], .tr-node, [data-tturn]');
+      const el = t.closest('[data-tkey], [data-tturn]');
       if (el) {
         e.preventDefault();
         el.click();
-        if (el.classList.contains('tr-node') && e.key === 'Enter') txt.focus();
         return;
       }
       if (e.key === ' ' || t.closest('button, a')) return;
@@ -2262,12 +2299,28 @@ function mountTrace() {
     splitter.addEventListener('pointercancel', up);
   });
 
-  // Wires follow the map's size: the splitter, the collapsed list and the window all change it.
-  const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => S.alive && queueWires()) : null;
-  if (ro) ro.observe($('#tr-map'));
+  // The session map: a 3D metro line the camera rides on its own (tracemetro.js). Reduced motion starts it still.
+  S.ride = !trReduce() && store.get('trace.tour', '1') !== '0';
+  metro =
+    typeof trMetro === 'function'
+      ? trMetro($('#tr-metro'), {
+          onPick: pickNode,
+          onFrame: paintHud,
+          onToggle: () => setRide(!S.ride),
+          onEnter: () => txt.focus(),
+        })
+      : null;
+  if (metro) metro.tour(S.ride);
+  else {
+    const m = document.createElement('div');
+    m.className = 'tr-empty';
+    m.textContent = 'The map needs canvas support · see the tree';
+    $('#tr-metro').replaceWith(m);
+    $('#tr-ride').hidden = true;
+  }
+  paintRide();
   const onResize = () => {
     fit();
-    queueWires();
     if (S.rows.length > TR_WINDOW_AT) paintRows();
   };
   addEventListener('resize', onResize);
@@ -2278,10 +2331,9 @@ function mountTrace() {
     clearTimeout(S.poll);
     for (const t of timers) clearTimeout(t);
     timers.clear();
-    if (S.frame) cancelAnimationFrame(S.frame);
+    if (metro) metro.destroy();
     if (S.rowFrame) cancelAnimationFrame(S.rowFrame);
     if (io) io.disconnect();
-    if (ro) ro.disconnect();
     document.removeEventListener('keydown', onKey);
     document.removeEventListener('visibilitychange', onVisible);
     removeEventListener('resize', onResize);
