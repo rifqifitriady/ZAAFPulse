@@ -377,7 +377,7 @@ function trMetro(canvas, opts = {}) {
       const g = pr(L.x, 0, L.z);
       if (!g) continue;
       const k = g[2];
-      const born = st.born[i] ? Math.min(1, (t - st.born[i]) / 400) : 1;
+      const born = st.born[i] && !calm ? Math.min(1, (t - st.born[i]) / 400) : 1;
       const fade = Math.max(0, Math.min(1, (METRO_FAR - g[3]) / 900)) * born;
       if (fade <= 0) continue;
       st.pts[i] = g;
@@ -529,7 +529,8 @@ function trMetro(canvas, opts = {}) {
       if (!st.nodes.length) return;
       e.preventDefault();
       const t = now();
-      st.hold = Math.max(0, Math.min(st.nodes.length - 1, cameraAt(t).p + e.deltaY / 300));
+      const dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? st.H : 1); // pixels, lines or pages
+      st.hold = Math.max(0, Math.min(st.nodes.length - 1, cameraAt(t).p + dy / 300));
       st.fly = null;
       st.riding = false;
       st.until = t + METRO_PAUSE;
@@ -615,6 +616,7 @@ function trMetro(canvas, opts = {}) {
     tour(on) {
       st.ride = !!on;
       st.riding = false;
+      if (st.ride) st.until = 0; // ▶ resumes the ride, even inside the pause after an interaction
       if (!st.ride && st.sel >= 0) {
         const t = now();
         st.fly = { from: cameraAt(t).p, to: st.sel, t0: t, ms: 600 };
