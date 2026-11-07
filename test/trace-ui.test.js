@@ -807,3 +807,28 @@ test('trAddBody: the multi-selection, else the turn on show with its selected sp
   );
   assert.equal(trAddBody([], { ...S, skKey: 'old' }), null, 'nothing while another session loads');
 });
+
+test('the session map is the metro line: no cards, notes or SVG wires remain', () => {
+  const src = fs.readFileSync(SRC, 'utf8');
+  for (const gone of ['drawWires', 'queueWires', 'scrollNode', 'tr-wires', "'.tr-node'", 'tr-note ', 'tr-gap']) {
+    assert.ok(!src.includes(gone), `traceview.js still has ${gone}`);
+  }
+  assert.match(src, /trMetro\(\$\('#tr-metro'\)/);
+  assert.match(src, /role="group" aria-label="Session map · arrow keys move between stations, Space pauses the ride"/);
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'styles.css'), 'utf8');
+  for (const gone of ['.tr-node', '.tr-note.l', '.tr-gap', 'svg.tr-wires', '.tr-packet', '@keyframes tr-flow', '.tr-nev'])
+    assert.ok(!css.includes(gone), `styles.css still has ${gone}`);
+  for (const added of ['.tr-metro', '.tr-hud', '.tr-bar', '.tr-ride', '.tr-sr']) assert.ok(css.includes(added), added);
+});
+
+test('index.html loads tracemetro.js before traceview.js', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  const a = html.indexOf('<script src="tracemetro.js"></script>');
+  const b = html.indexOf('<script src="traceview.js"></script>');
+  assert.ok(a > 0 && b > a, 'tracemetro.js comes first');
+});
+
+test('tracemetro.js builds no HTML at all (S1)', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'public', 'tracemetro.js'), 'utf8');
+  assert.doesNotMatch(src, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
+});

@@ -1,0 +1,165 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Trace map · metro</title>
+<style>
+body{margin:0;padding:28px 32px 60px;background:#0e1030;color:#e7e9ff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+h2{margin:0 0 6px;font-size:22px}.subtitle{color:#a5a9d6;margin:0 0 22px;font-size:14px;max-width:1100px;line-height:1.5}
+.cards{display:flex;flex-direction:column;gap:22px;max-width:1320px}
+.card{display:grid;grid-template-columns:minmax(0,1fr) 310px;background:#14173d;border:1px solid #2a2f66;border-radius:14px;overflow:hidden;cursor:pointer;transition:border-color .15s}
+.card:hover{border-color:#5b63c9}.card.selected{border-color:#34d399;box-shadow:0 0 0 2px #34d39955}
+.stage{position:relative;height:430px;background:radial-gradient(ellipse at 50% 22%,#1e2356 0%,#0a0c20 72%);overflow:hidden}
+canvas.stage{display:block;width:100%}
+.card-body{padding:18px 20px;border-left:1px solid #2a2f66}
+.card-body h3{margin:0 0 10px;font-size:17px}.card-body p{color:#c3c7ee;margin:8px 0;font-size:13px;line-height:1.55}
+.tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;margin:0 4px 4px 0;background:#2a2f5a;color:#cfd3ff}
+.rec{background:#1e6b4a;color:#d9ffe9}
+
+</style></head><body>
+<h2>Session map · metro line (direction D)</h2>
+<p class="subtitle">Approved direction for the Trace Explorer session map (spec 2026-11-07-trace-metro-map-design.md). The demo turn auto-plays here; in the product the camera follows the selection.</p>
+<div class="cards">
+  <div class="card" data-choice="d">
+    <canvas class="stage" id="vd"></canvas>
+    <div class="card-body">
+      <h3>D · Jalur metro 3D</h3>
+      <p><span class="tag">sinematik</span><span class="tag">fokus 1 langkah</span><span class="tag">skala ke sesi panjang</span></p>
+      <p>Sesi = satu jalur bercahaya yang menjauh ke horizon; tiap langkah = stasiun. Kamera "naik kereta" dan berhenti di tiap stasiun. Hanya 3–4 stasiun terdekat yang berlabel, sisanya memudar di kejauhan, jadi layar tidak pernah penuh.</p>
+      <p>Subagent = jalur cabang (pink) yang bergabung kembali; error = stasiun merah bergelombang; loop = cincin berputar. Bar waktu mini di bawah.</p>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  var C = { turn: '#a78bfa', model: '#22d3ee', tool: '#fbbf24', agent: '#f472b6', error: '#f87171', answer: '#34d399' };
+  // kind, start (m), duration (m), cost ($), status, label, detail
+  var S = [
+    ['model', 0, 2, 0.09, 'ok', 'chat · opus', 'rencana perbaikan'],
+    ['tool', 2, 0.8, 0, 'ok', 'Read', 'redirect.ts'],
+    ['agent', 3, 4, 0.01, 'ok', 'Explore', 'subagent · 1 tool'],
+    ['tool', 7, 2.1, 0, 'loop', 'Read ×3', 'session.ts berulang'],
+    ['tool', 9.2, 1, 0, 'error', 'Bash', 'npm test · exit 1'],
+    ['model', 10.2, 7, 0.21, 'ok', 'chat · opus', 'analisa kegagalan'],
+    ['tool', 17.2, 1, 0, 'ok', 'Edit', 'session.ts'],
+    ['tool', 18.3, 0.6, 0, 'ok', 'Bash', 'npm test · lulus'],
+    ['model', 19, 2, 0.06, 'ok', 'chat · opus', 'ringkasan'],
+    ['answer', 21, 0.3, 0, 'ok', 'Answer', 'jawaban dikirim']
+  ];
+  var T = 21.3;
+  var col = function (s) { return s[4] === 'error' ? C.error : C[s[0]]; };
+  var rgba = function (hex, a) { var n = parseInt(hex.slice(1), 16); return 'rgba(' + (n >> 16) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + Math.max(0, Math.min(1, a)).toFixed(3) + ')'; };
+  var lerp = function (a, b, t) { return a + (b - a) * t; };
+  var smooth = function (u) { return u * u * (3 - 2 * u); };
+
+  // ---------- D · metro ----------
+  (function () {
+    var cv = document.getElementById('vd');
+    var P = S.map(function (s, i) { return { x: s[0] === 'agent' ? 160 : Math.sin(i * 0.85) * 80, z: i * 120 }; });
+    var cum = []; var c = 0; S.forEach(function (s) { c += s[3]; cum.push(c); });
+    function label(x, cx, by, sc, s, side, a, act) {
+      var cc = col(s), W = 196 * sc, Hh = 50 * sc, Y = by - Hh;
+      var X = side === 0 ? cx - W / 2 : side > 0 ? cx - 12 * sc : cx - W + 12 * sc;
+      x.globalAlpha = a;
+      x.fillStyle = act ? 'rgba(26,30,76,.97)' : 'rgba(20,24,60,.88)';
+      x.strokeStyle = rgba(cc, act ? 0.95 : 0.5); x.lineWidth = act ? 1.6 : 1;
+      x.beginPath(); x.roundRect(X, Y, W, Hh, 9 * sc); x.fill(); x.stroke();
+      x.fillStyle = cc; x.beginPath(); x.roundRect(X, Y, 4 * sc, Hh, [9 * sc, 0, 0, 9 * sc]); x.fill();
+      x.font = '600 ' + (13.5 * sc).toFixed(1) + 'px -apple-system,sans-serif'; x.fillStyle = '#eef0ff';
+      x.fillText((s[4] === 'error' ? '✕ ' : s[4] === 'loop' ? '↻ ' : '') + s[5], X + 13 * sc, Y + 21 * sc);
+      x.font = (11 * sc).toFixed(1) + 'px -apple-system,sans-serif'; x.fillStyle = '#a9aee0';
+      x.fillText(s[6], X + 13 * sc, Y + 38 * sc);
+      x.textAlign = 'right'; x.fillStyle = rgba(cc, 0.95);
+      x.fillText(s[2].toFixed(1) + ' m', X + W - 11 * sc, Y + 21 * sc);
+      if (s[3] > 0) x.fillText('$' + s[3].toFixed(2), X + W - 11 * sc, Y + 38 * sc);
+      x.textAlign = 'left'; x.globalAlpha = 1;
+    }
+    function frame(now) {
+      var r = cv.getBoundingClientRect(), d = window.devicePixelRatio || 1;
+      if (cv.width !== Math.round(r.width * d) || cv.height !== Math.round(r.height * d)) { cv.width = Math.round(r.width * d); cv.height = Math.round(r.height * d); }
+      var x = cv.getContext('2d'); x.setTransform(d, 0, 0, d, 0, 0);
+      var w = r.width, h = r.height; x.clearRect(0, 0, w, h);
+      var tau = now / 1000, dwell = 2.0, cyc = S.length + 1.2, seg = (tau / dwell) % cyc;
+      var p = seg >= S.length - 1 ? S.length - 1 : Math.floor(seg) + smooth(Math.min(1, (seg % 1) * 1.8));
+      var i0 = Math.floor(p), i1 = Math.min(S.length - 1, i0 + 1), f = p - i0;
+      var camZ = lerp(P[i0].z, P[i1].z, f) - 190, camX = lerp(P[i0].x, P[i1].x, smooth(f)) * 0.55;
+      var F = 380, H = 110, hor = h * 0.27;
+      function pr(X, Y, Z) { var dz = Z - camZ; if (dz < 25) return null; var k = F / dz; return [w / 2 + (X - camX) * k, hor + (H - Y) * k, k, dz]; }
+      // horizon haze
+      var hz = x.createLinearGradient(0, hor - 40, 0, hor + 60); hz.addColorStop(0, 'rgba(120,110,255,0)'); hz.addColorStop(0.5, 'rgba(120,110,255,.10)'); hz.addColorStop(1, 'rgba(120,110,255,0)');
+      x.fillStyle = hz; x.fillRect(0, hor - 40, w, 100);
+      // floor grid
+      x.lineWidth = 1;
+      for (var gx = -560; gx <= 560; gx += 80) {
+        var a = pr(gx, 0, camZ + 30), b = pr(gx, 0, camZ + 1600);
+        if (a && b) { var g = x.createLinearGradient(a[0], a[1], b[0], b[1]); g.addColorStop(0, 'rgba(130,140,255,.16)'); g.addColorStop(1, 'rgba(130,140,255,0)'); x.strokeStyle = g; x.beginPath(); x.moveTo(a[0], a[1]); x.lineTo(b[0], b[1]); x.stroke(); }
+      }
+      for (var gz = Math.ceil((camZ + 30) / 120) * 120; gz < camZ + 1600; gz += 120) {
+        var a2 = pr(-560, 0, gz), b2 = pr(560, 0, gz);
+        if (a2 && b2) { x.strokeStyle = 'rgba(130,140,255,' + (0.13 * Math.min(1, a2[2] * 1.4)).toFixed(3) + ')'; x.beginPath(); x.moveTo(a2[0], a2[1]); x.lineTo(b2[0], b2[1]); x.stroke(); }
+      }
+      // route
+      function track(A0, B0, color, alpha, dash) {
+        var N = 18; x.setLineDash(dash || []);
+        for (var k = 0; k < N; k++) {
+          var u0 = k / N, u1 = (k + 1) / N;
+          var A = pr(lerp(A0.x, B0.x, smooth(u0)), 0, lerp(A0.z, B0.z, u0)), B = pr(lerp(A0.x, B0.x, smooth(u1)), 0, lerp(A0.z, B0.z, u1));
+          if (!A || !B) continue;
+          x.strokeStyle = rgba(color, alpha * Math.min(1, A[2] * 1.5)); x.lineWidth = Math.max(1.2, 7 * A[2]);
+          x.beginPath(); x.moveTo(A[0], A[1]); x.lineTo(B[0], B[1]); x.stroke();
+        }
+        x.setLineDash([]);
+      }
+      track(P[1], P[3], C.agent, 0.3, [6, 9]);
+      for (var i = 0; i < S.length - 1; i++) {
+        var done = i < p - 0.001, branch = S[i][0] === 'agent' || S[i + 1][0] === 'agent';
+        x.shadowColor = done ? '#b8b0ff' : 'transparent'; x.shadowBlur = done ? 12 : 0;
+        track(P[i], P[i + 1], branch ? C.agent : (done ? '#c7c2ff' : '#7c83ff'), done ? 0.9 : 0.35);
+        x.shadowBlur = 0;
+      }
+      // stations, far to near
+      var act = Math.round(p);
+      var order = S.map(function (s, i) { return i; }).sort(function (a, b) { return P[b].z - P[a].z; });
+      order.forEach(function (i) {
+        var s = S[i], cc = col(s), g = pr(P[i].x, 0, P[i].z); if (!g) return;
+        var k = g[2], dz = g[3], fade = Math.max(0, Math.min(1, (1500 - dz) / 900)); if (fade <= 0) return;
+        var isA = i === act;
+        x.globalAlpha = fade;
+        x.fillStyle = rgba(cc, isA ? 0.5 : 0.25); x.beginPath(); x.ellipse(g[0], g[1], 24 * k, 7.5 * k, 0, 0, 7); x.fill();
+        if (s[4] === 'error') { var ph = (tau % 1.3) / 1.3; x.strokeStyle = rgba(C.error, (1 - ph) * 0.9); x.lineWidth = 2; x.beginPath(); x.ellipse(g[0], g[1], (24 + ph * 70) * k, (7.5 + ph * 22) * k, 0, 0, 7); x.stroke(); }
+        if (s[4] === 'loop') { x.strokeStyle = rgba(cc, 0.95); x.lineWidth = 2; x.setLineDash([6, 6]); x.lineDashOffset = -tau * 30; x.beginPath(); x.ellipse(g[0], g[1], 36 * k, 11 * k, 0, 0, 7); x.stroke(); x.setLineDash([]); x.lineDashOffset = 0; }
+        var top = pr(P[i].x, 56, P[i].z);
+        var pg = x.createLinearGradient(g[0], g[1], top[0], top[1]); pg.addColorStop(0, rgba(cc, 0.9)); pg.addColorStop(1, rgba(cc, 0));
+        x.strokeStyle = pg; x.lineWidth = Math.max(1.5, 3 * k); x.beginPath(); x.moveTo(g[0], g[1]); x.lineTo(top[0], top[1]); x.stroke();
+        x.shadowColor = cc; x.shadowBlur = isA ? 26 : 12; x.fillStyle = cc;
+        x.beginPath(); x.arc(g[0], g[1] - 4 * k, (isA ? 9 : 6) * k * (s[4] === 'error' ? 1 + 0.15 * Math.sin(tau * 6) : 1), 0, 7); x.fill(); x.shadowBlur = 0;
+        x.globalAlpha = 1;
+        if (i >= act && i <= act + 2) {
+          var L = pr(P[i].x, 64, P[i].z), sc = Math.max(0.55, Math.min(1.1, k * 0.95)) * (isA ? 1.1 : 1);
+          var side = isA ? 0 : P[i].x >= camX ? 1 : -1;
+          label(x, L[0], L[1], sc, s, side, fade * (isA ? 1 : 0.8), isA);
+        }
+      });
+      // train
+      var tg = pr(lerp(P[i0].x, P[i1].x, smooth(f)), 6, lerp(P[i0].z, P[i1].z, f));
+      if (tg && f > 0.02 && f < 0.98) { x.shadowColor = '#fff'; x.shadowBlur = 22; x.fillStyle = '#fff'; x.beginPath(); x.arc(tg[0], tg[1], 5 * tg[2], 0, 7); x.fill(); x.shadowBlur = 0; }
+      // HUD
+      x.font = '600 11px -apple-system,sans-serif'; x.fillStyle = '#c4b5fd'; x.fillText('TURN 1 · FIX AUTH REDIRECT', 22, 28);
+      x.font = '13px -apple-system,sans-serif'; x.fillStyle = '#eef0ff';
+      x.fillText('Langkah ' + (act + 1) + '/' + S.length + '  ·  ' + (S[act][1] + S[act][2]).toFixed(1) + ' m  ·  $' + cum[act].toFixed(2), 22, 47);
+      var lg = [['Model', C.model], ['Tool', C.tool], ['Subagent', C.agent], ['Error', C.error]], lx = w - 22;
+      x.font = '11px -apple-system,sans-serif'; x.textAlign = 'right';
+      for (var j = lg.length - 1; j >= 0; j--) { x.fillStyle = '#a9aee0'; x.fillText(lg[j][0], lx, 28); var tw = x.measureText(lg[j][0]).width; x.fillStyle = lg[j][1]; x.beginPath(); x.arc(lx - tw - 8, 24.5, 4, 0, 7); x.fill(); lx -= tw + 26; }
+      x.textAlign = 'left';
+      var bx = 24, bw = w - 48, by = h - 20;
+      x.fillStyle = 'rgba(255,255,255,.06)'; x.beginPath(); x.roundRect(bx, by, bw, 6, 3); x.fill();
+      S.forEach(function (s, i) { x.fillStyle = rgba(col(s), i <= act ? 0.95 : 0.35); x.fillRect(bx + s[1] / T * bw, by, Math.max(2, s[2] / T * bw - 1), 6); });
+      var tnow = lerp(S[i0][1], S[i1][1], f), hx = bx + tnow / T * bw;
+      x.fillStyle = '#fff'; x.shadowColor = '#fff'; x.shadowBlur = 8; x.fillRect(hx - 1, by - 6, 2, 18); x.shadowBlur = 0;
+      // replay fade
+      var fo = seg > cyc - 0.35 ? (seg - (cyc - 0.35)) / 0.35 : seg < 0.2 ? 1 - seg / 0.2 : 0;
+      if (fo > 0) { x.fillStyle = 'rgba(10,12,32,' + fo.toFixed(3) + ')'; x.fillRect(0, 0, w, h); }
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  })();
+
+})();
+</script>
+</body></html>
