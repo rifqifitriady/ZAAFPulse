@@ -235,13 +235,22 @@ function trMetro(canvas, opts = {}) {
     }
   }
 
-  function label(i, at, sc, side, alpha, isF) {
-    const part = st.parts[i] || {};
-    const col = part.color || '#8f98cc';
+  // A label request becomes a box inside the map: too wide for it, the label shrinks; then it is slid in, 6 px from the edges.
+  function place(r, w) {
+    const M = 6;
+    let sc = r.sc;
+    if (212 * sc > w - 2 * M) sc = Math.max(0.1, (w - 2 * M) / 212);
     const W = 212 * sc;
     const H = 50 * sc;
-    const X = side === 0 ? at[0] - W / 2 : side > 0 ? at[0] - 12 * sc : at[0] - W + 12 * sc;
-    const Y = at[1] - H;
+    let X = r.side === 0 ? r.at[0] - W / 2 : r.side > 0 ? r.at[0] - 12 * sc : r.at[0] - W + 12 * sc;
+    X = Math.max(M, Math.min(w - M - W, X));
+    return { ...r, sc, X, Y: r.at[1] - H, W, H };
+  }
+
+  function label(r) {
+    const { i, sc, alpha, isF, X, Y, W, H } = r;
+    const part = st.parts[i] || {};
+    const col = part.color || '#8f98cc';
     ctx.globalAlpha = alpha;
     ctx.fillStyle = isF ? 'rgba(26,30,76,.97)' : 'rgba(20,24,60,.9)';
     ctx.strokeStyle = i === st.sel ? 'rgba(255,255,255,.95)' : rgba(col, isF ? 0.95 : 0.5);
@@ -348,7 +357,7 @@ function trMetro(canvas, opts = {}) {
         if (!A || !B) continue;
         const wave = glow && !calm ? 0.8 + 0.2 * Math.sin(s * 3 - A[3] / 90) : 1;
         ctx.strokeStyle = rgba(color, alpha * wave * Math.min(1, A[2] * 1.5));
-        ctx.lineWidth = Math.max(1.2, 7 * A[2]);
+        ctx.lineWidth = Math.min(16, Math.max(1.2, 7 * A[2]));
         ctx.beginPath();
         ctx.moveTo(A[0], A[1]);
         ctx.lineTo(B[0], B[1]);
@@ -368,6 +377,7 @@ function trMetro(canvas, opts = {}) {
     const focus = Math.round(cam.p);
     const labelled = metroLabelled(n, focus, st.sel);
     if (st.hover >= 0) labelled.add(st.hover);
+    const asks = [];
     const order = st.nodes.map((_, i) => i).sort((a, b) => st.lay[b].z - st.lay[a].z);
     for (const i of order) {
       const L = st.lay[i];
@@ -377,13 +387,14 @@ function trMetro(canvas, opts = {}) {
       const g = pr(L.x, 0, L.z);
       if (!g) continue;
       const k = g[2];
+      const kc = Math.min(k, 3); // sizes stop growing near the camera; positions keep the true projection
       const born = st.born[i] && !calm ? Math.min(1, (t - st.born[i]) / 400) : 1;
       const fade = Math.max(0, Math.min(1, (METRO_FAR - g[3]) / 900)) * born;
       if (fade <= 0) continue;
       st.pts[i] = g;
       const isF = i === focus;
       ctx.globalAlpha = fade;
-      const rx = (kind === 'session' ? 40 : 24) * k;
+      const rx = (kind === 'session' ? 40 : 24) * kc;
       ctx.fillStyle = rgba(col, isF ? 0.5 : 0.25);
       ctx.beginPath();
       ctx.ellipse(g[0], g[1], rx, rx * 0.31, 0, 0, Math.PI * 2);
@@ -392,7 +403,7 @@ function trMetro(canvas, opts = {}) {
         ctx.strokeStyle = 'rgba(255,255,255,.9)';
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.ellipse(g[0], g[1], rx + 8 * k, (rx + 8 * k) * 0.31, 0, 0, Math.PI * 2);
+        ctx.ellipse(g[0], g[1], rx + 8 * kc, (rx + 8 * kc) * 0.31, 0, 0, Math.PI * 2);
         ctx.stroke();
       }
       if (part.err) {
@@ -400,7 +411,7 @@ function trMetro(canvas, opts = {}) {
         ctx.strokeStyle = rgba(col, (1 - ph) * 0.9);
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.ellipse(g[0], g[1], (24 + ph * 70) * k, (7.5 + ph * 22) * k, 0, 0, Math.PI * 2);
+        ctx.ellipse(g[0], g[1], (24 + ph * 70) * kc, (7.5 + ph * 22) * kc, 0, 0, Math.PI * 2);
         ctx.stroke();
       }
       if (part.loop > 1) {
@@ -409,7 +420,7 @@ function trMetro(canvas, opts = {}) {
         ctx.setLineDash([6, 6]);
         ctx.lineDashOffset = calm ? 0 : -s * 30;
         ctx.beginPath();
-        ctx.ellipse(g[0], g[1], 36 * k, 11 * k, 0, 0, Math.PI * 2);
+        ctx.ellipse(g[0], g[1], 36 * kc, 11 * kc, 0, 0, Math.PI * 2);
         ctx.stroke();
         ctx.setLineDash([]);
         ctx.lineDashOffset = 0;
@@ -422,11 +433,11 @@ function trMetro(canvas, opts = {}) {
         const tb = pr(L.x + 44, 76, L.z);
         if (a && b && ta && tb) {
           ctx.strokeStyle = rgba(col, 0.8);
-          ctx.lineWidth = Math.max(1.5, 3 * k);
+          ctx.lineWidth = Math.max(1.5, 3 * kc);
           ctx.beginPath();
           ctx.moveTo(a[0], a[1]);
           ctx.lineTo(ta[0], ta[1]);
-          ctx.quadraticCurveTo((ta[0] + tb[0]) / 2, ta[1] - 26 * k, tb[0], tb[1]);
+          ctx.quadraticCurveTo((ta[0] + tb[0]) / 2, ta[1] - 26 * kc, tb[0], tb[1]);
           ctx.lineTo(b[0], b[1]);
           ctx.stroke();
         }
@@ -437,7 +448,7 @@ function trMetro(canvas, opts = {}) {
         pg.addColorStop(0, rgba(col, 0.9));
         pg.addColorStop(1, rgba(col, 0));
         ctx.strokeStyle = pg;
-        ctx.lineWidth = Math.max(1.5, 3 * k);
+        ctx.lineWidth = Math.max(1.5, 3 * kc);
         ctx.beginPath();
         ctx.moveTo(g[0], g[1]);
         ctx.lineTo(top[0], top[1]);
@@ -448,7 +459,7 @@ function trMetro(canvas, opts = {}) {
       ctx.shadowBlur = calm ? 0 : isF ? 26 : 12;
       ctx.fillStyle = col;
       ctx.beginPath();
-      ctx.arc(g[0], g[1] - 4 * k, (isF ? 9 : 6) * k * pulse, 0, Math.PI * 2);
+      ctx.arc(g[0], g[1] - 4 * kc, (isF ? 9 : 6) * kc * pulse, 0, Math.PI * 2);
       ctx.fill();
       ctx.shadowBlur = 0;
       ctx.globalAlpha = 1;
@@ -457,10 +468,24 @@ function trMetro(canvas, opts = {}) {
         if (at) {
           const sc = Math.max(0.55, Math.min(1.1, k * 0.95)) * (isF ? 1.1 : 1);
           const side = isF ? 0 : L.x >= c.x ? 1 : -1;
-          label(i, at, sc, side, fade * (isF ? 1 : i === focus - 1 ? 0.5 : 0.8), isF);
+          const alpha = fade * (isF ? 1 : i === focus - 1 ? 0.5 : 0.8);
+          const rank =
+            i === focus ? 0 : i === st.sel ? 1 : i === st.hover ? 2 : i === focus + 1 ? 3 : i === focus + 2 ? 4 : 5;
+          asks.push({ i, at, sc, side, alpha, isF, rank, dz: g[3] });
         }
       }
     }
+
+    // The labels: placed by priority, a lower one only where it clears the placed ones (focus, selection and hover
+    // always stay); drawn far to near so nearer ones paint on top; only drawn ones can be clicked.
+    const kept = [];
+    const hit = (a, b) => a.X < b.X + b.W && b.X < a.X + a.W && a.Y < b.Y + b.H && b.Y < a.Y + a.H;
+    asks.sort((a, b) => a.rank - b.rank);
+    for (const r of asks) {
+      const b = place(r, w);
+      if (r.rank <= 2 || !kept.some((o) => hit(o, b))) kept.push(b);
+    }
+    kept.sort((a, b) => b.dz - a.dz).forEach(label);
 
     // The train between two stations, and the fade of the ride's restart.
     if (cam.moving && !calm) {
@@ -475,7 +500,7 @@ function trMetro(canvas, opts = {}) {
         ctx.shadowBlur = 22;
         ctx.fillStyle = '#fff';
         ctx.beginPath();
-        ctx.arc(g[0], g[1], 5 * g[2], 0, Math.PI * 2);
+        ctx.arc(g[0], g[1], 5 * Math.min(g[2], 3), 0, Math.PI * 2);
         ctx.fill();
         ctx.shadowBlur = 0;
       }

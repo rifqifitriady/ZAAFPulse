@@ -192,7 +192,7 @@ test('metroRideAt: the ride time at which the camera rests at station k', () => 
 const { after } = require('node:test');
 const { trMetro, metroProject: project, metroCamera: camera, metroLayout: layout } = require('../public/tracemetro.js');
 
-function fakeCanvas({ ctx = true } = {}) {
+function fakeCanvas({ ctx = true, width = 600 } = {}) {
   const calls = [];
   const store = {};
   const c2d = new Proxy(store, {
@@ -206,12 +206,13 @@ function fakeCanvas({ ctx = true } = {}) {
     },
     set(t, k, v) {
       t[k] = v;
+      calls.push(['set', k, v]);
       return true;
     },
   });
   const listeners = {};
   const canvas = {
-    clientWidth: 600,
+    clientWidth: width,
     clientHeight: 400,
     width: 0,
     height: 0,
@@ -223,7 +224,7 @@ function fakeCanvas({ ctx = true } = {}) {
     removeEventListener: (type) => {
       delete listeners[type];
     },
-    getBoundingClientRect: () => ({ left: 0, top: 0, width: 600, height: 400 }),
+    getBoundingClientRect: () => ({ left: 0, top: 0, width, height: 400 }),
   };
   return { canvas, calls, listeners };
 }
@@ -513,4 +514,57 @@ test('trMetro: reduced motion rides only by whole stations, and only when starte
   }
   assert.ok(top >= 2, `it did step along: ${top}`);
   h.m.destroy();
+});
+
+// ---- polish: labels stay inside the map and never overlap; sizes near the camera are capped ----
+const labelBoxes = (calls) =>
+  calls.filter((c) => c[0] === 'roundRect').map((c) => ({ X: c[1], Y: c[2], W: c[3], H: c[4] }));
+const overlap = (a, b) => a.X < b.X + b.W && b.X < a.X + a.W && a.Y < b.Y + b.H && b.Y < a.Y + a.H;
+
+// One frame at camera position p (a float station index), optionally with a selection; returns the label boxes.
+function frameAt(p, { sel = -1, width = 360 } = {}) {
+  const h = harness({ width });
+  const nodes = demoNodes();
+  h.m.setNodes(nodes, nodes.map(part), sel, { restart: true });
+  h.m.tour(false);
+  h.step(0);
+  h.listeners.wheel({ deltaY: p * 300, deltaMode: 0, preventDefault() {} });
+  h.calls.length = 0;
+  h.step(10);
+  const out = { boxes: labelBoxes(h.calls), calls: h.calls.slice() };
+  h.m.destroy();
+  return out;
+}
+
+test('trMetro: every label lies fully inside a 360 px map', () => {
+  const nodes = demoNodes();
+  const spots = [];
+  for (let p = 0; p <= nodes.length - 1; p += 0.5) spots.push([p, -1]);
+  [0, nodes.length - 1, 2, nodes.length - 2].forEach((s) => spots.push([s, s]));
+  for (const [p, sel] of spots) {
+    const { boxes } = frameAt(p, { sel });
+    assert.ok(boxes.length > 0, `labels at ${p}`);
+    for (const b of boxes) assert.ok(b.X >= 0 && b.X + b.W <= 360, `p=${p} sel=${sel}: ${JSON.stringify(b)}`);
+  }
+});
+
+test('trMetro: no two labels of one frame overlap', () => {
+  const nodes = demoNodes();
+  for (let p = 0; p <= nodes.length - 1; p += 0.5) {
+    const { boxes } = frameAt(p);
+    for (let a = 0; a < boxes.length; a++)
+      for (let b = a + 1; b < boxes.length; b++)
+        assert.ok(!overlap(boxes[a], boxes[b]), `p=${p}: ${JSON.stringify(boxes[a])} vs ${JSON.stringify(boxes[b])}`);
+  }
+});
+
+test('trMetro: near the camera the track and the orbs keep a capped size', () => {
+  const nodes = demoNodes();
+  for (let p = 0; p <= nodes.length - 1; p++) {
+    const { calls } = frameAt(p);
+    for (const c of calls) {
+      if (c[0] === 'set' && c[1] === 'lineWidth') assert.ok(c[2] <= 16, `p=${p} lineWidth ${c[2]}`);
+      if (c[0] === 'arc') assert.ok(c[3] <= 9 * 3 * 1.15 + 1, `p=${p} arc radius ${c[3]}`);
+    }
+  }
 });
