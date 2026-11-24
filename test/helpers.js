@@ -199,4 +199,34 @@ const WIN_ENV = ['SystemRoot', 'SYSTEMROOT', 'PATHEXT', 'TEMP', 'TMP'];
 const winEnv = () =>
   Object.fromEntries(WIN_ENV.filter((k) => process.env[k] !== undefined).map((k) => [k, process.env[k]]));
 
-module.exports = { fakeServer, secretsFor, NO_JUDGE_PORTS, fakeClaude, winEnv };
+// Copies a fixture folder and moves every ISO timestamp in its files by one amount, so the newest lands `ageMs` before
+// `now`. A test that lists "the last N days" then finds the fixture whatever today's date is; the gaps between the
+// fixture's own times stay as written.
+const ISO_TS = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g;
+function copyRecent(src, dest, { now = Date.now(), ageMs = 86400e3 } = {}) {
+  fs.cpSync(src, dest, { recursive: true });
+  const files = [];
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else files.push(p);
+    }
+  };
+  walk(dest);
+  let newest = -Infinity;
+  for (const f of files)
+    for (const m of fs.readFileSync(f, 'utf8').match(ISO_TS) || []) newest = Math.max(newest, Date.parse(m));
+  if (!Number.isFinite(newest)) return dest;
+  const shift = now - ageMs - newest;
+  for (const f of files) {
+    const text = fs.readFileSync(f, 'utf8');
+    fs.writeFileSync(
+      f,
+      text.replace(ISO_TS, (m) => new Date(Date.parse(m) + shift).toISOString()),
+    );
+  }
+  return dest;
+}
+
+module.exports = { fakeServer, secretsFor, NO_JUDGE_PORTS, fakeClaude, winEnv, copyRecent };

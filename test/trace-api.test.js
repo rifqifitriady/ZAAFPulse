@@ -9,7 +9,7 @@ const net = require('net');
 const path = require('path');
 const { spawn } = require('child_process');
 const { createGateway } = require('../lib/gateway');
-const { secretsFor, NO_JUDGE_PORTS, fakeServer } = require('./helpers');
+const { secretsFor, NO_JUDGE_PORTS, fakeServer, copyRecent } = require('./helpers');
 
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const ROOT = path.join(__dirname, '..');
@@ -404,7 +404,7 @@ test('trace api: sign-in gate, gateway keys refused, and the live cursor round-t
 // where the dashboard itself shows one (loopback, content on).
 test('gateway /mcp: acc_trace_sessions never returns a Kiro title, while the dashboard does', async () => {
   const data = tmp('zp-trace-api-mcp-');
-  fs.cpSync(path.join(__dirname, 'fixtures', 'trace', 'kiro'), path.join(data, '.kiro', 'sessions'), { recursive: true });
+  copyRecent(path.join(__dirname, 'fixtures', 'trace', 'kiro'), path.join(data, '.kiro', 'sessions'));
   const gw = createGateway({
     dataDir: path.join(data, '.data'),
     getConfig: () => ({ gateway: {} }),
