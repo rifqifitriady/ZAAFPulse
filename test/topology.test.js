@@ -1084,8 +1084,7 @@ test('a running, answering runtime and the models it has loaded now are active; 
   assert.equal(node(silent, 'runtime:lmstudio').note, 'not answering');
 });
 
-// ZAAFPulse is the hub: every tool, router, runtime and provider is connected through it
-// (design-notes/specs/2026-10-23-topology-hub-design.md).
+// ZAAFPulse is the hub: every tool, router, runtime and provider is connected through it.
 test('the ZAAFPulse hub is always there, alone in layer 1, and always active', () => {
   const hub = (t) => t.nodes.filter((n) => n.layer === 1);
   for (const t of [

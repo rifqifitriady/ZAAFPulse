@@ -5253,7 +5253,7 @@ a.trace-link:focus-visible b {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
-/* The approved split view (design-notes/specs/mockups/split-view-v4.html), full-bleed under the top bar.
+/* The Trace & Session Explorer split view, full-bleed under the top bar.
    Classes carry a tr- prefix so the dashboard's own .topbar, .search and .icon-btn never apply. */
 .content:has(> .tr-wrap) {
   padding: 0;

@@ -1,7 +1,6 @@
 'use strict';
 /* Trace & Session Explorer (#trace): the sessions and the selected turn as a tree on the left, the same turn
-   as an animated map on the right, with one selection for both halves. A port of the approved mockup
-   design-notes/specs/mockups/split-view-v4.html; the map's motion comes from mockups/trace-map.html.
+   as an animated map on the right, with one selection for both halves.
    Content is text only (S1): it is drawn through textNodes() and textFragment() with textContent, never as
    HTML. A masked secret is revealed one at a time on request and never kept (S2). */
 
