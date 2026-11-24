@@ -53,7 +53,8 @@ async function startServer(t, env = {}, prepare = null) {
     const stop = async () => {
       if (!exited) child.kill();
       await gone;
-      fs.rmSync(data, { recursive: true, force: true });
+      // Windows can hold the stopped server's files for a moment (EPERM, EBUSY), so the removal retries.
+      fs.rmSync(data, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
     };
     const base = `http://127.0.0.1:${port}`;
     for (let i = 0; i < 80 && !exited; i++) {
