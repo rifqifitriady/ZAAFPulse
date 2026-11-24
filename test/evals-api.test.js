@@ -12,7 +12,7 @@ const { spawn } = require('child_process');
 const { createGateway } = require('../lib/gateway');
 const { createEvalApi } = require('../lib/evals/api');
 const { destinationOf } = require('../lib/evals/claude-cli');
-const { fakeServer, secretsFor, NO_JUDGE_PORTS, fakeClaude } = require('./helpers');
+const { fakeServer, secretsFor, NO_JUDGE_PORTS, fakeClaude, copyRecent } = require('./helpers');
 
 const tmp = (p) => fs.mkdtempSync(path.join(os.tmpdir(), p));
 const ROOT = path.join(__dirname, '..');
@@ -556,7 +556,7 @@ test('evals api: the preview is refused when content viewing is off, and when a 
   const data = tmp('zp-evals-api-off-');
   writeClaudeLog(data);
   const kiroFixture = path.join(__dirname, 'fixtures', 'trace', 'kiro');
-  fs.cpSync(kiroFixture, path.join(data, '.kiro', 'sessions'), { recursive: true });
+  copyRecent(kiroFixture, path.join(data, '.kiro', 'sessions'));
   fs.writeFileSync(path.join(data, 'config.json'), extoneConfig());
   const s = await startServer({ ZAAFPULSE_AUTH: 'none', ZAAFPULSE_CONTENT: 'on' }, { data });
   const c = client(s.base);
